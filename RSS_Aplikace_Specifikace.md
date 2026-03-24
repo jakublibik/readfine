@@ -158,7 +158,7 @@ Webová aplikace pro správu RSS kanálů s podporou více uživatelů, filtrov�
 
 ## Rozhodnutí
 
-- **Kanály jsou izolované** – každý uživatel má vlastní sadu kanálů a článků (žádné sdílení mezi uživateli)
+- **Sdílené feedy** – veřejné kanály jsou sdíleny napříč uživateli (fetchují se jednou globálně); privátní kanály s auth jsou per-user. Per-user nastavení feedu je v `user_feeds`, per-user stavy článků v `user_article_states`.
 - **Readable verze** – extrahuje se při fetchování a ukládá do DB jako obsah článku; nastavitelné per kanál (default: zapnuto)
 - **API standard** – MVP bez externího API; web bude responzivní pro mobilní použití; Fever API případně přidáme dodatečně
 - **Distribuce** – GitHub (zdrojový kód) + Docker Hub (hotové image); nastavíme až bude aplikace funkční
