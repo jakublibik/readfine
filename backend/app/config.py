@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Security
     secret_key: str
     encryption_key: str
-    allowed_hosts: list[str] = ["*"]
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
     # App
     debug: bool = False

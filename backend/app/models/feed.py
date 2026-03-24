@@ -78,4 +78,5 @@ class UserFeed(Base):
 
 
 from app.models.user import User  # noqa: E402
-from app.models.article import Article, FetchLog  # noqa: E402
+from app.models.article import Article  # noqa: E402
+from app.models.fetch_log import FetchLog  # noqa: E402

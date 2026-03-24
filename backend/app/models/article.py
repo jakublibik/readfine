@@ -67,19 +67,6 @@ class UserArticleState(Base):
     article: Mapped["Article"] = relationship(back_populates="user_states")
 
 
-class FetchLog(Base):
-    __tablename__ = "fetch_logs"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    feed_id: Mapped[int] = mapped_column(Integer, ForeignKey("feeds.id", ondelete="CASCADE"), nullable=False)
-    failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    http_status: Mapped[int | None] = mapped_column(SmallInteger)
-    error_message: Mapped[str] = mapped_column(Text, nullable=False)
-
-    # Relationships
-    feed: Mapped["Feed"] = relationship(back_populates="fetch_logs")
-
-
 from app.models.feed import Feed  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.models.label import ArticleLabel  # noqa: E402
