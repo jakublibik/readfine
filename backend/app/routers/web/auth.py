@@ -22,7 +22,7 @@ async def _get_app_settings(db: AsyncSession) -> AppSettings | None:
 async def login_page(request: Request):
     if request.session.get("user_id"):
         return RedirectResponse("/", status_code=302)
-    return templates.TemplateResponse("auth/login.html", {"request": request})
+    return templates.TemplateResponse(request, "auth/login.html")
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -37,15 +37,15 @@ async def login(
 
     if not user or not verify_password(password, user.password_hash):
         return templates.TemplateResponse(
-            "auth/login.html",
-            {"request": request, "error": "Invalid email or password"},
+            request, "auth/login.html",
+            {"error": "Invalid email or password", "email": email},
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
 
     if not user.is_active:
         return templates.TemplateResponse(
-            "auth/login.html",
-            {"request": request, "error": "Account is disabled"},
+            request, "auth/login.html",
+            {"error": "Account is disabled", "email": email},
             status_code=status.HTTP_403_FORBIDDEN,
         )
 
@@ -59,8 +59,8 @@ async def register_page(request: Request, db: AsyncSession = Depends(get_db)):
         return RedirectResponse("/", status_code=302)
     app_settings = await _get_app_settings(db)
     if app_settings and not app_settings.registration_enabled:
-        return templates.TemplateResponse("auth/registration_disabled.html", {"request": request})
-    return templates.TemplateResponse("auth/register.html", {"request": request})
+        return templates.TemplateResponse(request, "auth/registration_disabled.html")
+    return templates.TemplateResponse(request, "auth/register.html")
 
 
 @router.post("/register", response_class=HTMLResponse)
@@ -78,15 +78,15 @@ async def register(
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
         return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "This email is already registered"},
+            request, "auth/register.html",
+            {"error": "This email is already registered"},
             status_code=status.HTTP_409_CONFLICT,
         )
 
     if len(password) < 8:
         return templates.TemplateResponse(
-            "auth/register.html",
-            {"request": request, "error": "Password must be at least 8 characters"},
+            request, "auth/register.html",
+            {"error": "Password must be at least 8 characters"},
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
@@ -106,7 +106,7 @@ async def register(
     return RedirectResponse("/", status_code=302)
 
 
-@router.post("/logout")
+@router.api_route("/logout", methods=["GET", "POST"])
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)
