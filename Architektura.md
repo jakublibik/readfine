@@ -199,6 +199,11 @@ Indexy: `(user_id, feed_id)` UNIQUE, `user_id`, `(user_id, folder_id)`, `feed_id
 - Uživatel odebere feed → smaže se `user_feeds` záznam, `feeds.subscriber_count` se sníží o 1. Nehvězdičkované a nearchivované `user_article_states` pro daného uživatele se smažou. Hvězdičkované/archivované stavy zůstanou (článek je stále v DB).
 - `subscriber_count = 0` → background job aplikační logikou smaže články bez hvězdičky/archivu, pak smaže feed. Zbývající hvězdičkované/archivované články dostanou `feed_id = NULL` (ON DELETE SET NULL) a uživatel je nadále vidí ve Hvězdičkovaných/Archivovaných.
 
+**Invarianty – kdy se fyzicky maže článek:**
+- Článek s `feed_id IS NOT NULL` → maže se pouze cascade při smazání feedu (pokud nemá hvězdičku/archiv)
+- Článek s `feed_id IS NULL` → cleanup job ho smaže pokud neexistuje žádný `user_article_states` s `is_starred = TRUE OR is_archived = TRUE`
+- Článek s `feed_id IS NULL` a hvězdičkou/archivem → zůstává v DB dokud ho uživatel ručně nesmaže nebo neodstraní hvězdičku/archiv
+
 ---
 
 ### Tabulka: `articles`
@@ -217,6 +222,9 @@ Sdílené články – každý článek existuje v DB jednou, bez ohledu na poč
 | `content` | `TEXT` | | Obsah (HTML) |
 | `content_source` | `VARCHAR(20)` | | `feed_full`, `feed_summary`, `readable` |
 | `readable_content` | `TEXT` | | Readable extrakce (zachována zvlášť) |
+| `readable_status` | `VARCHAR(10)` | NOT NULL, DEFAULT `'skipped'` | `pending`, `success`, `failed`, `skipped` |
+| `readable_retries` | `SMALLINT` | NOT NULL, DEFAULT `0` | Počet pokusů o extrakci |
+| `readable_next_retry_at` | `TIMESTAMPTZ` | | Kdy zkusit znovu (exponenciální backoff) |
 | `summary` | `TEXT` | | Perex (pro zobrazení v seznamu) |
 | `published_at` | `TIMESTAMPTZ` | | Datum publikace z feedu |
 | `fetched_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum stažení |
@@ -391,6 +399,26 @@ Indexy: `(user_id, provider)` PK
 
 ---
 
+### Tabulka: `audit_log`
+
+Append-only log admin akcí. Záznamy se nemažou.
+
+| Sloupec | Typ | Constraints | Popis |
+|---|---|---|---|
+| `id` | `BIGSERIAL` | PK | Primární klíč |
+| `admin_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE RESTRICT | Admin který akci provedl |
+| `action` | `VARCHAR(50)` | NOT NULL | `user_reset_password`, `user_activate`, `user_deactivate`, `invitation_create`, `invitation_revoke`, `app_settings_update`, `ai_profile_create`, `ai_profile_delete` |
+| `target_type` | `VARCHAR(30)` | | `user`, `invitation`, `app_settings`, `ai_profile` |
+| `target_id` | `INTEGER` | | ID cílového záznamu |
+| `detail` | `JSONB` | | Doplňující kontext (např. změněná pole) |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Kdy akce proběhla |
+
+Indexy: `(admin_id, created_at DESC)`, `(target_type, target_id)`, `created_at DESC`
+
+Zobrazeno v admin panelu na `/admin/audit-log`.
+
+---
+
 ### Shrnutí relací
 
 ```
@@ -407,6 +435,7 @@ articles (1) ──< user_article_states  per-user stav článku
 filters (1) ──< filter_conditions (N)
 filters (1) ──< filter_actions (N)
 feeds (1) ──< fetch_logs (N)          pouze chybové záznamy
+users (1) ──< audit_log (N)           admin akce (append-only)
 ```
 
 ---
@@ -625,6 +654,7 @@ filtread/
 | `GET/POST` | `/admin/settings` | Globální nastavení |
 | `POST` | `/admin/settings/smtp-test` | Test SMTP |
 | `GET` | `/admin/fetch-logs` | Přehled logů fetchování |
+| `GET` | `/admin/audit-log` | Audit log admin akcí |
 | `GET` | `/admin/ai-profiles` | Správa AI profilů (stub, Fáze 2) |
 
 ---
@@ -733,11 +763,21 @@ Při importu: `guid_hash` (SHA-256 z guid nebo URL) se porovná s existujícími
 
 Výsledek do `articles.readable_content`. UI přepínač volí, který sloupec zobrazit.
 
+**Stavový model (`readable_status`):**
+- `pending` – zařazeno k extrakci, ještě neproběhlo
+- `success` – extrakce OK, `readable_content` vyplněno
+- `failed` – extrakce selhala po max. pokusech
+- `skipped` – přeskočeno záměrně (krátký obsah, vypnuto per feed, chybí URL)
+
+**Retry policy:**
+- Max 3 pokusy, exponenciální backoff: 1. retry po 5 min, 2. po 15 min, 3. po 60 min
+- Po 3. selhání → `readable_status = failed`, žádné další pokusy
+
 **UX při čekání na extrakci:**
-Extrakce probíhá na pozadí po fetchování feedu. Uživatel může otevřít článek dřív, než je hotová.
-- Pokud `readable_content IS NULL` a `extract_readable = TRUE` → detail článku zobrazí indikátor „načítám fulltext..."
-- HTMX polling (`hx-trigger="every 2s"`) na endpoint detailu článku, dokud `readable_content` není vyplněno
-- Timeout po 30 sekundách – pokud extrakce neproběhla, zobrazí se původní obsah z feedu bez dalšího pollingu
+- `pending` → indikátor „načítám fulltext...", HTMX polling každé 2s
+- `success` → polling se zastaví, zobrazí se readable obsah
+- `failed` → zobrazí se „Fulltext nedostupný", původní obsah z feedu
+- `skipped` → rovnou zobrazit původní obsah, žádný polling
 
 **Rozhodovací logika – extrakce se přeskočí pokud:**
 - `feeds.extract_readable = FALSE` – uživatel vypnul per kanál
@@ -818,6 +858,25 @@ V Alembic downgrade: `DROP TRIGGER` + `DROP FUNCTION`.
 
 ## 5. Security
 
+### XSS ochrana
+
+RSS obsah pochází z externích zdrojů – bez sanitizace je persistent XSS snadný útok.
+
+**Sanitizace obsahu (při uložení do DB):**
+- Knihovna `nh3` (Rust-based, rychlejší než `bleach`) – allowlist tagů
+- Povolené tagy: `p, br, h1, h2, h3, h4, h5, h6, a, img, ul, ol, li, blockquote, code, pre, strong, em, figure, figcaption`
+- Povolené atributy: `href` (pouze `http/https`), `src` (pouze `http/https`), `alt`, `title`
+- Sanitizace se provádí v `readable_service.py` i při parsování feedu před uložením `content`
+- V Jinja2 šablonách používat `|safe` **pouze** na již sanitizovaný obsah – nikdy na raw data
+
+**CSP hlavičky (druhá vrstva obrany):**
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'; img-src * data:; style-src 'self' 'unsafe-inline';
+```
+Nastavit jako middleware v `main.py` pro všechny responses.
+
+---
+
 ### CSRF ochrana
 
 Web používá session cookies → zranitelný na CSRF. Ochrana je povinná pro všechny POST/PUT/PATCH/DELETE endpointy včetně HTMX fragmentů.
@@ -835,12 +894,19 @@ Dva klíče v `.env`, každý s jiným dopadem při rotaci:
 **`SECRET_KEY`** – podepisuje session cookies.
 - Rotace → všechny aktivní sessions okamžitě neplatné, uživatelé se musí znovu přihlásit.
 - API tokeny (SHA-256 hash) nejsou ovlivněny.
+- Postup rotace: nastavit nový `SECRET_KEY` v `.env` → restartovat app. Hotovo.
+- Zero-downtime varianta (volitelně): přidat `SECRET_KEY_OLD` a validovat session nejdříve novým, pak starým klíčem po dobu přechodu (např. 24h).
 
 **`ENCRYPTION_KEY`** – šifruje citlivá data v DB: `smtp_password_encrypted`, `fetch_auth_pass_encrypted`, `user_ai_keys.api_key_encrypted`.
 - Rotace bez migrace → všechna zašifrovaná data nečitelná.
-- Při rotaci je nutný jednorázový migration script: dešifrovat starým klíčem → zašifrovat novým → uložit.
+- Postup rotace:
+  1. Nastavit `ENCRYPTION_KEY_NEW` v `.env` vedle stávajícího `ENCRYPTION_KEY`
+  2. Spustit migration script: pro každý zašifrovaný záznam → dešifrovat starým klíčem → zašifrovat novým → uložit (v DB transakci)
+  3. Přejmenovat `ENCRYPTION_KEY_NEW` → `ENCRYPTION_KEY`, odstranit starý
+  4. Restartovat app
+- Dotčené tabulky: `app_settings`, `feeds`, `user_ai_keys`
 
-Pro MVP se rotační nástroj neimplementuje. Klíče se generují jednou při nasazení a uchovávají bezpečně (např. v secrets manageru nebo zabezpečeném `.env`).
+Pro MVP se rotační script neimplementuje – vytvoří se až při první potřebě rotace. Klíče se generují jednou při nasazení a uchovávají v zabezpečeném `.env` (mimo repozitář).
 
 ---
 
@@ -892,3 +958,12 @@ DEBUG
 FIRST_ADMIN_EMAIL    # inicializační seed
 FIRST_ADMIN_PASSWORD
 ```
+
+### Zálohy PostgreSQL
+
+MVP (lokální vývoj) – zálohy se neřeší.
+
+TODO při nasazení na VPS (fáze 6–7):
+- Týdenní `pg_dump` + gzip, ukládat na externí úložiště (S3 / Backblaze B2)
+- Retention: poslední 4 týdenní zálohy
+- Před nasazením otestovat restore postup
