@@ -40,7 +40,7 @@ class UserSettings(Base):
     left_panel_pinned: Mapped[bool] = mapped_column(Boolean, default=True)
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
-    language: Mapped[str] = mapped_column(String(10), default="cs")
+    language: Mapped[str] = mapped_column(String(10), default="en")
     keyboard_shortcuts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Relationships

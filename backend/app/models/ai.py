@@ -16,7 +16,7 @@ class AiProfile(Base):
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
     max_tokens: Mapped[int | None] = mapped_column(Integer, default=1000)
-    summary_language: Mapped[str] = mapped_column(String(10), default="cs")
+    summary_language: Mapped[str] = mapped_column(String(10), default="en")
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

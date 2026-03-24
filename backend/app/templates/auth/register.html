@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Register – Filtread{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center">
+    <div class="w-full max-w-sm">
+        <h1 class="text-2xl font-semibold text-center mb-6">Filtread</h1>
+
+        {% if error %}
+        <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
+            {{ error }}
+        </div>
+        {% endif %}
+
+        <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
+            <div>
+                <label class="block text-sm font-medium mb-1" for="display_name">Display name</label>
+                <input id="display_name" name="display_name" type="text" required
+                    class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1" for="email">Email</label>
+                <input id="email" name="email" type="email" required autocomplete="email"
+                    class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+                <label class="block text-sm font-medium mb-1" for="password">Password</label>
+                <input id="password" name="password" type="password" required autocomplete="new-password"
+                    class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <p class="text-xs text-gray-400 mt-1">At least 8 characters</p>
+            </div>
+            <button type="submit"
+                class="w-full bg-blue-600 text-white rounded px-4 py-2 text-sm font-medium hover:bg-blue-700">
+                Create account
+            </button>
+        </form>
+
+        <p class="text-center text-sm text-gray-500 mt-4">
+            Already have an account? <a href="/login" class="text-blue-600 hover:underline">Sign in</a>
+        </p>
+    </div>
+</div>
+{% endblock %}
