@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -7,6 +7,9 @@ from app.database import Base
 
 class Filter(Base):
     __tablename__ = "filters"
+    __table_args__ = (
+        CheckConstraint("match_operator IN ('AND', 'OR')", name="ck_filters_match_operator"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -39,6 +42,12 @@ class FilterCondition(Base):
 
 class FilterAction(Base):
     __tablename__ = "filter_actions"
+    __table_args__ = (
+        CheckConstraint(
+            "action_type IN ('label', 'mark_read', 'star', 'hide', 'notify')",
+            name="ck_filter_actions_action_type",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     filter_id: Mapped[int] = mapped_column(Integer, ForeignKey("filters.id", ondelete="CASCADE"), nullable=False)

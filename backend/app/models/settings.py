@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -8,6 +8,9 @@ from app.database import Base
 
 class AppSettings(Base):
     __tablename__ = "app_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_app_settings_singleton"),
+    )
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     registration_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
