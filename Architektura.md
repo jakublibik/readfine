@@ -9,7 +9,9 @@ Stav: Návrh architektury
 
 ### Principy návrhu
 
-- Kanály jsou izolované per uživatel – žádné sdílení feedů mezi uživateli.
+- Feedy jsou sdílené napříč uživateli – každý feed se fetchuje jednou globálně, bez ohledu na počet předplatitelů.
+- Per-user nastavení feedu (složka, název, purge, pozice) je v tabulce `user_feeds`.
+- Per-user stavy článků (přečteno, hvězdička, archivace) jsou v tabulce `user_article_states`.
 - Všechny numerické cizí klíče jsou `INTEGER` (PostgreSQL sequence).
 - `updated_at` triggery se nastaví na DB úrovni.
 - Sloupce pro Fázi 2 (AI) jsou přítomny od začátku, ale mohou být NULL a aplikace je ignoruje, dokud AI není aktivní.
@@ -58,7 +60,7 @@ Indexy: `email` (unique), `role`
 | `id` | `SERIAL` | PK | Primární klíč |
 | `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Vlastník tokenu |
 | `name` | `VARCHAR(100)` | NOT NULL | Pojmenování (např. "iPhone") |
-| `token_hash` | `VARCHAR(255)` | NOT NULL, UNIQUE | bcrypt/SHA-256 hash tokenu |
+| `token_hash` | `CHAR(64)` | NOT NULL, UNIQUE | SHA-256 hex hash tokenu |
 | `token_prefix` | `VARCHAR(10)` | NOT NULL | Prvních 8 znaků pro identifikaci (zobrazení) |
 | `last_used_at` | `TIMESTAMPTZ` | | Poslední použití |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum vytvoření |
@@ -136,16 +138,17 @@ Indexy: `(user_id, name)` UNIQUE, `user_id`
 
 ### Tabulka: `feeds`
 
+Globální pool feedů. Veřejné feedy jsou sdílené napříč uživateli (každá URL jednou). Privátní feedy (s auth) jsou per-user – stejná URL může existovat vícekrát jako různé privátní instance.
+
 | Sloupec | Typ | Constraints | Popis |
 |---|---|---|---|
 | `id` | `SERIAL` | PK | Primární klíč |
-| `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Vlastník |
-| `folder_id` | `INTEGER` | FK → `folders.id` ON DELETE SET NULL | Složka (NULL = bez složky) |
 | `feed_url` | `VARCHAR(2048)` | NOT NULL | URL RSS/Atom feedu |
+| `is_private` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Privátní feed (auth) – per-user, nesdílený |
+| `fetch_auth_user` | `VARCHAR(255)` | | HTTP Basic Auth user |
+| `fetch_auth_pass_encrypted` | `TEXT` | | HTTP Basic Auth heslo (šifrované) |
 | `site_url` | `VARCHAR(2048)` | | URL webu |
-| `title` | `VARCHAR(255)` | NOT NULL | Název (z feedu nebo vlastní) |
-| `custom_title` | `VARCHAR(255)` | | Přepsaný název uživatelem |
-| `description` | `TEXT` | | Vlastní poznámka uživatele |
+| `title` | `VARCHAR(255)` | NOT NULL | Název z feedu |
 | `favicon_url` | `VARCHAR(2048)` | | URL favicony |
 | `favicon_data` | `TEXT` | | Base64 favicona (fallback cache) |
 | `status` | `VARCHAR(20)` | NOT NULL, DEFAULT `'active'` | `active`, `error`, `paused` |
@@ -154,34 +157,58 @@ Indexy: `(user_id, name)` UNIQUE, `user_id`
 | `last_fetch_duration_ms` | `INTEGER` | | Doba trvání posledního fetche |
 | `last_published_at` | `TIMESTAMPTZ` | | Datum posledního článku ve feedu |
 | `fetch_interval_min` | `SMALLINT` | | NULL = global default |
-| `fetch_auth_user` | `VARCHAR(255)` | | HTTP Basic Auth user |
-| `fetch_auth_pass_encrypted` | `TEXT` | | HTTP Basic Auth heslo (šifrované) |
-| `extract_readable` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Extrahovat readable verzi |
-| `article_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Celkový počet článků (denorm.) |
-| `unread_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Nepřečtených (denorm.) |
-| `purge_after_days` | `SMALLINT` | | NULL = global |
-| `purge_keep_count` | `SMALLINT` | | NULL = global |
-| `position` | `SMALLINT` | NOT NULL, DEFAULT `0` | Pořadí v rámci složky |
+| `subscriber_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Počet předplatitelů (denorm.) |
 | `feed_type` | `VARCHAR(20)` | NOT NULL, DEFAULT `'rss'` | `rss`, `youtube`, `scrape`, `twitter`, `podcast` |
-| `type_config` | `JSONB` | | Konfigurace specifická pro typ (CSS selektor pro scraping, channel_id pro YouTube apod.) |
-| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum přidání |
+| `type_config` | `JSONB` | | Konfigurace specifická pro typ |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum přidání do systému |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Poslední změna |
 
-Indexy: `user_id`, `(user_id, folder_id)`, `status`, `last_fetched_at`
+Indexy: `feed_url` (unique partial WHERE `is_private = FALSE`), `status`, `last_fetched_at`
 
 Constraints: CHECK `status IN ('active', 'error', 'paused')`, CHECK `feed_type IN ('rss', 'youtube', 'scrape', 'twitter', 'podcast')`
 
-Poznámka: V MVP je vždy `feed_type = 'rss'`. Ostatní typy přicházejí ve Fázi 3. `type_config` je JSONB – každý typ má jiná nastavení, není potřeba desítky nullable sloupců.
+Poznámka: V MVP je vždy `feed_type = 'rss'`. Ostatní typy přicházejí ve Fázi 3.
+
+---
+
+### Tabulka: `user_feeds`
+
+Per-user předplatné feedu – nastavení, která jsou specifická pro každého uživatele.
+
+| Sloupec | Typ | Constraints | Popis |
+|---|---|---|---|
+| `id` | `SERIAL` | PK | Primární klíč |
+| `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Uživatel |
+| `feed_id` | `INTEGER` | NOT NULL, FK → `feeds.id` ON DELETE CASCADE | Feed |
+| `folder_id` | `INTEGER` | FK → `folders.id` ON DELETE SET NULL | Složka (NULL = bez složky) |
+| `custom_title` | `VARCHAR(255)` | | Přepsaný název uživatelem |
+| `description` | `TEXT` | | Vlastní poznámka uživatele |
+| `extract_readable` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Extrahovat readable verzi |
+| `unread_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Nepřečtených (denorm.) |
+| `purge_after_days` | `SMALLINT` | | NULL = global default |
+| `purge_keep_count` | `SMALLINT` | | NULL = global default |
+| `position` | `SMALLINT` | NOT NULL, DEFAULT `0` | Pořadí v rámci složky |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum přidání feedu uživatelem |
+| `updated_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Poslední změna |
+
+Indexy: `(user_id, feed_id)` UNIQUE, `user_id`, `(user_id, folder_id)`, `feed_id`
+
+**Životní cyklus feedu:**
+- Uživatel přidá **veřejný feed** → pokud URL v DB neexistuje, vytvoří se `feeds` záznam (`is_private = FALSE`) a spustí se první fetch. Vytvoří se `user_feeds` záznam, `subscriber_count` +1.
+- Uživatel přidá **privátní feed (s auth)** → vždy se vytvoří nový `feeds` záznam (`is_private = TRUE`) jen pro tohoto uživatele, `subscriber_count` = 1. Články jsou de facto soukromé – stejná URL může existovat vícekrát jako různé privátní instance pro různé uživatele.
+- Uživatel odebere feed → smaže se `user_feeds` záznam, `feeds.subscriber_count` se sníží o 1. Nehvězdičkované a nearchivované `user_article_states` pro daného uživatele se smažou. Hvězdičkované/archivované stavy zůstanou (článek je stále v DB).
+- `subscriber_count = 0` → background job aplikační logikou smaže články bez hvězdičky/archivu, pak smaže feed. Zbývající hvězdičkované/archivované články dostanou `feed_id = NULL` (ON DELETE SET NULL) a uživatel je nadále vidí ve Hvězdičkovaných/Archivovaných.
 
 ---
 
 ### Tabulka: `articles`
 
+Sdílené články – každý článek existuje v DB jednou, bez ohledu na počet předplatitelů feedu.
+
 | Sloupec | Typ | Constraints | Popis |
 |---|---|---|---|
 | `id` | `BIGSERIAL` | PK | Primární klíč |
-| `feed_id` | `INTEGER` | NOT NULL, FK → `feeds.id` ON DELETE CASCADE | Zdrojový feed |
-| `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Vlastník (denorm. pro rychlé dotazy) |
+| `feed_id` | `INTEGER` | NULLABLE, FK → `feeds.id` ON DELETE SET NULL | Zdrojový feed (NULL = feed smazán, článek zachován) |
 | `guid` | `VARCHAR(2048)` | NOT NULL | Unikátní ID z feedu |
 | `guid_hash` | `CHAR(64)` | NOT NULL | SHA-256 hash guid (pro rychlé lookup) |
 | `url` | `VARCHAR(2048)` | | URL článku |
@@ -193,15 +220,9 @@ Poznámka: V MVP je vždy `feed_type = 'rss'`. Ostatní typy přicházejí ve F�
 | `summary` | `TEXT` | | Perex (pro zobrazení v seznamu) |
 | `published_at` | `TIMESTAMPTZ` | | Datum publikace z feedu |
 | `fetched_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum stažení |
-| `is_read` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Přečtený |
-| `is_starred` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Hvězdičkovaný |
-| `is_archived` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Archivovaný |
-| `is_hidden` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Skrytý filtrem |
-| `read_at` | `TIMESTAMPTZ` | | Kdy byl označen přečtený |
 | `estimated_read_min` | `SMALLINT` | | Odhad doby čtení v minutách |
 | `word_count` | `INTEGER` | | Počet slov |
 | `image_url` | `VARCHAR(2048)` | | Hlavní obrázek článku |
-| `share_token` | `VARCHAR(32)` | UNIQUE | Token pro sdílení odkazu |
 | `ai_summary` | `TEXT` | | AI shrnutí (Fáze 2) |
 | `ai_score` | `REAL` | | AI relevance skóre 0–1 (Fáze 2) |
 | `ai_tags_suggested` | `TEXT[]` | | Navrhnuté AI štítky (Fáze 2) |
@@ -209,13 +230,37 @@ Poznámka: V MVP je vždy `feed_type = 'rss'`. Ostatní typy přicházejí ve F�
 | `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Interní datum vložení |
 
 Indexy:
-- `(feed_id, guid_hash)` UNIQUE – deduplikace
-- `(user_id, is_read, published_at DESC)` – hlavní výpis
+- `(feed_id, guid_hash)` UNIQUE (partial WHERE `feed_id IS NOT NULL`) – deduplikace
+- `(feed_id, published_at DESC)` – per-feed výpis
+- Full-text: GIN index nad `to_tsvector('simple', unaccent(title) || ' ' || unaccent(COALESCE(content, '')))`
+
+---
+
+### Tabulka: `user_article_states`
+
+Per-user stav článku – vzniká lazy (až uživatel s článkem nějak interaguje, nebo při prvním načtení feedu).
+
+| Sloupec | Typ | Constraints | Popis |
+|---|---|---|---|
+| `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Uživatel |
+| `article_id` | `BIGINT` | NOT NULL, FK → `articles.id` ON DELETE CASCADE | Článek |
+| `is_read` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Přečtený |
+| `is_starred` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Hvězdičkovaný |
+| `is_archived` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Archivovaný |
+| `is_hidden` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Skrytý filtrem |
+| `read_at` | `TIMESTAMPTZ` | | Kdy byl označen přečtený |
+| `share_token` | `VARCHAR(32)` | UNIQUE | Token pro sdílení odkazu |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum vytvoření záznamu |
+
+PK: `(user_id, article_id)`
+
+Indexy:
+- `(user_id, is_read, article_id)` – hlavní výpis nepřečtených
 - `(user_id, is_starred)` – hvězdičkované
 - `(user_id, is_archived)` – archivované
-- `(feed_id, published_at DESC)` – per-feed výpis
 - `share_token` UNIQUE (partial WHERE NOT NULL)
-- Full-text: GIN index nad `to_tsvector('simple', title || ' ' || COALESCE(content, ''))`
+
+Poznámka: Pro dotazy „všechny články feedu pro uživatele" je nutný JOIN `articles` → `user_article_states` (LEFT JOIN, protože stav nemusí existovat). Absence záznamu = článek je nepřečtený.
 
 ---
 
@@ -236,16 +281,19 @@ Indexy: `(user_id, name)` UNIQUE
 
 ### Tabulka: `article_labels`
 
-Vazební tabulka M:N mezi `articles` a `labels`.
+Vazební tabulka M:N mezi `articles` a `labels`. Štítky jsou per-user, proto je `user_id` součástí PK.
 
 | Sloupec | Typ | Constraints | Popis |
 |---|---|---|---|
+| `user_id` | `INTEGER` | NOT NULL, FK → `users.id` ON DELETE CASCADE | Uživatel |
 | `article_id` | `BIGINT` | NOT NULL, FK → `articles.id` ON DELETE CASCADE | Článek |
 | `label_id` | `INTEGER` | NOT NULL, FK → `labels.id` ON DELETE CASCADE | Štítek |
 | `assigned_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Kdy byl štítek přiřazen |
 | `assigned_by_filter` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | True = přiřazeno filtrem automaticky |
 
-Indexy: `(article_id, label_id)` PK, `label_id`, `article_id`
+PK: `(user_id, article_id, label_id)`
+
+Indexy: `(user_id, label_id)`, `article_id`
 
 ---
 
@@ -303,12 +351,11 @@ Logujeme pouze chyby – úspěšné fetche se nezaznamenávají, poslední stav
 |---|---|---|---|
 | `id` | `BIGSERIAL` | PK | Primární klíč |
 | `feed_id` | `INTEGER` | NOT NULL, FK → `feeds.id` ON DELETE CASCADE | Feed |
-| `user_id` | `INTEGER` | NOT NULL | Vlastník feedu (denorm.) |
 | `failed_at` | `TIMESTAMPTZ` | NOT NULL | Kdy chyba nastala |
 | `http_status` | `SMALLINT` | | HTTP status odpovědi (NULL pokud chyba před HTTP) |
 | `error_message` | `TEXT` | NOT NULL | Chybová zpráva |
 
-Indexy: `(feed_id, failed_at DESC)`, `(user_id, failed_at DESC)`
+Indexy: `(feed_id, failed_at DESC)`
 
 Poznámka: Záznamy starší 30 dní se automaticky mažou (purge job). Aktuální stav feedu (poslední fetch, poslední chyba, duration) je vždy v tabulce `feeds`.
 
@@ -347,17 +394,19 @@ Indexy: `(user_id, provider)` PK
 ### Shrnutí relací
 
 ```
-users (1) ──< feeds (N)
+users (1) ──< user_feeds (N)
 users (1) ──< folders (N)
 users (1) ──< labels (N)
 users (1) ──< filters (N)
 users (1) ── user_settings (1)
-folders (1) ──< feeds (N)
+folders (1) ──< user_feeds (N)
+feeds (1) ──< user_feeds (N)          sdílený feed ← předplatitelé
 feeds (1) ──< articles (N)
-articles (M) ──>< labels (N)     přes article_labels
+articles (M) ──>< labels (N)          přes article_labels (user_id, article_id, label_id)
+articles (1) ──< user_article_states  per-user stav článku
 filters (1) ──< filter_conditions (N)
 filters (1) ──< filter_actions (N)
-feeds (1) ──< fetch_logs (N)     pouze chybové záznamy
+feeds (1) ──< fetch_logs (N)          pouze chybové záznamy
 ```
 
 ---
@@ -530,6 +579,9 @@ filtread/
 | `POST` | `/htmx/folders/{id}/mark-read` | Označit celou složku jako přečtenou |
 | `POST` | `/htmx/all/mark-read` | Označit vše jako přečtené |
 | `GET` | `/htmx/articles/search` | Full-text vyhledávání (`?q=...`) |
+| `POST` | `/htmx/articles/{id}/share` | Vygenerování share_token (128 bit náhodný) |
+| `DELETE` | `/htmx/articles/{id}/share` | Zrušení share_token |
+| `GET` | `/share/{token}` | Veřejné zobrazení sdíleného článku ⚠️ rate limit |
 
 ---
 
@@ -577,7 +629,7 @@ filtread/
 
 ---
 
-### REST API v1 – JSON
+### REST API v1 – JSON *(plánováno po MVP)*
 
 Auth: `Authorization: Bearer <token>` nebo platná session cookie.
 
@@ -662,7 +714,11 @@ Běží přímo v FastAPI procesu. Jobs:
 - `cleanup_fetch_logs` – jednou týdně (chybové záznamy starší 30 dní)
 - `cleanup_expired_tokens` – denně
 
-Při více workerech: APScheduler s `PersistentJobStore` v PostgreSQL, nebo scheduler jen v prvním workeru.
+**MVP = 1 worker.** Uvicorn se spouští s `--workers 1` – zajištěno v `docker-compose.yml` napevno v command. Díky tomu existuje právě jedna instance scheduleru a joby neběží duplicitně.
+
+FastAPI je async, takže 1 worker zvládne self-hosted provoz s desítkami uživatelů bez problémů.
+
+Do budoucna při škálování: přesunout scheduler do separátního containeru, nebo použít `PersistentJobStore` (PostgreSQL/Redis) s leader election.
 
 ### Deduplikace článků
 
@@ -676,6 +732,12 @@ Při importu: `guid_hash` (SHA-256 z guid nebo URL) se porovná s existujícími
 3. Raw content z feedu (fallback)
 
 Výsledek do `articles.readable_content`. UI přepínač volí, který sloupec zobrazit.
+
+**UX při čekání na extrakci:**
+Extrakce probíhá na pozadí po fetchování feedu. Uživatel může otevřít článek dřív, než je hotová.
+- Pokud `readable_content IS NULL` a `extract_readable = TRUE` → detail článku zobrazí indikátor „načítám fulltext..."
+- HTMX polling (`hx-trigger="every 2s"`) na endpoint detailu článku, dokud `readable_content` není vyplněno
+- Timeout po 30 sekundách – pokud extrakce neproběhla, zobrazí se původní obsah z feedu bez dalšího pollingu
 
 **Rozhodovací logika – extrakce se přeskočí pokud:**
 - `feeds.extract_readable = FALSE` – uživatel vypnul per kanál
@@ -710,6 +772,41 @@ Překlady přes GNU gettext + `Babel`. Texty v Jinja2 šablonách obalené `_()`
 
 PostgreSQL nativní full-text search přes `tsvector` + GIN index. Nulová externí závislost. Transparentní upgrade na Elasticsearch/Meilisearch do budoucna.
 
+Konfigurace: `simple` (žádný stemming) + `unaccent` extension pro ignorování diakritiky. Hledání probíhá přes přesné tvary slov – uživatel musí zadat správný tvar (např. „programování", ne „programovat"). Plný český stemming je možné doplnit později vlastním slovníkem nebo `pg_trgm` trigram indexem.
+
+Migrace musí obsahovat: `CREATE EXTENSION IF NOT EXISTS unaccent;`
+
+### DB triggery pro `updated_at`
+
+PostgreSQL neaktualizuje `updated_at` automaticky – je potřeba trigger. Implementace v první Alembic migraci přes `op.execute()`:
+
+```sql
+-- Jedna sdílená trigger function
+CREATE OR REPLACE FUNCTION update_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger na každou tabulku s updated_at
+CREATE TRIGGER trg_updated_at BEFORE UPDATE ON users
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_updated_at BEFORE UPDATE ON feeds
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_updated_at BEFORE UPDATE ON user_feeds
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_updated_at BEFORE UPDATE ON filters
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+CREATE TRIGGER trg_updated_at BEFORE UPDATE ON app_settings
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+```
+
+V Alembic downgrade: `DROP TRIGGER` + `DROP FUNCTION`.
+
+---
+
 ### Příprava na Fázi 2 (AI)
 
 - Tabulky `ai_profiles` a `user_ai_keys` vytvořeny v první DB migraci.
@@ -719,7 +816,59 @@ PostgreSQL nativní full-text search přes `tsvector` + GIN index. Nulová exter
 
 ---
 
-## 5. Docker nasazení
+## 5. Security
+
+### CSRF ochrana
+
+Web používá session cookies → zranitelný na CSRF. Ochrana je povinná pro všechny POST/PUT/PATCH/DELETE endpointy včetně HTMX fragmentů.
+
+Implementace:
+- Middleware `starlette-csrf` (nebo vlastní) generuje CSRF token, ukládá do cookie
+- Každý mutující request musí přiložit token v headeru `X-CSRFToken`
+- V base Jinja2 šabloně globálně nastavit HTMX header: `hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'`
+- Klasické HTML formuláře dostanou hidden input `<input type="hidden" name="csrf_token" value="{{ csrf_token }}">`
+
+### Secret management
+
+Dva klíče v `.env`, každý s jiným dopadem při rotaci:
+
+**`SECRET_KEY`** – podepisuje session cookies.
+- Rotace → všechny aktivní sessions okamžitě neplatné, uživatelé se musí znovu přihlásit.
+- API tokeny (SHA-256 hash) nejsou ovlivněny.
+
+**`ENCRYPTION_KEY`** – šifruje citlivá data v DB: `smtp_password_encrypted`, `fetch_auth_pass_encrypted`, `user_ai_keys.api_key_encrypted`.
+- Rotace bez migrace → všechna zašifrovaná data nečitelná.
+- Při rotaci je nutný jednorázový migration script: dešifrovat starým klíčem → zašifrovat novým → uložit.
+
+Pro MVP se rotační nástroj neimplementuje. Klíče se generují jednou při nasazení a uchovávají bezpečně (např. v secrets manageru nebo zabezpečeném `.env`).
+
+---
+
+### CORS
+
+MVP nepovoluje CORS – web běží na stejné doméně, HTMX nepotřebuje cross-origin přístup. `CORSMiddleware` se nepřidává.
+
+Nastavit až při implementaci REST API (po MVP) – povolit pouze explicitně uvedené origins přes `.env`.
+
+---
+
+### Rate limiting
+
+Knihovna `slowapi` (dekorátor na endpoint, in-memory store – dostačující pro 1 worker).
+
+| Endpoint | Limit |
+|---|---|
+| `POST /login` | 5 / minuta per IP |
+| `POST /reset-password` | 2 / hodina per IP |
+| `POST /register` | 3 / hodina per IP |
+| `GET /share/{token}` | 20 / minuta per IP |
+| `POST /settings/tokens` | 5 / hodina per user |
+
+Při překročení limitu vrátit HTTP 429. Limity jsou konfigurovatelné přes `.env`.
+
+---
+
+## 6. Docker nasazení
 
 ```yaml
 # docker-compose.yml obsahuje:

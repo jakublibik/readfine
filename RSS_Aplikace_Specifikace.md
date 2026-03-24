@@ -54,7 +54,7 @@ Webová aplikace pro správu RSS kanálů s podporou více uživatelů, filtrov�
 - Deduplikace článků
 - Adaptivní stránkování
 - Automatické čištění starých článků (purge dle stáří nebo počtu na kanál); hvězdičkované a archivované články vyjmuty z purge
-- Smazání kanálu – hvězdičkované a archivované články se zachovají bez kanálu
+- Smazání kanálu – nehvězdičkované a nearchivované články se smažou; hvězdičkované a archivované se zachovají bez kanálu (feed_id = NULL, zobrazí se ve Hvězdičkovaných / Archivovaných)
 
 ### Zobrazení článků
 - Layout: 3-panel (levý panel: kategorie, střední: seznam, pravý: detail)
