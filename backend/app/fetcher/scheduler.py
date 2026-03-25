@@ -27,14 +27,19 @@ async def _fetch_due_feeds() -> None:
         )
         default_interval = result.scalar_one_or_none() or 60
 
-        # Feeds that are active and past their next scheduled fetch time
+        # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
+        error_backoff_min = max(30, default_interval * 5)
         due_feeds = await session.execute(
             select(Feed).where(
-                Feed.status == "active",
                 text(
-                    "last_fetched_at IS NULL OR "
-                    "last_fetched_at + (COALESCE(fetch_interval_min, :di) * interval '1 minute') < NOW()"
-                ).bindparams(di=default_interval),
+                    "(status = 'active' AND ("
+                    "  last_fetched_at IS NULL OR "
+                    "  last_fetched_at + (COALESCE(fetch_interval_min, :di) * interval '1 minute') < NOW()"
+                    ")) OR ("
+                    "  status = 'error' AND "
+                    "  last_fetched_at + (:backoff * interval '1 minute') < NOW()"
+                    ")"
+                ).bindparams(di=default_interval, backoff=error_backoff_min),
             )
         )
         feeds = due_feeds.scalars().all()

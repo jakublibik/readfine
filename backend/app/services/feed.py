@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +11,8 @@ from app.fetcher.rss import fetch_and_parse_url, fetch_feed
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
+from app.utils.crypto import encrypt
+from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,9 @@ async def subscribe(
     existing row is reused. Private feeds always get a dedicated row.
     """
     is_private = bool(fetch_auth_user or fetch_auth_pass)
+
+    # SSRF protection
+    validate_feed_url(url)
 
     # Validate folder ownership
     if folder_id is not None:
@@ -84,7 +90,7 @@ async def subscribe(
             feed_url=url,
             is_private=is_private,
             fetch_auth_user=fetch_auth_user if is_private else None,
-            # fetch_auth_pass_encrypted: set by caller after encryption
+            fetch_auth_pass_encrypted=encrypt(fetch_auth_pass) if fetch_auth_pass else None,
             title=title[:255],
             site_url=site_url[:2048] if site_url else None,
             subscriber_count=0,
@@ -101,7 +107,11 @@ async def subscribe(
         custom_title=custom_title[:255] if custom_title else None,
     )
     db.add(user_feed)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise ValueError("Already subscribed to this feed")
     await db.refresh(user_feed)
 
     # Kick off initial fetch in the background

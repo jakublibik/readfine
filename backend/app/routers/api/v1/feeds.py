@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
-from app.models.feed import Feed, UserFeed
+from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
 from app.services.feed import list_user_feeds, subscribe, unsubscribe
@@ -89,7 +89,13 @@ async def update_feed(
 
     if payload.custom_title is not None:
         user_feed.custom_title = payload.custom_title[:255] if payload.custom_title else None
-    if payload.folder_id is not None:
+    if "folder_id" in payload.model_fields_set:
+        if payload.folder_id is not None:
+            folder_result = await db.execute(
+                select(Folder).where(Folder.id == payload.folder_id, Folder.user_id == user.id)
+            )
+            if not folder_result.scalar_one_or_none():
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
         user_feed.folder_id = payload.folder_id
     if payload.extract_readable is not None:
         user_feed.extract_readable = payload.extract_readable

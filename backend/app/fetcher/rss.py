@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
+from app.utils.crypto import decrypt
+from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,8 @@ _TIMEOUT = 30  # seconds
 
 async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
-    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+    validate_feed_url(url)
+    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
         response = await client.get(url, headers=_HEADERS)
         response.raise_for_status()
         content = response.text
@@ -46,13 +49,12 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
     start_ms = int(time.monotonic() * 1000)
 
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
-            kwargs: dict = {"headers": _HEADERS}
-            if feed.fetch_auth_user:
-                # Decryption of fetch_auth_pass_encrypted is handled elsewhere;
-                # skip Basic Auth for now if pass is not plaintext.
-                pass
-            response = await client.get(feed.feed_url, **kwargs)
+        validate_feed_url(feed.feed_url)
+        auth = None
+        if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
+            auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
+            response = await client.get(feed.feed_url, headers=_HEADERS, auth=auth)
             response.raise_for_status()
             content = response.text
 
@@ -80,12 +82,14 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
 
     except Exception as exc:
         logger.error("Error fetching feed %d (%s): %s", feed.id, feed.feed_url, exc)
+        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
         feed.status = "error"
         feed.last_error = str(exc)[:500]
         feed.last_fetched_at = datetime.now(timezone.utc)
         db.add(FetchLog(
             feed_id=feed.id,
             failed_at=datetime.now(timezone.utc),
+            http_status=http_status,
             error_message=str(exc)[:500],
         ))
         await db.commit()
