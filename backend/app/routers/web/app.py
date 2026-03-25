@@ -21,10 +21,7 @@ async def main_app(
     request: Request,
     user: User = Depends(get_current_user),
 ):
-    return templates.TemplateResponse(
-        "app/main.html",
-        {"request": request, "user": user},
-    )
+    return templates.TemplateResponse(request, "app/main.html", {"user": user})
 
 
 # ── HTMX fragments ────────────────────────────────────────────────────────────
@@ -36,10 +33,7 @@ async def htmx_sidebar(
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db)
-    return templates.TemplateResponse(
-        "app/partials/sidebar.html",
-        {"request": request, "user": user, "user_feeds": user_feeds},
-    )
+    return templates.TemplateResponse(request, "app/partials/sidebar.html", {"user": user, "user_feeds": user_feeds})
 
 
 @router.get("/htmx/articles", response_class=HTMLResponse)
@@ -70,19 +64,15 @@ async def htmx_article_list(
     )
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
-    return templates.TemplateResponse(
-        "app/partials/article_list.html",
-        {
-            "request": request,
-            "articles": articles,
-            "feed_id": feed_id,
-            "folder_id": folder_id,
-            "unread_only": unread_only,
-            "starred_only": starred_only,
-            "archived_only": archived_only,
-            "mark_read_on_scroll": mark_read_on_scroll,
-        },
-    )
+    return templates.TemplateResponse(request, "app/partials/article_list.html", {
+        "articles": articles,
+        "feed_id": feed_id,
+        "folder_id": folder_id,
+        "unread_only": unread_only,
+        "starred_only": starred_only,
+        "archived_only": archived_only,
+        "mark_read_on_scroll": mark_read_on_scroll,
+    })
 
 
 @router.get("/htmx/articles/{article_id}", response_class=HTMLResponse)
@@ -100,10 +90,7 @@ async def htmx_article_detail(
     )
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
-    return templates.TemplateResponse(
-        "app/partials/article_detail.html",
-        {"request": request, "article": article, "mark_read_on_scroll": mark_read_on_scroll},
-    )
+    return templates.TemplateResponse(request, "app/partials/article_detail.html", {"article": article, "mark_read_on_scroll": mark_read_on_scroll})
 
 
 @router.post("/htmx/articles/{article_id}/read", response_class=HTMLResponse)
@@ -116,10 +103,7 @@ async def htmx_toggle_read(
     article = await toggle_article_state(user, article_id, "is_read", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    response = templates.TemplateResponse(
-        "app/partials/read_button.html",
-        {"request": request, "article": article},
-    )
+    response = templates.TemplateResponse(request, "app/partials/read_button.html", {"article": article})
     # Signal the sidebar to refresh its unread badges
     response.headers["HX-Trigger"] = "sidebarRefresh"
     return response
@@ -135,10 +119,7 @@ async def htmx_toggle_star(
     article = await toggle_article_state(user, article_id, "is_starred", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return templates.TemplateResponse(
-        "app/partials/star_button.html",
-        {"request": request, "article": article},
-    )
+    return templates.TemplateResponse(request, "app/partials/star_button.html", {"article": article})
 
 
 @router.post("/htmx/articles/{article_id}/archive", response_class=HTMLResponse)
@@ -151,7 +132,4 @@ async def htmx_toggle_archive(
     article = await toggle_article_state(user, article_id, "is_archived", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return templates.TemplateResponse(
-        "app/partials/archive_button.html",
-        {"request": request, "article": article},
-    )
+    return templates.TemplateResponse(request, "app/partials/archive_button.html", {"article": article})

@@ -23,7 +23,7 @@ async def _get_app_settings(db: AsyncSession) -> AppSettings | None:
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     if request.session.get("user_id"):
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse("/app", status_code=302)
     return templates.TemplateResponse(request, "auth/login.html")
 
 
@@ -53,13 +53,13 @@ async def login(
         )
 
     request.session["user_id"] = user.id
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse("/app", status_code=302)
 
 
 @router.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
-        return RedirectResponse("/", status_code=302)
+        return RedirectResponse("/app", status_code=302)
     app_settings = await _get_app_settings(db)
     if app_settings and not app_settings.registration_enabled:
         return templates.TemplateResponse(request, "auth/registration_disabled.html")
@@ -123,10 +123,10 @@ async def register(
         )
 
     request.session["user_id"] = user.id
-    return RedirectResponse("/", status_code=302)
+    return RedirectResponse("/app", status_code=302)
 
 
-@router.post("/logout")
+@router.api_route("/logout", methods=["GET", "POST"])
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)

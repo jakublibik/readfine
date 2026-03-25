@@ -13,6 +13,7 @@
         {% endif %}
 
         <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
+            <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
             <div>
                 <label class="block text-sm font-medium mb-1" for="display_name">Display name</label>
                 <input id="display_name" name="display_name" type="text" required

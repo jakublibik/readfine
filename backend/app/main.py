@@ -61,7 +61,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CSRFMiddleware,
         secret=settings.secret_key,
-        exempt_urls=[re.compile(r"^/api/")],  # API uses Bearer tokens, not cookies
+        exempt_urls=[re.compile(r"^/api/"), re.compile(r"^/logout$")],  # API uses Bearer tokens; logout needs no CSRF
         sensitive_cookies={"session"},  # only check CSRF when user is logged in
     )
 
