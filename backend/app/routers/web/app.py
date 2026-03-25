@@ -65,6 +65,11 @@ async def htmx_article_list(
         limit=50,
         offset=offset,
     )
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     return templates.TemplateResponse(
         "app/partials/article_list.html",
         {
@@ -75,6 +80,7 @@ async def htmx_article_list(
             "unread_only": unread_only,
             "starred_only": starred_only,
             "archived_only": archived_only,
+            "mark_read_on_scroll": mark_read_on_scroll,
         },
     )
 

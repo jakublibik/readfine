@@ -1,4 +1,6 @@
-<div class="border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
+<div class="article-row border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
+     data-article-id="{{ article.id }}"
+     data-is-read="{{ 'true' if article.is_read else 'false' }}"
      hx-get="/htmx/articles/{{ article.id }}"
      hx-target="#article-detail"
      hx-swap="innerHTML">
@@ -15,7 +17,7 @@
 
   <!-- Title -->
   <p class="text-sm font-medium text-gray-900 leading-snug line-clamp-2">
-    {% if not article.is_read %}<span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 mr-1 mb-0.5 align-middle"></span>{% endif %}
+    {% if not article.is_read %}<span class="unread-dot inline-block w-1.5 h-1.5 rounded-full bg-blue-500 mr-1 mb-0.5 align-middle"></span>{% endif %}
     {{ article.title }}
   </p>
 
