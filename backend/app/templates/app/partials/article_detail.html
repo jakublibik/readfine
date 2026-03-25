@@ -60,7 +60,7 @@
 
 </article>
 
-{% if mark_read_on_scroll and not article.is_read %}
+{% if not article.is_read %}
 <script>
   (function() {
     var timer = setTimeout(function() {
