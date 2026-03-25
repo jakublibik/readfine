@@ -90,3 +90,5 @@ class UserFeedUpdate(BaseModel):
     purge_after_days: int | None = None
     purge_keep_count: int | None = None
     position: int | None = None
+    fetch_auth_user: str | None = None
+    fetch_auth_pass: str | None = None

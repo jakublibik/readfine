@@ -9,6 +9,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
 from app.services.feed import list_user_feeds, subscribe, unsubscribe
+from app.utils.crypto import encrypt
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
 
@@ -105,6 +106,19 @@ async def update_feed(
         user_feed.purge_keep_count = payload.purge_keep_count
     if payload.position is not None:
         user_feed.position = payload.position
+
+    auth_fields = {"fetch_auth_user", "fetch_auth_pass"} & payload.model_fields_set
+    if auth_fields:
+        feed = user_feed.feed
+        if feed.is_private:
+            if "fetch_auth_user" in payload.model_fields_set and not payload.fetch_auth_user:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_user cannot be empty for a private feed")
+            if "fetch_auth_pass" in payload.model_fields_set and not payload.fetch_auth_pass:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_pass cannot be empty for a private feed")
+        if "fetch_auth_user" in payload.model_fields_set:
+            feed.fetch_auth_user = payload.fetch_auth_user
+        if "fetch_auth_pass" in payload.model_fields_set and payload.fetch_auth_pass:
+            feed.fetch_auth_pass_encrypted = encrypt(payload.fetch_auth_pass)
 
     await db.commit()
     await db.refresh(user_feed)
