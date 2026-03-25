@@ -112,6 +112,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         author=article.author,
         content=article.content,
         content_source=article.content_source,
+        readable_content=article.readable_content,
         readable_status=article.readable_status,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
@@ -124,23 +125,115 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     )
 
 
+async def toggle_article_state(
+    user: User,
+    article_id: int,
+    field: str,
+    db: AsyncSession,
+) -> ArticleResponse | None:
+    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
+    assert field in {"is_read", "is_starred", "is_archived"}
+    current_value = {field: True}  # payload with inverted value – determined after load
+    # Load current state first via the same single-query path as update_article_state
+    stmt = (
+        select(
+            Article,
+            UserArticleState,
+            Feed.title.label("feed_title"),
+            UserFeed.custom_title.label("custom_title"),
+            UserFeed.feed_id.label("uf_feed_id"),
+        )
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .join(Feed, Feed.id == Article.feed_id)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == user.id),
+        )
+        .where(Article.id == article_id, UserFeed.user_id == user.id)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return None
+
+    article, state, feed_title, custom_title, uf_feed_id = row
+
+    if state is None:
+        state = UserArticleState(user_id=user.id, article_id=article_id)
+        db.add(state)
+
+    new_value = not getattr(state, field, False)
+    setattr(state, field, new_value)
+
+    if field == "is_read":
+        state.read_at = datetime.now(timezone.utc) if new_value else None
+        if uf_feed_id:
+            delta = -1 if new_value else 1
+            await db.execute(
+                update(UserFeed)
+                .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
+                .values(unread_count=UserFeed.unread_count + delta)
+            )
+
+    await db.commit()
+    await db.refresh(state)
+
+    return ArticleResponse(
+        id=article.id,
+        feed_id=article.feed_id,
+        feed_title=custom_title or feed_title,
+        url=article.url,
+        title=article.title,
+        author=article.author,
+        content=article.content,
+        content_source=article.content_source,
+        readable_content=article.readable_content,
+        readable_status=article.readable_status,
+        published_at=article.published_at,
+        estimated_read_min=article.estimated_read_min,
+        word_count=article.word_count,
+        image_url=article.image_url,
+        is_read=state.is_read,
+        is_starred=state.is_starred,
+        is_archived=state.is_archived,
+        read_at=state.read_at,
+    )
+
+
 async def update_article_state(
     user: User,
     article_id: int,
     payload: ArticleStateUpdate,
     db: AsyncSession,
 ) -> ArticleResponse | None:
-    """Toggle is_read / is_starred / is_archived. Creates UserArticleState if needed."""
-    # Verify the article is accessible to this user
-    access = await db.execute(
-        select(UserFeed.id)
-        .join(Article, Article.feed_id == UserFeed.feed_id)
+    """Toggle is_read / is_starred / is_archived. Creates UserArticleState if needed.
+
+    Single round-trip: loads Article + Feed title + UserFeed + state in one query,
+    applies changes, commits, and builds the response from already-loaded data.
+    """
+    stmt = (
+        select(
+            Article,
+            UserArticleState,
+            Feed.title.label("feed_title"),
+            UserFeed.custom_title.label("custom_title"),
+            UserFeed.feed_id.label("uf_feed_id"),
+        )
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .join(Feed, Feed.id == Article.feed_id)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == user.id),
+        )
         .where(Article.id == article_id, UserFeed.user_id == user.id)
     )
-    if not access.scalar_one_or_none():
+    row = (await db.execute(stmt)).first()
+    if not row:
         return None
 
-    state = await db.get(UserArticleState, (user.id, article_id))
+    article, state, feed_title, custom_title, uf_feed_id = row
+
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
@@ -149,9 +242,13 @@ async def update_article_state(
         prev_read = state.is_read
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
-        # Update denormalized unread_count on affected UserFeed
-        if prev_read != payload.is_read:
-            await _adjust_unread_count(user.id, article_id, delta=-1 if payload.is_read else 1, db=db)
+        if prev_read != payload.is_read and uf_feed_id:
+            delta = -1 if payload.is_read else 1
+            await db.execute(
+                update(UserFeed)
+                .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
+                .values(unread_count=UserFeed.unread_count + delta)
+            )
 
     if payload.is_starred is not None:
         state.is_starred = payload.is_starred
@@ -160,16 +257,25 @@ async def update_article_state(
         state.is_archived = payload.is_archived
 
     await db.commit()
-    return await get_article(user, article_id, db)
+    await db.refresh(state)
 
-
-async def _adjust_unread_count(user_id: int, article_id: int, delta: int, db: AsyncSession) -> None:
-    """Increment or decrement unread_count on the UserFeed that owns this article."""
-    article = await db.get(Article, article_id)
-    if not article or not article.feed_id:
-        return
-    await db.execute(
-        update(UserFeed)
-        .where(UserFeed.user_id == user_id, UserFeed.feed_id == article.feed_id)
-        .values(unread_count=UserFeed.unread_count + delta)
+    return ArticleResponse(
+        id=article.id,
+        feed_id=article.feed_id,
+        feed_title=custom_title or feed_title,
+        url=article.url,
+        title=article.title,
+        author=article.author,
+        content=article.content,
+        content_source=article.content_source,
+        readable_content=article.readable_content,
+        readable_status=article.readable_status,
+        published_at=article.published_at,
+        estimated_read_min=article.estimated_read_min,
+        word_count=article.word_count,
+        image_url=article.image_url,
+        is_read=state.is_read,
+        is_starred=state.is_starred,
+        is_archived=state.is_archived,
+        read_at=state.read_at,
     )

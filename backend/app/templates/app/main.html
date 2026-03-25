@@ -9,7 +9,7 @@
   <aside id="sidebar"
          class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto"
          hx-get="/htmx/sidebar"
-         hx-trigger="load"
+         hx-trigger="load, sidebarRefresh from:body"
          hx-swap="innerHTML">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
   </aside>

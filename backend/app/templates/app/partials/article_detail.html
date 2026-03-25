@@ -47,7 +47,11 @@
 
   <!-- Content -->
   <div class="prose prose-sm max-w-none text-gray-800">
-    {% if article.content %}
+    {% if article.readable_status == 'success' and article.readable_content %}
+      {{ article.readable_content | safe }}
+    {% elif article.readable_status == 'pending' %}
+      <p class="text-gray-400 italic">Loading full content…</p>
+    {% elif article.content %}
       {{ article.content | safe }}
     {% else %}
       <p class="text-gray-400 italic">No content available.</p>
