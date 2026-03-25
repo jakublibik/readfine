@@ -27,9 +27,14 @@ async def lifespan(app: FastAPI):
         async with db.async_session_factory() as session:
             await seed_first_admin(session, settings.first_admin_email, settings.first_admin_password)
 
+    from app.fetcher.scheduler import create_scheduler
+    sched = create_scheduler()
+    sched.start()
+
     yield
 
     # Shutdown
+    sched.shutdown(wait=False)
     await db.engine.dispose()
 
 
@@ -87,9 +92,13 @@ def create_app() -> FastAPI:
     # Routers
     from app.routers.web.auth import router as web_auth_router
     from app.routers.api.v1.auth import router as api_auth_router
+    from app.routers.api.v1.folders import router as api_folders_router
+    from app.routers.api.v1.feeds import router as api_feeds_router
 
     app.include_router(web_auth_router)
     app.include_router(api_auth_router, prefix="/api/v1")
+    app.include_router(api_folders_router, prefix="/api/v1")
+    app.include_router(api_feeds_router, prefix="/api/v1")
 
     return app
 
