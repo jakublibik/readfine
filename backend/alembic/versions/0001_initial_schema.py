@@ -51,7 +51,7 @@ def upgrade() -> None:
         sa.Column("left_panel_pinned", sa.Boolean, server_default="true"),
         sa.Column("articles_per_page", sa.SmallInteger, server_default="50"),
         sa.Column("timezone", sa.String(50), server_default="UTC"),
-        sa.Column("language", sa.String(10), server_default="cs"),
+        sa.Column("language", sa.String(10), server_default="en"),
         sa.Column("keyboard_shortcuts_enabled", sa.Boolean, server_default="true"),
     )
 

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.auth.security import create_access_token, verify_password
 from app.database import get_db
+from app.main import limiter
 from app.models.user import User
 from app.schemas.user import LoginRequest, UserResponse
 
@@ -12,7 +13,9 @@ router = APIRouter(prefix="/auth", tags=["api-auth"])
 
 
 @router.post("/token")
+@limiter.limit("10/minute")
 async def get_token(
+    request: Request,
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):

@@ -48,7 +48,7 @@ Indexy: `email` (unique), `role`
 | `left_panel_pinned` | `BOOLEAN` | DEFAULT `TRUE` | Levý panel připnutý/overlay |
 | `articles_per_page` | `SMALLINT` | DEFAULT `50` | Počet článků na stránku |
 | `timezone` | `VARCHAR(50)` | DEFAULT `'UTC'` | Časová zóna uživatele |
-| `language` | `VARCHAR(10)` | DEFAULT `'cs'` | Jazyk UI (`cs`, `en`) |
+| `language` | `VARCHAR(10)` | DEFAULT `'en'` | Jazyk UI (`cs`, `en`) |
 | `keyboard_shortcuts_enabled` | `BOOLEAN` | DEFAULT `TRUE` | Klávesové zkratky |
 
 ---
@@ -804,9 +804,9 @@ Výsledek do `articles.readable_content`. UI přepínač volí, který sloupec z
 
 Překlady přes GNU gettext + `Babel`. Texty v Jinja2 šablonách obalené `_()`, překladové soubory v `backend/app/locales/{lang}/LC_MESSAGES/`.
 
-- **MVP**: pouze čeština (`cs`), anglické překlady se nedodávají
-- **Do budoucna**: angličtina (`en`) a případně další jazyky; sloupec `user_settings.language` je připraven
-- Výchozí jazyk aplikace: `cs`
+- **MVP**: pouze angličtina (`en`), další překlady se nedodávají
+- **Do budoucna**: čeština (`cs`) a případně další jazyky; sloupec `user_settings.language` je připraven
+- Výchozí jazyk aplikace: `en`
 
 ### Full-text search
 

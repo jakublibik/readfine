@@ -13,6 +13,8 @@ from slowapi.errors import RateLimitExceeded
 from app.config import settings
 import app.database as db
 
+limiter = Limiter(key_func=get_remote_address)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -59,7 +61,6 @@ def create_app() -> FastAPI:
     )
 
     # Rate limiting
-    limiter = Limiter(key_func=get_remote_address)
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -73,9 +74,10 @@ def create_app() -> FastAPI:
         if not settings.debug:
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self'; "
+                "script-src 'self' https://cdn.tailwindcss.com https://unpkg.com; "
                 "img-src * data:; "
-                "style-src 'self' 'unsafe-inline';"
+                "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
+                "connect-src 'self' https://cdn.tailwindcss.com;"
             )
         return response
 

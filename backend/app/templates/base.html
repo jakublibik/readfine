@@ -6,13 +6,7 @@
     <title>{% block title %}Filtread{% endblock %}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
-    <script>
-        // Send CSRF token as header on every HTMX request
-        document.addEventListener("htmx:configRequest", (e) => {
-            const token = document.cookie.split("; ").find(r => r.startsWith("csrftoken="))?.split("=")[1];
-            if (token) e.detail.headers["x-csrftoken"] = token;
-        });
-    </script>
+    <script src="/static/js/csrf.js"></script>
 </head>
 <body class="bg-gray-50 text-gray-900">
     {% block content %}{% endblock %}

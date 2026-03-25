@@ -2,10 +2,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.security import hash_password, verify_password
 from app.database import get_db
+from app.main import limiter
 from app.models.user import User, UserSettings
 from app.models.settings import AppSettings
 
@@ -26,6 +28,7 @@ async def login_page(request: Request):
 
 
 @router.post("/login", response_class=HTMLResponse)
+@limiter.limit("10/minute")
 async def login(
     request: Request,
     email: str = Form(...),
@@ -64,6 +67,7 @@ async def register_page(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/register", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def register(
     request: Request,
     email: str = Form(...),
@@ -90,23 +94,39 @@ async def register(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
 
+    display_name = display_name.strip()
+    if not display_name:
+        return templates.TemplateResponse(
+            request, "auth/register.html",
+            {"error": "Display name cannot be empty"},
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
     user = User(
         email=email,
         password_hash=hash_password(password),
-        display_name=display_name.strip(),
+        display_name=display_name,
         role="user",
     )
     db.add(user)
     await db.flush()
 
     db.add(UserSettings(user_id=user.id))
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return templates.TemplateResponse(
+            request, "auth/register.html",
+            {"error": "This email is already registered"},
+            status_code=status.HTTP_409_CONFLICT,
+        )
 
     request.session["user_id"] = user.id
     return RedirectResponse("/", status_code=302)
 
 
-@router.api_route("/logout", methods=["GET", "POST"])
+@router.post("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)
