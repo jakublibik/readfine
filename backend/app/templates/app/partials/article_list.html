@@ -1,0 +1,9 @@
+{% if articles %}
+  {% for article in articles %}
+    {% include "app/partials/article_row.html" %}
+  {% endfor %}
+{% else %}
+  <div class="flex items-center justify-center h-48 text-gray-400 text-sm">
+    No articles found.
+  </div>
+{% endif %}

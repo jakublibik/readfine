@@ -1,0 +1,40 @@
+<div class="border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
+     hx-get="/htmx/articles/{{ article.id }}"
+     hx-target="#article-detail"
+     hx-swap="innerHTML">
+
+  <!-- Feed name + date -->
+  <div class="flex items-center justify-between mb-1">
+    <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+    {% if article.published_at %}
+      <span class="text-xs text-gray-400 flex-shrink-0 ml-2">
+        {{ article.published_at.strftime("%b %d") }}
+      </span>
+    {% endif %}
+  </div>
+
+  <!-- Title -->
+  <p class="text-sm font-medium text-gray-900 leading-snug line-clamp-2">
+    {% if not article.is_read %}<span class="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 mr-1 mb-0.5 align-middle"></span>{% endif %}
+    {{ article.title }}
+  </p>
+
+  <!-- Summary -->
+  {% if article.summary %}
+    <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ article.summary }}</p>
+  {% endif %}
+
+  <!-- Footer: read time + star indicator -->
+  <div class="flex items-center gap-2 mt-1.5">
+    {% if article.estimated_read_min %}
+      <span class="text-xs text-gray-400">{{ article.estimated_read_min }} min</span>
+    {% endif %}
+    {% if article.is_starred %}
+      <span class="text-xs text-yellow-500">★</span>
+    {% endif %}
+    {% if article.is_archived %}
+      <span class="text-xs text-gray-400">archived</span>
+    {% endif %}
+  </div>
+
+</div>

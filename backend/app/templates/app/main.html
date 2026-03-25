@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}Filtread{% endblock %}
+
+{% block content %}
+<div class="flex h-screen overflow-hidden">
+
+  <!-- Left panel: sidebar -->
+  <aside id="sidebar"
+         class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto"
+         hx-get="/htmx/sidebar"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+    <div class="p-4 text-gray-400 text-sm">Loading…</div>
+  </aside>
+
+  <!-- Middle panel: article list -->
+  <section id="article-list"
+           class="w-80 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto"
+           hx-get="/htmx/articles"
+           hx-trigger="load"
+           hx-swap="innerHTML">
+    <div class="p-4 text-gray-400 text-sm">Loading…</div>
+  </section>
+
+  <!-- Right panel: article detail -->
+  <main id="article-detail" class="flex-1 overflow-y-auto bg-white">
+    <div class="flex items-center justify-center h-full text-gray-400">
+      <div class="text-center">
+        <svg class="mx-auto mb-3 h-10 w-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                d="M19 20H5a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2z"/>
+        </svg>
+        <p class="text-sm">Select an article to read</p>
+      </div>
+    </div>
+  </main>
+
+</div>
+{% endblock %}

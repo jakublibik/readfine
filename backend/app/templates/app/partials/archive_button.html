@@ -1,0 +1,8 @@
+<button hx-post="/htmx/articles/{{ article.id }}/archive"
+        hx-target="#archive-btn-{{ article.id }}"
+        hx-swap="innerHTML"
+        title="{% if article.is_archived %}Unarchive{% else %}Archive{% endif %}"
+        class="flex items-center gap-1 px-2 py-1 rounded text-xs border
+               {% if article.is_archived %}bg-gray-100 border-gray-300 text-gray-700{% else %}border-gray-200 text-gray-500 hover:bg-gray-50{% endif %}">
+  {% if article.is_archived %}⊡ Archived{% else %}⊟ Archive{% endif %}
+</button>

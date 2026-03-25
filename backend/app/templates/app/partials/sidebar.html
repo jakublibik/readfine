@@ -1,0 +1,66 @@
+<!-- Sidebar: header + nav links + feed list -->
+<div class="flex flex-col h-full">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+    <span class="font-semibold text-gray-800">Filtread</span>
+    <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600">Logout</a>
+  </div>
+
+  <!-- Nav -->
+  <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
+    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+       hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
+       hx-push-url="false">
+      All articles
+    </a>
+    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+       hx-get="/htmx/articles?unread_only=true" hx-target="#article-list" hx-swap="innerHTML"
+       hx-push-url="false">
+      Unread
+    </a>
+    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+       hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
+       hx-push-url="false">
+      Starred
+    </a>
+    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+       hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML"
+       hx-push-url="false">
+      Archived
+    </a>
+  </nav>
+
+  <!-- Feed list -->
+  <div class="flex-1 overflow-y-auto px-2 py-3">
+    {% set ns = namespace(current_folder=None) %}
+    {% for uf in user_feeds %}
+      {% if uf.folder_id != ns.current_folder %}
+        {% set ns.current_folder = uf.folder_id %}
+        {% if uf.folder %}
+          <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            {{ uf.folder.name }}
+          </div>
+        {% elif ns.current_folder is none and loop.index > 1 %}
+          <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            Uncategorized
+          </div>
+        {% endif %}
+      {% endif %}
+
+      <a class="flex items-center justify-between px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="truncate">{{ uf.custom_title or uf.feed.title }}</span>
+        {% if uf.unread_count > 0 %}
+          <span class="ml-2 flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
+            {{ uf.unread_count }}
+          </span>
+        {% endif %}
+      </a>
+    {% else %}
+      <p class="px-3 py-2 text-sm text-gray-400">No feeds yet.</p>
+    {% endfor %}
+  </div>
+
+</div>

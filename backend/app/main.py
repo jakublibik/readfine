@@ -91,14 +91,18 @@ def create_app() -> FastAPI:
 
     # Routers
     from app.routers.web.auth import router as web_auth_router
+    from app.routers.web.app import router as web_app_router
     from app.routers.api.v1.auth import router as api_auth_router
     from app.routers.api.v1.folders import router as api_folders_router
     from app.routers.api.v1.feeds import router as api_feeds_router
+    from app.routers.api.v1.articles import router as api_articles_router
 
     app.include_router(web_auth_router)
+    app.include_router(web_app_router)
     app.include_router(api_auth_router, prefix="/api/v1")
     app.include_router(api_folders_router, prefix="/api/v1")
     app.include_router(api_feeds_router, prefix="/api/v1")
+    app.include_router(api_articles_router, prefix="/api/v1")
 
     return app
 

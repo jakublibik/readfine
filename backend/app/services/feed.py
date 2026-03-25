@@ -157,7 +157,7 @@ async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
     """Return all subscriptions for a user, ordered by folder/position."""
     result = await db.execute(
         select(UserFeed)
-        .options(selectinload(UserFeed.feed))
+        .options(selectinload(UserFeed.feed), selectinload(UserFeed.folder))
         .where(UserFeed.user_id == user.id)
         .order_by(UserFeed.folder_id.nulls_last(), UserFeed.position)
     )

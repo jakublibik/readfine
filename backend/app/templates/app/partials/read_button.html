@@ -1,0 +1,8 @@
+<button hx-post="/htmx/articles/{{ article.id }}/read"
+        hx-target="#read-btn-{{ article.id }}"
+        hx-swap="innerHTML"
+        title="{% if article.is_read %}Mark as unread{% else %}Mark as read{% endif %}"
+        class="flex items-center gap-1 px-2 py-1 rounded text-xs border
+               {% if article.is_read %}bg-blue-50 border-blue-200 text-blue-700{% else %}border-gray-200 text-gray-500 hover:bg-gray-50{% endif %}">
+  {% if article.is_read %}✓ Read{% else %}○ Unread{% endif %}
+</button>

@@ -1,0 +1,57 @@
+<article class="max-w-2xl mx-auto px-6 py-8">
+
+  <!-- Header -->
+  <header class="mb-6">
+    <h1 class="text-xl font-bold text-gray-900 leading-snug mb-2">{{ article.title }}</h1>
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500">
+      {% if article.feed_title %}
+        <span>{{ article.feed_title }}</span>
+      {% endif %}
+      {% if article.author %}
+        <span>· {{ article.author }}</span>
+      {% endif %}
+      {% if article.published_at %}
+        <span>· {{ article.published_at.strftime("%B %d, %Y") }}</span>
+      {% endif %}
+      {% if article.estimated_read_min %}
+        <span>· {{ article.estimated_read_min }} min read</span>
+      {% endif %}
+    </div>
+  </header>
+
+  <!-- Action toolbar -->
+  <div class="flex items-center gap-2 mb-6 pb-4 border-b border-gray-100">
+
+    <!-- Read toggle -->
+    <div id="read-btn-{{ article.id }}">
+      {% include "app/partials/read_button.html" %}
+    </div>
+
+    <!-- Star toggle -->
+    <div id="star-btn-{{ article.id }}">
+      {% include "app/partials/star_button.html" %}
+    </div>
+
+    <!-- Archive toggle -->
+    <div id="archive-btn-{{ article.id }}">
+      {% include "app/partials/archive_button.html" %}
+    </div>
+
+    {% if article.url %}
+      <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
+         class="ml-auto text-xs text-blue-600 hover:underline">
+        Open original ↗
+      </a>
+    {% endif %}
+  </div>
+
+  <!-- Content -->
+  <div class="prose prose-sm max-w-none text-gray-800">
+    {% if article.content %}
+      {{ article.content | safe }}
+    {% else %}
+      <p class="text-gray-400 italic">No content available.</p>
+    {% endif %}
+  </div>
+
+</article>
