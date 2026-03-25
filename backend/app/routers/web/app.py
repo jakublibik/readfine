@@ -4,9 +4,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.auth.dependencies import get_current_user
 from app.database import get_db
-from app.models.user import User
+from app.models.user import User, UserSettings
 from app.services.article import get_article, list_articles, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 
@@ -87,9 +89,14 @@ async def htmx_article_detail(
     article = await get_article(user, article_id, db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-4'>Article not found.</p>", status_code=404)
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     return templates.TemplateResponse(
         "app/partials/article_detail.html",
-        {"request": request, "article": article},
+        {"request": request, "article": article, "mark_read_on_scroll": mark_read_on_scroll},
     )
 
 

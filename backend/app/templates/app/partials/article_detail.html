@@ -59,3 +59,20 @@
   </div>
 
 </article>
+
+{% if mark_read_on_scroll and not article.is_read %}
+<script>
+  (function() {
+    var timer = setTimeout(function() {
+      htmx.ajax('POST', '/htmx/articles/{{ article.id }}/read', {
+        target: '#read-btn-{{ article.id }}',
+        swap: 'innerHTML'
+      });
+    }, 3000);
+    // Cancel if user navigates away before timer fires
+    document.getElementById('article-detail').addEventListener(
+      'htmx:beforeRequest', function() { clearTimeout(timer); }, { once: true }
+    );
+  })();
+</script>
+{% endif %}
