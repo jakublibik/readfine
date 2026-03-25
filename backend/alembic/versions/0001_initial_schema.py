@@ -344,7 +344,7 @@ def upgrade() -> None:
         sa.Column("model", sa.String(100), nullable=False),
         sa.Column("api_key_encrypted", sa.Text),
         sa.Column("max_tokens", sa.Integer, server_default="1000"),
-        sa.Column("summary_language", sa.String(10), server_default="cs"),
+        sa.Column("summary_language", sa.String(10), server_default="en"),
         sa.Column("is_active", sa.Boolean, server_default="false"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )

@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -51,9 +51,9 @@ async def subscribe(
     )
     max_feeds = app_settings_result.scalar_one_or_none() or 200
     count_result = await db.execute(
-        select(UserFeed).where(UserFeed.user_id == user.id)
+        select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
     )
-    if len(count_result.scalars().all()) >= max_feeds:
+    if (count_result.scalar() or 0) >= max_feeds:
         raise ValueError(f"Feed limit reached ({max_feeds})")
 
     feed: Feed | None = None
