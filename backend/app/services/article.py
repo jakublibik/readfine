@@ -172,7 +172,7 @@ async def toggle_article_state(
             await db.execute(
                 update(UserFeed)
                 .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
-                .values(unread_count=UserFeed.unread_count + delta)
+                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
             )
 
     await db.commit()
@@ -247,7 +247,7 @@ async def update_article_state(
             await db.execute(
                 update(UserFeed)
                 .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
-                .values(unread_count=UserFeed.unread_count + delta)
+                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
             )
 
     if payload.is_starred is not None:

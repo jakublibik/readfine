@@ -9,6 +9,7 @@ from sqlalchemy import select
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User, UserSettings
+from app.schemas.article import ArticleStateUpdate
 from app.services.article import get_article, list_articles, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 
@@ -93,6 +94,19 @@ async def htmx_article_detail(
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {"article": article, "mark_read_on_scroll": mark_read_on_scroll})
 
 
+def _read_response(request: Request, article) -> HTMLResponse:
+    """Return read button HTML + OOB article row update + sidebarRefresh trigger."""
+    btn_html = templates.env.get_template("app/partials/read_button.html").render(
+        article=article, request=request
+    )
+    row_html = templates.env.get_template("app/partials/article_row.html").render(
+        article=article, request=request, oob=True
+    )
+    response = HTMLResponse(btn_html + row_html)
+    response.headers["HX-Trigger"] = "sidebarRefresh"
+    return response
+
+
 @router.post("/htmx/articles/{article_id}/read", response_class=HTMLResponse)
 async def htmx_toggle_read(
     article_id: int,
@@ -103,10 +117,21 @@ async def htmx_toggle_read(
     article = await toggle_article_state(user, article_id, "is_read", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    response = templates.TemplateResponse(request, "app/partials/read_button.html", {"article": article})
-    # Signal the sidebar to refresh its unread badges
-    response.headers["HX-Trigger"] = "sidebarRefresh"
-    return response
+    return _read_response(request, article)
+
+
+@router.post("/htmx/articles/{article_id}/set-read", response_class=HTMLResponse)
+async def htmx_set_read(
+    article_id: int,
+    request: Request,
+    state: bool = Query(True),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    article = await update_article_state(user, article_id, ArticleStateUpdate(is_read=state), db)
+    if not article:
+        return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
+    return _read_response(request, article)
 
 
 @router.post("/htmx/articles/{article_id}/star", response_class=HTMLResponse)

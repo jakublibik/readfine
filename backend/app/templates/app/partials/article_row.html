@@ -1,4 +1,6 @@
-<div class="article-row border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
+<div id="article-row-{{ article.id }}"
+     {% if oob %}hx-swap-oob="outerHTML"{% endif %}
+     class="article-row border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
      data-article-id="{{ article.id }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      hx-get="/htmx/articles/{{ article.id }}"

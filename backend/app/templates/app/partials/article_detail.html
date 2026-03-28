@@ -64,7 +64,7 @@
 <script>
   (function() {
     var timer = setTimeout(function() {
-      htmx.ajax('POST', '/htmx/articles/{{ article.id }}/read', {
+      htmx.ajax('POST', '/htmx/articles/{{ article.id }}/set-read?state=true', {
         target: '#read-btn-{{ article.id }}',
         swap: 'innerHTML'
       });
