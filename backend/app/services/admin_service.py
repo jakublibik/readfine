@@ -162,7 +162,7 @@ async def get_feed(db: AsyncSession, feed_id: int) -> Feed | None:
 
 async def toggle_feed_pause(db: AsyncSession, feed_id: int) -> Feed | None:
     feed = await db.get(Feed, feed_id)
-    if not feed:
+    if not feed or feed.status == "error":
         return None
     feed.status = "paused" if feed.status == "active" else "active"
     await db.commit()

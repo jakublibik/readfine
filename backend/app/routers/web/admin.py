@@ -117,14 +117,19 @@ async def admin_settings_save(
 
     smtp_password_plain = form.get("smtp_password", "").strip()
 
+    def _clamp(value: int | None, lo: int, hi: int, default: int) -> int:
+        if value is None:
+            return default
+        return max(lo, min(hi, value))
+
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
-        "default_fetch_interval_min": _safe_int(form.get("default_fetch_interval_min"), 60),
-        "max_feeds_per_user": _safe_int(form.get("max_feeds_per_user"), 200),
-        "default_purge_after_days": _safe_int(form.get("default_purge_after_days")),
-        "default_purge_keep_count": _safe_int(form.get("default_purge_keep_count")),
+        "default_fetch_interval_min": _clamp(_safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
+        "max_feeds_per_user": _clamp(_safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
+        "default_purge_after_days": _clamp(_safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
+        "default_purge_keep_count": _clamp(_safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,
         "smtp_host": form.get("smtp_host", "").strip() or None,
-        "smtp_port": _safe_int(form.get("smtp_port"), 587),
+        "smtp_port": _clamp(_safe_int(form.get("smtp_port")), 1, 65535, 587),
         "smtp_user": form.get("smtp_user", "").strip() or None,
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
@@ -190,14 +195,11 @@ async def admin_test_smtp(
             '<span class="text-green-600">Test email sent to ' + user.email + ".</span>"
         )
     except ValueError as e:
-        return HTMLResponse(
-            f'<span class="text-red-600">Not configured: {e}</span>'
-        )
+        logger.warning("SMTP test – not configured: %s", e)
+        return HTMLResponse('<span class="text-red-600">SMTP not configured (missing host or from address).</span>')
     except Exception as e:
         logger.error("SMTP test failed: %s", e)
-        return HTMLResponse(
-            f'<span class="text-red-600">Failed: {e}</span>'
-        )
+        return HTMLResponse('<span class="text-red-600">Failed to send test email. Check server logs for details.</span>')
 
 
 # ── Invitations ───────────────────────────────────────────────────────────────
@@ -227,7 +229,10 @@ async def admin_create_invitation(
     expires_at = None
     if expires_str:
         try:
-            expires_at = datetime.fromisoformat(expires_str).replace(tzinfo=timezone.utc)
+            # Set to end of selected day (23:59:59 UTC) so the invitation stays valid all day
+            expires_at = datetime.fromisoformat(expires_str).replace(
+                hour=23, minute=59, second=59, tzinfo=timezone.utc
+            )
         except ValueError:
             pass
 
@@ -248,8 +253,9 @@ async def admin_revoke_invitation(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await revoke_invitation(db, invitation_id)
-    await log_audit(db, user.id, "invitation_revoke", target_type="invitation", target_id=invitation_id)
+    revoked = await revoke_invitation(db, invitation_id)
+    if revoked:
+        await log_audit(db, user.id, "invitation_revoke", target_type="invitation", target_id=invitation_id)
     invitations = await list_invitations(db)
     return templates.TemplateResponse(request, "admin/partials/invitations_table.html", {
         "invitations": invitations,
@@ -297,8 +303,9 @@ async def admin_clear_feed_error(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await clear_feed_error(db, feed_id)
-    await log_audit(db, user.id, "feed_clear_error", target_type="feed", target_id=feed_id)
+    cleared = await clear_feed_error(db, feed_id)
+    if cleared:
+        await log_audit(db, user.id, "feed_clear_error", target_type="feed", target_id=feed_id)
     return await _feeds_response(request, db, user)
 
 
@@ -309,8 +316,9 @@ async def admin_delete_feed(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    await delete_feed(db, feed_id)
-    await log_audit(db, user.id, "feed_delete", target_type="feed", target_id=feed_id)
+    deleted = await delete_feed(db, feed_id)
+    if deleted:
+        await log_audit(db, user.id, "feed_delete", target_type="feed", target_id=feed_id)
     return await _feeds_response(request, db, user)
 
 
