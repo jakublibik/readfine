@@ -126,6 +126,7 @@ async def admin_settings_save(
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
         "default_fetch_interval_min": _clamp(_safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
+        "min_fetch_interval_min": _clamp(_safe_int(form.get("min_fetch_interval_min")), 1, 1440, 15),
         "max_feeds_per_user": _clamp(_safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
         "default_purge_after_days": _clamp(_safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
         "default_purge_keep_count": _clamp(_safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,

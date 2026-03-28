@@ -21,16 +21,23 @@ async def _fetch_due_feeds() -> None:
         return
 
     async with db.async_session_factory() as session:
-        # Resolve default interval from app_settings
+        # Resolve default and minimum intervals from app_settings
         result = await session.execute(
-            select(AppSettings.default_fetch_interval_min).where(AppSettings.id == 1)
+            select(AppSettings.default_fetch_interval_min, AppSettings.min_fetch_interval_min)
+            .where(AppSettings.id == 1)
         )
-        default_interval = result.scalar_one_or_none() or 60
+        row = result.one_or_none()
+        default_interval = (row[0] if row else None) or 60
+        min_interval = (row[1] if row else None) or 15
 
         # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
         error_backoff_min = max(30, default_interval * 5)
         one_minute = literal_column("interval '1 minute'")
-        effective_interval = func.coalesce(Feed.fetch_interval_min, default_interval) * one_minute
+        # per-feed interval clamped to global minimum
+        effective_interval = func.greatest(
+            func.coalesce(Feed.fetch_interval_min, default_interval),
+            min_interval,
+        ) * one_minute
         backoff_interval = error_backoff_min * one_minute
         due_feeds = await session.execute(
             select(Feed).where(

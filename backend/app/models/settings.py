@@ -12,6 +12,7 @@ class AppSettings(Base):
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     registration_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     default_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=60)
+    min_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=15)
     max_feeds_per_user: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=200)
     default_purge_after_days: Mapped[int | None] = mapped_column(SmallInteger, default=90)
     default_purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger, default=500)

@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
@@ -52,6 +54,8 @@ async def get_current_user(
         if api_token:
             user = await _get_user_by_id(api_token.user_id, db)
             if user:
+                api_token.last_used_at = datetime.now(timezone.utc)
+                await db.commit()
                 return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -82,6 +86,8 @@ async def get_api_user(
         if api_token:
             user = await _get_user_by_id(api_token.user_id, db)
             if user:
+                api_token.last_used_at = datetime.now(timezone.utc)
+                await db.commit()
                 return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")

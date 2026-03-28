@@ -1,7 +1,7 @@
 # Filtread – Architektura aplikace (Fáze 1 MVP + příprava na Fázi 2)
 
-Datum: 23. 3. 2026
-Stav: Návrh architektury
+Datum: 23. 3. 2026 (aktualizováno: 28. 3. 2026)
+Stav: Návrh architektury — poznámky o stavu implementace jsou označeny ⚠️
 
 ---
 
@@ -43,19 +43,18 @@ Indexy: `email` (unique), `role`
 | `list_density_web` | `VARCHAR(20)` | DEFAULT `'medium'` | `compact`, `medium`, `full` |
 | `list_density_mobile` | `VARCHAR(20)` | DEFAULT `'compact'` | `compact`, `medium`, `full` |
 | `mark_read_on_scroll` | `BOOLEAN` | DEFAULT `TRUE` | Automark přečteno při scrollu |
-| `show_unread_only` | `BOOLEAN` | DEFAULT `TRUE` | Výchozí filtr nepřečtených |
+| `unread_filter` | `VARCHAR(20)` | DEFAULT `'adaptive'` | ⚠️ Nahrazuje `show_unread_only`: `adaptive`, `unread_only`, `show_all` |
 | `default_sort_order` | `VARCHAR(10)` | DEFAULT `'newest'` | `newest`, `oldest` |
 | `left_panel_pinned` | `BOOLEAN` | DEFAULT `TRUE` | Levý panel připnutý/overlay |
-| `articles_per_page_desktop` | `SMALLINT` | DEFAULT `50` | Počet článků na stránku – desktop |
-| `articles_per_page_mobile` | `SMALLINT` | DEFAULT `20` | Počet článků na stránku – mobil |
+| `articles_per_page` | `SMALLINT` | DEFAULT `40` | ⚠️ MVP: jedno pole místo desktop/mobile variant |
 | `timezone` | `VARCHAR(50)` | DEFAULT `'UTC'` | Časová zóna uživatele (záloha pro serverové formátování) |
 | `language` | `VARCHAR(10)` | DEFAULT `'en'` | Jazyk UI (`cs`, `en`) |
 | `keyboard_shortcuts_enabled` | `BOOLEAN` | DEFAULT `TRUE` | Klávesové zkratky |
 | `ai_enabled` | `BOOLEAN` | DEFAULT `TRUE` | AI funkce zapnuty pro tohoto uživatele (relevantní jen pokud `app_settings.ai_enabled = TRUE`) |
-| `list_content_fields` | `JSONB` | DEFAULT `'["summary"]'` | Pole zobrazená v rozšířeném řádku seznamu; výchozí závisí na dostupnosti AI/readable. Fixní pořadí zobrazení: summary → ai_summary → readable_content → content |
-| `detail_content_fields` | `JSONB` | DEFAULT `'["content"]'` | Pole zobrazená v detailu článku; výchozí závisí na dostupnosti AI/readable. Stejné fixní pořadí |
+| `list_content_fields` | `JSONB` | DEFAULT `'["summary"]'` | ⚠️ Plánováno pro Fázi 7 — zatím není implementováno; snippet se generuje automaticky ze summary/content |
+| `detail_content_fields` | `JSONB` | DEFAULT `'["content"]'` | ⚠️ Plánováno pro Fázi 7 — zatím se renderuje content/readable_content dle dostupnosti |
 
-Poznámka k `list_content_fields` a `detail_content_fields`:
+Poznámka k `list_content_fields` a `detail_content_fields` (plánováno Fáze 7):
 - Dostupné hodnoty: `summary`, `ai_summary`, `readable_content`, `content`
 - `ai_summary` se nabídne jen pokud `app_settings.ai_enabled AND user_settings.ai_enabled AND user_feeds.ai_enabled`
 - `readable_content` se nabídne jen pokud `user_feeds.extract_readable = TRUE`
@@ -168,7 +167,7 @@ Globální pool feedů. Veřejné feedy jsou sdílené napříč uživateli (ka�
 | `last_fetched_at` | `TIMESTAMPTZ` | | Poslední úspěšný fetch |
 | `last_fetch_duration_ms` | `INTEGER` | | Doba trvání posledního fetche |
 | `last_published_at` | `TIMESTAMPTZ` | | Datum posledního článku ve feedu |
-| `effective_fetch_interval_min` | `SMALLINT` | | Denormalizovaný efektivní interval (= MIN přes všechny subscribers); aktualizuje se při subscribe/unsubscribe/edit. Scheduler ho čte přímo. |
+| `effective_fetch_interval_min` | `SMALLINT` | | ⚠️ Zatím neimplementováno — scheduler počítá efektivní interval inline (GREATEST(feed.fetch_interval_min, app_settings.min_fetch_interval_min)). Denormalizovaný sloupec přidáme až při optimalizaci výkonu scheduleru. |
 | `subscriber_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Počet předplatitelů (denorm.) |
 | `feed_type` | `VARCHAR(20)` | NOT NULL, DEFAULT `'rss'` | `rss`, `youtube`, `scrape`, `twitter`, `podcast` |
 | `type_config` | `JSONB` | | Konfigurace specifická pro typ |
@@ -197,9 +196,9 @@ Per-user předplatné feedu – nastavení, která jsou specifická pro každéh
 | `description` | `TEXT` | | Vlastní poznámka uživatele |
 | `extract_readable` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Extrahovat readable verzi článků z tohoto feedu |
 | `ai_enabled` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | AI funkce zapnuty pro tento feed (relevantní jen pokud user i globálně zapnuto) |
-| `list_content_fields` | `JSONB` | | NULL = použij `user_settings.list_content_fields`; per-feed override |
-| `detail_content_fields` | `JSONB` | | NULL = použij `user_settings.detail_content_fields`; per-feed override |
-| `fetch_interval_min` | `SMALLINT` | | NULL = použij `app_settings.default_fetch_interval_min`; nesmí být nižší než `app_settings.min_fetch_interval_min`. Při změně se přepočítá `feeds.effective_fetch_interval_min` jako MIN přes všechny subscribers |
+| `list_content_fields` | `JSONB` | | ⚠️ Plánováno Fáze 7 — NULL = použij `user_settings.list_content_fields`; per-feed override |
+| `detail_content_fields` | `JSONB` | | ⚠️ Plánováno Fáze 7 — NULL = použij `user_settings.detail_content_fields`; per-feed override |
+| `fetch_interval_min` | `SMALLINT` | | NULL = použij `app_settings.default_fetch_interval_min`; scheduler vynucuje `app_settings.min_fetch_interval_min` inline |
 | `unread_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Nepřečtených (denorm.) |
 | `purge_after_days` | `SMALLINT` | | NULL = global default |
 | `purge_keep_count` | `SMALLINT` | | NULL = global default |
