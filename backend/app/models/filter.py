@@ -1,6 +1,7 @@
 from datetime import datetime
 from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from typing import Optional
 
 from app.database import Base
 
@@ -15,6 +16,9 @@ class Filter(Base):
     match_operator: Mapped[str] = mapped_column(String(5), nullable=False, default="AND")
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     stop_on_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scope_type: Mapped[str] = mapped_column(String(10), nullable=False, default="all")
+    scope_feed_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("feeds.id", ondelete="SET NULL"), nullable=True)
+    scope_folder_id: Mapped[Optional[int]] = mapped_column(Integer, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

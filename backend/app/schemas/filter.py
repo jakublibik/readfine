@@ -2,9 +2,10 @@ from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel
 
-FieldType = Literal["title", "content", "author", "url", "feed_id", "folder_id", "published_at"]
+FieldType = Literal["title", "content", "author", "url", "published_at"]
+ScopeType = Literal["all", "feed", "folder"]
 OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "lt"]
-ActionType = Literal["add_label", "mark_read", "star", "hide", "notify"]
+ActionType = Literal["label", "mark_read", "star", "hide", "notify"]
 MatchOperator = Literal["AND", "OR"]
 
 
@@ -26,6 +27,9 @@ class FilterCreate(BaseModel):
     match_operator: MatchOperator = "AND"
     position: int = 0
     stop_on_match: bool = False
+    scope_type: ScopeType = "all"
+    scope_feed_id: int | None = None
+    scope_folder_id: int | None = None
     conditions: list[FilterConditionCreate] = []
     actions: list[FilterActionCreate] = []
 
@@ -36,6 +40,9 @@ class FilterUpdate(BaseModel):
     match_operator: MatchOperator | None = None
     position: int | None = None
     stop_on_match: bool | None = None
+    scope_type: ScopeType | None = None
+    scope_feed_id: int | None = None
+    scope_folder_id: int | None = None
     conditions: list[FilterConditionCreate] | None = None
     actions: list[FilterActionCreate] | None = None
 
@@ -65,6 +72,9 @@ class FilterResponse(BaseModel):
     match_operator: str
     position: int
     stop_on_match: bool
+    scope_type: str
+    scope_feed_id: int | None
+    scope_folder_id: int | None
     created_at: datetime
     updated_at: datetime
     conditions: list[FilterConditionResponse]

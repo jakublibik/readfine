@@ -36,6 +36,9 @@ async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -
         match_operator=payload.match_operator,
         position=payload.position,
         stop_on_match=payload.stop_on_match,
+        scope_type=payload.scope_type,
+        scope_feed_id=payload.scope_feed_id,
+        scope_folder_id=payload.scope_folder_id,
     )
     for c in payload.conditions:
         f.conditions.append(FilterCondition(**c.model_dump()))
@@ -126,10 +129,6 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str):
         return article.author or ""
     if field == "url":
         return article.url or ""
-    if field == "feed_id":
-        return article.feed_id
-    if field == "folder_id":
-        return user_feed.folder_id if user_feed else None
     if field == "published_at":
         return article.published_at
     return None
@@ -172,8 +171,21 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
     return False
 
 
+def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> bool:
+    """Return True if the article is within the filter's scope."""
+    if f.scope_type == "all":
+        return True
+    if f.scope_type == "feed":
+        return article.feed_id == f.scope_feed_id
+    if f.scope_type == "folder":
+        return user_feed is not None and user_feed.folder_id == f.scope_folder_id
+    return True
+
+
 def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None) -> bool:
-    """Return True if the filter's conditions match the article."""
+    """Return True if the article is in scope and all/any conditions match."""
+    if not _scope_matches(f, article, user_feed):
+        return False
     if not f.conditions:
         return False
     results = [_matches_condition(c, article, user_feed) for c in f.conditions]
@@ -187,7 +199,7 @@ async def _execute_actions(
 ) -> None:
     for action in f.actions:
         try:
-            if action.action_type == "add_label" and action.action_value:
+            if action.action_type == "label" and action.action_value:
                 label_id = int(action.action_value)
                 existing = await db.execute(
                     select(ArticleLabel).where(

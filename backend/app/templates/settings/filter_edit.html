@@ -8,6 +8,7 @@
 
   <form method="POST"
         action="{% if filter %}/settings/filters/{{ filter.id }}/edit{% else %}/settings/filters{% endif %}"
+        hx-boost="true"
         class="space-y-6">
 
     <!-- Basic info -->
@@ -49,6 +50,41 @@
       </div>
     </div>
 
+    <!-- Scope -->
+    <div>
+      <h2 class="text-sm font-medium text-gray-700 mb-2">Scope</h2>
+      <div class="flex items-center gap-3 flex-wrap">
+        <select name="scope_type" id="scope_type" onchange="toggleScope(this.value)"
+                class="border border-gray-300 rounded px-2 py-1 text-sm">
+          <option value="all" {% if not filter or filter.scope_type == 'all' %}selected{% endif %}>All feeds</option>
+          <option value="feed" {% if filter and filter.scope_type == 'feed' %}selected{% endif %}>Specific feed</option>
+          <option value="folder" {% if filter and filter.scope_type == 'folder' %}selected{% endif %}>Specific folder</option>
+        </select>
+
+        <select name="scope_feed_id" id="scope_feed_select"
+                class="border border-gray-300 rounded px-2 py-1 text-sm {% if not filter or filter.scope_type != 'feed' %}hidden{% endif %}">
+          <option value="">-- select feed --</option>
+          {% for uf in user_feeds %}
+            <option value="{{ uf.feed_id }}"
+                    {% if filter and filter.scope_feed_id == uf.feed_id %}selected{% endif %}>
+              {{ uf.custom_title or uf.feed.title }}
+            </option>
+          {% endfor %}
+        </select>
+
+        <select name="scope_folder_id" id="scope_folder_select"
+                class="border border-gray-300 rounded px-2 py-1 text-sm {% if not filter or filter.scope_type != 'folder' %}hidden{% endif %}">
+          <option value="">-- select folder --</option>
+          {% for folder in folders %}
+            <option value="{{ folder.id }}"
+                    {% if filter and filter.scope_folder_id == folder.id %}selected{% endif %}>
+              {{ folder.name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
     <!-- Conditions -->
     <div>
       <h2 class="text-sm font-medium text-gray-700 mb-2">Conditions</h2>
@@ -57,7 +93,7 @@
         {% for c in existing_conditions %}
         <div class="flex items-center gap-2 condition-row">
           <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
-            {% for f in ['title','content','author','url','feed_id','folder_id','published_at'] %}
+            {% for f in ['title','content','author','url','published_at'] %}
               <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f }}</option>
             {% endfor %}
           </select>
@@ -87,12 +123,12 @@
         <div class="flex items-center gap-2 action-row">
           <select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select"
                   onchange="toggleActionValue(this)">
-            {% for at in ['add_label','mark_read','star','hide'] %}
+            {% for at in ['label','mark_read','star','hide'] %}
               <option value="{{ at }}" {% if a.action_type == at %}selected{% endif %}>{{ at }}</option>
             {% endfor %}
           </select>
           <select name="action_value"
-                  class="border border-gray-300 rounded px-2 py-1 text-sm {% if a.action_type != 'add_label' %}hidden{% endif %} label-select">
+                  class="border border-gray-300 rounded px-2 py-1 text-sm {% if a.action_type != 'label' %}hidden{% endif %} label-select">
             <option value="">-- select label --</option>
             {% for label in labels %}
               <option value="{{ label.id }}" {% if a.action_value == label.id | string %}selected{% endif %}>
@@ -120,9 +156,9 @@
 </div>
 
 <script>
-const FIELDS = ['title','content','author','url','feed_id','folder_id','published_at'];
+const FIELDS = ['title','content','author','url','published_at'];
 const OPERATORS = ['contains','not_contains','equals','regex','gt','lt'];
-const ACTION_TYPES = ['add_label','mark_read','star','hide'];
+const ACTION_TYPES = ['label','mark_read','star','hide'];
 const LABELS = [{% for l in labels %}{"id": {{ l.id }}, "name": {{ l.name | tojson }}},{% endfor %}];
 
 document.getElementById('add-condition').addEventListener('click', function() {
@@ -158,11 +194,17 @@ document.getElementById('add-action').addEventListener('click', function() {
     <button type="button" onclick="this.closest('.action-row').remove()"
             class="text-red-400 hover:text-red-600 text-sm">✕</button>`;
   document.getElementById('actions').appendChild(row);
+  toggleActionValue(row.querySelector('.action-type-select'));
 });
+
+function toggleScope(value) {
+  document.getElementById('scope_feed_select').classList.toggle('hidden', value !== 'feed');
+  document.getElementById('scope_folder_select').classList.toggle('hidden', value !== 'folder');
+}
 
 function toggleActionValue(select) {
   const labelSelect = select.closest('.action-row').querySelector('.label-select');
-  if (select.value === 'add_label') {
+  if (select.value === 'label') {
     labelSelect.classList.remove('hidden');
   } else {
     labelSelect.classList.add('hidden');

@@ -4,11 +4,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sqlalchemy import select
+
 from app.auth.dependencies import get_current_user
 from app.database import get_db
+from app.models.feed import Folder
 from app.models.user import User
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
+from app.services.feed import list_user_feeds
 from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
@@ -103,9 +107,16 @@ async def settings_filter_new(
     db: AsyncSession = Depends(get_db),
 ):
     labels = await list_labels(user, db)
+    user_feeds = await list_user_feeds(user, db)
+    folders_result = await db.execute(
+        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+    )
+    folders = folders_result.scalars().all()
     return templates.TemplateResponse(request, "settings/filter_edit.html", {
         "filter": None,
         "labels": labels,
+        "user_feeds": user_feeds,
+        "folders": folders,
     })
 
 
@@ -120,9 +131,16 @@ async def settings_filter_edit(
     if not f:
         return HTMLResponse("<p class='text-red-500 p-4'>Filter not found.</p>", status_code=404)
     labels = await list_labels(user, db)
+    user_feeds = await list_user_feeds(user, db)
+    folders_result = await db.execute(
+        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+    )
+    folders = folders_result.scalars().all()
     return templates.TemplateResponse(request, "settings/filter_edit.html", {
         "filter": f,
         "labels": labels,
+        "user_feeds": user_feeds,
+        "folders": folders,
     })
 
 
@@ -221,12 +239,19 @@ def _parse_filter_form(form) -> FilterCreate:
                 action_value=a_val or None,
             ))
 
+    scope_type = form.get("scope_type", "all")
+    scope_feed_id_raw = form.get("scope_feed_id")
+    scope_folder_id_raw = form.get("scope_folder_id")
+
     return FilterCreate(
         name=form.get("name", ""),
         is_active=form.get("is_active") == "true",
         match_operator=form.get("match_operator", "AND"),
         position=int(form.get("position", 0)),
         stop_on_match=form.get("stop_on_match") == "true",
+        scope_type=scope_type,
+        scope_feed_id=int(scope_feed_id_raw) if scope_feed_id_raw else None,
+        scope_folder_id=int(scope_folder_id_raw) if scope_folder_id_raw else None,
         conditions=conditions,
         actions=actions,
     )

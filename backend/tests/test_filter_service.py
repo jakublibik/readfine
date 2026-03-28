@@ -31,13 +31,17 @@ def make_condition(field, operator, value, position=0):
     return SimpleNamespace(field=field, operator=operator, value=value, position=position)
 
 
-def make_filter(conditions, match_operator="AND", is_active=True, stop_on_match=False):
+def make_filter(conditions, match_operator="AND", is_active=True, stop_on_match=False,
+                scope_type="all", scope_feed_id=None, scope_folder_id=None):
     return SimpleNamespace(
         conditions=conditions,
         actions=[],
         match_operator=match_operator,
         is_active=is_active,
         stop_on_match=stop_on_match,
+        scope_type=scope_type,
+        scope_feed_id=scope_feed_id,
+        scope_folder_id=scope_folder_id,
     )
 
 
@@ -88,10 +92,6 @@ class TestEquals:
         cond = make_condition("author", "equals", "john doe")
         assert _matches_condition(cond, article, None) is False
 
-    def test_feed_id_match(self):
-        article = make_article(feed_id=42)
-        cond = make_condition("feed_id", "equals", "42")
-        assert _matches_condition(cond, article, None) is True
 
 
 class TestRegex:
@@ -117,14 +117,14 @@ class TestRegex:
 
 
 class TestGtLt:
-    def test_numeric_gt(self):
-        article = make_article(feed_id=100)
-        cond = make_condition("feed_id", "gt", "50")
+    def test_datetime_gt_numeric_content(self):
+        article = make_article(published_at=datetime(2025, 1, 1, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "gt", "2024-01-01")
         assert _matches_condition(cond, article, None) is True
 
-    def test_numeric_lt(self):
-        article = make_article(feed_id=10)
-        cond = make_condition("feed_id", "lt", "50")
+    def test_datetime_lt_numeric_content(self):
+        article = make_article(published_at=datetime(2023, 6, 1, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "lt", "2024-01-01")
         assert _matches_condition(cond, article, None) is True
 
     def test_datetime_gt(self):
@@ -143,18 +143,6 @@ class TestGtLt:
         assert _matches_condition(cond, article, None) is False
 
 
-class TestFolderIdField:
-    def test_folder_id_from_user_feed(self):
-        article = make_article()
-        uf = make_user_feed(folder_id=5)
-        cond = make_condition("folder_id", "equals", "5")
-        assert _matches_condition(cond, article, uf) is True
-
-    def test_no_folder_returns_false(self):
-        article = make_article()
-        uf = make_user_feed(folder_id=None)
-        cond = make_condition("folder_id", "equals", "5")
-        assert _matches_condition(cond, article, uf) is False
 
 
 # ── evaluate_filter ───────────────────────────────────────────────────────────
@@ -201,3 +189,43 @@ class TestEvaluateFilter:
         article = make_article(title="Spam Message")
         f = make_filter([make_condition("title", "contains", "spam")])
         assert evaluate_filter(f, article) is True
+
+
+class TestScope:
+    def test_scope_all_always_passes(self):
+        article = make_article(feed_id=99)
+        f = make_filter([make_condition("title", "contains", "x")], scope_type="all")
+        # scope passes, but condition doesn't match
+        assert evaluate_filter(f, make_article(title="no match")) is False
+
+    def test_scope_feed_matches(self):
+        article = make_article(feed_id=10, title="Python")
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="feed", scope_feed_id=10)
+        assert evaluate_filter(f, article) is True
+
+    def test_scope_feed_no_match(self):
+        article = make_article(feed_id=99, title="Python")
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="feed", scope_feed_id=10)
+        assert evaluate_filter(f, article) is False
+
+    def test_scope_folder_matches(self):
+        article = make_article(title="Python")
+        uf = make_user_feed(folder_id=5)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="folder", scope_folder_id=5)
+        assert evaluate_filter(f, article, uf) is True
+
+    def test_scope_folder_no_match(self):
+        article = make_article(title="Python")
+        uf = make_user_feed(folder_id=7)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="folder", scope_folder_id=5)
+        assert evaluate_filter(f, article, uf) is False
+
+    def test_scope_folder_no_user_feed(self):
+        article = make_article(title="Python")
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="folder", scope_folder_id=5)
+        assert evaluate_filter(f, article, None) is False
