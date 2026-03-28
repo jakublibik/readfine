@@ -4,7 +4,10 @@
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
     <span class="font-semibold text-gray-800">Filtread</span>
-    <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600">Logout</a>
+    <div class="flex items-center gap-3">
+      <a href="/settings/labels" class="text-xs text-gray-400 hover:text-gray-600">Settings</a>
+      <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600">Logout</a>
+    </div>
   </div>
 
   <!-- Nav -->
@@ -30,6 +33,21 @@
       Archived
     </a>
   </nav>
+
+  <!-- Labels -->
+  {% if user_labels %}
+  <div class="px-2 py-3 border-b border-gray-200">
+    <div class="px-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Labels</div>
+    {% for label in user_labels %}
+      <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?label_id={{ label.id }}" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+        <span class="truncate">{{ label.name }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   <!-- Feed list -->
   <div class="flex-1 overflow-y-auto px-2 py-3">

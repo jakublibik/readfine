@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}{% if filter %}Edit filter{% else %}New filter{% endif %} – Filtread{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <h1 class="text-xl font-semibold text-gray-900 mb-6">
+    {% if filter %}Edit filter{% else %}New filter{% endif %}
+  </h1>
+
+  <form method="POST"
+        action="{% if filter %}/settings/filters/{{ filter.id }}/edit{% else %}/settings/filters{% endif %}"
+        class="space-y-6">
+
+    <!-- Basic info -->
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+        <input type="text" name="name" required
+               value="{{ filter.name if filter else '' }}"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center gap-6">
+        <label class="flex items-center gap-2 text-sm text-gray-700">
+          <input type="hidden" name="is_active" value="false">
+          <input type="checkbox" name="is_active" value="true"
+                 {% if not filter or filter.is_active %}checked{% endif %}
+                 class="rounded">
+          Active
+        </label>
+        <label class="flex items-center gap-2 text-sm text-gray-700">
+          <input type="hidden" name="stop_on_match" value="false">
+          <input type="checkbox" name="stop_on_match" value="true"
+                 {% if filter and filter.stop_on_match %}checked{% endif %}
+                 class="rounded">
+          Stop on match
+        </label>
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-700">Match</label>
+          <select name="match_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
+            <option value="AND" {% if not filter or filter.match_operator == 'AND' %}selected{% endif %}>ALL conditions (AND)</option>
+            <option value="OR" {% if filter and filter.match_operator == 'OR' %}selected{% endif %}>ANY condition (OR)</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-sm text-gray-700">Priority</label>
+          <input type="number" name="position" min="0"
+                 value="{{ filter.position if filter else 0 }}"
+                 class="w-16 border border-gray-300 rounded px-2 py-1 text-sm">
+        </div>
+      </div>
+    </div>
+
+    <!-- Conditions -->
+    <div>
+      <h2 class="text-sm font-medium text-gray-700 mb-2">Conditions</h2>
+      <div id="conditions" class="space-y-2">
+        {% set existing_conditions = filter.conditions if filter else [] %}
+        {% for c in existing_conditions %}
+        <div class="flex items-center gap-2 condition-row">
+          <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
+            {% for f in ['title','content','author','url','feed_id','folder_id','published_at'] %}
+              <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f }}</option>
+            {% endfor %}
+          </select>
+          <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
+            {% for op in ['contains','not_contains','equals','regex','gt','lt'] %}
+              <option value="{{ op }}" {% if c.operator == op %}selected{% endif %}>{{ op }}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="cond_value" value="{{ c.value }}" required
+                 class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm">
+          <input type="hidden" name="cond_position" value="{{ c.position }}">
+          <button type="button" onclick="this.closest('.condition-row').remove()"
+                  class="text-red-400 hover:text-red-600 text-sm">✕</button>
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" id="add-condition"
+              class="mt-2 text-sm text-blue-600 hover:underline">+ Add condition</button>
+    </div>
+
+    <!-- Actions -->
+    <div>
+      <h2 class="text-sm font-medium text-gray-700 mb-2">Actions</h2>
+      <div id="actions" class="space-y-2">
+        {% set existing_actions = filter.actions if filter else [] %}
+        {% for a in existing_actions %}
+        <div class="flex items-center gap-2 action-row">
+          <select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select"
+                  onchange="toggleActionValue(this)">
+            {% for at in ['add_label','mark_read','star','hide'] %}
+              <option value="{{ at }}" {% if a.action_type == at %}selected{% endif %}>{{ at }}</option>
+            {% endfor %}
+          </select>
+          <select name="action_value"
+                  class="border border-gray-300 rounded px-2 py-1 text-sm {% if a.action_type != 'add_label' %}hidden{% endif %} label-select">
+            <option value="">-- select label --</option>
+            {% for label in labels %}
+              <option value="{{ label.id }}" {% if a.action_value == label.id | string %}selected{% endif %}>
+                {{ label.name }}
+              </option>
+            {% endfor %}
+          </select>
+          <button type="button" onclick="this.closest('.action-row').remove()"
+                  class="text-red-400 hover:text-red-600 text-sm">✕</button>
+        </div>
+        {% endfor %}
+      </div>
+      <button type="button" id="add-action"
+              class="mt-2 text-sm text-blue-600 hover:underline">+ Add action</button>
+    </div>
+
+    <div class="flex items-center gap-3 pt-2">
+      <button type="submit"
+              class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+        {% if filter %}Save changes{% else %}Create filter{% endif %}
+      </button>
+      <a href="/settings/filters" class="text-sm text-gray-500 hover:underline">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+const FIELDS = ['title','content','author','url','feed_id','folder_id','published_at'];
+const OPERATORS = ['contains','not_contains','equals','regex','gt','lt'];
+const ACTION_TYPES = ['add_label','mark_read','star','hide'];
+const LABELS = [{% for l in labels %}{"id": {{ l.id }}, "name": {{ l.name | tojson }}},{% endfor %}];
+
+document.getElementById('add-condition').addEventListener('click', function() {
+  const row = document.createElement('div');
+  row.className = 'flex items-center gap-2 condition-row';
+  row.innerHTML = `
+    <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
+      ${FIELDS.map(f => `<option value="${f}">${f}</option>`).join('')}
+    </select>
+    <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
+      ${OPERATORS.map(o => `<option value="${o}">${o}</option>`).join('')}
+    </select>
+    <input type="text" name="cond_value" required
+           class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm" placeholder="value">
+    <input type="hidden" name="cond_position" value="0">
+    <button type="button" onclick="this.closest('.condition-row').remove()"
+            class="text-red-400 hover:text-red-600 text-sm">✕</button>`;
+  document.getElementById('conditions').appendChild(row);
+});
+
+document.getElementById('add-action').addEventListener('click', function() {
+  const labelOptions = LABELS.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+  const row = document.createElement('div');
+  row.className = 'flex items-center gap-2 action-row';
+  row.innerHTML = `
+    <select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select"
+            onchange="toggleActionValue(this)">
+      ${ACTION_TYPES.map(t => `<option value="${t}">${t}</option>`).join('')}
+    </select>
+    <select name="action_value" class="border border-gray-300 rounded px-2 py-1 text-sm hidden label-select">
+      <option value="">-- select label --</option>${labelOptions}
+    </select>
+    <button type="button" onclick="this.closest('.action-row').remove()"
+            class="text-red-400 hover:text-red-600 text-sm">✕</button>`;
+  document.getElementById('actions').appendChild(row);
+});
+
+function toggleActionValue(select) {
+  const labelSelect = select.closest('.action-row').querySelector('.label-select');
+  if (select.value === 'add_label') {
+    labelSelect.classList.remove('hidden');
+  } else {
+    labelSelect.classList.add('hidden');
+    labelSelect.value = '';
+  }
+}
+</script>
+{% endblock %}

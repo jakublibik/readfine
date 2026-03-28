@@ -1,0 +1,28 @@
+<div id="labels-list">
+  {% if labels %}
+    <ul class="space-y-2">
+      {% for label in labels %}
+      <li class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded">
+        <span class="w-4 h-4 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+        <form hx-post="/settings/labels/{{ label.id }}"
+              hx-target="#labels-list"
+              hx-swap="outerHTML"
+              class="flex flex-1 items-center gap-2">
+          <input type="text" name="name" value="{{ label.name }}" required
+                 class="flex-1 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <input type="color" name="color" value="{{ label.color }}"
+                 class="w-7 h-7 rounded cursor-pointer border border-gray-200">
+          <button type="submit" class="text-xs text-blue-600 hover:underline">Save</button>
+        </form>
+        <button hx-delete="/settings/labels/{{ label.id }}"
+                hx-target="#labels-list"
+                hx-swap="outerHTML"
+                hx-confirm="Delete label '{{ label.name }}'?"
+                class="text-xs text-red-400 hover:text-red-600">Delete</button>
+      </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-sm text-gray-400">No labels yet. Add one above.</p>
+  {% endif %}
+</div>

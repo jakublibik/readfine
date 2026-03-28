@@ -12,6 +12,7 @@ from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import get_article, list_articles, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
+from app.services.label_service import list_labels
 
 router = APIRouter(tags=["web-app"])
 templates = Jinja2Templates(directory="app/templates")
@@ -34,7 +35,12 @@ async def htmx_sidebar(
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db)
-    return templates.TemplateResponse(request, "app/partials/sidebar.html", {"user": user, "user_feeds": user_feeds})
+    user_labels = await list_labels(user, db)
+    return templates.TemplateResponse(request, "app/partials/sidebar.html", {
+        "user": user,
+        "user_feeds": user_feeds,
+        "user_labels": user_labels,
+    })
 
 
 @router.get("/htmx/articles", response_class=HTMLResponse)
@@ -42,6 +48,7 @@ async def htmx_article_list(
     request: Request,
     feed_id: int | None = Query(None),
     folder_id: int | None = Query(None),
+    label_id: int | None = Query(None),
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
@@ -54,6 +61,7 @@ async def htmx_article_list(
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
+        label_id=label_id,
         unread_only=unread_only,
         starred_only=starred_only,
         archived_only=archived_only,

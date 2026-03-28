@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Filters – Filtread{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto px-4 py-8">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-semibold text-gray-900">Filters</h1>
+    <div class="flex items-center gap-4">
+      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
+      <a href="/settings/filters/new"
+         class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+        New filter
+      </a>
+    </div>
+  </div>
+
+  <div id="filters-list">
+    {% include "settings/partials/filters_list.html" %}
+  </div>
+
+  <div class="mt-6">
+    <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
+  </div>
+</div>
+{% endblock %}

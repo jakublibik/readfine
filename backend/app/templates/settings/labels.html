@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Labels – Filtread{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-semibold text-gray-900">Labels</h1>
+    <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters →</a>
+  </div>
+
+  <!-- Add label form -->
+  <form hx-post="/settings/labels"
+        hx-target="#labels-list"
+        hx-swap="outerHTML"
+        class="flex items-center gap-3 mb-6">
+    <input type="text" name="name" placeholder="Label name" required
+           class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <input type="color" name="color" value="#6366f1"
+           class="w-8 h-8 rounded cursor-pointer border border-gray-300">
+    <button type="submit"
+            class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Add
+    </button>
+  </form>
+
+  <!-- Labels list -->
+  <div id="labels-list">
+    {% include "settings/partials/labels_list.html" %}
+  </div>
+
+  <div class="mt-6">
+    <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
+  </div>
+</div>
+{% endblock %}

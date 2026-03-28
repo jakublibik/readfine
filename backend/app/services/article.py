@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
+from app.models.label import ArticleLabel
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
 
@@ -15,6 +16,7 @@ async def list_articles(
     db: AsyncSession,
     feed_id: int | None = None,
     folder_id: int | None = None,
+    label_id: int | None = None,
     unread_only: bool = False,
     starred_only: bool = False,
     archived_only: bool = False,
@@ -45,6 +47,14 @@ async def list_articles(
 
     if folder_id is not None:
         stmt = stmt.where(UserFeed.folder_id == folder_id)
+
+    if label_id is not None:
+        stmt = stmt.join(
+            ArticleLabel,
+            (ArticleLabel.article_id == Article.id)
+            & (ArticleLabel.user_id == user.id)
+            & (ArticleLabel.label_id == label_id),
+        )
 
     if unread_only:
         stmt = stmt.where(

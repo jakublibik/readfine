@@ -97,7 +97,7 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
 
 
 async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession) -> int:
-    """Insert new articles from parsed feed. Returns count of inserted articles."""
+    """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     # Determine if any subscriber wants readable extraction
     result = await db.execute(
         select(UserFeed.id).where(
@@ -107,7 +107,7 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     )
     wants_readable = result.scalar_one_or_none() is not None
 
-    new_count = 0
+    new_articles: list[Article] = []
     for entry in parsed.entries:
         guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         if not guid:
@@ -149,9 +149,16 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
             image_url=_extract_image(entry),
         )
         db.add(article)
-        new_count += 1
+        new_articles.append(article)
 
-    return new_count
+    if new_articles:
+        # Flush to get IDs, then apply filters before the outer commit
+        await db.flush()
+        from app.services.filter_service import apply_filters_to_article
+        for article in new_articles:
+            await apply_filters_to_article(article, db)
+
+    return len(new_articles)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
