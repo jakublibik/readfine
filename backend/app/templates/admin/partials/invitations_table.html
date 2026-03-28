@@ -1,0 +1,61 @@
+<table class="w-full text-sm">
+  <thead class="bg-gray-50 border-b border-gray-200">
+    <tr>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Link</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Email</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Expires</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Status</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Created by</th>
+      <th class="px-4 py-2"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-gray-100">
+    {% for inv in invitations %}
+    <tr>
+      <td class="px-4 py-2 font-mono text-xs text-gray-600 max-w-xs">
+        <div class="flex items-center gap-1.5">
+          <span class="truncate" title="{{ base_url }}/register?invite={{ inv.token }}">
+            {{ base_url }}/register?invite={{ inv.token }}
+          </span>
+          <button type="button"
+                  data-copy="{{ base_url }}/register?invite={{ inv.token }}"
+                  class="copy-btn flex-shrink-0 text-gray-300 hover:text-gray-500"
+                  title="Copy link">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+            </svg>
+          </button>
+        </div>
+      </td>
+      <td class="px-4 py-2 text-gray-600">{{ inv.email or "—" }}</td>
+      <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        {% if inv.expires_at %}
+          <time datetime="{{ inv.expires_at.isoformat() }}" data-format="date">{{ inv.expires_at.strftime("%b %d, %Y") }}</time>
+        {% else %}—{% endif %}
+      </td>
+      <td class="px-4 py-2">
+        {% if inv.used_at %}
+          <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">used</span>
+        {% else %}
+          <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+        {% endif %}
+      </td>
+      <td class="px-4 py-2 text-gray-500">{{ inv.creator.display_name if inv.creator else "—" }}</td>
+      <td class="px-4 py-2 text-right">
+        {% if not inv.used_at %}
+          <button hx-delete="/admin/invitations/{{ inv.id }}"
+                  hx-target="#invitations-table"
+                  hx-swap="innerHTML"
+                  hx-confirm="Revoke this invitation?"
+                  class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-red-500">
+            Revoke
+          </button>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="px-4 py-6 text-center text-gray-400 text-sm">No invitations yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>

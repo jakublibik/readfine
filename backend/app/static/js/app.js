@@ -5,13 +5,21 @@ function _formatLocalTime(isoStr, format) {
   if (format === 'long') {
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
   }
-  // short: today → HH:MM, otherwise "Mon DD, HH:MM"
-  var isToday = dt.toDateString() === new Date().toDateString();
+  if (format === 'date') {
+    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  }
+  // short: today → HH:MM, this year → "Mon DD HH:MM", older → "Mon DD, YYYY HH:MM"
+  var now = new Date();
+  var isToday = dt.toDateString() === now.toDateString();
   if (isToday) {
     return dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
-  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' +
-         dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  var isThisYear = dt.getFullYear() === now.getFullYear();
+  var time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (isThisYear) {
+    return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  }
+  return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + time;
 }
 
 function localizeAllTimes() {
@@ -23,6 +31,23 @@ function localizeAllTimes() {
 
 document.addEventListener('DOMContentLoaded', localizeAllTimes);
 document.body.addEventListener('htmx:afterSettle', localizeAllTimes);
+
+// Copy-to-clipboard for [data-copy] buttons
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('.copy-btn[data-copy]');
+  if (!btn) return;
+  navigator.clipboard.writeText(btn.dataset.copy).then(function () {
+    var svg = btn.querySelector('svg');
+    svg.style.display = 'none';
+    btn.insertAdjacentText('beforeend', '✓');
+    btn.classList.add('text-green-500');
+    setTimeout(function () {
+      btn.lastChild.remove();
+      svg.style.display = '';
+      btn.classList.remove('text-green-500');
+    }, 1500);
+  });
+});
 
 // [data-menu-toggle] button opens/closes its next sibling [data-menu]; click outside closes all
 // Menu uses position:fixed — immune to parent overflow clipping

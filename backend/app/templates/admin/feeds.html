@@ -1,0 +1,18 @@
+{% extends "admin/base.html" %}
+{% block title %}Feeds – Admin – Filtread{% endblock %}
+{% set active = "feeds" %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">
+  Feeds
+  <span class="text-sm font-normal text-gray-400">({{ feeds | length }})</span>
+</h1>
+
+{% if feeds %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  {% include "admin/partials/feeds_table.html" %}
+</div>
+{% else %}
+<p class="text-sm text-gray-400">No feeds yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,107 @@
+<div id="feeds-table">
+<table class="w-full text-sm">
+  <thead class="bg-gray-50 border-b border-gray-200">
+    <tr>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Type</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Status</th>
+      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Subscribers</th>
+      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Articles</th>
+      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Interval</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last fetch</th>
+      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Duration</th>
+      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last published</th>
+      <th class="px-4 py-2"></th>
+    </tr>
+  </thead>
+  <tbody class="divide-y divide-gray-100">
+    {% for item in feeds %}
+    {% set f = item.feed %}
+    <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
+      <td class="px-4 py-2 max-w-xs">
+        <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
+        <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
+           class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
+        {% if f.status == 'error' and f.last_error %}
+        <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
+        {% endif %}
+      </td>
+      <td class="px-4 py-2">
+        <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
+      </td>
+      <td class="px-4 py-2">
+        {% if f.status == 'active' %}
+          <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+        {% elif f.status == 'error' %}
+          <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">error</span>
+        {% else %}
+          <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
+        {% endif %}
+      </td>
+      <td class="px-4 py-2 text-right text-gray-600">{{ f.subscriber_count }}</td>
+      <td class="px-4 py-2 text-right text-gray-600">{{ item.article_count }}</td>
+      <td class="px-4 py-2 text-right text-gray-500">
+        {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        {% if f.last_fetched_at %}
+          <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at.strftime("%b %d, %H:%M") }}</time>
+        {% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-4 py-2 text-right text-gray-400 whitespace-nowrap">
+        {% if f.last_fetch_duration_ms is not none %}
+          {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s
+        {% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        {% if f.last_published_at %}
+          <time datetime="{{ f.last_published_at.isoformat() }}">{{ f.last_published_at.strftime("%b %d, %H:%M") }}</time>
+        {% else %}<span class="text-gray-300">—</span>{% endif %}
+      </td>
+      <td class="px-4 py-2 text-right">
+        <div class="relative inline-block">
+          <button data-menu-toggle class="text-gray-400 hover:text-gray-600 px-1">···</button>
+          <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36 text-left">
+            <button hx-post="/admin/feeds/{{ f.id }}/force-fetch"
+                    hx-target="#feeds-table"
+                    hx-swap="outerHTML"
+                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+              Force fetch
+            </button>
+            {% if f.status in ('active', 'paused') %}
+            <button hx-post="/admin/feeds/{{ f.id }}/pause"
+                    hx-target="#feeds-table"
+                    hx-swap="outerHTML"
+                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+              {{ "Unpause" if f.status == 'paused' else "Pause" }}
+            </button>
+            {% endif %}
+            {% if f.status == 'error' %}
+            <button hx-post="/admin/feeds/{{ f.id }}/clear-error"
+                    hx-target="#feeds-table"
+                    hx-swap="outerHTML"
+                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+              Clear error
+            </button>
+            {% endif %}
+            {% if f.subscriber_count == 0 %}
+            <div class="border-t border-gray-100 mt-1 pt-1">
+              <button hx-delete="/admin/feeds/{{ f.id }}"
+                      hx-target="#feeds-table"
+                      hx-swap="outerHTML"
+                      hx-confirm="Delete this feed and all its articles?"
+                      class="block w-full text-left px-4 py-1.5 text-sm text-red-600 hover:bg-red-50">
+                Delete
+              </button>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="px-4 py-6 text-center text-gray-400 text-sm">No feeds yet.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>

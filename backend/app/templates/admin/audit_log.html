@@ -1,0 +1,40 @@
+{% extends "admin/base.html" %}
+{% block title %}Audit log – Admin – Filtread{% endblock %}
+{% set active = "audit_log" %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Audit log <span class="text-sm font-normal text-gray-400">(last 100)</span></h1>
+
+{% if logs %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Admin</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Action</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Target</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Detail</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for log in logs %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700">{{ log.admin.display_name if log.admin else "—" }}</td>
+        <td class="px-4 py-2 font-mono text-xs text-gray-600">{{ log.action }}</td>
+        <td class="px-4 py-2 text-gray-500 text-xs">
+          {% if log.target_type %}{{ log.target_type }}{% if log.target_id %} #{{ log.target_id }}{% endif %}{% else %}—{% endif %}
+        </td>
+        <td class="px-4 py-2 text-gray-400 text-xs max-w-xs truncate">{{ log.detail | tojson if log.detail else "—" }}</td>
+        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+          <time datetime="{{ log.created_at.isoformat() }}">{{ log.created_at.strftime("%b %d, %H:%M") }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-sm text-gray-400">No audit log entries yet.</p>
+{% endif %}
+{% endblock %}

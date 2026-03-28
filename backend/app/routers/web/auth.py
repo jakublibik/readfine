@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from datetime import datetime, timezone
+
 from app.auth.security import hash_password, verify_password
 from app.database import get_db
 from app.main import limiter
@@ -51,6 +53,9 @@ async def login(
             {"error": "Account is disabled", "email": email},
             status_code=status.HTTP_403_FORBIDDEN,
         )
+
+    user.last_active_at = datetime.now(timezone.utc)
+    await db.commit()
 
     request.session["user_id"] = user.id
     return RedirectResponse("/app", status_code=302)

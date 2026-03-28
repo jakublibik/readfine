@@ -1,0 +1,176 @@
+{% extends "admin/base.html" %}
+{% block title %}Settings – Admin – Filtread{% endblock %}
+{% set active = "settings" %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Global settings</h1>
+
+{% if saved %}
+  <div class="mb-4 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-700">Settings saved.</div>
+{% endif %}
+{% if error %}
+  <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-600">{{ error }}</div>
+{% endif %}
+
+<form method="POST" action="/admin/settings" hx-boost="true" class="space-y-8">
+
+  <!-- General -->
+  <section>
+    <h2 class="text-sm font-semibold text-gray-700 mb-4 pb-2 border-b border-gray-200">General</h2>
+    <div class="space-y-4 max-w-lg">
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Open registration</label>
+          <p class="text-xs text-gray-400">Allow new users to register without invitation</p>
+        </div>
+        <select name="registration_enabled"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="true" {% if s.registration_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not s.registration_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </div>
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium text-gray-700">Default fetch interval (minutes)</label>
+        <input type="number" name="default_fetch_interval_min" min="5" max="1440"
+               value="{{ s.default_fetch_interval_min }}"
+               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium text-gray-700">Max feeds per user</label>
+        <input type="number" name="max_feeds_per_user" min="1" max="9999"
+               value="{{ s.max_feeds_per_user }}"
+               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+    </div>
+  </section>
+
+  <!-- Retention -->
+  <section>
+    <h2 class="text-sm font-semibold text-gray-700 mb-4 pb-2 border-b border-gray-200">Article retention (defaults)</h2>
+    <div class="space-y-4 max-w-lg">
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Purge after (days)</label>
+          <p class="text-xs text-gray-400">Leave empty to disable age-based purge</p>
+        </div>
+        <input type="number" name="default_purge_after_days" min="1"
+               value="{{ s.default_purge_after_days or '' }}"
+               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Keep max articles per feed</label>
+          <p class="text-xs text-gray-400">Leave empty to disable count-based purge</p>
+        </div>
+        <input type="number" name="default_purge_keep_count" min="1"
+               value="{{ s.default_purge_keep_count or '' }}"
+               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+    </div>
+  </section>
+
+  <!-- SMTP -->
+  <section>
+    <h2 class="text-sm font-semibold text-gray-700 mb-4 pb-2 border-b border-gray-200">SMTP (email)</h2>
+    <div class="space-y-3 max-w-lg">
+      <div class="flex items-center justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">Host</label>
+        <input type="text" name="smtp_host" value="{{ s.smtp_host or '' }}" placeholder="smtp.example.com"
+               class="flex-1 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">Port</label>
+        <input type="number" name="smtp_port" min="1" max="65535" value="{{ s.smtp_port or 587 }}"
+               class="flex-1 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">Username</label>
+        <input type="text" name="smtp_user" value="{{ s.smtp_user or '' }}"
+               class="flex-1 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <div class="w-36 flex-shrink-0">
+          <label class="text-sm font-medium text-gray-700">Password</label>
+          <p class="text-xs text-gray-400">
+            {% if s.smtp_password_encrypted %}Password saved{% else %}No password set{% endif %}
+          </p>
+        </div>
+        <input type="password" name="smtp_password" value=""
+               placeholder="{% if s.smtp_password_encrypted %}Leave empty to keep current{% else %}Enter password{% endif %}"
+               class="flex-1 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">From email</label>
+        <input type="email" name="smtp_from_email" value="{{ s.smtp_from_email or '' }}"
+               class="flex-1 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">TLS</label>
+        <select name="smtp_use_tls"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="true" {% if s.smtp_use_tls %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not s.smtp_use_tls %}selected{% endif %}>Disabled</option>
+        </select>
+      </div>
+      <div class="space-y-2">
+        <div class="flex items-center gap-3">
+          <label class="text-sm font-medium text-gray-700">Test connection</label>
+          <button type="button"
+                  hx-post="/admin/settings/test-smtp"
+                  hx-target="#smtp-test-result"
+                  hx-swap="innerHTML"
+                  hx-indicator="#smtp-spinner"
+                  hx-include="closest form"
+                  class="px-3 py-1 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-700">
+            Send test email
+          </button>
+          <svg id="smtp-spinner"
+               class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
+               xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+          </svg>
+        </div>
+        <div id="smtp-test-result" class="text-sm"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI -->
+  <section>
+    <h2 class="text-sm font-semibold text-gray-700 mb-4 pb-2 border-b border-gray-200">AI</h2>
+    <div class="space-y-4 max-w-lg">
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Enable AI features</label>
+          <p class="text-xs text-gray-400">AI summaries and other AI-powered features</p>
+        </div>
+        <select name="ai_enabled"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="true" {% if s.ai_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not s.ai_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </div>
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Require user API keys</label>
+          <p class="text-xs text-gray-400">Users must provide their own API keys</p>
+        </div>
+        <select name="ai_require_user_keys"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="true" {% if s.ai_require_user_keys %}selected{% endif %}>Yes</option>
+          <option value="false" {% if not s.ai_require_user_keys %}selected{% endif %}>No</option>
+        </select>
+      </div>
+    </div>
+  </section>
+
+  <div class="pt-2">
+    <button type="submit"
+            class="px-6 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Save settings
+    </button>
+  </div>
+
+</form>
+{% endblock %}

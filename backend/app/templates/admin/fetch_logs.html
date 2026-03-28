@@ -1,0 +1,39 @@
+{% extends "admin/base.html" %}
+{% block title %}Fetch logs – Admin – Filtread{% endblock %}
+{% set active = "fetch_logs" %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Fetch logs <span class="text-sm font-normal text-gray-400">(last 100 errors)</span></h1>
+
+{% if logs %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">HTTP</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for log in logs %}
+      <tr>
+        <td class="px-4 py-2 max-w-xs">
+          <div class="font-medium text-gray-800 truncate">{{ log.feed.title if log.feed else "Deleted feed" }}</div>
+          {% if log.feed %}<div class="text-xs text-gray-400 truncate">{{ log.feed.feed_url }}</div>{% endif %}
+        </td>
+        <td class="px-4 py-2 text-gray-500">{{ log.http_status or "—" }}</td>
+        <td class="px-4 py-2 text-red-600 max-w-sm truncate">{{ log.error_message }}</td>
+        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+          <time datetime="{{ log.failed_at.isoformat() }}">{{ log.failed_at.strftime("%b %d, %H:%M") }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<p class="text-sm text-gray-400">No fetch errors recorded.</p>
+{% endif %}
+{% endblock %}

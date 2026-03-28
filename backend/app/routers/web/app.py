@@ -1,4 +1,6 @@
 """Web routes for the main application UI."""
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -25,7 +27,12 @@ templates = Jinja2Templates(directory="app/templates")
 async def main_app(
     request: Request,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
+    now = datetime.now(timezone.utc)
+    if not user.last_active_at or user.last_active_at < now - timedelta(hours=1):
+        user.last_active_at = now
+        await db.commit()
     return templates.TemplateResponse(request, "app/main.html", {"user": user})
 
 
