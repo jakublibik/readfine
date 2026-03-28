@@ -8,11 +8,11 @@
      hx-swap="innerHTML">
 
   <!-- Title row: star + title -->
-  <div class="flex items-start gap-1.5">
+  <div class="flex items-baseline gap-1.5">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
             onclick="event.stopPropagation()"
-            class="flex-shrink-0 mt-0.5 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+            class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
         <span class="text-base text-yellow-400">★</span>

@@ -137,7 +137,7 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
             feed_id=feed.id,
             guid=guid[:2048],
             guid_hash=guid_hash,
-            url=(_val_or_none(entry.get("link"), 2048)),
+            url=_safe_url(entry.get("link")),
             title=(entry.get("title") or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,
@@ -188,10 +188,10 @@ def _extract_image(entry) -> str | None:
     for key in ("media_thumbnail", "media_content"):
         media = entry.get(key)
         if media and isinstance(media, list) and media[0].get("url"):
-            return media[0]["url"][:2048]
+            return _safe_url(media[0]["url"])
     for enc in entry.get("enclosures") or []:
         if (enc.get("type") or "").startswith("image/") and enc.get("href"):
-            return enc["href"][:2048]
+            return _safe_url(enc["href"])
     return None
 
 
@@ -220,3 +220,13 @@ def _val_or_none(value: str | None, max_len: int) -> str | None:
     if not value:
         return None
     return value[:max_len]
+
+
+def _safe_url(value: str | None, max_len: int = 2048) -> str | None:
+    """Allow only http/https URLs to prevent javascript: and other dangerous schemes."""
+    if not value:
+        return None
+    stripped = value.strip()
+    if not stripped.lower().startswith(("http://", "https://")):
+        return None
+    return stripped[:max_len]

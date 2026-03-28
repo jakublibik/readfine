@@ -99,7 +99,9 @@ async def subscribe(
         db.add(feed)
         await db.flush()  # get feed.id
 
-    feed.subscriber_count += 1
+    await db.execute(
+        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
+    )
 
     user_feed = UserFeed(
         user_id=user.id,
@@ -164,15 +166,18 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
     # 2. Delete the subscription
     await db.delete(user_feed)
 
-    # 3. Decrement subscriber_count
+    # 3. Atomically decrement subscriber_count (floor 0)
+    await db.execute(
+        update(Feed)
+        .where(Feed.id == feed_id)
+        .values(subscriber_count=func.greatest(Feed.subscriber_count - 1, 0))
+    )
     result = await db.execute(select(Feed).where(Feed.id == feed_id))
     feed = result.scalar_one_or_none()
-    if feed:
-        new_count = max(0, (feed.subscriber_count or 0) - 1)
-        feed.subscriber_count = new_count
 
+    if feed:
         # 4. If no subscribers left: orphan surviving articles, delete the rest, delete the feed
-        if new_count == 0 and feed:
+        if feed.subscriber_count == 0:
             starred_or_archived_subq = (
                 select(UserArticleState.article_id)
                 .where(

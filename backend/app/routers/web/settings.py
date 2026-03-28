@@ -1,4 +1,6 @@
 """Web routes for settings: feeds, folders, labels, and filters management."""
+import logging
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -6,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from sqlalchemy import select
+
+logger = logging.getLogger(__name__)
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
@@ -18,7 +22,6 @@ from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
     delete_filter,
-    get_filter,
     get_filter,
     list_filters,
     test_filter,
@@ -141,7 +144,8 @@ async def settings_feeds_subscribe(
     except ValueError as e:
         error = str(e)
     except Exception as e:
-        error = f"Could not fetch feed: {e}"
+        logger.error("Unexpected error during feed subscribe (url=%s): %s", url, e)
+        error = "Could not subscribe to feed. Please check the URL and try again."
 
     # Re-fetch after failed subscribe (no commit happened)
     user_feeds, folders = await _get_feeds_context(user, db)

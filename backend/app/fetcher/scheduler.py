@@ -3,7 +3,7 @@ import logging
 
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, literal_column, or_, select
 
 import app.database as db
 from app.fetcher.rss import fetch_feed
@@ -29,8 +29,9 @@ async def _fetch_due_feeds() -> None:
 
         # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
         error_backoff_min = max(30, default_interval * 5)
-        effective_interval = func.make_interval(mins=func.coalesce(Feed.fetch_interval_min, default_interval))
-        backoff_interval = func.make_interval(mins=error_backoff_min)
+        one_minute = literal_column("interval '1 minute'")
+        effective_interval = func.coalesce(Feed.fetch_interval_min, default_interval) * one_minute
+        backoff_interval = error_backoff_min * one_minute
         due_feeds = await session.execute(
             select(Feed).where(
                 Feed.subscriber_count > 0,

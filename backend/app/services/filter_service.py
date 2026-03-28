@@ -16,6 +16,26 @@ from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, F
 logger = logging.getLogger(__name__)
 
 
+_REGEX_MAX_LEN = 200
+# Patterns that commonly cause catastrophic backtracking
+_REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w\+\)\{)")
+
+
+def _validate_regex_conditions(conditions) -> None:
+    """Raise ValueError if any regex condition is too long or looks like a ReDoS risk."""
+    for c in conditions:
+        if c.operator != "regex":
+            continue
+        if len(c.value) > _REGEX_MAX_LEN:
+            raise ValueError(f"Regex pattern too long (max {_REGEX_MAX_LEN} characters).")
+        if _REDOS_PATTERNS.search(c.value):
+            raise ValueError("Regex pattern contains potentially unsafe constructs (nested quantifiers).")
+        try:
+            re.compile(c.value)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}") from e
+
+
 # ── CRUD helpers ─────────────────────────────────────────────────────────────
 
 async def _validate_scope(
@@ -69,6 +89,7 @@ async def list_filters(user_id: int, db: AsyncSession) -> list[FilterResponse]:
 
 
 async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -> FilterResponse:
+    _validate_regex_conditions(payload.conditions)
     await _validate_scope(user_id, payload.scope_type, payload.scope_feed_id, payload.scope_folder_id, db)
     scope_feed_id, scope_folder_id = _normalize_scope(payload)
     f = Filter(
@@ -119,6 +140,9 @@ async def update_filter(
     f = result.scalar_one_or_none()
     if not f:
         return None
+
+    if payload.conditions is not None:
+        _validate_regex_conditions(payload.conditions)
 
     scope_type = payload.scope_type if payload.scope_type is not None else f.scope_type
     scope_feed_id = payload.scope_feed_id if "scope_feed_id" in (payload.model_fields_set or set()) else f.scope_feed_id

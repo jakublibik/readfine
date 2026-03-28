@@ -344,8 +344,8 @@ Indexy: `filter_id`
 |---|---|---|---|
 | `id` | `SERIAL` | PK | Primární klíč |
 | `filter_id` | `INTEGER` | NOT NULL, FK → `filters.id` ON DELETE CASCADE | Nadřazený filtr |
-| `action_type` | `VARCHAR(30)` | NOT NULL | `add_label`, `mark_read`, `star`, `hide`, `notify` |
-| `action_value` | `TEXT` | | Parametr akce (např. label_id pro `add_label`) |
+| `action_type` | `VARCHAR(30)` | NOT NULL | `label`, `mark_read`, `star`, `hide`, `notify` |
+| `action_value` | `TEXT` | | Parametr akce (např. label_id pro `label`) |
 
 Indexy: `filter_id`
 
