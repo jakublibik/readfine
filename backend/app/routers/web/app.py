@@ -1,4 +1,5 @@
 """Web routes for the main application UI."""
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -16,6 +17,19 @@ from app.services.label_service import list_labels
 
 router = APIRouter(tags=["web-app"])
 templates = Jinja2Templates(directory="app/templates")
+
+
+def _format_article_date(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    local_dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    if local_dt.date() == now.date():
+        return local_dt.strftime("%H:%M")
+    return local_dt.strftime("%b %d, %H:%M")
+
+
+templates.env.filters["article_date"] = _format_article_date
 
 
 @router.get("/app", response_class=HTMLResponse)

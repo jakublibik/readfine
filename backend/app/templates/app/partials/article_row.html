@@ -7,32 +7,25 @@
      hx-target="#article-detail"
      hx-swap="innerHTML">
 
-  <!-- Feed name + date -->
-  <div class="flex items-center justify-between mb-1">
-    <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
-    {% if article.published_at %}
-      <span class="text-xs text-gray-400 flex-shrink-0 ml-2">
-        {{ article.published_at.strftime("%b %d") }}
-      </span>
-    {% endif %}
-  </div>
-
   <!-- Title -->
-  <p class="text-sm font-medium text-gray-900 leading-snug line-clamp-2">
-    {% if not article.is_read %}<span class="unread-dot inline-block w-1.5 h-1.5 rounded-full bg-blue-500 mr-1 mb-0.5 align-middle"></span>{% endif %}
+  <p class="text-sm leading-snug line-clamp-2 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-700{% endif %}">
     {{ article.title }}
   </p>
+
+  <!-- Feed name + date -->
+  <div class="flex items-center justify-between mt-0.5">
+    <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+    <span class="text-xs text-gray-400 flex-shrink-0 ml-2">{{ article.published_at | article_date }}</span>
+  </div>
 
   <!-- Summary -->
   {% if article.summary %}
     <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ article.summary }}</p>
   {% endif %}
 
-  <!-- Footer: read time + star indicator -->
+  <!-- Footer: star indicator -->
+  {% if article.is_starred or article.is_archived %}
   <div class="flex items-center gap-2 mt-1.5">
-    {% if article.estimated_read_min %}
-      <span class="text-xs text-gray-400">{{ article.estimated_read_min }} min</span>
-    {% endif %}
     {% if article.is_starred %}
       <span class="text-xs text-yellow-500">★</span>
     {% endif %}
@@ -40,5 +33,6 @@
       <span class="text-xs text-gray-400">archived</span>
     {% endif %}
   </div>
+  {% endif %}
 
 </div>
