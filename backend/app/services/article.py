@@ -90,7 +90,7 @@ async def list_articles(
             author=article.author,
             summary=article.summary,
             published_at=article.published_at,
-            formatted_date=_format_date(article.published_at),
+            formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,
             image_url=article.image_url,
             is_read=state.is_read if state else False,
