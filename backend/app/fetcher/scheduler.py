@@ -1,9 +1,9 @@
 """APScheduler integration: periodic RSS feed fetching."""
 import logging
-from datetime import datetime, timezone
+
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, text
+from sqlalchemy import and_, func, or_, select
 
 import app.database as db
 from app.fetcher.rss import fetch_feed
@@ -29,17 +29,24 @@ async def _fetch_due_feeds() -> None:
 
         # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
         error_backoff_min = max(30, default_interval * 5)
+        effective_interval = func.make_interval(mins=func.coalesce(Feed.fetch_interval_min, default_interval))
+        backoff_interval = func.make_interval(mins=error_backoff_min)
         due_feeds = await session.execute(
             select(Feed).where(
-                text(
-                    "(status = 'active' AND ("
-                    "  last_fetched_at IS NULL OR "
-                    "  last_fetched_at + (COALESCE(fetch_interval_min, :di) * interval '1 minute') < NOW()"
-                    ")) OR ("
-                    "  status = 'error' AND "
-                    "  last_fetched_at + (:backoff * interval '1 minute') < NOW()"
-                    ")"
-                ).bindparams(di=default_interval, backoff=error_backoff_min),
+                Feed.subscriber_count > 0,
+                or_(
+                    and_(
+                        Feed.status == "active",
+                        or_(
+                            Feed.last_fetched_at.is_(None),
+                            Feed.last_fetched_at + effective_interval < func.now(),
+                        ),
+                    ),
+                    and_(
+                        Feed.status == "error",
+                        Feed.last_fetched_at + backoff_interval < func.now(),
+                    ),
+                ),
             )
         )
         feeds = due_feeds.scalars().all()

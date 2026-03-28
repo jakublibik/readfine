@@ -29,27 +29,50 @@ async def list_articles(
     unread_only: bool = False,
     starred_only: bool = False,
     archived_only: bool = False,
+    labeled_only: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state."""
-    # Base: articles in feeds the user subscribes to
-    stmt = (
-        select(
-            Article,
-            UserArticleState,
-            Feed.title.label("feed_title"),
-            UserFeed.custom_title.label("custom_title"),
+    # Starred/archived views: UserFeed is optional (articles remain visible after unsubscribe)
+    is_state_view = starred_only or archived_only
+    if is_state_view:
+        stmt = (
+            select(
+                Article,
+                UserArticleState,
+                Feed.title.label("feed_title"),
+                UserFeed.custom_title.label("custom_title"),
+            )
+            .join(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
+            .outerjoin(Feed, Feed.id == Article.feed_id)
+            .outerjoin(
+                UserFeed,
+                (UserFeed.feed_id == Article.feed_id)
+                & (UserFeed.user_id == user.id),
+            )
         )
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .join(Feed, Feed.id == Article.feed_id)
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
+    else:
+        # Normal view: user must be subscribed to the feed
+        stmt = (
+            select(
+                Article,
+                UserArticleState,
+                Feed.title.label("feed_title"),
+                UserFeed.custom_title.label("custom_title"),
+            )
+            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+            .join(Feed, Feed.id == Article.feed_id)
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
         )
-        .where(UserFeed.user_id == user.id)
-    )
 
     if feed_id is not None:
         stmt = stmt.where(Article.feed_id == feed_id)
@@ -64,6 +87,12 @@ async def list_articles(
             & (ArticleLabel.user_id == user.id)
             & (ArticleLabel.label_id == label_id),
         )
+    elif labeled_only:
+        stmt = stmt.join(
+            ArticleLabel,
+            (ArticleLabel.article_id == Article.id)
+            & (ArticleLabel.user_id == user.id),
+        ).distinct()
 
     if unread_only:
         stmt = stmt.where(
@@ -101,7 +130,11 @@ async def list_articles(
 
 
 async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleResponse | None:
-    """Return article detail with user state. Returns None if not accessible."""
+    """Return article detail with user state. Returns None if not accessible.
+
+    Access is granted if the user subscribes to the feed, OR has a starred/archived
+    state for the article (remains accessible after unsubscribing).
+    """
     stmt = (
         select(
             Article,
@@ -109,14 +142,19 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
         )
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .join(Feed, Feed.id == Article.feed_id)
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .outerjoin(
             UserArticleState,
             (UserArticleState.article_id == Article.id)
             & (UserArticleState.user_id == user.id),
         )
-        .where(Article.id == article_id, UserFeed.user_id == user.id)
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711 — subscribed
+            | (UserArticleState.is_starred == True)  # noqa: E712 — starred orphan
+            | (UserArticleState.is_archived == True),  # noqa: E712 — archived orphan
+        )
     )
     row = (await db.execute(stmt)).first()
     if not row:

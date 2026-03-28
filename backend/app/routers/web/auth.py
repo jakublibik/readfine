@@ -126,7 +126,7 @@ async def register(
     return RedirectResponse("/app", status_code=302)
 
 
-@router.api_route("/logout", methods=["GET", "POST"])
+@router.post("/logout")
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)

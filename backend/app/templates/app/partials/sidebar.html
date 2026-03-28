@@ -1,3 +1,5 @@
+{% macro badge_unread(count) %}<span class="ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count }}</span>{% endmacro %}
+{% macro badge_total(count) %}<span class="ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count }}</span>{% endmacro %}
 <!-- Sidebar: header + nav links + feed list -->
 <div class="flex flex-col h-full">
 
@@ -6,44 +8,57 @@
     <span class="font-semibold text-gray-800">Filtread</span>
     <div class="flex items-center gap-3">
       <a href="/settings/feeds" class="text-xs text-gray-400 hover:text-gray-600">Settings</a>
-      <a href="/logout" class="text-xs text-gray-400 hover:text-gray-600">Logout</a>
+      <form method="POST" action="/logout" hx-boost="true" style="display:inline">
+        <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer">Logout</button>
+      </form>
     </div>
   </div>
 
   <!-- Nav -->
   <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
-    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
-      All articles
+      <span class="flex-1">All articles</span>
+      {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_total) }}{% endif %}
     </a>
-    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?unread_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
-      Unread
+      <span class="flex-1">Unread</span>
+      {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_unread) }}{% endif %}
     </a>
-    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
-      Starred
+      <span class="flex-1">Starred</span>
+      {% if nav_unread_starred > 0 %}{{ badge_unread(nav_unread_starred) }}{% else %}{{ badge_total(nav_starred) }}{% endif %}
     </a>
-    <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
-      Archived
+      <span class="flex-1">Archived</span>
+      {% if nav_unread_archived > 0 %}{{ badge_unread(nav_unread_archived) }}{% else %}{{ badge_total(nav_archived) }}{% endif %}
     </a>
   </nav>
 
   <!-- Labels -->
   {% if user_labels %}
   <div class="px-2 py-3 border-b border-gray-200">
-    <div class="px-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">Labels</div>
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+       hx-get="/htmx/articles?labeled_only=true" hx-target="#article-list" hx-swap="innerHTML"
+       hx-push-url="false">
+      <span class="flex-1 font-medium">Labels</span>
+      {% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}
+    </a>
     {% for label in user_labels %}
-      <a class="flex items-center gap-2 px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+      <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
          hx-get="/htmx/articles?label_id={{ label.id }}" hx-target="#article-list" hx-swap="innerHTML"
          hx-push-url="false">
-        <span class="w-2 h-2 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
-        <span class="truncate">{{ label.name }}</span>
+        <span class="w-2 h-2 rounded-full flex-shrink-0 mr-2" style="background-color: {{ label.color }}"></span>
+        <span class="flex-1 truncate">{{ label.name }}</span>
+        {% set lu = label_unread_counts.get(label.id, 0) %}
+        {% if lu > 0 %}{{ badge_unread(lu) }}{% else %}{{ badge_total(label_counts.get(label.id, 0)) }}{% endif %}
       </a>
     {% endfor %}
   </div>
@@ -66,15 +81,12 @@
         {% endif %}
       {% endif %}
 
-      <a class="flex items-center justify-between px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+      <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
          hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
          hx-push-url="false">
-        <span class="truncate">{{ uf.custom_title or uf.feed.title }}</span>
-        {% if uf.unread_count > 0 %}
-          <span class="ml-2 flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
-            {{ uf.unread_count }}
-          </span>
-        {% endif %}
+        <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
+        {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}
+        {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
       </a>
     {% else %}
       <p class="px-3 py-2 text-sm text-gray-400">No feeds yet.</p>
@@ -82,3 +94,7 @@
   </div>
 
 </div>
+
+<style>
+  .nav-item.active { background-color: #eff6ff; color: #1d4ed8; font-weight: 500; }
+</style>

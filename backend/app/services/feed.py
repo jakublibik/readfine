@@ -2,12 +2,13 @@
 import asyncio
 import logging
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed
+from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
@@ -132,24 +133,68 @@ async def _initial_fetch(feed_id: int) -> None:
 
 
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
-    """Remove a user's subscription. Decrements subscriber_count on the feed."""
+    """Remove a user's subscription with full lifecycle cleanup.
+
+    1. Deletes UserArticleState rows for non-starred, non-archived articles.
+    2. Deletes the UserFeed row.
+    3. Decrements subscriber_count on the Feed.
+    4. If subscriber_count reaches 0: deletes orphan articles (not starred/archived
+       by anyone) and the Feed itself if no articles remain.
+    """
     result = await db.execute(
-        select(UserFeed).where(
-            UserFeed.id == user_feed_id,
-            UserFeed.user_id == user.id,
-        )
+        select(UserFeed).where(UserFeed.id == user_feed_id, UserFeed.user_id == user.id)
     )
     user_feed = result.scalar_one_or_none()
     if not user_feed:
         raise ValueError("Subscription not found")
 
-    # Decrement subscriber count
-    result = await db.execute(select(Feed).where(Feed.id == user_feed.feed_id))
-    feed = result.scalar_one_or_none()
-    if feed and feed.subscriber_count > 0:
-        feed.subscriber_count -= 1
+    feed_id = user_feed.feed_id
 
+    # 1. Delete non-starred, non-archived UserArticleState rows for this user + feed
+    article_ids_subq = select(Article.id).where(Article.feed_id == feed_id).scalar_subquery()
+    await db.execute(
+        delete(UserArticleState).where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.article_id.in_(article_ids_subq),
+            UserArticleState.is_starred == False,  # noqa: E712
+            UserArticleState.is_archived == False,  # noqa: E712
+        )
+    )
+
+    # 2. Delete the subscription
     await db.delete(user_feed)
+
+    # 3. Decrement subscriber_count
+    result = await db.execute(select(Feed).where(Feed.id == feed_id))
+    feed = result.scalar_one_or_none()
+    if feed:
+        new_count = max(0, (feed.subscriber_count or 0) - 1)
+        feed.subscriber_count = new_count
+
+        # 4. If no subscribers left: clean up orphan articles (not starred/archived by anyone)
+        if new_count == 0 and feed:
+            starred_or_archived_subq = (
+                select(UserArticleState.article_id)
+                .where(
+                    UserArticleState.article_id == Article.id,
+                    (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),  # noqa: E712
+                )
+                .correlate(Article)
+                .exists()
+            )
+            await db.execute(
+                delete(Article).where(
+                    Article.feed_id == feed_id,
+                    ~starred_or_archived_subq,
+                )
+            )
+            # Delete feed if no articles remain
+            remaining = (await db.execute(
+                select(func.count()).select_from(Article).where(Article.feed_id == feed_id)
+            )).scalar()
+            if remaining == 0:
+                await db.delete(feed)
+
     await db.commit()
 
 

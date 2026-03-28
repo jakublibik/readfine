@@ -8,40 +8,4 @@
   </div>
 {% endif %}
 
-{% if mark_read_on_scroll %}
-<script>
-(function () {
-  var list = document.getElementById('article-list');
-  if (!list) return;
-
-  // Track which articles have been seen (entered viewport)
-  var seen = new Set();
-
-  var observer = new IntersectionObserver(function (entries) {
-    entries.forEach(function (entry) {
-      var el = entry.target;
-      var id = el.dataset.articleId;
-      var isRead = el.dataset.isRead === 'true';
-
-      if (entry.isIntersecting) {
-        seen.add(id);
-      } else if (seen.has(id) && !isRead && entry.boundingClientRect.top < 0) {
-        // Article was visible and scrolled above the list top → mark as read
-        seen.delete(id);
-        el.dataset.isRead = 'true';
-        el.classList.add('opacity-60');
-        // Remove the unread dot if present
-        var dot = el.querySelector('.unread-dot');
-        if (dot) dot.remove();
-        // Call the read endpoint; HX-Trigger: sidebarRefresh is handled by htmx
-        htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
-      }
-    });
-  }, { root: list, threshold: 0.1 });
-
-  list.querySelectorAll('.article-row').forEach(function (el) {
-    observer.observe(el);
-  });
-})();
-</script>
-{% endif %}
+<script type="application/json" id="article-list-cfg">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}}</script>

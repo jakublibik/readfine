@@ -1,4 +1,6 @@
-<article class="max-w-2xl mx-auto px-3 py-8">
+<article class="max-w-3xl px-6 py-6"
+         data-article-id="{{ article.id }}"
+         data-is-read="{{ 'true' if article.is_read else 'false' }}">
 
   <!-- Header -->
   <header class="mb-6">
@@ -60,19 +62,3 @@
 
 </article>
 
-{% if not article.is_read %}
-<script>
-  (function() {
-    var timer = setTimeout(function() {
-      htmx.ajax('POST', '/htmx/articles/{{ article.id }}/set-read?state=true', {
-        target: '#read-btn-{{ article.id }}',
-        swap: 'innerHTML'
-      });
-    }, 1500);
-    // Cancel if user navigates away before timer fires
-    document.getElementById('article-detail').addEventListener(
-      'htmx:beforeRequest', function() { clearTimeout(timer); }, { once: true }
-    );
-  })();
-</script>
-{% endif %}

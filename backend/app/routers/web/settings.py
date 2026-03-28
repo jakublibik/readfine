@@ -19,6 +19,7 @@ from app.services.filter_service import (
     create_filter,
     delete_filter,
     get_filter,
+    get_filter,
     list_filters,
     test_filter,
     update_filter,
@@ -334,6 +335,15 @@ async def settings_filter_edit(
     })
 
 
+async def _filter_form_context(user, db):
+    labels = await list_labels(user, db)
+    user_feeds = await list_user_feeds(user, db)
+    folders_result = await db.execute(
+        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+    )
+    return {"labels": labels, "user_feeds": user_feeds, "folders": folders_result.scalars().all()}
+
+
 @router.post("/filters", response_class=HTMLResponse)
 async def settings_filter_create(
     request: Request,
@@ -342,7 +352,12 @@ async def settings_filter_create(
 ):
     form = await request.form()
     payload = _parse_filter_form(form)
-    await create_filter(user.id, payload, db)
+    try:
+        await create_filter(user.id, payload, db)
+    except ValueError as e:
+        ctx = await _filter_form_context(user, db)
+        ctx.update({"filter": None, "error": str(e)})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
     return RedirectResponse("/settings/filters", status_code=303)
 
 
@@ -355,7 +370,13 @@ async def settings_filter_update(
 ):
     form = await request.form()
     payload = _parse_filter_form(form)
-    await update_filter(user.id, filter_id, FilterUpdate(**payload.model_dump()), db)
+    try:
+        await update_filter(user.id, filter_id, FilterUpdate(**payload.model_dump()), db)
+    except ValueError as e:
+        existing = await get_filter(user.id, filter_id, db)
+        ctx = await _filter_form_context(user, db)
+        ctx.update({"filter": existing, "error": str(e)})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
     return RedirectResponse("/settings/filters", status_code=303)
 
 
