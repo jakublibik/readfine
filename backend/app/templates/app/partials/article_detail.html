@@ -13,7 +13,7 @@
         <span>· {{ article.author }}</span>
       {% endif %}
       {% if article.published_at %}
-        <span>· {{ article.published_at.strftime("%B %d, %Y") }}</span>
+        <span>· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y") }}</time></span>
       {% endif %}
       {% if article.estimated_read_min %}
         <span>· {{ article.estimated_read_min }} min read</span>

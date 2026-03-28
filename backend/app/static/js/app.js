@@ -1,3 +1,29 @@
+// Local time formatting for <time datetime="..."> elements
+function _formatLocalTime(isoStr, format) {
+  var dt = new Date(isoStr);
+  if (isNaN(dt.getTime())) return null;
+  if (format === 'long') {
+    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+  }
+  // short: today → HH:MM, otherwise "Mon DD, HH:MM"
+  var isToday = dt.toDateString() === new Date().toDateString();
+  if (isToday) {
+    return dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  }
+  return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ', ' +
+         dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+}
+
+function localizeAllTimes() {
+  document.querySelectorAll('time[datetime]').forEach(function (el) {
+    var localized = _formatLocalTime(el.getAttribute('datetime'), el.dataset.format || 'short');
+    if (localized) el.textContent = localized;
+  });
+}
+
+document.addEventListener('DOMContentLoaded', localizeAllTimes);
+document.body.addEventListener('htmx:afterSettle', localizeAllTimes);
+
 // Nav active state — event delegation, survives HTMX sidebar swaps
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');

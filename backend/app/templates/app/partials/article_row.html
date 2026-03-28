@@ -28,7 +28,13 @@
   <!-- Feed name + date -->
   <div class="flex items-center justify-between mt-0.5 pl-5">
     <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
-    <span class="text-xs text-gray-400 flex-shrink-0 ml-2">{{ article.formatted_date }}</span>
+    <span class="text-xs text-gray-400 flex-shrink-0 ml-2">
+      {% if article.published_at %}
+        <time datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
+      {% else %}
+        {{ article.formatted_date }}
+      {% endif %}
+    </span>
   </div>
 
   <!-- Summary -->
