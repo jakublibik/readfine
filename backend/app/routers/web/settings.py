@@ -34,6 +34,13 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _safe_int(value, default=None) -> int | None:
+    try:
+        return int(value) if value else default
+    except (ValueError, TypeError):
+        return default
+
+
 # ── Labels ────────────────────────────────────────────────────────────────────
 
 @router.get("/labels", response_class=HTMLResponse)
@@ -121,7 +128,7 @@ async def settings_feeds_subscribe(
     url = form.get("url", "").strip()
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
-    folder_id = int(folder_id_raw) if folder_id_raw else None
+    folder_id = _safe_int(folder_id_raw)
 
     user_feeds, folders = await _get_feeds_context(user, db)
     error = None
@@ -189,7 +196,7 @@ async def settings_feed_update(
     form = await request.form()
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
-    folder_id = int(folder_id_raw) if folder_id_raw else None
+    folder_id = _safe_int(folder_id_raw)
 
     if folder_id is not None:
         folder_check = await db.execute(
@@ -406,6 +413,7 @@ def _parse_filter_form(form) -> FilterCreate:
     values = form.getlist("cond_value")
     positions = form.getlist("cond_position")
     for i, (field, op, val) in enumerate(zip(fields, operators, values)):
+        val = val.strip()
         if field and op and val:
             conditions.append(FilterConditionCreate(
                 field=field, operator=op, value=val,
@@ -430,11 +438,11 @@ def _parse_filter_form(form) -> FilterCreate:
         name=form.get("name", ""),
         is_active=form.get("is_active") == "true",
         match_operator=form.get("match_operator", "AND"),
-        position=int(form.get("position", 0)),
+        position=_safe_int(form.get("position"), 0),
         stop_on_match=form.get("stop_on_match") == "true",
         scope_type=scope_type,
-        scope_feed_id=int(scope_feed_id_raw) if scope_feed_id_raw else None,
-        scope_folder_id=int(scope_folder_id_raw) if scope_folder_id_raw else None,
+        scope_feed_id=_safe_int(scope_feed_id_raw),
+        scope_folder_id=_safe_int(scope_folder_id_raw),
         conditions=conditions,
         actions=actions,
     )

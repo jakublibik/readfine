@@ -8,12 +8,52 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.article import Article, UserArticleState
-from app.models.feed import UserFeed
+from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
-from app.models.label import ArticleLabel
+from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterUpdate
 
 logger = logging.getLogger(__name__)
+
+
+# ── CRUD helpers ─────────────────────────────────────────────────────────────
+
+async def _validate_scope(
+    user_id: int,
+    scope_type: str,
+    scope_feed_id: int | None,
+    scope_folder_id: int | None,
+    db: AsyncSession,
+) -> None:
+    """Raise ValueError if scope IDs don't belong to the user."""
+    if scope_type == "feed":
+        if not scope_feed_id:
+            raise ValueError("scope_feed_id is required for feed scope")
+        result = await db.execute(
+            select(UserFeed.id).where(
+                UserFeed.user_id == user_id, UserFeed.feed_id == scope_feed_id
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise ValueError("Feed not in your subscriptions")
+    elif scope_type == "folder":
+        if not scope_folder_id:
+            raise ValueError("scope_folder_id is required for folder scope")
+        result = await db.execute(
+            select(Folder.id).where(
+                Folder.id == scope_folder_id, Folder.user_id == user_id
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise ValueError("Folder not found")
+
+
+def _normalize_scope(payload) -> tuple[int | None, int | None]:
+    """Return (scope_feed_id, scope_folder_id) with unused IDs zeroed out."""
+    scope_type = getattr(payload, "scope_type", "all") or "all"
+    feed_id = payload.scope_feed_id if scope_type == "feed" else None
+    folder_id = payload.scope_folder_id if scope_type == "folder" else None
+    return feed_id, folder_id
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -29,6 +69,8 @@ async def list_filters(user_id: int, db: AsyncSession) -> list[FilterResponse]:
 
 
 async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -> FilterResponse:
+    await _validate_scope(user_id, payload.scope_type, payload.scope_feed_id, payload.scope_folder_id, db)
+    scope_feed_id, scope_folder_id = _normalize_scope(payload)
     f = Filter(
         user_id=user_id,
         name=payload.name,
@@ -37,8 +79,8 @@ async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -
         position=payload.position,
         stop_on_match=payload.stop_on_match,
         scope_type=payload.scope_type,
-        scope_feed_id=payload.scope_feed_id,
-        scope_folder_id=payload.scope_folder_id,
+        scope_feed_id=scope_feed_id,
+        scope_folder_id=scope_folder_id,
     )
     for c in payload.conditions:
         f.conditions.append(FilterCondition(**c.model_dump()))
@@ -78,9 +120,17 @@ async def update_filter(
     if not f:
         return None
 
+    scope_type = payload.scope_type if payload.scope_type is not None else f.scope_type
+    scope_feed_id = payload.scope_feed_id if "scope_feed_id" in (payload.model_fields_set or set()) else f.scope_feed_id
+    scope_folder_id = payload.scope_folder_id if "scope_folder_id" in (payload.model_fields_set or set()) else f.scope_folder_id
+    await _validate_scope(user_id, scope_type, scope_feed_id, scope_folder_id, db)
+
     scalar_fields = payload.model_dump(exclude_unset=True, exclude={"conditions", "actions"})
     for field, value in scalar_fields.items():
         setattr(f, field, value)
+    # Normalize: clear unused scope IDs
+    if payload.scope_type is not None:
+        f.scope_feed_id, f.scope_folder_id = _normalize_scope(payload)
     f.updated_at = datetime.now(timezone.utc)
 
     if payload.conditions is not None:
@@ -137,7 +187,9 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str):
 def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None) -> bool:
     field_value = _get_field_value(article, user_feed, condition.field)
     op = condition.operator
-    val = condition.value
+    val = condition.value.strip()
+    if not val:
+        return False
 
     if field_value is None:
         return op == "not_contains"
@@ -201,6 +253,12 @@ async def _execute_actions(
         try:
             if action.action_type == "label" and action.action_value:
                 label_id = int(action.action_value)
+                # Verify label belongs to this user
+                label_check = await db.execute(
+                    select(Label.id).where(Label.id == label_id, Label.user_id == user_id)
+                )
+                if not label_check.scalar_one_or_none():
+                    continue
                 existing = await db.execute(
                     select(ArticleLabel).where(
                         ArticleLabel.user_id == user_id,
@@ -288,7 +346,11 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     if not f:
         return None
 
-    # Load articles from user's feeds
+    user_feeds_result = await db.execute(
+        select(UserFeed).where(UserFeed.user_id == user_id)
+    )
+    user_feeds_map = {uf.feed_id: uf for uf in user_feeds_result.scalars()}
+
     articles_result = await db.execute(
         select(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
@@ -298,7 +360,7 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     )
     articles = articles_result.scalars().all()
 
-    matched = [a for a in articles if evaluate_filter(f, a)]
+    matched = [a for a in articles if evaluate_filter(f, a, user_feeds_map.get(a.feed_id))]
     return FilterTestResult(
         matched_count=len(matched),
         sample_titles=[a.title for a in matched[:5]],

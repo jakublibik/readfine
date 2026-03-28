@@ -2,6 +2,8 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.article import Article
+from app.models.feed import UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
@@ -60,11 +62,19 @@ async def delete_label(user: User, label_id: int, db: AsyncSession) -> bool:
 async def assign_label(
     user: User, article_id: int, label_id: int, db: AsyncSession
 ) -> bool:
-    """Assign a label to an article. Returns False if label doesn't belong to user."""
+    """Assign a label to an article. Returns False if label or article not accessible to user."""
     label_exists = await db.execute(
         select(Label.id).where(Label.id == label_id, Label.user_id == user.id)
     )
     if not label_exists.scalar_one_or_none():
+        return False
+
+    article_access = await db.execute(
+        select(Article.id)
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .where(Article.id == article_id, UserFeed.user_id == user.id)
+    )
+    if not article_access.scalar_one_or_none():
         return False
 
     existing = await db.execute(
