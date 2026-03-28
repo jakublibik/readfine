@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+{% block title %}Preferences – Filtread{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-semibold text-gray-900">Preferences</h1>
+    <div class="flex items-center gap-4">
+      <a href="/settings/feeds" class="text-sm text-blue-600 hover:underline">Feeds</a>
+      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
+      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
+    </div>
+  </div>
+
+  {% if saved %}
+    <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Preferences saved.
+    </div>
+  {% endif %}
+
+  <!-- Reading preferences -->
+  <form method="POST" action="/settings/preferences" hx-boost="true" class="space-y-6">
+
+    <section>
+      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Reading</h2>
+      <div class="space-y-4">
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Unread filter</label>
+            <p class="text-xs text-gray-500 mt-0.5">Adaptive: show only unread when any exist, otherwise all</p>
+          </div>
+          <select name="unread_filter"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="adaptive" {% if s.unread_filter == "adaptive" %}selected{% endif %}>Adaptive</option>
+            <option value="unread_only" {% if s.unread_filter == "unread_only" %}selected{% endif %}>Unread only</option>
+            <option value="show_all" {% if s.unread_filter == "show_all" %}selected{% endif %}>Show all</option>
+          </select>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Mark as read on scroll</label>
+            <p class="text-xs text-gray-500 mt-0.5">Automatically mark articles as read when scrolled past</p>
+          </div>
+          <input type="checkbox" name="mark_read_on_scroll" {% if s.mark_read_on_scroll %}checked{% endif %}
+                 class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        </div>
+
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-medium text-gray-700">Default sort order</label>
+          <select name="default_sort_order"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="newest" {% if s.default_sort_order == "newest" %}selected{% endif %}>Newest first</option>
+            <option value="oldest" {% if s.default_sort_order == "oldest" %}selected{% endif %}>Oldest first</option>
+          </select>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Articles per page</label>
+            <p class="text-xs text-gray-500 mt-0.5">10–200</p>
+          </div>
+          <input type="number" name="articles_per_page" value="{{ s.articles_per_page }}"
+                 min="10" max="200"
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+        </div>
+
+      </div>
+    </section>
+
+    <section>
+      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Article list layout</h2>
+      <div class="space-y-4">
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Desktop density</label>
+            <p class="text-xs text-gray-500 mt-0.5">How much space each article row takes</p>
+          </div>
+          <select name="list_density_web"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="compact" {% if s.list_density_web == "compact" %}selected{% endif %}>Compact</option>
+            <option value="comfortable" {% if s.list_density_web == "comfortable" %}selected{% endif %}>Comfortable</option>
+            <option value="summary" {% if s.list_density_web == "summary" %}selected{% endif %}>Summary</option>
+          </select>
+        </div>
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Mobile density</label>
+            <p class="text-xs text-gray-500 mt-0.5">Density on small screens</p>
+          </div>
+          <select name="list_density_mobile"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="comfortable" {% if s.list_density_mobile == "comfortable" %}selected{% endif %}>Comfortable</option>
+            <option value="compact" {% if s.list_density_mobile == "compact" %}selected{% endif %}>Compact</option>
+            <option value="summary" {% if s.list_density_mobile == "summary" %}selected{% endif %}>Summary</option>
+          </select>
+        </div>
+
+      </div>
+    </section>
+
+    <div>
+      <button type="submit"
+              class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+        Save preferences
+      </button>
+    </div>
+
+  </form>
+
+  <!-- Change password -->
+  <section class="mt-10 pt-6 border-t border-gray-200">
+    <h2 class="text-sm font-medium text-gray-700 mb-3">Change password</h2>
+
+    {% if pw_error %}
+      <div id="pw-error" tabindex="-1"
+           class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700 focus:outline-none">
+        {{ pw_error }}
+      </div>
+      <script>document.getElementById('pw-error').focus();</script>
+    {% endif %}
+    {% if pw_saved %}
+      <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+        Password changed successfully.
+      </div>
+    {% endif %}
+
+    <form method="POST" action="/settings/password" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">New password</label>
+        <input type="password" name="new_password" required minlength="8" autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Confirm new password</label>
+        <input type="password" name="confirm_password" required autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-gray-700 text-white text-sm rounded hover:bg-gray-800">
+          Change password
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <div class="mt-6">
+    <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
+  </div>
+</div>
+{% endblock %}

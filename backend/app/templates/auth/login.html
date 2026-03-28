@@ -9,6 +9,11 @@
         {% if error %}
         <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
             {{ error }}
+            {% if show_reset %}
+            <div class="mt-1">
+                <a href="/reset-password" class="text-red-600 underline hover:text-red-800">Forgot password?</a>
+            </div>
+            {% endif %}
         </div>
         {% endif %}
 

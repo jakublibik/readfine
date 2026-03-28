@@ -1,13 +1,41 @@
+{% set d = density | default("comfortable") %}
+{% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
+
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 px-4 py-3 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %}"
+     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %} {% if d == 'compact' %}px-4 py-1.5{% else %}px-4 py-2{% endif %}"
      data-article-id="{{ article.id }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      hx-get="/htmx/articles/{{ article.id }}"
      hx-target="#article-detail"
      hx-swap="innerHTML">
 
-  <!-- Title row: star + title -->
+  {% if d == "compact" %}
+  <!-- Compact: star + title + feed + date all inline -->
+  <div class="flex items-center gap-1.5">
+    <button hx-post="/htmx/articles/{{ article.id }}/star"
+            hx-swap="none"
+            onclick="event.stopPropagation()"
+            class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+            title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
+      {% if article.is_starred %}
+        <span class="text-base text-yellow-400">★</span>
+      {% else %}
+        <span class="text-base text-gray-300 hover:text-yellow-300">☆</span>
+      {% endif %}
+    </button>
+    <p class="text-sm leading-snug line-clamp-1 flex-1 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-700{% endif %}">
+      {{ article.title }}
+    </p>
+    <span class="text-xs text-gray-400 flex-shrink-0 ml-2">
+      {% if article.published_at %}
+        <time datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
+      {% else %}{{ article.formatted_date }}{% endif %}
+    </span>
+  </div>
+
+  {% else %}
+  <!-- Comfortable / Summary: star + title, then feed + date row -->
   <div class="flex items-baseline gap-1.5">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
@@ -20,31 +48,26 @@
         <span class="text-lg text-gray-300 hover:text-yellow-300">☆</span>
       {% endif %}
     </button>
-    <p class="text-sm leading-snug line-clamp-2 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-700{% endif %}">
-      {{ article.title }}
-    </p>
+    <p class="text-sm leading-snug line-clamp-2 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-700{% endif %}">{{ article.title }}</p>
   </div>
 
-  <!-- Feed name + date -->
   <div class="flex items-center justify-between mt-0.5 pl-5">
     <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
     <span class="text-xs text-gray-400 flex-shrink-0 ml-2">
       {% if article.published_at %}
         <time datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
-      {% else %}
-        {{ article.formatted_date }}
-      {% endif %}
+      {% else %}{{ article.formatted_date }}{% endif %}
     </span>
   </div>
 
-  <!-- Summary -->
-  {% if article.summary %}
-    <p class="text-xs text-gray-500 mt-1 pl-5 line-clamp-2">{{ article.summary }}</p>
+  {% if d == "summary" and article.snippet %}
+    <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ article.snippet }}</p>
+  {% endif %}
   {% endif %}
 
-  <!-- Footer: archived indicator -->
+  <!-- Archived indicator (all densities) -->
   {% if article.is_archived %}
-  <div class="flex items-center mt-1.5 pl-5">
+  <div class="{% if d == 'compact' %}inline ml-1{% else %}mt-1 pl-5{% endif %}">
     <span class="text-xs text-gray-400">archived</span>
   </div>
   {% endif %}

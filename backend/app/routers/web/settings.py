@@ -9,12 +9,14 @@ from sqlalchemy.orm import selectinload
 
 from sqlalchemy import select
 
+from app.auth.security import hash_password, verify_password
+
 logger = logging.getLogger(__name__)
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.feed import Folder, UserFeed
-from app.models.user import User
+from app.models.user import User, UserSettings
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
 from app.services.feed import list_user_feeds, subscribe, unsubscribe
@@ -471,3 +473,108 @@ def _parse_filter_form(form) -> FilterCreate:
         conditions=conditions,
         actions=actions,
     )
+
+
+# ── Preferences ───────────────────────────────────────────────────────────────
+
+_DENSITY_VALUES = {"compact", "comfortable", "summary"}
+_SORT_VALUES = {"newest", "oldest"}
+
+
+async def _get_or_create_settings(user: User, db: AsyncSession) -> UserSettings:
+    result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    s = result.scalar_one_or_none()
+    if s is None:
+        s = UserSettings(user_id=user.id)
+        db.add(s)
+        await db.flush()
+    return s
+
+
+@router.get("/preferences", response_class=HTMLResponse)
+async def settings_preferences(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    s = await _get_or_create_settings(user, db)
+    return templates.TemplateResponse(request, "settings/preferences.html", {"s": s})
+
+
+@router.post("/preferences", response_class=HTMLResponse)
+async def settings_preferences_save(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    s = await _get_or_create_settings(user, db)
+
+    density_web = form.get("list_density_web", "comfortable")
+    if density_web not in _DENSITY_VALUES:
+        density_web = "comfortable"
+    s.list_density_web = density_web
+
+    density_mobile = form.get("list_density_mobile", "compact")
+    if density_mobile not in _DENSITY_VALUES:
+        density_mobile = "compact"
+    s.list_density_mobile = density_mobile
+
+    sort_order = form.get("default_sort_order", "newest")
+    if sort_order not in _SORT_VALUES:
+        sort_order = "newest"
+    s.default_sort_order = sort_order
+
+    unread_filter = form.get("unread_filter", "adaptive")
+    if unread_filter not in {"show_all", "unread_only", "adaptive"}:
+        unread_filter = "adaptive"
+    s.unread_filter = unread_filter
+
+    s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
+
+    articles_per_page = _safe_int(form.get("articles_per_page"), 50)
+    if articles_per_page is not None:
+        s.articles_per_page = max(10, min(200, articles_per_page))
+
+    await db.commit()
+    return templates.TemplateResponse(request, "settings/preferences.html", {
+        "s": s,
+        "saved": True,
+    })
+
+
+@router.post("/password", response_class=HTMLResponse)
+async def settings_password_change(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    current = form.get("current_password", "")
+    new_pw = form.get("new_password", "")
+    confirm = form.get("confirm_password", "")
+
+    s = await _get_or_create_settings(user, db)
+
+    if not verify_password(current, user.password_hash):
+        return templates.TemplateResponse(request, "settings/preferences.html", {
+            "s": s,
+            "pw_error": "Current password is incorrect.",
+        })
+    if len(new_pw) < 8:
+        return templates.TemplateResponse(request, "settings/preferences.html", {
+            "s": s,
+            "pw_error": "New password must be at least 8 characters.",
+        })
+    if new_pw != confirm:
+        return templates.TemplateResponse(request, "settings/preferences.html", {
+            "s": s,
+            "pw_error": "Passwords do not match.",
+        })
+
+    user.password_hash = hash_password(new_pw)
+    await db.commit()
+    return templates.TemplateResponse(request, "settings/preferences.html", {
+        "s": s,
+        "pw_saved": True,
+    })

@@ -1,4 +1,5 @@
 """Web routes for the main application UI."""
+import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -33,7 +34,10 @@ async def main_app(
     if not user.last_active_at or user.last_active_at < now - timedelta(hours=1):
         user.last_active_at = now
         await db.commit()
-    return templates.TemplateResponse(request, "app/main.html", {"user": user})
+    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    settings = settings_result.scalar_one_or_none()
+    pinned = settings.left_panel_pinned if settings else True
+    return templates.TemplateResponse(request, "app/main.html", {"user": user, "pinned": pinned})
 
 
 # ── HTMX fragments ────────────────────────────────────────────────────────────
@@ -133,6 +137,10 @@ async def htmx_sidebar(
         label_counts = {}
         label_unread_counts = {}
 
+    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    settings = settings_result.scalar_one_or_none()
+    pinned = settings.left_panel_pinned if settings else True
+
     return templates.TemplateResponse(request, "app/partials/sidebar.html", {
         "user": user,
         "user_feeds": user_feeds,
@@ -149,7 +157,30 @@ async def htmx_sidebar(
         "nav_labeled": nav_labeled,
         "nav_unread_labeled": nav_unread_labeled,
         "label_unread_counts": label_unread_counts,
+        "pinned": pinned,
     })
+
+
+@router.post("/htmx/sidebar/pin", response_class=HTMLResponse)
+async def htmx_sidebar_pin(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    settings = settings_result.scalar_one_or_none()
+    if settings is None:
+        settings = UserSettings(user_id=user.id)
+        db.add(settings)
+    settings.left_panel_pinned = not settings.left_panel_pinned
+    await db.commit()
+    pinned = settings.left_panel_pinned
+    response = HTMLResponse("")
+    response.headers["HX-Trigger"] = json.dumps({
+        "sidebarRefresh": True,
+        "sidebarPinChanged": {"pinned": pinned},
+    })
+    return response
 
 
 @router.get("/htmx/articles", response_class=HTMLResponse)
@@ -166,32 +197,64 @@ async def htmx_article_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    settings = settings_result.scalar_one_or_none()
+
+    sort_order = settings.default_sort_order if settings else "newest"
+    articles_per_page = settings.articles_per_page if settings else 50
+    mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
+    ua = request.headers.get("user-agent", "")
+    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
+    density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
+
+    # Resolve effective unread filter
+    if starred_only or archived_only:
+        # State-based views always show everything
+        effective_unread_only = False
+    elif unread_only:
+        # Explicit "Unread" nav item — always filter
+        effective_unread_only = True
+    else:
+        unread_filter = settings.unread_filter if settings else "adaptive"
+        if unread_filter == "unread_only":
+            effective_unread_only = True
+        elif unread_filter == "show_all":
+            effective_unread_only = False
+        else:  # adaptive
+            probe = await list_articles(
+                user=user, db=db,
+                feed_id=feed_id, folder_id=folder_id, label_id=label_id,
+                labeled_only=labeled_only,
+                unread_only=True, limit=1,
+            )
+            effective_unread_only = len(probe) > 0
+
     articles = await list_articles(
         user=user,
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
         label_id=label_id,
-        unread_only=unread_only,
+        unread_only=effective_unread_only,
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
-        limit=50,
+        sort_order=sort_order,
+        limit=articles_per_page,
         offset=offset,
     )
-    settings_result = await db.execute(
-        select(UserSettings).where(UserSettings.user_id == user.id)
-    )
-    settings = settings_result.scalar_one_or_none()
-    mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
+
     return templates.TemplateResponse(request, "app/partials/article_list.html", {
         "articles": articles,
         "feed_id": feed_id,
         "folder_id": folder_id,
-        "unread_only": unread_only,
+        "unread_only": effective_unread_only,
         "starred_only": starred_only,
         "archived_only": archived_only,
         "mark_read_on_scroll": mark_read_on_scroll,
+        "density": density,
     })
 
 

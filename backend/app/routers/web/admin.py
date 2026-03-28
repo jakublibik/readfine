@@ -1,4 +1,5 @@
 """Web routes for the admin panel."""
+import asyncio
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -185,14 +186,14 @@ async def admin_test_smtp(
     )
 
     try:
-        send_email(
-            s,
-            to=user.email,
-            subject="Filtread – SMTP test",
-            body=f"This is a test email sent from Filtread admin panel to {user.email}.",
+        await asyncio.to_thread(
+            send_email, s, user.email,
+            "Filtread – SMTP test",
+            f"This is a test email sent from Filtread admin panel to {user.email}.",
         )
+        from html import escape
         return HTMLResponse(
-            '<span class="text-green-600">Test email sent to ' + user.email + ".</span>"
+            '<span class="text-green-600">Test email sent to ' + escape(user.email) + ".</span>"
         )
     except ValueError as e:
         logger.warning("SMTP test – not configured: %s", e)

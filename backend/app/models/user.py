@@ -15,6 +15,8 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_reset_token: Mapped[str | None] = mapped_column(String(64), unique=True)
+    password_reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -33,10 +35,10 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
 
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    list_density_web: Mapped[str] = mapped_column(String(20), default="medium")
-    list_density_mobile: Mapped[str] = mapped_column(String(20), default="compact")
+    list_density_web: Mapped[str] = mapped_column(String(20), default="comfortable")
+    list_density_mobile: Mapped[str] = mapped_column(String(20), default="comfortable")
     mark_read_on_scroll: Mapped[bool] = mapped_column(Boolean, default=True)
-    show_unread_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    unread_filter: Mapped[str] = mapped_column(String(20), default="adaptive")
     default_sort_order: Mapped[str] = mapped_column(String(10), default="newest")
     left_panel_pinned: Mapped[bool] = mapped_column(Boolean, default=True)
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)

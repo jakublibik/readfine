@@ -8,4 +8,4 @@
   </div>
 {% endif %}
 
-<script type="application/json" id="article-list-cfg">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}}</script>
+<script type="application/json" id="article-list-cfg">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}, "density": {{ density | default("comfortable") | tojson }}}</script>

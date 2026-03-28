@@ -7,7 +7,7 @@
 
   <!-- Left panel: sidebar -->
   <aside id="sidebar"
-         class="w-64 flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto"
+         class="{% if pinned %}w-64{% else %}w-12{% endif %} flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto transition-[width] duration-200"
          hx-get="/htmx/sidebar"
          hx-trigger="load, sidebarRefresh from:body, every 60s"
          hx-swap="innerHTML">
@@ -37,4 +37,13 @@
   </main>
 
 </div>
+
+<script>
+document.body.addEventListener('sidebarPinChanged', function (e) {
+  var sidebar = document.getElementById('sidebar');
+  var pinned = e.detail.pinned;
+  sidebar.classList.toggle('w-64', pinned);
+  sidebar.classList.toggle('w-12', !pinned);
+});
+</script>
 {% endblock %}

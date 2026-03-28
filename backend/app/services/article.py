@@ -1,4 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
+import re
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select
@@ -9,6 +10,23 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+_SNIPPET_LEN = 200
+
+
+def _make_snippet(summary: str | None, content: str | None) -> str | None:
+    """Return a plain-text snippet: summary if usable, otherwise content prefix."""
+    for source in (summary, content):
+        if not source:
+            continue
+        text = _HTML_TAG_RE.sub(" ", source)
+        text = _WHITESPACE_RE.sub(" ", text).strip()
+        if len(text) > 20:
+            return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] if len(text) > _SNIPPET_LEN else text
+    return None
 
 
 def _format_date(dt: datetime | None) -> str:
@@ -30,6 +48,7 @@ async def list_articles(
     starred_only: bool = False,
     archived_only: bool = False,
     labeled_only: bool = False,
+    sort_order: str = "newest",
     limit: int = 50,
     offset: int = 0,
 ) -> list[ArticleListItem]:
@@ -105,7 +124,8 @@ async def list_articles(
     if archived_only:
         stmt = stmt.where(UserArticleState.is_archived == True)  # noqa: E712
 
-    stmt = stmt.order_by(Article.published_at.desc().nulls_last()).limit(limit).offset(offset)
+    order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
+    stmt = stmt.order_by(order).limit(limit).offset(offset)
 
     rows = (await db.execute(stmt)).all()
 
@@ -118,6 +138,7 @@ async def list_articles(
             title=article.title,
             author=article.author,
             summary=article.summary,
+            snippet=_make_snippet(article.summary, article.content),
             published_at=article.published_at,
             formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,
