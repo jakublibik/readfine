@@ -15,9 +15,9 @@
             class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
-        <span class="text-base text-yellow-400">★</span>
+        <span class="text-lg text-yellow-400">★</span>
       {% else %}
-        <span class="text-base text-gray-300 hover:text-yellow-300">☆</span>
+        <span class="text-lg text-gray-300 hover:text-yellow-300">☆</span>
       {% endif %}
     </button>
     <p class="text-sm leading-snug line-clamp-2 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-700{% endif %}">

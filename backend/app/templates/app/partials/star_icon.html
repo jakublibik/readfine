@@ -1,0 +1,11 @@
+<button hx-post="/htmx/articles/{{ article.id }}/star"
+        hx-target="#star-btn-{{ article.id }}"
+        hx-swap="innerHTML"
+        class="leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+        title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
+  {% if article.is_starred %}
+    <span class="text-lg text-yellow-400">★</span>
+  {% else %}
+    <span class="text-lg text-gray-300 hover:text-yellow-300">☆</span>
+  {% endif %}
+</button>

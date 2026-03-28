@@ -220,8 +220,8 @@ def _read_response(request: Request, article) -> HTMLResponse:
 
 
 def _star_response(request: Request, article) -> HTMLResponse:
-    """Return star button HTML + OOB article row update + sidebarRefresh trigger."""
-    btn_html = templates.env.get_template("app/partials/star_button.html").render(
+    """Return star icon HTML + OOB article row update + sidebarRefresh trigger."""
+    btn_html = templates.env.get_template("app/partials/star_icon.html").render(
         article=article, request=request
     )
     row_html = templates.env.get_template("app/partials/article_row.html").render(

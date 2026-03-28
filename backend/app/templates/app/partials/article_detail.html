@@ -4,48 +4,51 @@
 
   <!-- Header -->
   <header class="mb-6">
-    <h1 class="text-xl font-bold text-gray-900 leading-snug mb-2">{{ article.title }}</h1>
-    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500">
-      {% if article.feed_title %}
-        <span>{{ article.feed_title }}</span>
-      {% endif %}
-      {% if article.author %}
-        <span>· {{ article.author }}</span>
-      {% endif %}
-      {% if article.published_at %}
-        <span>· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y") }}</time></span>
-      {% endif %}
-      {% if article.estimated_read_min %}
-        <span>· {{ article.estimated_read_min }} min read</span>
+
+    <!-- Title row: star + title -->
+    <div class="flex items-baseline gap-2 mb-1">
+      <div id="star-btn-{{ article.id }}" class="flex-shrink-0">
+        {% include "app/partials/star_icon.html" %}
+      </div>
+      {% if article.url %}
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
+           class="text-xl font-bold text-gray-900 leading-snug hover:underline">
+          {{ article.title or "↗" }}
+        </a>
+      {% else %}
+        <h1 class="text-xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
       {% endif %}
     </div>
+
+    <!-- Metadata row + ··· menu -->
+    <div class="flex items-center gap-x-2 text-sm text-gray-500 pl-5">
+      <div class="flex flex-wrap items-center gap-x-2 gap-y-1 flex-1 min-w-0">
+        {% if article.feed_title %}<span class="truncate">{{ article.feed_title }}</span>{% endif %}
+        {% if article.author %}<span class="shrink-0">· {{ article.author }}</span>{% endif %}
+        {% if article.published_at %}
+          <span class="shrink-0">· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y") }}</time></span>
+        {% endif %}
+        {% if article.estimated_read_min %}
+          <span class="shrink-0">· {{ article.estimated_read_min }} min read</span>
+        {% endif %}
+      </div>
+
+      <!-- ··· dropdown menu -->
+      <div class="relative flex-shrink-0">
+        <button data-menu-toggle
+                class="px-2 py-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 select-none text-lg leading-none">···</button>
+        <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
+          <div id="read-btn-{{ article.id }}" class="px-2 py-0.5">
+            {% include "app/partials/read_button.html" %}
+          </div>
+          <div id="archive-btn-{{ article.id }}" class="px-2 py-0.5">
+            {% include "app/partials/archive_button.html" %}
+          </div>
+        </div>
+      </div>
+    </div>
+
   </header>
-
-  <!-- Action toolbar -->
-  <div class="flex items-center gap-2 mb-6 pb-4 border-b border-gray-100">
-
-    <!-- Read toggle -->
-    <div id="read-btn-{{ article.id }}">
-      {% include "app/partials/read_button.html" %}
-    </div>
-
-    <!-- Star toggle -->
-    <div id="star-btn-{{ article.id }}">
-      {% include "app/partials/star_button.html" %}
-    </div>
-
-    <!-- Archive toggle -->
-    <div id="archive-btn-{{ article.id }}">
-      {% include "app/partials/archive_button.html" %}
-    </div>
-
-    {% if article.url %}
-      <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
-         class="ml-auto text-xs text-blue-600 hover:underline">
-        Open original ↗
-      </a>
-    {% endif %}
-  </div>
 
   <!-- Content -->
   <div class="prose prose-sm max-w-none text-gray-800">
@@ -61,4 +64,3 @@
   </div>
 
 </article>
-

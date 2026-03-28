@@ -24,6 +24,32 @@ function localizeAllTimes() {
 document.addEventListener('DOMContentLoaded', localizeAllTimes);
 document.body.addEventListener('htmx:afterSettle', localizeAllTimes);
 
+// [data-menu-toggle] button opens/closes its next sibling [data-menu]; click outside closes all
+// Menu uses position:fixed — immune to parent overflow clipping
+document.addEventListener('click', function (e) {
+  var toggle = e.target.closest('[data-menu-toggle]');
+  if (toggle) {
+    var menu = toggle.nextElementSibling;
+    if (!menu) return;
+    var isOpen = !menu.classList.contains('hidden');
+    document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
+    if (!isOpen) {
+      var rect = toggle.getBoundingClientRect();
+      menu.style.top = (rect.bottom + 4) + 'px';
+      menu.style.right = (window.innerWidth - rect.right) + 'px';
+      menu.classList.remove('hidden');
+    }
+    return;
+  }
+  if (!e.target.closest('[data-menu]')) {
+    document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
+  }
+});
+document.body.addEventListener('htmx:afterRequest', function (e) {
+  var menu = e.target.closest('[data-menu]');
+  if (menu) menu.classList.add('hidden');
+});
+
 // Nav active state — event delegation, survives HTMX sidebar swaps
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');

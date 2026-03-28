@@ -46,10 +46,21 @@ Indexy: `email` (unique), `role`
 | `show_unread_only` | `BOOLEAN` | DEFAULT `TRUE` | Výchozí filtr nepřečtených |
 | `default_sort_order` | `VARCHAR(10)` | DEFAULT `'newest'` | `newest`, `oldest` |
 | `left_panel_pinned` | `BOOLEAN` | DEFAULT `TRUE` | Levý panel připnutý/overlay |
-| `articles_per_page` | `SMALLINT` | DEFAULT `50` | Počet článků na stránku |
-| `timezone` | `VARCHAR(50)` | DEFAULT `'UTC'` | Časová zóna uživatele |
+| `articles_per_page_desktop` | `SMALLINT` | DEFAULT `50` | Počet článků na stránku – desktop |
+| `articles_per_page_mobile` | `SMALLINT` | DEFAULT `20` | Počet článků na stránku – mobil |
+| `timezone` | `VARCHAR(50)` | DEFAULT `'UTC'` | Časová zóna uživatele (záloha pro serverové formátování) |
 | `language` | `VARCHAR(10)` | DEFAULT `'en'` | Jazyk UI (`cs`, `en`) |
 | `keyboard_shortcuts_enabled` | `BOOLEAN` | DEFAULT `TRUE` | Klávesové zkratky |
+| `ai_enabled` | `BOOLEAN` | DEFAULT `TRUE` | AI funkce zapnuty pro tohoto uživatele (relevantní jen pokud `app_settings.ai_enabled = TRUE`) |
+| `list_content_fields` | `JSONB` | DEFAULT `'["summary"]'` | Pole zobrazená v rozšířeném řádku seznamu; výchozí závisí na dostupnosti AI/readable. Fixní pořadí zobrazení: summary → ai_summary → readable_content → content |
+| `detail_content_fields` | `JSONB` | DEFAULT `'["content"]'` | Pole zobrazená v detailu článku; výchozí závisí na dostupnosti AI/readable. Stejné fixní pořadí |
+
+Poznámka k `list_content_fields` a `detail_content_fields`:
+- Dostupné hodnoty: `summary`, `ai_summary`, `readable_content`, `content`
+- `ai_summary` se nabídne jen pokud `app_settings.ai_enabled AND user_settings.ai_enabled AND user_feeds.ai_enabled`
+- `readable_content` se nabídne jen pokud `user_feeds.extract_readable = TRUE`
+- Fallback při chybějícím obsahu (jen pokud záložní pole není samo v seznamu): `ai_summary` → `summary`, `readable_content` → `content`
+- Výchozí hodnoty pro nového uživatele: `list_content_fields` = `["ai_summary"]` pokud AI dostupné, jinak `["summary"]`; `detail_content_fields` = `["readable_content"]` pokud readable dostupné, jinak `["content"]`
 
 ---
 
@@ -106,7 +117,8 @@ Globální nastavení aplikace – vždy právě jeden řádek (id=1).
 |---|---|---|---|
 | `id` | `SMALLINT` | PK, DEFAULT 1 | Vždy 1 |
 | `registration_enabled` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Otevřená/uzavřená registrace |
-| `default_fetch_interval_min` | `SMALLINT` | NOT NULL, DEFAULT `60` | Interval fetchování v minutách |
+| `default_fetch_interval_min` | `SMALLINT` | NOT NULL, DEFAULT `60` | Výchozí interval fetchování v minutách (použije se, pokud feed nemá vlastní `fetch_interval_min`) |
+| `min_fetch_interval_min` | `SMALLINT` | NOT NULL, DEFAULT `15` | Minimální povolený interval – uživatel nemůže nastavit nižší hodnotu per-feed |
 | `max_feeds_per_user` | `SMALLINT` | NOT NULL, DEFAULT `200` | Limit kanálů na uživatele |
 | `default_purge_after_days` | `SMALLINT` | DEFAULT `90` | NULL = nemazat dle stáří |
 | `default_purge_keep_count` | `SMALLINT` | DEFAULT `500` | NULL = nemazat dle počtu |
@@ -156,7 +168,7 @@ Globální pool feedů. Veřejné feedy jsou sdílené napříč uživateli (ka�
 | `last_fetched_at` | `TIMESTAMPTZ` | | Poslední úspěšný fetch |
 | `last_fetch_duration_ms` | `INTEGER` | | Doba trvání posledního fetche |
 | `last_published_at` | `TIMESTAMPTZ` | | Datum posledního článku ve feedu |
-| `fetch_interval_min` | `SMALLINT` | | NULL = global default |
+| `effective_fetch_interval_min` | `SMALLINT` | | Denormalizovaný efektivní interval (= MIN přes všechny subscribers); aktualizuje se při subscribe/unsubscribe/edit. Scheduler ho čte přímo. |
 | `subscriber_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Počet předplatitelů (denorm.) |
 | `feed_type` | `VARCHAR(20)` | NOT NULL, DEFAULT `'rss'` | `rss`, `youtube`, `scrape`, `twitter`, `podcast` |
 | `type_config` | `JSONB` | | Konfigurace specifická pro typ |
@@ -183,7 +195,11 @@ Per-user předplatné feedu – nastavení, která jsou specifická pro každéh
 | `folder_id` | `INTEGER` | FK → `folders.id` ON DELETE SET NULL | Složka (NULL = bez složky) |
 | `custom_title` | `VARCHAR(255)` | | Přepsaný název uživatelem |
 | `description` | `TEXT` | | Vlastní poznámka uživatele |
-| `extract_readable` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Extrahovat readable verzi |
+| `extract_readable` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Extrahovat readable verzi článků z tohoto feedu |
+| `ai_enabled` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | AI funkce zapnuty pro tento feed (relevantní jen pokud user i globálně zapnuto) |
+| `list_content_fields` | `JSONB` | | NULL = použij `user_settings.list_content_fields`; per-feed override |
+| `detail_content_fields` | `JSONB` | | NULL = použij `user_settings.detail_content_fields`; per-feed override |
+| `fetch_interval_min` | `SMALLINT` | | NULL = použij `app_settings.default_fetch_interval_min`; nesmí být nižší než `app_settings.min_fetch_interval_min`. Při změně se přepočítá `feeds.effective_fetch_interval_min` jako MIN přes všechny subscribers |
 | `unread_count` | `INTEGER` | NOT NULL, DEFAULT `0` | Nepřečtených (denorm.) |
 | `purge_after_days` | `SMALLINT` | | NULL = global default |
 | `purge_keep_count` | `SMALLINT` | | NULL = global default |
