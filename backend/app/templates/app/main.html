@@ -38,12 +38,4 @@
 
 </div>
 
-<script>
-document.body.addEventListener('sidebarPinChanged', function (e) {
-  var sidebar = document.getElementById('sidebar');
-  var pinned = e.detail.pinned;
-  sidebar.classList.toggle('w-64', pinned);
-  sidebar.classList.toggle('w-12', !pinned);
-});
-</script>
 {% endblock %}

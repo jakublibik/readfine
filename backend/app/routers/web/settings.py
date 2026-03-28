@@ -573,6 +573,8 @@ async def settings_password_change(
         })
 
     user.password_hash = hash_password(new_pw)
+    user.password_reset_token = None
+    user.password_reset_expires_at = None
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,

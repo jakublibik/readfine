@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import secrets
 
@@ -223,7 +224,7 @@ async def reset_password_request(
     user = result.scalar_one_or_none()
     if user and user.is_active:
         token = secrets.token_urlsafe(32)
-        user.password_reset_token = token
+        user.password_reset_token = hashlib.sha256(token.encode()).hexdigest()
         user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         await db.commit()
 
@@ -285,7 +286,8 @@ async def reset_password_confirm(
 
 
 async def _get_user_by_reset_token(db: AsyncSession, token: str) -> User | None:
-    result = await db.execute(select(User).where(User.password_reset_token == token))
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    result = await db.execute(select(User).where(User.password_reset_token == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.password_reset_expires_at:
         return None

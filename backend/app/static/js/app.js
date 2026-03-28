@@ -120,6 +120,22 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 });
 
+// Sidebar pin toggle — width class swap on sidebarPinChanged event
+document.body.addEventListener('sidebarPinChanged', function (e) {
+  var sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  sidebar.classList.toggle('w-64', e.detail.pinned);
+  sidebar.classList.toggle('w-12', !e.detail.pinned);
+});
+
+// Focus pw-error element when present (password change error in preferences)
+function _focusPwError() {
+  var el = document.getElementById('pw-error');
+  if (el) el.focus();
+}
+document.addEventListener('DOMContentLoaded', _focusPwError);
+document.body.addEventListener('htmx:afterSettle', _focusPwError);
+
 // Article detail: auto mark-as-read timer
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (evt.detail.target.id !== 'article-detail') return;
