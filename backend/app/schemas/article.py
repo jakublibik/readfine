@@ -25,6 +25,7 @@ class ArticleListItem(BaseModel):
     author: str | None
     summary: str | None
     published_at: datetime | None
+    formatted_date: str  # pre-formatted: HH:MM for today, "Mon DD, HH:MM" otherwise
     estimated_read_min: int | None
     image_url: str | None
     # state (None = no UserArticleState row yet = unread, not starred)

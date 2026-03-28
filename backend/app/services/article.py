@@ -1,5 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,15 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+
+
+def _format_date(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    today = datetime.now(timezone.utc).date()
+    return dt.strftime("%H:%M") if dt.date() == today else dt.strftime("%b %d, %H:%M")
 
 
 async def list_articles(
@@ -81,6 +90,7 @@ async def list_articles(
             author=article.author,
             summary=article.summary,
             published_at=article.published_at,
+            formatted_date=_format_date(article.published_at),
             estimated_read_min=article.estimated_read_min,
             image_url=article.image_url,
             is_read=state.is_read if state else False,
