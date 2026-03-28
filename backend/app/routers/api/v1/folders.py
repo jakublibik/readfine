@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_api_user
 from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
@@ -13,7 +13,7 @@ router = APIRouter(prefix="/folders", tags=["folders"])
 
 @router.get("", response_model=list[FolderResponse])
 async def list_folders(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -27,7 +27,7 @@ async def list_folders(
 @router.post("", response_model=FolderResponse, status_code=status.HTTP_201_CREATED)
 async def create_folder(
     payload: FolderCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(
@@ -47,7 +47,7 @@ async def create_folder(
 async def update_folder(
     folder_id: int,
     payload: FolderUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -81,7 +81,7 @@ async def update_folder(
 @router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_folder(
     folder_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(

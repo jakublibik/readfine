@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_api_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
@@ -19,7 +19,7 @@ async def get_articles(
     archived_only: bool = Query(False),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await list_articles(
@@ -38,7 +38,7 @@ async def get_articles(
 @router.get("/{article_id}", response_model=ArticleResponse)
 async def get_article_detail(
     article_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     article = await get_article(user, article_id, db)
@@ -51,7 +51,7 @@ async def get_article_detail(
 async def patch_article_state(
     article_id: int,
     payload: ArticleStateUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     article = await update_article_state(user, article_id, payload, db)

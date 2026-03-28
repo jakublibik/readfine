@@ -77,6 +77,8 @@ def create_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         if not settings.debug:
+            # Note: <script type="application/json"> is a data block, not executable —
+            # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 "script-src 'self' https://cdn.tailwindcss.com https://unpkg.com; "

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_api_user
 from app.auth.security import create_access_token, verify_password
 from app.database import get_db
 from app.main import limiter
@@ -33,5 +33,5 @@ async def get_token(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(user: User = Depends(get_current_user)):
+async def get_me(user: User = Depends(get_api_user)):
     return user

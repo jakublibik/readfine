@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_api_user
 from app.database import get_db
 from app.models.user import User
 from app.schemas.label import ArticleLabelAssign, LabelCreate, LabelResponse, LabelUpdate
@@ -19,7 +19,7 @@ router = APIRouter(tags=["labels"])
 
 @router.get("/labels", response_model=list[LabelResponse])
 async def get_labels(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await list_labels(user, db)
@@ -28,7 +28,7 @@ async def get_labels(
 @router.post("/labels", response_model=LabelResponse, status_code=status.HTTP_201_CREATED)
 async def post_label(
     payload: LabelCreate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await create_label(user, payload, db)
@@ -38,7 +38,7 @@ async def post_label(
 async def patch_label(
     label_id: int,
     payload: LabelUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     label = await update_label(user, label_id, payload, db)
@@ -50,7 +50,7 @@ async def patch_label(
 @router.delete("/labels/{label_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def del_label(
     label_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not await delete_label(user, label_id, db):
@@ -61,7 +61,7 @@ async def del_label(
 async def post_article_label(
     article_id: int,
     payload: ArticleLabelAssign,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     if not await assign_label(user, article_id, payload.label_id, db):
@@ -72,7 +72,7 @@ async def post_article_label(
 async def del_article_label(
     article_id: int,
     label_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     await remove_label(user, article_id, label_id, db)

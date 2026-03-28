@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_api_user
 from app.database import get_db
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/feeds", tags=["feeds"])
 
 @router.get("", response_model=list[UserFeedResponse])
 async def get_feeds(
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     return await list_user_feeds(user, db)
@@ -25,7 +25,7 @@ async def get_feeds(
 @router.post("", response_model=UserFeedResponse, status_code=status.HTTP_201_CREATED)
 async def subscribe_feed(
     payload: FeedSubscribeRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:
@@ -52,7 +52,7 @@ async def subscribe_feed(
 @router.get("/{user_feed_id}", response_model=UserFeedResponse)
 async def get_feed(
     user_feed_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -73,7 +73,7 @@ async def get_feed(
 async def update_feed(
     user_feed_id: int,
     payload: UserFeedUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -128,7 +128,7 @@ async def update_feed(
 @router.delete("/{user_feed_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def unsubscribe_feed(
     user_feed_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
     try:

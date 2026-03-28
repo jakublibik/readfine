@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from sqlalchemy import delete, exists, func, select
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,7 +171,7 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
         new_count = max(0, (feed.subscriber_count or 0) - 1)
         feed.subscriber_count = new_count
 
-        # 4. If no subscribers left: clean up orphan articles (not starred/archived by anyone)
+        # 4. If no subscribers left: orphan surviving articles, delete the rest, delete the feed
         if new_count == 0 and feed:
             starred_or_archived_subq = (
                 select(UserArticleState.article_id)
@@ -182,18 +182,21 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
                 .correlate(Article)
                 .exists()
             )
+            # Surviving articles (starred/archived by someone): detach from feed (feed_id = NULL)
+            await db.execute(
+                update(Article)
+                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .values(feed_id=None)
+            )
+            # Delete the remaining articles (not starred/archived by anyone)
             await db.execute(
                 delete(Article).where(
                     Article.feed_id == feed_id,
                     ~starred_or_archived_subq,
                 )
             )
-            # Delete feed if no articles remain
-            remaining = (await db.execute(
-                select(func.count()).select_from(Article).where(Article.feed_id == feed_id)
-            )).scalar()
-            if remaining == 0:
-                await db.delete(feed)
+            # Always delete the feed — no subscribers remain
+            await db.delete(feed)
 
     await db.commit()
 

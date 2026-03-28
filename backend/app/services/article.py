@@ -1,7 +1,7 @@
 """Article service: listing, detail, state toggles, unread count management."""
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -199,22 +199,26 @@ async def toggle_article_state(
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
-            UserFeed.feed_id.label("uf_feed_id"),
         )
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .join(Feed, Feed.id == Article.feed_id)
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .outerjoin(
             UserArticleState,
             (UserArticleState.article_id == Article.id)
             & (UserArticleState.user_id == user.id),
         )
-        .where(Article.id == article_id, UserFeed.user_id == user.id)
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711
+            | (UserArticleState.is_starred == True)  # noqa: E712
+            | (UserArticleState.is_archived == True),  # noqa: E712
+        )
     )
     row = (await db.execute(stmt)).first()
     if not row:
         return None
 
-    article, state, feed_title, custom_title, uf_feed_id = row
+    article, state, feed_title, custom_title = row
 
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
@@ -225,13 +229,6 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
-        if uf_feed_id:
-            delta = -1 if new_value else 1
-            await db.execute(
-                update(UserFeed)
-                .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
-                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
-            )
 
     await db.commit()
     await db.refresh(state)
@@ -275,38 +272,34 @@ async def update_article_state(
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
-            UserFeed.feed_id.label("uf_feed_id"),
         )
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .join(Feed, Feed.id == Article.feed_id)
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .outerjoin(
             UserArticleState,
             (UserArticleState.article_id == Article.id)
             & (UserArticleState.user_id == user.id),
         )
-        .where(Article.id == article_id, UserFeed.user_id == user.id)
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711
+            | (UserArticleState.is_starred == True)  # noqa: E712
+            | (UserArticleState.is_archived == True),  # noqa: E712
+        )
     )
     row = (await db.execute(stmt)).first()
     if not row:
         return None
 
-    article, state, feed_title, custom_title, uf_feed_id = row
+    article, state, feed_title, custom_title = row
 
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
 
     if payload.is_read is not None:
-        prev_read = state.is_read
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
-        if prev_read != payload.is_read and uf_feed_id:
-            delta = -1 if payload.is_read else 1
-            await db.execute(
-                update(UserFeed)
-                .where(UserFeed.user_id == user.id, UserFeed.feed_id == uf_feed_id)
-                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
-            )
 
     if payload.is_starred is not None:
         state.is_starred = payload.is_starred

@@ -57,6 +57,36 @@ async def get_current_user(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
+async def get_api_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """Bearer-only auth for API endpoints. Session cookies are not accepted."""
+    if credentials:
+        token = credentials.credentials
+
+        payload = decode_access_token(token)
+        if payload:
+            user = await _get_user_by_id(int(payload["sub"]), db)
+            if user:
+                return user
+
+        token_hash = hash_token(token)
+        result = await db.execute(
+            select(ApiToken).where(
+                ApiToken.token_hash == token_hash,
+                ApiToken.revoked_at == None,  # noqa: E711
+            )
+        )
+        api_token = result.scalar_one_or_none()
+        if api_token:
+            user = await _get_user_by_id(api_token.user_id, db)
+            if user:
+                return user
+
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
 async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")

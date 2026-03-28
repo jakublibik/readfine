@@ -2,7 +2,7 @@
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.article import Article, UserArticleState
 from app.models.feed import UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
@@ -71,8 +71,17 @@ async def assign_label(
 
     article_access = await db.execute(
         select(Article.id)
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .where(Article.id == article_id, UserFeed.user_id == user.id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+        )
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711 — subscribed
+            | (UserArticleState.is_starred == True)  # noqa: E712 — starred orphan
+            | (UserArticleState.is_archived == True),  # noqa: E712 — archived orphan
+        )
     )
     if not article_access.scalar_one_or_none():
         return False
