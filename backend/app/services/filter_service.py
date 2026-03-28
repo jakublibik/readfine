@@ -184,16 +184,10 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str):
     return None
 
 
-def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None) -> bool:
-    field_value = _get_field_value(article, user_feed, condition.field)
-    op = condition.operator
-    val = condition.value.strip()
-    if not val:
-        return False
-
+def _eval_op(op: str, val: str, field_value) -> bool:
+    """Evaluate a single operator/value against a field value."""
     if field_value is None:
         return op == "not_contains"
-
     if op == "contains":
         return val.lower() in str(field_value).lower()
     if op == "not_contains":
@@ -221,6 +215,24 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
         except (ValueError, TypeError):
             return False
     return False
+
+
+def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None) -> bool:
+    op = condition.operator
+    val = condition.value.strip()
+    if not val:
+        return False
+
+    if condition.field == "title_or_content":
+        title_match = _eval_op(op, val, _get_field_value(article, user_feed, "title"))
+        content_match = _eval_op(op, val, _get_field_value(article, user_feed, "content"))
+        # not_contains: neither field may contain the value (AND)
+        # all other operators: either field suffices (OR)
+        if op == "not_contains":
+            return title_match and content_match
+        return title_match or content_match
+
+    return _eval_op(op, val, _get_field_value(article, user_feed, condition.field))
 
 
 def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> bool:

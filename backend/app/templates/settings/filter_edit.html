@@ -93,8 +93,8 @@
         {% for c in existing_conditions %}
         <div class="flex items-center gap-2 condition-row">
           <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
-            {% for f in ['title','content','author','url','published_at'] %}
-              <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f }}</option>
+            {% for f in ['title_or_content','title','content','author','url','published_at'] %}
+              <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f | replace('_', ' ') }}</option>
             {% endfor %}
           </select>
           <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
@@ -156,7 +156,7 @@
 </div>
 
 <script>
-const FIELDS = ['title','content','author','url','published_at'];
+const FIELDS = ['title_or_content','title','content','author','url','published_at'];
 const OPERATORS = ['contains','not_contains','equals','regex','gt','lt'];
 const ACTION_TYPES = ['label','mark_read','star','hide'];
 const LABELS = [{% for l in labels %}{"id": {{ l.id }}, "name": {{ l.name | tojson }}},{% endfor %}];
@@ -166,7 +166,7 @@ document.getElementById('add-condition').addEventListener('click', function() {
   row.className = 'flex items-center gap-2 condition-row';
   row.innerHTML = `
     <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
-      ${FIELDS.map(f => `<option value="${f}">${f}</option>`).join('')}
+      ${FIELDS.map(f => `<option value="${f}">${f.replace(/_/g, ' ')}</option>`).join('')}
     </select>
     <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
       ${OPERATORS.map(o => `<option value="${o}">${o}</option>`).join('')}

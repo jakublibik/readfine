@@ -64,6 +64,43 @@ class TestContains:
         assert _matches_condition(cond, article, None) is True
 
 
+class TestTitleOrContent:
+    def test_matches_title(self):
+        article = make_article(title="Python News", content="Nothing relevant")
+        cond = make_condition("title_or_content", "contains", "python")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_matches_content(self):
+        article = make_article(title="Daily Digest", content="Python is great")
+        cond = make_condition("title_or_content", "contains", "python")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_matches_both(self):
+        article = make_article(title="Python News", content="Python is great")
+        cond = make_condition("title_or_content", "contains", "python")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_no_match(self):
+        article = make_article(title="Weather Report", content="Sunny skies today")
+        cond = make_condition("title_or_content", "contains", "python")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_not_contains_neither(self):
+        article = make_article(title="Weather Report", content="Sunny skies")
+        cond = make_condition("title_or_content", "not_contains", "python")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_not_contains_in_title_returns_false(self):
+        article = make_article(title="Python News", content="Sunny skies")
+        cond = make_condition("title_or_content", "not_contains", "python")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_not_contains_in_content_returns_false(self):
+        article = make_article(title="Weather Report", content="Python is great")
+        cond = make_condition("title_or_content", "not_contains", "python")
+        assert _matches_condition(cond, article, None) is False
+
+
 class TestNotContains:
     def test_no_match_returns_true(self):
         article = make_article(title="Weather Report")

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel
 
-FieldType = Literal["title", "content", "author", "url", "published_at"]
+FieldType = Literal["title_or_content", "title", "content", "author", "url", "published_at"]
 ScopeType = Literal["all", "feed", "folder"]
 OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "lt"]
 ActionType = Literal["label", "mark_read", "star", "hide", "notify"]
