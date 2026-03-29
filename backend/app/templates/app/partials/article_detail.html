@@ -54,16 +54,29 @@
   </header>
 
   <!-- Content -->
+  {% if article.readable_status == 'pending' %}
+  <div id="article-content-{{ article.id }}"
+       hx-get="/htmx/articles/{{ article.id }}"
+       hx-trigger="every 3s"
+       hx-target="#article-detail"
+       hx-swap="innerHTML"
+       class="prose prose-sm max-w-none text-gray-800">
+    {% if article.content %}
+      {{ article.content | safe }}
+    {% else %}
+      <p class="text-gray-400 italic">Loading full content…</p>
+    {% endif %}
+  </div>
+  {% else %}
   <div class="prose prose-sm max-w-none text-gray-800">
     {% if article.readable_status == 'success' and article.readable_content %}
       {{ article.readable_content | safe }}
-    {% elif article.readable_status == 'pending' %}
-      <p class="text-gray-400 italic">Loading full content…</p>
     {% elif article.content %}
       {{ article.content | safe }}
     {% else %}
       <p class="text-gray-400 italic">No content available.</p>
     {% endif %}
   </div>
+  {% endif %}
 
 </article>

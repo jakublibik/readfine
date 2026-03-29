@@ -158,6 +158,11 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
         for article in new_articles:
             await apply_filters_to_article(article, db)
 
+        # Auto-detect full-content feed and disable readable extraction if warranted
+        if wants_readable:
+            from app.services.readable_service import maybe_disable_readable_for_feed
+            await maybe_disable_readable_for_feed(feed.id, db)
+
     return len(new_articles)
 
 

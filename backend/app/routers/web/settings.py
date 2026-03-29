@@ -306,6 +306,7 @@ async def settings_feed_update(
 
     uf.custom_title = custom_title
     uf.folder_id = folder_id
+    uf.extract_readable = form.get("extract_readable") == "true"
 
     if uf.feed.is_private:
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None

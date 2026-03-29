@@ -1,4 +1,4 @@
-"""APScheduler integration: periodic RSS feed fetching."""
+"""APScheduler integration: periodic RSS feed fetching and readable extraction."""
 import logging
 
 
@@ -71,6 +71,15 @@ async def _fetch_due_feeds() -> None:
                 await fetch_feed(feed_in_session, session)
 
 
+async def _process_readable() -> None:
+    """Job: extract readable content for pending articles."""
+    if db.async_session_factory is None:
+        return
+    from app.services.readable_service import process_pending_readable
+    async with db.async_session_factory() as session:
+        await process_pending_readable(session)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
     scheduler.add_job(
@@ -78,6 +87,15 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger="interval",
         minutes=1,
         id="fetch_due_feeds",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        _process_readable,
+        trigger="interval",
+        minutes=1,
+        id="process_readable",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=30,
