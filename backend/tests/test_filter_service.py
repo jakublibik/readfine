@@ -32,7 +32,7 @@ def make_condition(field, operator, value, position=0):
 
 
 def make_filter(conditions, match_operator="AND", is_active=True, stop_on_match=False,
-                scope_type="all", scope_feed_id=None, scope_folder_id=None):
+                scope_type="all", scope_feed_id=None, scope_folder_id=None, scope_except=None):
     return SimpleNamespace(
         conditions=conditions,
         actions=[],
@@ -42,6 +42,7 @@ def make_filter(conditions, match_operator="AND", is_active=True, stop_on_match=
         scope_type=scope_type,
         scope_feed_id=scope_feed_id,
         scope_folder_id=scope_folder_id,
+        scope_except=scope_except,
     )
 
 

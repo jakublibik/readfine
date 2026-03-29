@@ -1,5 +1,6 @@
 """Web routes for the main application UI."""
 import json
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -7,12 +8,14 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import func, select
+from sqlalchemy import select, func
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
+from app.main import limiter
 from app.models.article import Article, UserArticleState
-from app.models.feed import UserFeed
+from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
@@ -113,6 +116,14 @@ async def htmx_sidebar(
 
     nav_unread = sum(feed_unread_counts.values())
 
+    # Aggregate counts per folder (None = no folder)
+    folder_unread_counts: dict[int | None, int] = {}
+    folder_total_counts: dict[int | None, int] = {}
+    for uf in user_feeds:
+        key = uf.folder_id
+        folder_unread_counts[key] = folder_unread_counts.get(key, 0) + feed_unread_counts.get(uf.feed_id, 0)
+        folder_total_counts[key] = folder_total_counts.get(key, 0) + feed_total_counts.get(uf.feed_id, 0)
+
     # Label article counts (batch)
     label_ids = [lb.id for lb in user_labels]
     if label_ids:
@@ -157,6 +168,8 @@ async def htmx_sidebar(
         "nav_labeled": nav_labeled,
         "nav_unread_labeled": nav_unread_labeled,
         "label_unread_counts": label_unread_counts,
+        "folder_unread_counts": folder_unread_counts,
+        "folder_total_counts": folder_total_counts,
         "pinned": pinned,
     })
 
@@ -366,3 +379,76 @@ async def htmx_toggle_archive(
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     return _archive_response(request, article)
+
+
+@router.post("/htmx/articles/{article_id}/share", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_share_token)
+async def htmx_toggle_share(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle share token for an article. Generates on first call, revokes on second."""
+    # Load article access + state
+    stmt = (
+        select(Article, UserArticleState)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+        )
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711
+            | (UserArticleState.is_starred == True)  # noqa: E712
+            | (UserArticleState.is_archived == True),  # noqa: E712
+        )
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
+
+    article, state = row
+    if state is None:
+        state = UserArticleState(user_id=user.id, article_id=article_id)
+        db.add(state)
+
+    if state.share_token:
+        state.share_token = None
+        share_url = None
+    else:
+        state.share_token = secrets.token_urlsafe(24)
+        share_url = str(request.base_url) + f"share/{state.share_token}"
+
+    await db.commit()
+    await db.refresh(state)
+
+    return templates.TemplateResponse(request, "app/partials/share_button.html", {
+        "article": type("A", (), {"id": article_id, "share_token": state.share_token})(),
+        "share_url": share_url,
+    })
+
+
+@router.get("/share/{token}", response_class=HTMLResponse)
+async def public_share_view(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Public article view — no authentication required."""
+    stmt = (
+        select(Article, Feed.title.label("feed_title"))
+        .join(UserArticleState, UserArticleState.article_id == Article.id)
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .where(UserArticleState.share_token == token)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return templates.TemplateResponse(request, "app/share_not_found.html", {}, status_code=404)
+
+    article, feed_title = row
+    return templates.TemplateResponse(request, "app/share.html", {
+        "article": article,
+        "feed_title": feed_title,
+    })

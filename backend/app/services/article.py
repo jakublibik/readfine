@@ -97,7 +97,10 @@ async def list_articles(
         stmt = stmt.where(Article.feed_id == feed_id)
 
     if folder_id is not None:
-        stmt = stmt.where(UserFeed.folder_id == folder_id)
+        if folder_id == 0:
+            stmt = stmt.where(UserFeed.folder_id == None)  # noqa: E711
+        else:
+            stmt = stmt.where(UserFeed.folder_id == folder_id)
 
     if label_id is not None:
         stmt = stmt.join(
@@ -201,6 +204,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         is_starred=state.is_starred if state else False,
         is_archived=state.is_archived if state else False,
         read_at=state.read_at if state else None,
+        share_token=state.share_token if state else None,
     )
 
 

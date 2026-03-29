@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 
 from app.auth.security import hash_password, verify_password
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.main import limiter
 from app.models.auth import Invitation
@@ -49,7 +50,7 @@ async def login_page(request: Request):
 
 
 @router.post("/login", response_class=HTMLResponse)
-@limiter.limit("10/minute")
+@limiter.limit(app_settings_config.rate_limit_login)
 async def login(
     request: Request,
     email: str = Form(...),
@@ -109,7 +110,7 @@ async def register_page(request: Request, invite: str | None = None, db: AsyncSe
 
 
 @router.post("/register", response_class=HTMLResponse)
-@limiter.limit("5/minute")
+@limiter.limit(app_settings_config.rate_limit_register)
 async def register(
     request: Request,
     email: str = Form(...),
@@ -208,7 +209,7 @@ async def reset_password_page(request: Request):
 
 
 @router.post("/reset-password", response_class=HTMLResponse)
-@limiter.limit("5/minute")
+@limiter.limit(app_settings_config.rate_limit_reset_password)
 async def reset_password_request(
     request: Request,
     email: str = Form(...),
@@ -259,7 +260,7 @@ async def reset_password_confirm_page(
 
 
 @router.post("/reset-password/{token}", response_class=HTMLResponse)
-@limiter.limit("10/minute")
+@limiter.limit(app_settings_config.rate_limit_reset_password)
 async def reset_password_confirm(
     token: str,
     request: Request,

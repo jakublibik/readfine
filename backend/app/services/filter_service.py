@@ -1,4 +1,5 @@
 """Filter service: CRUD, condition evaluation, and filter application during fetch."""
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
-from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterUpdate
+from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -57,15 +58,16 @@ async def _validate_scope(
         if not result.scalar_one_or_none():
             raise ValueError("Feed not in your subscriptions")
     elif scope_type == "folder":
-        if not scope_folder_id:
+        if scope_folder_id is None:
             raise ValueError("scope_folder_id is required for folder scope")
-        result = await db.execute(
-            select(Folder.id).where(
-                Folder.id == scope_folder_id, Folder.user_id == user_id
+        if scope_folder_id != 0:  # 0 = sentinel for "no folder"
+            result = await db.execute(
+                select(Folder.id).where(
+                    Folder.id == scope_folder_id, Folder.user_id == user_id
+                )
             )
-        )
-        if not result.scalar_one_or_none():
-            raise ValueError("Folder not found")
+            if not result.scalar_one_or_none():
+                raise ValueError("Folder not found")
 
 
 def _normalize_scope(payload) -> tuple[int | None, int | None]:
@@ -102,6 +104,7 @@ async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -
         scope_type=payload.scope_type,
         scope_feed_id=scope_feed_id,
         scope_folder_id=scope_folder_id,
+        scope_except=json.dumps(payload.scope_except) if payload.scope_except else None,
     )
     for c in payload.conditions:
         f.conditions.append(FilterCondition(**c.model_dump()))
@@ -149,12 +152,14 @@ async def update_filter(
     scope_folder_id = payload.scope_folder_id if "scope_folder_id" in (payload.model_fields_set or set()) else f.scope_folder_id
     await _validate_scope(user_id, scope_type, scope_feed_id, scope_folder_id, db)
 
-    scalar_fields = payload.model_dump(exclude_unset=True, exclude={"conditions", "actions"})
+    scalar_fields = payload.model_dump(exclude_unset=True, exclude={"conditions", "actions", "scope_except"})
     for field, value in scalar_fields.items():
         setattr(f, field, value)
     # Normalize: clear unused scope IDs
     if payload.scope_type is not None:
         f.scope_feed_id, f.scope_folder_id = _normalize_scope(payload)
+    if "scope_except" in (payload.model_fields_set or set()):
+        f.scope_except = json.dumps(payload.scope_except) if payload.scope_except else None
     f.updated_at = datetime.now(timezone.utc)
 
     if payload.conditions is not None:
@@ -259,20 +264,51 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
     return _eval_op(op, val, _get_field_value(article, user_feed, condition.field))
 
 
-def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> bool:
-    """Return True if the article is within the filter's scope."""
-    if f.scope_type == "all":
-        return True
+def _parse_except_list(scope_except: str | None) -> list[str]:
+    if not scope_except:
+        return []
+    try:
+        return json.loads(scope_except)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None, except_list: list[str]) -> bool:
+    """Return True if the article is within the filter's scope (and not excluded)."""
+    # Check scope inclusion
     if f.scope_type == "feed":
-        return article.feed_id == f.scope_feed_id
-    if f.scope_type == "folder":
-        return user_feed is not None and user_feed.folder_id == f.scope_folder_id
+        if article.feed_id != f.scope_feed_id:
+            return False
+    elif f.scope_type == "folder":
+        if f.scope_folder_id == 0:  # sentinel: feeds with no folder
+            if user_feed is None or user_feed.folder_id is not None:
+                return False
+        else:
+            if user_feed is None or user_feed.folder_id != f.scope_folder_id:
+                return False
+    # scope_type == "all": no inclusion check needed
+
+    # Check except exclusions
+    for item in except_list:
+        try:
+            if item.startswith("feed:") and article.feed_id == int(item[5:]):
+                return False
+            if item.startswith("folder:"):
+                folder_val = int(item[7:])
+                if folder_val == 0:  # sentinel: no folder
+                    if user_feed is not None and user_feed.folder_id is None:
+                        return False
+                elif user_feed is not None and user_feed.folder_id == folder_val:
+                    return False
+        except (ValueError, IndexError):
+            continue
+
     return True
 
 
 def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None) -> bool:
     """Return True if the article is in scope and all/any conditions match."""
-    if not _scope_matches(f, article, user_feed):
+    if not _scope_matches(f, article, user_feed, _parse_except_list(f.scope_except)):
         return False
     if not f.conditions:
         return False
@@ -382,24 +418,30 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     if not f:
         return None
 
+    from app.models.feed import Feed
+
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
     )
     user_feeds_map = {uf.feed_id: uf for uf in user_feeds_result.scalars()}
 
     articles_result = await db.execute(
-        select(Article)
+        select(Article, Feed.title.label("feed_title"))
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .join(Feed, Feed.id == Article.feed_id)
         .where(UserFeed.user_id == user_id)
         .order_by(Article.published_at.desc())
         .limit(500)
     )
-    articles = articles_result.scalars().all()
+    rows = articles_result.all()
 
-    matched = [a for a in articles if evaluate_filter(f, a, user_feeds_map.get(a.feed_id))]
+    matched = [(a, ft) for a, ft in rows if evaluate_filter(f, a, user_feeds_map.get(a.feed_id))]
     return FilterTestResult(
         matched_count=len(matched),
-        sample_titles=[a.title for a in matched[:5]],
+        samples=[
+            FilterTestSample(title=a.title or "(no title)", feed_title=ft or "")
+            for a, ft in matched[:5]
+        ],
     )
 
 

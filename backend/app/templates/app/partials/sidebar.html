@@ -15,12 +15,27 @@
   </button>
 
   {% macro rail_count(count) %}{% if count > 0 %}<span class="absolute top-0 right-0 text-[9px] font-semibold text-blue-500 leading-none">{{ count if count < 100 else "99+" }}</span>{% endif %}{% endmacro %}
+  {% macro rail_count_total(count) %}{% if count > 0 %}<span class="absolute top-0 right-0 text-[9px] font-semibold text-gray-400 leading-none">{{ count if count < 100 else "99+" }}</span>{% endif %}{% endmacro %}
 
   <!-- All articles -->
   <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm font-medium relative"
      hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
      title="All articles">
     A{{ rail_count(nav_unread) }}
+  </a>
+
+  <!-- Starred -->
+  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-base relative"
+     hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+     title="Starred">
+    ★{{ rail_count_total(nav_starred) }}
+  </a>
+
+  <!-- Archived -->
+  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm font-medium relative"
+     hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+     title="Archived">
+    Ar{{ rail_count_total(nav_archived) }}
   </a>
 
   <!-- Labels -->
@@ -30,19 +45,34 @@
     L{{ rail_count(nav_unread_labeled) }}
   </a>
 
-  <!-- Starred -->
-  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-base relative"
-     hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
-     title="Starred">
-    ★{{ rail_count(nav_unread_starred) }}
-  </a>
+  {% if user_feeds %}
+  <!-- Folder separator -->
+  <div class="w-6 border-t border-gray-200 my-1"></div>
 
-  <!-- Archived -->
-  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm font-medium relative"
-     hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
-     title="Archived">
-    Ar{{ rail_count(nav_unread_archived) }}
-  </a>
+  <!-- Folders -->
+  {% set rns = namespace(seen=[]) %}
+  {% for uf in user_feeds %}
+    {% set fid = uf.folder_id %}
+    {% if fid not in rns.seen %}
+      {% set rns.seen = rns.seen + [fid] %}
+      {% if uf.folder %}
+        {% set fc_unread = folder_unread_counts.get(fid, 0) %}
+        <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-xs font-medium relative"
+           hx-get="/htmx/articles?folder_id={{ fid }}" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+           title="{{ uf.folder.name }}">
+          {{ uf.folder.name[:2] }}{{ rail_count(fc_unread) }}
+        </a>
+      {% else %}
+        {% set nf_unread = folder_unread_counts.get(none, 0) %}
+        <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm relative"
+           hx-get="/htmx/articles?folder_id=0" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+           title="No folder">
+          –{{ rail_count(nf_unread) }}
+        </a>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% endif %}
 
 </div>
 
@@ -72,25 +102,25 @@
 
   <!-- Nav -->
   <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">All articles</span>
       {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_total) }}{% endif %}
     </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?unread_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">Unread</span>
       {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_unread) }}{% endif %}
     </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">Starred</span>
       {% if nav_unread_starred > 0 %}{{ badge_unread(nav_unread_starred) }}{% else %}{{ badge_total(nav_starred) }}{% endif %}
     </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">Archived</span>
@@ -101,10 +131,10 @@
   <!-- Labels -->
   {% if user_labels %}
   <div class="px-2 py-3 border-b border-gray-200">
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?labeled_only=true" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
-      <span class="flex-1 font-medium">Labels</span>
+      <span class="flex-1">Labels</span>
       {% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}
     </a>
     {% for label in user_labels %}
@@ -122,22 +152,32 @@
 
   <!-- Feed list -->
   <div class="flex-1 overflow-y-auto px-2 py-3">
-    {% set ns = namespace(current_folder=None) %}
+    {% set ns = namespace(current_folder="__unset__") %}
     {% for uf in user_feeds %}
       {% if uf.folder_id != ns.current_folder %}
         {% set ns.current_folder = uf.folder_id %}
         {% if uf.folder %}
-          <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            {{ uf.folder.name }}
-          </div>
-        {% elif ns.current_folder is none and loop.index > 1 %}
-          <div class="px-3 pt-3 pb-1 text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Uncategorized
-          </div>
+          {% set fc_unread = folder_unread_counts.get(uf.folder_id, 0) %}
+          {% set fc_total = folder_total_counts.get(uf.folder_id, 0) %}
+          <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer mt-1"
+             hx-get="/htmx/articles?folder_id={{ uf.folder_id }}" hx-target="#article-list" hx-swap="innerHTML"
+             hx-push-url="false">
+            <span class="flex-1 truncate">{{ uf.folder.name }}</span>
+            {% if fc_unread > 0 %}{{ badge_unread(fc_unread) }}{% else %}{{ badge_total(fc_total) }}{% endif %}
+          </a>
+        {% else %}
+          {% set nf_unread = folder_unread_counts.get(none, 0) %}
+          {% set nf_total = folder_total_counts.get(none, 0) %}
+          <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer mt-1"
+             hx-get="/htmx/articles?folder_id=0" hx-target="#article-list" hx-swap="innerHTML"
+             hx-push-url="false">
+            <span class="flex-1">No folder</span>
+            {% if nf_unread > 0 %}{{ badge_unread(nf_unread) }}{% else %}{{ badge_total(nf_total) }}{% endif %}
+          </a>
         {% endif %}
       {% endif %}
 
-      <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+      <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
          hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
          hx-push-url="false">
         <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
@@ -153,5 +193,5 @@
 {% endif %}
 
 <style>
-  .nav-item.active { background-color: #eff6ff; color: #1d4ed8; font-weight: 500; }
+  .nav-item.active { background-color: #eff6ff; color: #1d4ed8; }
 </style>

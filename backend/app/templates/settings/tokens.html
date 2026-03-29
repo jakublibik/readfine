@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}API Tokens – Filtread{% endblock %}
+{% block content %}
+<div class="max-w-2xl mx-auto px-4 py-8">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-xl font-semibold text-gray-900">API Tokens</h1>
+    <div class="flex items-center gap-4">
+      <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
+      <a href="/settings/feeds" class="text-sm text-blue-600 hover:underline">Feeds</a>
+      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
+      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
+    </div>
+  </div>
+
+  <p class="text-sm text-gray-500 mb-6">
+    API tokens allow external apps to access Filtread on your behalf.
+    A token is shown only once when created — store it somewhere safe.
+  </p>
+
+  {% if new_token %}
+  <div class="mb-6 p-4 bg-green-50 border border-green-200 rounded">
+    <p class="text-sm font-medium text-green-800 mb-2">Token "<strong>{{ new_token_name }}</strong>" created — copy it now, it won't be shown again:</p>
+    <code class="block bg-white border border-green-300 rounded px-3 py-2 text-sm font-mono break-all text-gray-900 select-all">{{ new_token }}</code>
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+  {% endif %}
+
+  <!-- Create new token -->
+  <form method="POST" action="/settings/tokens" class="mb-8 flex gap-2 items-end">
+    <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+    <div class="flex-1">
+      <label class="block text-sm font-medium text-gray-700 mb-1">New token name</label>
+      <input type="text" name="name" required maxlength="100" placeholder="e.g. My script"
+             class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    </div>
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
+      Generate token
+    </button>
+  </form>
+
+  <!-- Token list -->
+  <div id="tokens-list">
+    {% include "settings/partials/tokens_list.html" %}
+  </div>
+
+  <div class="mt-6">
+    <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
+  </div>
+</div>
+{% endblock %}

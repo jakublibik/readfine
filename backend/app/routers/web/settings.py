@@ -1,5 +1,10 @@
-"""Web routes for settings: feeds, folders, labels, and filters management."""
+"""Web routes for settings: feeds, folders, labels, filters, and API tokens."""
 import logging
+import secrets
+from datetime import datetime, timezone
+
+import asyncio
+import httpx
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -7,14 +12,20 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import feedparser
 from sqlalchemy import select
 
-from app.auth.security import hash_password, verify_password
+from app.auth.security import hash_password, verify_password, hash_token
+from app.config import settings as app_settings_config
+from app.main import limiter
+from app.utils.crypto import encrypt
+from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
+from app.models.auth import ApiToken
 from app.models.feed import Folder, UserFeed
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
@@ -124,6 +135,84 @@ async def settings_feeds(
     })
 
 
+@router.post("/feeds/test", response_class=HTMLResponse)
+@limiter.limit("10/minute")
+async def settings_feeds_test(
+    request: Request,
+    url: str = Form(...),
+    fetch_auth_user: str = Form(""),
+    fetch_auth_pass: str = Form(""),
+    user: User = Depends(get_current_user),
+):
+    """Test a feed URL without saving. Returns title + entry count or error."""
+    url = url.strip()
+    auth_user = fetch_auth_user.strip() or None
+    auth_pass = fetch_auth_pass or None
+
+    try:
+        validate_feed_url(url)
+    except ValueError as e:
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
+                                          {"error": str(e)})
+
+    _headers = {
+        "User-Agent": "Filtread/1.0",
+        "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+    }
+    has_auth = bool(auth_user and auth_pass)
+    auth = (auth_user, auth_pass) if has_auth else None
+
+    async def _fetch(with_auth) -> tuple[str | None, str | None]:
+        """Returns (content, error_string)."""
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, max_redirects=5) as client:
+                response = await client.get(url, headers=_headers, auth=auth if with_auth else None)
+                response.raise_for_status()
+                return response.text, None
+        except httpx.HTTPStatusError as e:
+            return None, f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
+        except httpx.RequestError as e:
+            return None, f"Connection error: {e}"
+
+    # Always fetch with the configured auth (or no auth if none provided)
+    content, error = await _fetch(with_auth=True)
+
+    auth_status = None  # will be set when credentials were provided
+    if has_auth and content is None and error and "401" in error:
+        # Credentials provided but got 401 → wrong credentials
+        auth_status = "wrong"
+    elif has_auth and content is not None:
+        # Succeeded with auth — check if auth was actually needed
+        no_auth_content, no_auth_error = await _fetch(with_auth=False)
+        if no_auth_content is not None:
+            auth_status = "not_required"
+        else:
+            auth_status = "required_ok"
+
+    if error and auth_status != "wrong":
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
+                                          {"error": error})
+
+    if auth_status == "wrong":
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
+                                          {"error": f"{error} — credentials rejected"})
+
+    loop = asyncio.get_running_loop()
+    parsed = await loop.run_in_executor(None, feedparser.parse, content)
+
+    if parsed.bozo and not parsed.entries and not parsed.feed:
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
+                                          {"error": f"Not a valid feed: {parsed.bozo_exception}"})
+
+    feed_title = parsed.feed.get("title") or url
+    entry_count = len(parsed.entries)
+    return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
+        "feed_title": feed_title,
+        "entry_count": entry_count,
+        "auth_status": auth_status,
+    })
+
+
 @router.post("/feeds", response_class=HTMLResponse)
 async def settings_feeds_subscribe(
     request: Request,
@@ -135,13 +224,16 @@ async def settings_feeds_subscribe(
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
     folder_id = _safe_int(folder_id_raw)
+    fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
+    fetch_auth_pass = form.get("fetch_auth_pass", "") or None
+    is_private = form.get("is_private") == "on"
 
     user_feeds, folders = await _get_feeds_context(user, db)
     error = None
     try:
         await subscribe(user=user, url=url, folder_id=folder_id,
-                        custom_title=custom_title, fetch_auth_user=None,
-                        fetch_auth_pass=None, db=db)
+                        custom_title=custom_title, fetch_auth_user=fetch_auth_user,
+                        fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db)
         return RedirectResponse("/settings/feeds", status_code=303)
     except ValueError as e:
         error = str(e)
@@ -214,6 +306,14 @@ async def settings_feed_update(
 
     uf.custom_title = custom_title
     uf.folder_id = folder_id
+
+    if uf.feed.is_private:
+        fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
+        fetch_auth_pass = form.get("fetch_auth_pass", "") or None
+        uf.feed.fetch_auth_user = fetch_auth_user
+        if fetch_auth_pass:
+            uf.feed.fetch_auth_pass_encrypted = encrypt(fetch_auth_pass)
+
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)
 
@@ -273,6 +373,60 @@ async def settings_folder_delete(
     folder = result.scalar_one_or_none()
     if folder:
         await db.delete(folder)
+        await db.commit()
+    user_feeds, folders = await _get_feeds_context(user, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
+        "user_feeds": user_feeds,
+        "folders": folders,
+    })
+
+
+@router.get("/feeds-list", response_class=HTMLResponse)
+async def settings_feeds_list(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user_feeds, folders = await _get_feeds_context(user, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
+        "user_feeds": user_feeds,
+        "folders": folders,
+    })
+
+
+@router.get("/folders/{folder_id}/rename-form", response_class=HTMLResponse)
+async def settings_folder_rename_form(
+    folder_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
+    )
+    folder = result.scalar_one_or_none()
+    if not folder:
+        return HTMLResponse("", status_code=404)
+    return templates.TemplateResponse(request, "settings/partials/folder_rename_form.html", {
+        "folder": folder,
+    })
+
+
+@router.post("/folders/{folder_id}/rename", response_class=HTMLResponse)
+async def settings_folder_rename(
+    folder_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    name = form.get("name", "").strip()
+    result = await db.execute(
+        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
+    )
+    folder = result.scalar_one_or_none()
+    if folder and name:
+        folder.name = name
         await db.commit()
     user_feeds, folders = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
@@ -357,13 +511,19 @@ async def settings_filter_create(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
+    save_and_test = form.get("save_and_test") == "1"
     payload = _parse_filter_form(form)
     try:
-        await create_filter(user.id, payload, db)
+        f = await create_filter(user.id, payload, db)
     except ValueError as e:
         ctx = await _filter_form_context(user, db)
         ctx.update({"filter": None, "error": str(e)})
         return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
+    if save_and_test:
+        test_result = await test_filter(user.id, f.id, db)
+        ctx = await _filter_form_context(user, db)
+        ctx.update({"filter": f, "test_result": test_result})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     return RedirectResponse("/settings/filters", status_code=303)
 
 
@@ -375,6 +535,7 @@ async def settings_filter_update(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
+    save_and_test = form.get("save_and_test") == "1"
     payload = _parse_filter_form(form)
     try:
         await update_filter(user.id, filter_id, FilterUpdate(**payload.model_dump()), db)
@@ -383,6 +544,12 @@ async def settings_filter_update(
         ctx = await _filter_form_context(user, db)
         ctx.update({"filter": existing, "error": str(e)})
         return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
+    if save_and_test:
+        updated = await get_filter(user.id, filter_id, db)
+        test_result = await test_filter(user.id, filter_id, db)
+        ctx = await _filter_form_context(user, db)
+        ctx.update({"filter": updated, "test_result": test_result})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     return RedirectResponse("/settings/filters", status_code=303)
 
 
@@ -457,9 +624,21 @@ def _parse_filter_form(form) -> FilterCreate:
                 action_value=a_val or None,
             ))
 
-    scope_type = form.get("scope_type", "all")
-    scope_feed_id_raw = form.get("scope_feed_id")
-    scope_folder_id_raw = form.get("scope_folder_id")
+    scope_target = form.get("scope_target", "all")
+    if scope_target.startswith("feed:"):
+        scope_type = "feed"
+        scope_feed_id = _safe_int(scope_target[5:])
+        scope_folder_id = None
+    elif scope_target.startswith("folder:"):
+        scope_type = "folder"
+        scope_folder_id = _safe_int(scope_target[7:])
+        scope_feed_id = None
+    else:
+        scope_type = "all"
+        scope_feed_id = None
+        scope_folder_id = None
+
+    scope_except = [v for v in form.getlist("scope_except") if v]
 
     return FilterCreate(
         name=form.get("name", ""),
@@ -468,11 +647,88 @@ def _parse_filter_form(form) -> FilterCreate:
         position=_safe_int(form.get("position"), 0),
         stop_on_match=form.get("stop_on_match") == "true",
         scope_type=scope_type,
-        scope_feed_id=_safe_int(scope_feed_id_raw),
-        scope_folder_id=_safe_int(scope_folder_id_raw),
+        scope_feed_id=scope_feed_id,
+        scope_folder_id=scope_folder_id,
+        scope_except=scope_except,
         conditions=conditions,
         actions=actions,
     )
+
+
+# ── API Tokens ────────────────────────────────────────────────────────────────
+
+async def _list_tokens(user_id: int, db: AsyncSession) -> list[ApiToken]:
+    result = await db.execute(
+        select(ApiToken)
+        .where(ApiToken.user_id == user_id, ApiToken.revoked_at == None)  # noqa: E711
+        .order_by(ApiToken.created_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+@router.get("/tokens", response_class=HTMLResponse)
+async def settings_tokens(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    tokens = await _list_tokens(user.id, db)
+    return templates.TemplateResponse(request, "settings/tokens.html", {"tokens": tokens})
+
+
+@router.post("/tokens", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_api_tokens)
+async def settings_tokens_create(
+    request: Request,
+    name: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    name = name.strip()
+    if not name:
+        tokens = await _list_tokens(user.id, db)
+        return templates.TemplateResponse(request, "settings/tokens.html", {
+            "tokens": tokens,
+            "error": "Token name cannot be empty.",
+        }, status_code=422)
+
+    raw_token = secrets.token_urlsafe(32)
+    token_prefix = raw_token[:8]
+    token_hash = hash_token(raw_token)
+
+    db.add(ApiToken(
+        user_id=user.id,
+        name=name,
+        token_hash=token_hash,
+        token_prefix=token_prefix,
+    ))
+    await db.commit()
+
+    tokens = await _list_tokens(user.id, db)
+    return templates.TemplateResponse(request, "settings/tokens.html", {
+        "tokens": tokens,
+        "new_token": raw_token,
+        "new_token_name": name,
+    })
+
+
+@router.post("/tokens/{token_id}/revoke", response_class=HTMLResponse)
+async def settings_tokens_revoke(
+    token_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ApiToken).where(ApiToken.id == token_id, ApiToken.user_id == user.id)
+    )
+    token = result.scalar_one_or_none()
+    if token and token.revoked_at is None:
+        token.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    tokens = await _list_tokens(user.id, db)
+    return templates.TemplateResponse(request, "settings/partials/tokens_list.html", {"tokens": tokens})
 
 
 # ── Preferences ───────────────────────────────────────────────────────────────

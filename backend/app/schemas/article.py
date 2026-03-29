@@ -56,5 +56,6 @@ class ArticleResponse(BaseModel):
     is_starred: bool
     is_archived: bool
     read_at: datetime | None
+    share_token: str | None = None
 
     model_config = {"from_attributes": False}

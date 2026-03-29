@@ -17,16 +17,29 @@
     {% if error %}
       <p class="text-sm text-red-500 mb-3">{{ error }}</p>
     {% endif %}
-    <form method="POST" action="/settings/feeds" hx-boost="true" class="space-y-3">
+    <form id="feed-subscribe-form" method="POST" action="/settings/feeds" hx-boost="true" class="space-y-3">
       <div class="flex gap-3">
-        <input type="url" name="url" placeholder="https://example.com/feed.xml" required
+        <input id="feed-url-input" type="url" name="url" placeholder="https://example.com/feed.xml" required
                value="{{ subscribe_url or '' }}"
                class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <button type="button"
+                hx-post="/settings/feeds/test"
+                hx-include="#feed-subscribe-form"
+                hx-target="#feed-test-result"
+                hx-indicator="#feed-test-spinner"
+                class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
+          <svg id="feed-test-spinner" class="htmx-indicator animate-spin h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+          Test
+        </button>
         <button type="submit"
                 class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
           Subscribe
         </button>
       </div>
+      <div id="feed-test-result" class="min-h-0"></div>
       <div class="flex gap-3">
         <input type="text" name="custom_title" placeholder="Custom title (optional)"
                class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
@@ -37,6 +50,28 @@
           {% endfor %}
         </select>
       </div>
+      <div class="flex items-start gap-2">
+        <input type="checkbox" id="feed-is-private" name="is_private"
+               class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer">
+        <label for="feed-is-private" class="text-sm text-gray-600 cursor-pointer select-none">
+          Private feed
+          <span class="block text-xs text-gray-400 font-normal">
+            Public feeds are shared — other subscribers on this server reuse the same cached articles.
+            Mark as private to keep this feed isolated to your account.
+          </span>
+        </label>
+      </div>
+      <details class="text-sm" id="feed-auth-details">
+        <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">HTTP Basic Auth (optional)</summary>
+        <div class="mt-2 flex gap-3">
+          <input type="text" id="feed-auth-user" name="fetch_auth_user" placeholder="Feed username"
+                 autocomplete="off"
+                 class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <input type="password" id="feed-auth-pass" name="fetch_auth_pass" placeholder="Feed password"
+                 autocomplete="new-password"
+                 class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+      </details>
     </form>
   </div>
 
@@ -51,6 +86,7 @@
     <form hx-post="/settings/folders"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
+          hx-on:htmx:after-request="this.reset()"
           class="flex gap-3">
       <input type="text" name="name" placeholder="Folder name" required
              class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">

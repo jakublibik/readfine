@@ -1,0 +1,15 @@
+<div class="flex items-center gap-2" id="folder-header-{{ folder.id }}">
+  <form hx-post="/settings/folders/{{ folder.id }}/rename"
+        hx-target="#feeds-list"
+        hx-swap="outerHTML"
+        class="flex items-center gap-2 flex-1">
+    <input type="text" name="name" value="{{ folder.name }}" required autofocus
+           class="flex-1 border border-gray-300 rounded px-2 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <button type="submit"
+            class="px-2 py-0.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700">Save</button>
+  </form>
+  <button hx-get="/settings/feeds-list"
+          hx-target="#feeds-list"
+          hx-swap="outerHTML"
+          class="text-xs text-gray-400 hover:text-gray-600">Cancel</button>
+</div>

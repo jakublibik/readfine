@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_api_user
 from app.auth.security import create_access_token, verify_password
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.main import limiter
 from app.models.user import User
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/auth", tags=["api-auth"])
 
 
 @router.post("/token")
-@limiter.limit("10/minute")
+@limiter.limit(app_settings_config.rate_limit_login)
 async def get_token(
     request: Request,
     payload: LoginRequest,

@@ -31,12 +31,44 @@
       </select>
     </div>
 
-    <div class="text-xs text-gray-400 pt-1">
-      Feed URL: <span class="font-mono">{{ uf.feed.feed_url }}</span><br>
-      Status: {{ uf.feed.status }}
-      {% if uf.feed.last_error %}
-        — <span class="text-red-500">{{ uf.feed.last_error }}</span>
-      {% endif %}
+    {% if uf.feed.is_private %}
+    <div class="space-y-3 pt-1">
+      <h3 class="text-sm font-medium text-gray-700">HTTP Basic Auth</h3>
+      <div class="flex gap-3">
+        <div class="flex-1">
+          <label class="block text-xs text-gray-500 mb-1">Username</label>
+          <input type="text" name="fetch_auth_user"
+                 value="{{ uf.feed.fetch_auth_user or '' }}"
+                 autocomplete="off"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+        <div class="flex-1">
+          <label class="block text-xs text-gray-500 mb-1">New password <span class="text-gray-400">(leave blank to keep current)</span></label>
+          <input type="password" name="fetch_auth_pass" placeholder="••••••••"
+                 autocomplete="new-password"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="text-xs text-gray-400 pt-1 space-y-0.5">
+      <div>Feed URL: <span class="font-mono">{{ uf.feed.feed_url }}</span></div>
+      <div>
+        Status: {{ uf.feed.status }}
+        {% if uf.feed.last_error %}
+          — <span class="text-red-500">{{ uf.feed.last_error }}</span>
+        {% endif %}
+      </div>
+      <div class="flex items-center gap-1.5 pt-0.5">
+        {% if uf.feed.is_private %}
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
+          <span class="text-gray-400">This feed is isolated to your account and not shared with other users.</span>
+        {% else %}
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
+          <span class="text-gray-400">Articles are cached and shared across all subscribers on this server.</span>
+        {% endif %}
+      </div>
     </div>
 
     <div class="flex items-center gap-3 pt-2">

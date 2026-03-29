@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ article.title }} – Filtread</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div class="max-w-3xl mx-auto px-4 py-10">
+
+    <div class="mb-6 text-sm text-gray-400">
+      Shared via <a href="/login" class="hover:underline">Filtread</a>
+      {% if feed_title %} · {{ feed_title }}{% endif %}
+    </div>
+
+    <article>
+      <header class="mb-6">
+        {% if article.url %}
+          <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
+             class="text-2xl font-bold text-gray-900 leading-snug hover:underline">
+            {{ article.title or "Untitled" }}
+          </a>
+        {% else %}
+          <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "Untitled" }}</h1>
+        {% endif %}
+        <div class="mt-2 text-sm text-gray-500 flex flex-wrap gap-x-3">
+          {% if article.author %}<span>{{ article.author }}</span>{% endif %}
+          {% if article.published_at %}
+            <span>{{ article.published_at.strftime("%B %d, %Y") }}</span>
+          {% endif %}
+          {% if article.estimated_read_min %}
+            <span>{{ article.estimated_read_min }} min read</span>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="prose prose-sm max-w-none text-gray-800">
+        {% if article.readable_status == 'success' and article.readable_content %}
+          {{ article.readable_content | safe }}
+        {% elif article.content %}
+          {{ article.content | safe }}
+        {% else %}
+          <p class="text-gray-400 italic">No content available.</p>
+        {% endif %}
+      </div>
+    </article>
+
+  </div>
+</body>
+</html>

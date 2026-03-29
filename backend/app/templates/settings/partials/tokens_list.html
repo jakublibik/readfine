@@ -1,0 +1,33 @@
+{% if tokens %}
+<ul class="divide-y divide-gray-200 border border-gray-200 rounded">
+  {% for token in tokens %}
+  <li class="flex items-center justify-between px-4 py-3">
+    <div>
+      <span class="text-sm font-medium text-gray-900">{{ token.name }}</span>
+      <span class="ml-2 text-xs text-gray-400 font-mono">{{ token.token_prefix }}…</span>
+      <div class="text-xs text-gray-400 mt-0.5">
+        Created {{ token.created_at.strftime("%Y-%m-%d") }}
+        {% if token.last_used_at %}
+          · Last used {{ token.last_used_at.strftime("%Y-%m-%d") }}
+        {% else %}
+          · Never used
+        {% endif %}
+      </div>
+    </div>
+    <form method="POST" action="/settings/tokens/{{ token.id }}/revoke"
+          hx-post="/settings/tokens/{{ token.id }}/revoke"
+          hx-target="#tokens-list"
+          hx-confirm="Revoke token '{{ token.name }}'?"
+          class="inline">
+      <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+      <button type="submit"
+              class="text-xs text-red-600 hover:text-red-800 hover:underline">
+        Revoke
+      </button>
+    </form>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-sm text-gray-400">No active tokens.</p>
+{% endif %}

@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 FieldType = Literal["title_or_content", "title", "content", "author", "url", "published_at"]
 ScopeType = Literal["all", "feed", "folder"]
@@ -30,6 +31,7 @@ class FilterCreate(BaseModel):
     scope_type: ScopeType = "all"
     scope_feed_id: int | None = None
     scope_folder_id: int | None = None
+    scope_except: list[str] = []
     conditions: list[FilterConditionCreate] = []
     actions: list[FilterActionCreate] = []
 
@@ -43,6 +45,7 @@ class FilterUpdate(BaseModel):
     scope_type: ScopeType | None = None
     scope_feed_id: int | None = None
     scope_folder_id: int | None = None
+    scope_except: list[str] | None = None
     conditions: list[FilterConditionCreate] | None = None
     actions: list[FilterActionCreate] | None = None
 
@@ -75,6 +78,7 @@ class FilterResponse(BaseModel):
     scope_type: str
     scope_feed_id: int | None
     scope_folder_id: int | None
+    scope_except: list[str]
     created_at: datetime
     updated_at: datetime
     conditions: list[FilterConditionResponse]
@@ -82,7 +86,24 @@ class FilterResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @field_validator("scope_except", mode="before")
+    @classmethod
+    def parse_scope_except(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
+        try:
+            return json.loads(v)
+        except (json.JSONDecodeError, TypeError):
+            return []
+
+
+class FilterTestSample(BaseModel):
+    title: str
+    feed_title: str
+
 
 class FilterTestResult(BaseModel):
     matched_count: int
-    sample_titles: list[str]
+    samples: list[FilterTestSample]

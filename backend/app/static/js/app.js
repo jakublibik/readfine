@@ -158,3 +158,17 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     'htmx:beforeRequest', function () { clearTimeout(timer); }, { once: true }
   );
 });
+
+// Feed subscribe form: auto-check "Private feed" when auth fields are filled
+(function () {
+  var cb = document.getElementById('feed-is-private');
+  var authUser = document.getElementById('feed-auth-user');
+  var authPass = document.getElementById('feed-auth-pass');
+  if (!cb || !authUser || !authPass) return;
+  function autoCheck() {
+    if (authUser.value.trim() || authPass.value) cb.checked = true;
+  }
+  authUser.addEventListener('input', autoCheck);
+  authPass.addEventListener('input', autoCheck);
+})();
+

@@ -48,22 +48,11 @@
     btn.addEventListener('click', function () { btn.closest('.condition-row, .action-row').remove(); });
   });
 
-  // Scope select
-  var scopeSelect = document.getElementById('scope_type');
-  if (scopeSelect) {
-    scopeSelect.addEventListener('change', function () { window.toggleScope(this.value); });
-  }
-
   // Action-type selects for pre-rendered rows
   document.querySelectorAll('.action-type-select').forEach(function (sel) {
     sel.addEventListener('change', function () { window.toggleActionValue(sel); });
     window.toggleActionValue(sel);
   });
-
-  window.toggleScope = function (value) {
-    document.getElementById('scope_feed_select').classList.toggle('hidden', value !== 'feed');
-    document.getElementById('scope_folder_select').classList.toggle('hidden', value !== 'folder');
-  };
 
   window.toggleActionValue = function (select) {
     var labelSelect = select.closest('.action-row').querySelector('.label-select');
@@ -74,4 +63,18 @@
       labelSelect.value = '';
     }
   };
+
+  // Except toggle
+  var exceptToggle = document.getElementById('except-toggle');
+  if (exceptToggle) {
+    exceptToggle.addEventListener('change', function () {
+      var panel = document.getElementById('except-panel');
+      var sel = document.getElementById('except-select');
+      panel.classList.toggle('hidden', !this.checked);
+      sel.disabled = !this.checked;
+      if (!this.checked) {
+        Array.from(sel.options).forEach(function (o) { o.selected = false; });
+      }
+    });
+  }
 })();

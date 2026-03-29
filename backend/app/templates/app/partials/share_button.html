@@ -1,0 +1,26 @@
+<div id="share-btn-{{ article.id }}">
+  {% if article.share_token %}
+    {% set resolved_share_url = share_url or (request.base_url ~ "share/" ~ article.share_token) %}
+    <div class="flex items-center gap-2 py-1">
+      <span class="text-xs text-green-700 font-medium">Shared</span>
+      <button
+        hx-post="/htmx/articles/{{ article.id }}/share"
+        hx-target="#share-btn-{{ article.id }}"
+        hx-swap="outerHTML"
+        class="text-xs text-red-500 hover:underline">
+        Revoke
+      </button>
+    </div>
+    <input type="text" readonly value="{{ resolved_share_url }}"
+           onclick="this.select()"
+           class="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5 font-mono bg-gray-50 cursor-pointer mt-0.5">
+  {% else %}
+    <button
+      hx-post="/htmx/articles/{{ article.id }}/share"
+      hx-target="#share-btn-{{ article.id }}"
+      hx-swap="outerHTML"
+      class="w-full text-left text-sm px-1 py-1 hover:bg-gray-50 rounded text-gray-700">
+      Share article…
+    </button>
+  {% endif %}
+</div>

@@ -26,6 +26,7 @@ async def subscribe(
     fetch_auth_user: str | None,
     fetch_auth_pass: str | None,
     db: AsyncSession,
+    is_private: bool = False,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -33,7 +34,7 @@ async def subscribe(
     Public feeds (no auth) are shared: if the feed already exists in DB, the
     existing row is reused. Private feeds always get a dedicated row.
     """
-    is_private = bool(fetch_auth_user or fetch_auth_pass)
+    is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
     validate_feed_url(url)

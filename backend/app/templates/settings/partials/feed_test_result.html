@@ -1,0 +1,17 @@
+{% if error %}
+<p class="text-sm text-red-600">
+  <span class="font-medium">Error:</span> {{ error }}
+</p>
+{% else %}
+<div class="text-sm text-green-700 space-y-0.5">
+  <p>
+    <span class="font-medium">✓ Feed OK</span> — {{ feed_title }}
+    <span class="text-gray-500">({{ entry_count }} article{% if entry_count != 1 %}s{% endif %})</span>
+  </p>
+  {% if auth_status == "not_required" %}
+  <p class="text-amber-600 text-xs">⚠ Feed is publicly accessible — authentication is not required.</p>
+  {% elif auth_status == "required_ok" %}
+  <p class="text-green-600 text-xs">🔒 Authentication required and credentials are correct.</p>
+  {% endif %}
+</div>
+{% endif %}

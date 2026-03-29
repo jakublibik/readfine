@@ -1,9 +1,13 @@
 <div class="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 mt-1">
   Matched <strong>{{ result.matched_count }}</strong> article{% if result.matched_count != 1 %}s{% endif %}.
-  {% if result.sample_titles %}
-    <ul class="mt-1 space-y-0.5 text-gray-500">
-      {% for title in result.sample_titles %}
-        <li class="truncate">· {{ title }}</li>
+  {% if result.samples %}
+    <ul class="mt-1 space-y-0.5">
+      {% for s in result.samples %}
+        <li class="truncate">
+          <span class="text-gray-400">{{ s.feed_title }}</span>
+          <span class="text-gray-500 mx-1">·</span>
+          <span class="text-gray-700">{{ s.title }}</span>
+        </li>
       {% endfor %}
     </ul>
   {% endif %}
