@@ -220,6 +220,26 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .order_by(FetchLog.failed_at.desc())
         .limit(5)
     )).scalars().all()
+    readable_pending = (await db.execute(
+        select(func.count(Article.id)).where(Article.readable_status == "pending")
+    )).scalar() or 0
+    readable_failed = (await db.execute(
+        select(func.count(Article.id)).where(Article.readable_status == "failed")
+    )).scalar() or 0
+    readable_pending_recent = (await db.execute(
+        select(Article)
+        .options(selectinload(Article.feed))
+        .where(Article.readable_status == "pending")
+        .order_by(Article.readable_retries.desc(), Article.id.desc())
+        .limit(10)
+    )).scalars().all()
+    readable_failed_recent = (await db.execute(
+        select(Article)
+        .options(selectinload(Article.feed))
+        .where(Article.readable_status == "failed")
+        .order_by(Article.id.desc())
+        .limit(5)
+    )).scalars().all()
     return {
         "user_count": user_count,
         "active_user_count": active_user_count,
@@ -227,4 +247,8 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "article_count": article_count,
         "error_feed_count": error_feed_count,
         "recent_errors": recent_errors,
+        "readable_pending": readable_pending,
+        "readable_failed": readable_failed,
+        "readable_pending_recent": readable_pending_recent,
+        "readable_failed_recent": readable_failed_recent,
     }

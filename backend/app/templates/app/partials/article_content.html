@@ -1,0 +1,23 @@
+<div id="article-content-{{ article.id }}">
+  {% if article.readable_status == 'pending' %}
+  <p class="text-xs text-gray-400 italic mb-4">Readable content extraction in progress…</p>
+  {% elif article.readable_status == 'failed' %}
+  <p class="text-xs text-amber-500 italic mb-4">
+    {%- if article.readable_error and '403' in article.readable_error -%}
+      Full content could not be retrieved (access denied). The feed may require authentication, or this site does not allow automated access.
+    {%- else -%}
+      Readable content extraction failed{% if article.readable_error %}: {{ article.readable_error }}{% endif %}.
+    {%- endif %}
+    Showing feed content.
+  </p>
+  {% endif %}
+  <div class="prose prose-sm max-w-none text-gray-800">
+    {% if article.readable_status == 'success' and article.readable_content %}
+      {{ article.readable_content | safe }}
+    {% elif article.content %}
+      {{ article.content | safe }}
+    {% else %}
+      <p class="text-gray-400 italic">No content available.</p>
+    {% endif %}
+  </div>
+</div>

@@ -430,6 +430,72 @@ async def htmx_toggle_share(
     })
 
 
+@router.post("/htmx/articles/{article_id}/extract-readable", response_class=HTMLResponse)
+async def htmx_extract_readable(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Extract readable content on demand for a single article."""
+    import asyncio
+    from app.services.readable_service import extract_readable
+    from app.utils.crypto import decrypt
+
+    stmt = (
+        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+        )
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)  # noqa: E711
+            | (UserArticleState.is_starred == True)  # noqa: E712
+            | (UserArticleState.is_archived == True),  # noqa: E712
+        )
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
+
+    article, auth_user, auth_pass_enc = row
+    if not article.url:
+        return HTMLResponse("<p class='text-amber-500 p-2 text-xs'>Article has no URL.</p>")
+
+    if article.readable_status == "success":
+        return HTMLResponse("")  # already done, nothing to do
+
+    auth_pass: str | None = None
+    if auth_pass_enc:
+        try:
+            auth_pass = decrypt(auth_pass_enc)
+        except Exception:
+            pass
+
+    loop = asyncio.get_running_loop()
+    content, error = await loop.run_in_executor(
+        None, extract_readable, article.url, auth_user, auth_pass
+    )
+
+    if content:
+        article.readable_content = content
+        article.readable_status = "success"
+        article.readable_error = None
+        article.readable_retries = (article.readable_retries or 0) + 1
+    else:
+        article.readable_status = "failed"
+        article.readable_error = error
+        article.readable_retries = (article.readable_retries or 0) + 1
+
+    await db.commit()
+    await db.refresh(article)
+
+    return templates.TemplateResponse(request, "app/partials/article_content.html", {"article": article})
+
+
 @router.get("/share/{token}", response_class=HTMLResponse)
 async def public_share_view(
     token: str,

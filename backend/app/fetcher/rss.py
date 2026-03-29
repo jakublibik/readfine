@@ -98,15 +98,6 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
 
 async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
-    # Determine if any subscriber wants readable extraction
-    result = await db.execute(
-        select(UserFeed.id).where(
-            UserFeed.feed_id == feed.id,
-            UserFeed.extract_readable == True,  # noqa: E712
-        ).limit(1)
-    )
-    wants_readable = result.scalar_one_or_none() is not None
-
     new_articles: list[Article] = []
     for entry in parsed.entries:
         guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
@@ -142,7 +133,7 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
             author=_extract_author(entry),
             content=content,
             content_source=content_source,
-            readable_status="pending" if wants_readable else "skipped",
+            readable_status="skipped",
             published_at=published_at,
             word_count=word_count,
             estimated_read_min=estimated_read_min,
@@ -159,9 +150,8 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
             await apply_filters_to_article(article, db)
 
         # Auto-detect full-content feed and disable readable extraction if warranted
-        if wants_readable:
-            from app.services.readable_service import maybe_disable_readable_for_feed
-            await maybe_disable_readable_for_feed(feed.id, db)
+        from app.services.readable_service import maybe_disable_readable_for_feed
+        await maybe_disable_readable_for_feed(feed.id, db)
 
     return len(new_articles)
 

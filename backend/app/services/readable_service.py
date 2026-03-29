@@ -29,17 +29,26 @@ _FULL_CONTENT_SAMPLE = 10  # how many recent articles to sample
 
 # ── core extraction ───────────────────────────────────────────────────────────
 
-def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> Optional[str]:
-    """Download article HTML. Returns raw HTML string or None on error."""
+def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Download article HTML. Returns (html, error_message)."""
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
         resp = httpx.get(url, timeout=_TIMEOUT, follow_redirects=True, auth=auth,
                          headers={"User-Agent": "Filtread/1.0 (+https://github.com/filtread)"})
         resp.raise_for_status()
-        return resp.text
+        return resp.text, None
+    except httpx.HTTPStatusError as exc:
+        msg = f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+        logger.warning("readable fetch failed for %s: %s", url, msg)
+        return None, msg
+    except httpx.TimeoutException:
+        msg = f"Timeout after {_TIMEOUT}s"
+        logger.warning("readable fetch timed out for %s", url)
+        return None, msg
     except Exception as exc:
-        logger.debug("readable fetch failed for %s: %s", url, exc)
-        return None
+        msg = str(exc)[:200]
+        logger.warning("readable fetch failed for %s: %s", url, msg)
+        return None, msg
 
 
 def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
@@ -82,22 +91,24 @@ def _sanitize(html: str) -> str:
 
 
 def extract_readable(url: str, auth_user: Optional[str] = None,
-                     auth_pass: Optional[str] = None) -> Optional[str]:
+                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Download URL and extract readable HTML.
-    Returns sanitized HTML string or None if extraction failed.
+    Returns (sanitized HTML, error_message). One of the two is always None.
     """
-    html = _fetch_html(url, auth_user, auth_pass)
+    html, fetch_error = _fetch_html(url, auth_user, auth_pass)
     if not html:
-        return None
+        return None, fetch_error
 
     content = _extract_with_trafilatura(html, url)
     if not content:
         content = _extract_with_readability(html)
     if not content:
-        return None
+        msg = "No content could be extracted from the page"
+        logger.warning("readable extraction yielded no content for %s", url)
+        return None, msg
 
-    return _sanitize(content)
+    return _sanitize(content), None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -148,28 +159,27 @@ async def process_pending_readable(db: AsyncSession) -> int:
     for article in articles:
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
         try:
-            content = extract_readable(article.url, auth_user, auth_pass)
+            content, error = extract_readable(article.url, auth_user, auth_pass)
         except Exception as exc:
+            content, error = None, str(exc)[:200]
             logger.warning("readable extraction error for article %d: %s", article.id, exc)
-            content = None
 
         if content:
             article.readable_content = content
             article.readable_status = "success"
+            article.readable_error = None
             article.readable_retries = (article.readable_retries or 0) + 1
         else:
             retries = (article.readable_retries or 0) + 1
             article.readable_retries = retries
-            if retries >= _MAX_RETRIES:
+            article.readable_error = error
+            no_retry = error and "403" in error
+            if no_retry or retries >= _MAX_RETRIES:
                 article.readable_status = "failed"
                 article.readable_next_retry_at = None
             else:
                 delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
                 article.readable_next_retry_at = now + timedelta(minutes=delay_min)
-                # Keep status as "pending" but schedule next attempt
-                # Re-queue: temporarily set to a non-pending status, then back
-                # Actually: leave as pending, scheduler will re-pick based on next_retry_at
-                # We filter by next_retry_at below in the query — update query to exclude not-yet-due
 
         processed += 1
 

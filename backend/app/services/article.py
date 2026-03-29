@@ -224,6 +224,7 @@ async def toggle_article_state(
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
+            UserFeed.extract_readable,
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
@@ -243,7 +244,7 @@ async def toggle_article_state(
     if not row:
         return None
 
-    article, state, feed_title, custom_title = row
+    article, state, feed_title, custom_title, extract_readable = row
 
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
@@ -254,6 +255,9 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
+
+    if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
+        article.readable_status = "pending"
 
     await db.commit()
     await db.refresh(state)

@@ -26,7 +26,7 @@
         {% if article.feed_title %}<span class="truncate">{{ article.feed_title }}</span>{% endif %}
         {% if article.author %}<span class="shrink-0">· {{ article.author }}</span>{% endif %}
         {% if article.published_at %}
-          <span class="shrink-0">· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y") }}</time></span>
+          <span class="shrink-0">· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y %H:%M") }}</time></span>
         {% endif %}
         {% if article.estimated_read_min %}
           <span class="shrink-0">· {{ article.estimated_read_min }} min read</span>
@@ -47,6 +47,21 @@
           <div id="share-btn-{{ article.id }}" class="px-2 py-0.5">
             {% include "app/partials/share_button.html" %}
           </div>
+          {% if article.url and article.readable_status in ('skipped', 'failed') %}
+          <div class="px-2 py-0.5">
+            <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
+                    hx-target="#article-content-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    hx-indicator="#readable-spinner-{{ article.id }}"
+                    class="w-full text-left px-2 py-1 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center gap-2">
+              <svg id="readable-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+              </svg>
+              Extract full content
+            </button>
+          </div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -54,29 +69,6 @@
   </header>
 
   <!-- Content -->
-  {% if article.readable_status == 'pending' %}
-  <div id="article-content-{{ article.id }}"
-       hx-get="/htmx/articles/{{ article.id }}"
-       hx-trigger="every 3s"
-       hx-target="#article-detail"
-       hx-swap="innerHTML"
-       class="prose prose-sm max-w-none text-gray-800">
-    {% if article.content %}
-      {{ article.content | safe }}
-    {% else %}
-      <p class="text-gray-400 italic">Loading full content…</p>
-    {% endif %}
-  </div>
-  {% else %}
-  <div class="prose prose-sm max-w-none text-gray-800">
-    {% if article.readable_status == 'success' and article.readable_content %}
-      {{ article.readable_content | safe }}
-    {% elif article.content %}
-      {{ article.content | safe }}
-    {% else %}
-      <p class="text-gray-400 italic">No content available.</p>
-    {% endif %}
-  </div>
-  {% endif %}
+  {% include "app/partials/article_content.html" %}
 
 </article>

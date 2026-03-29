@@ -401,11 +401,18 @@ async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
         )
         filters = filters_result.scalars().all()
 
+        got_star_or_label = False
         for f in filters:
             if evaluate_filter(f, article, uf):
+                action_types = {a.action_type for a in f.actions}
+                if action_types & {"star", "label"}:
+                    got_star_or_label = True
                 await _execute_actions(f, article, uf.user_id, uf, db)
                 if f.stop_on_match:
                     break
+
+        if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
+            article.readable_status = "pending"
 
 
 # ── Test / retroactive apply ──────────────────────────────────────────────────

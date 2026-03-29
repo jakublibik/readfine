@@ -3,7 +3,8 @@ function _formatLocalTime(isoStr, format) {
   var dt = new Date(isoStr);
   if (isNaN(dt.getTime())) return null;
   if (format === 'long') {
-    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    var time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) + ' ' + time;
   }
   if (format === 'date') {
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
