@@ -155,20 +155,30 @@ async def process_pending_readable(db: AsyncSession) -> int:
                 pass
         feed_auth[feed_id] = (auth_user, decrypted_pass)
 
+    import asyncio
+    loop = asyncio.get_running_loop()
+
     processed = 0
     for article in articles:
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
         try:
-            content, error = extract_readable(article.url, auth_user, auth_pass)
+            content, error = await loop.run_in_executor(
+                None, extract_readable, article.url, auth_user, auth_pass
+            )
         except Exception as exc:
             content, error = None, str(exc)[:200]
             logger.warning("readable extraction error for article %d: %s", article.id, exc)
+
+        # Re-check status — on-demand extraction may have already processed this article
+        await db.refresh(article)
+        if article.readable_status == "success":
+            processed += 1
+            continue
 
         if content:
             article.readable_content = content
             article.readable_status = "success"
             article.readable_error = None
-            article.readable_retries = (article.readable_retries or 0) + 1
         else:
             retries = (article.readable_retries or 0) + 1
             article.readable_retries = retries

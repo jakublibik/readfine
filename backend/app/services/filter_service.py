@@ -478,11 +478,16 @@ async def apply_filter_retroactively(user_id: int, filter_id: int, db: AsyncSess
     )
     articles = articles_result.scalars().all()
 
+    action_types = {a.action_type for a in f.actions}
+    triggers_readable = bool(action_types & {"star", "label"})
+
     count = 0
     for article in articles:
         uf = user_feeds_map.get(article.feed_id)
         if evaluate_filter(f, article, uf):
             await _execute_actions(f, article, user_id, uf, db)
+            if triggers_readable and uf and uf.extract_readable and article.readable_status == "skipped":
+                article.readable_status = "pending"
             count += 1
 
     await db.commit()

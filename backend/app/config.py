@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     rate_limit_reset_password: str = "2/hour"
     rate_limit_share_token: str = "20/minute"
     rate_limit_api_tokens: str = "5/hour"
+    rate_limit_extract_readable: str = "10/minute"
 
 
 settings = Settings()

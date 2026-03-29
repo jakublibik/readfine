@@ -431,6 +431,7 @@ async def htmx_toggle_share(
 
 
 @router.post("/htmx/articles/{article_id}/extract-readable", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_extract_readable)
 async def htmx_extract_readable(
     article_id: int,
     request: Request,
@@ -484,7 +485,6 @@ async def htmx_extract_readable(
         article.readable_content = content
         article.readable_status = "success"
         article.readable_error = None
-        article.readable_retries = (article.readable_retries or 0) + 1
     else:
         article.readable_status = "failed"
         article.readable_error = error
