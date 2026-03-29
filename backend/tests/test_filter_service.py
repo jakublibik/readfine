@@ -372,3 +372,33 @@ class TestScope:
                         scope_type="all",
                         scope_except=json.dumps(["feed:", "folder:abc", "feed:10"]))
         assert evaluate_filter(f, article, uf) is False  # feed:10 still matches
+
+    def test_scope_except_non_string_integers_ignored(self):
+        import json
+        article = make_article(feed_id=10, title="Python")
+        uf = make_user_feed(folder_id=None)
+        # [1] — integer items should not raise AttributeError
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="all",
+                        scope_except=json.dumps([1, 2, 3]))
+        assert evaluate_filter(f, article, uf) is True
+
+    def test_scope_except_null_items_ignored(self):
+        import json
+        article = make_article(title="Python")
+        uf = make_user_feed(folder_id=None)
+        # [null] — None items should not raise
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="all",
+                        scope_except=json.dumps([None, None]))
+        assert evaluate_filter(f, article, uf) is True
+
+    def test_scope_except_mixed_types_string_still_applied(self):
+        import json
+        article = make_article(feed_id=10, title="Python")
+        uf = make_user_feed(folder_id=None)
+        # mix of non-strings and valid string — string entry should still work
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_type="all",
+                        scope_except=json.dumps([1, None, {}, "feed:10"]))
+        assert evaluate_filter(f, article, uf) is False  # "feed:10" still excludes

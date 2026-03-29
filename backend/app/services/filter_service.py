@@ -268,7 +268,8 @@ def _parse_except_list(scope_except: str | None) -> list[str]:
     if not scope_except:
         return []
     try:
-        return json.loads(scope_except)
+        parsed = json.loads(scope_except)
+        return [item for item in parsed if isinstance(item, str)]
     except (json.JSONDecodeError, TypeError):
         return []
 
@@ -290,6 +291,8 @@ def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None, exce
 
     # Check except exclusions
     for item in except_list:
+        if not isinstance(item, str):
+            continue
         try:
             if item.startswith("feed:") and article.feed_id == int(item[5:]):
                 return False
