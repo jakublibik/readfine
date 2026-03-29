@@ -69,7 +69,7 @@ def _sanitize(html: str) -> str:
         "ul", "var",
     }
     allowed_attrs = {
-        "a": {"href", "title", "rel"},
+        "a": {"href", "title"},
         "img": {"src", "alt", "title", "width", "height"},
         "td": {"colspan", "rowspan"},
         "th": {"colspan", "rowspan", "scope"},
