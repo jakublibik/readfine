@@ -31,10 +31,32 @@ _FULL_CONTENT_SAMPLE = 10  # how many recent articles to sample
 
 def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str]]:
     """Download article HTML. Returns (html, error_message)."""
+    from app.utils.url_validator import validate_feed_url
+    try:
+        validate_feed_url(url)
+    except ValueError as exc:
+        logger.warning("readable URL blocked (SSRF): %s — %s", url, exc)
+        return None, str(exc)
+
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
-        resp = httpx.get(url, timeout=_TIMEOUT, follow_redirects=True, auth=auth,
-                         headers={"User-Agent": "Filtread/1.0 (+https://github.com/filtread)"})
+        headers = {"User-Agent": "Filtread/1.0 (+https://github.com/filtread)"}
+        current_url = url
+        with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers) as client:
+            for _ in range(_MAX_REDIRECTS + 1):
+                resp = client.get(current_url)
+                if not resp.is_redirect:
+                    break
+                redirect_url = resp.headers.get("location", "")
+                try:
+                    validate_feed_url(redirect_url)
+                except ValueError as exc:
+                    logger.warning("readable redirect blocked (SSRF): %s — %s", redirect_url, exc)
+                    return None, f"Redirect blocked: {exc}"
+                current_url = redirect_url
+            else:
+                return None, f"Too many redirects (max {_MAX_REDIRECTS})"
+
         resp.raise_for_status()
         return resp.text, None
     except httpx.HTTPStatusError as exc:
@@ -118,8 +140,6 @@ async def process_pending_readable(db: AsyncSession) -> int:
     Process a batch of articles with readable_status='pending'.
     Returns the number of articles processed.
     """
-    now = datetime.now(timezone.utc)
-
     result = await db.execute(
         select(Article)
         .where(
@@ -128,7 +148,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
             Article.url != "",
             and_(
                 Article.readable_next_retry_at.is_(None)
-                | (Article.readable_next_retry_at <= now)
+                | (Article.readable_next_retry_at <= datetime.now(timezone.utc))
             ),
         )
         .order_by(Article.id)
@@ -189,7 +209,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
                 article.readable_next_retry_at = None
             else:
                 delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-                article.readable_next_retry_at = now + timedelta(minutes=delay_min)
+                article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
 
         processed += 1
 
