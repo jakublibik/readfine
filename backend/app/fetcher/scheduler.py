@@ -111,8 +111,9 @@ def create_scheduler() -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _purge_old_articles,
-        trigger="interval",
-        hours=24,
+        trigger="cron",
+        hour=3,
+        minute=0,
         id="purge_old_articles",
         replace_existing=True,
         max_instances=1,

@@ -29,7 +29,6 @@ def ids_exceeding_count(
     """
     Return IDs of articles that exceed keep_count per feed.
     articles: list of (id, feed_id, published_at, fetched_at)
-    Articles with feed_id=None are grouped together and also pruned.
     Ordering: newest first (published_at if set, else fetched_at).
     """
     by_feed: dict[int | None, list[tuple[int, datetime]]] = defaultdict(list)
@@ -57,60 +56,55 @@ def _protected_subquery():
     )
 
 
-async def _effective_feed_setting(
-    db: AsyncSession,
-    column,
-    global_default: int,
-) -> dict[int, int]:
-    """
-    Return {feed_id: effective_value} using the most conservative (max) value
-    across all UserFeed rows for that feed, falling back to global_default.
-    """
-    from app.models.feed import UserFeed
-    result = await db.execute(
-        select(
-            UserFeed.feed_id,
-            func.max(func.coalesce(column, global_default)).label("val"),
-        ).group_by(UserFeed.feed_id)
-    )
-    return {r.feed_id: r.val for r in result}
-
-
 # ── main purge job ────────────────────────────────────────────────────────────
 
 async def purge_old_articles(db: AsyncSession) -> int:
     """
     Delete articles exceeding retention limits.
 
-    Pass 1 — age-based: delete articles older than purge_after_days.
-    Pass 2 — count-based: per feed, delete articles beyond purge_keep_count.
+    NULL global settings mean the respective pass is disabled globally;
+    per-feed overrides still apply when set.
+
+    Pass 1 — age-based: delete articles older than effective purge_after_days.
+    Pass 2 — count-based: per feed, delete articles beyond effective purge_keep_count.
+              Uses a single SQL window-function query (no N+1).
 
     Articles starred or archived by any user are never deleted.
     Returns total number of deleted articles.
     """
+    from app.models.feed import UserFeed
+
     result = await db.execute(
         select(AppSettings.default_purge_after_days, AppSettings.default_purge_keep_count)
         .where(AppSettings.id == 1)
     )
     row = result.one_or_none()
-    global_days = (row[0] if row else None) or 90
-    global_count = (row[1] if row else None) or 500
+    # None = admin disabled this pass globally
+    global_days: int | None = row[0] if row else None
+    global_count: int | None = row[1] if row else None
 
-    from app.models.feed import UserFeed
     protected = _protected_subquery()
     now = datetime.now(timezone.utc)
     total_deleted = 0
 
     # ── Pass 1: age-based ─────────────────────────────────────────────────────
-    feed_days = await _effective_feed_setting(db, UserFeed.purge_after_days, global_days)
+    # Per-feed effective_days = coalesce(feed override, global_days).
+    # If both are NULL, skip the feed entirely.
+    feed_days_result = await db.execute(
+        select(
+            UserFeed.feed_id,
+            func.coalesce(UserFeed.purge_after_days, global_days).label("effective_days"),
+        )
+    )
     age_deleted = 0
-
-    for feed_id, days in feed_days.items():
-        cutoff = now - timedelta(days=days)
+    for r in feed_days_result:
+        if r.effective_days is None:
+            continue  # disabled for this feed
+        cutoff = now - timedelta(days=r.effective_days)
         res = await db.execute(
             delete(Article)
             .where(
-                Article.feed_id == feed_id,
+                Article.feed_id == r.feed_id,
                 Article.fetched_at < cutoff,
                 Article.id.not_in(protected),
             )
@@ -118,31 +112,65 @@ async def purge_old_articles(db: AsyncSession) -> int:
         )
         age_deleted += len(res.fetchall())
 
-    # Orphaned articles (feed deleted)
-    res = await db.execute(
-        delete(Article)
-        .where(
-            Article.feed_id.is_(None),
-            Article.fetched_at < now - timedelta(days=global_days),
-            Article.id.not_in(protected),
+    # Orphaned articles (feed deleted) — use global default only if set
+    if global_days is not None:
+        res = await db.execute(
+            delete(Article)
+            .where(
+                Article.feed_id.is_(None),
+                Article.fetched_at < now - timedelta(days=global_days),
+                Article.id.not_in(protected),
+            )
+            .returning(Article.id)
         )
-        .returning(Article.id)
-    )
-    age_deleted += len(res.fetchall())
+        age_deleted += len(res.fetchall())
+
     total_deleted += age_deleted
 
-    # ── Pass 2: count-based ───────────────────────────────────────────────────
-    feed_counts = await _effective_feed_setting(db, UserFeed.purge_keep_count, global_count)
-    count_deleted = 0
-
-    for feed_id, keep in feed_counts.items():
-        # Fetch (id, published_at, fetched_at) for this feed
-        rows = await db.execute(
-            select(Article.id, Article.published_at, Article.fetched_at)
-            .where(Article.feed_id == feed_id)
+    # ── Pass 2: count-based (single window-function query) ────────────────────
+    # Per-feed effective_count = coalesce(feed override, global_count).
+    # If both are NULL, skip the feed.
+    feed_counts_result = await db.execute(
+        select(
+            UserFeed.feed_id,
+            func.coalesce(UserFeed.purge_keep_count, global_count).label("effective_count"),
         )
-        articles = [(r.id, feed_id, r.published_at, r.fetched_at) for r in rows]
-        excess_ids = list(ids_exceeding_count(articles, keep))
+    )
+    feed_counts: dict[int, int] = {
+        r.feed_id: r.effective_count
+        for r in feed_counts_result
+        if r.effective_count is not None
+    }
+
+    count_deleted = 0
+    if feed_counts:
+        # Rank all articles within their feed by recency in one query
+        ranked = (
+            select(
+                Article.id,
+                Article.feed_id,
+                func.row_number()
+                .over(
+                    partition_by=Article.feed_id,
+                    order_by=func.coalesce(Article.published_at, Article.fetched_at).desc(),
+                )
+                .label("rn"),
+            )
+            .where(Article.feed_id.in_(feed_counts.keys()))
+            .subquery()
+        )
+
+        # Build a CASE expression for per-feed keep counts
+        from sqlalchemy import case, literal
+        keep_case = case(
+            {feed_id: literal(keep) for feed_id, keep in feed_counts.items()},
+            value=ranked.c.feed_id,
+        )
+        excess_result = await db.execute(
+            select(ranked.c.id).where(ranked.c.rn > keep_case)
+        )
+        excess_ids = [r[0] for r in excess_result]
+
         if excess_ids:
             res = await db.execute(
                 delete(Article)
