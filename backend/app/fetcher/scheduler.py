@@ -80,6 +80,15 @@ async def _process_readable() -> None:
         await process_pending_readable(session)
 
 
+async def _purge_old_articles() -> None:
+    """Job: delete articles exceeding retention limits."""
+    if db.async_session_factory is None:
+        return
+    from app.services.purge_service import purge_old_articles
+    async with db.async_session_factory() as session:
+        await purge_old_articles(session)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
     scheduler.add_job(
@@ -99,5 +108,14 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        _purge_old_articles,
+        trigger="interval",
+        hours=24,
+        id="purge_old_articles",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     return scheduler
