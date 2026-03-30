@@ -102,17 +102,11 @@
 
   <!-- Nav -->
   <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item active flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">All articles</span>
       {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_total) }}{% endif %}
-    </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
-       hx-get="/htmx/articles?unread_only=true" hx-target="#article-list" hx-swap="innerHTML"
-       hx-push-url="false">
-      <span class="flex-1">Unread</span>
-      {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_unread) }}{% endif %}
     </a>
     <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
