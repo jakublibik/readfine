@@ -4,7 +4,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Filtread{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      window.tailwind = {
+        config: {
+          theme: {
+            extend: {
+              typography: {
+                DEFAULT: { css: { p: { marginTop: '0.4em', marginBottom: '0.4em' } } },
+                sm:      { css: { p: { marginTop: '0.3em', marginBottom: '0.3em' } } },
+              }
+            }
+          }
+        }
+      };
+    </script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <style>
+      .prose h1 { font-size: 1.1em !important; }
+      .prose h2 { font-size: 1.0em !important; }
+      .prose h3 { font-size: 0.95em !important; }
+      .prose h4 { font-size: 0.9em !important; }
+    </style>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="/static/js/csrf.js"></script>
     <script src="/static/js/app.js" defer></script>

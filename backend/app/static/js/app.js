@@ -1,3 +1,29 @@
+// Open article content links in a new tab
+function openProseLinksInNewTab(root) {
+  (root || document).querySelectorAll('.prose a[href]').forEach(function (a) {
+    a.setAttribute('target', '_blank');
+    a.setAttribute('rel', 'noopener noreferrer');
+  });
+}
+document.addEventListener('DOMContentLoaded', function () { openProseLinksInNewTab(); });
+document.body.addEventListener('htmx:afterSettle', function () { openProseLinksInNewTab(); });
+
+// Hide duplicate h1 if it matches the article title (first 50 chars)
+function hideDuplicateH1() {
+  var articleEl = document.querySelector('#article-detail [data-article-id]');
+  if (!articleEl) return;
+  var prose = articleEl.querySelector('.prose');
+  if (!prose) return;
+  var h1 = prose.querySelector(':scope > h1:first-child');
+  if (!h1) return;
+  var normalize = function (s) { return s.trim().toLowerCase().slice(0, 50); };
+  if (normalize(h1.textContent) === normalize(articleEl.dataset.title || '')) {
+    h1.style.display = 'none';
+  }
+}
+document.addEventListener('DOMContentLoaded', hideDuplicateH1);
+document.body.addEventListener('htmx:afterSettle', hideDuplicateH1);
+
 // Local time formatting for <time datetime="..."> elements
 function _formatLocalTime(isoStr, format) {
   var dt = new Date(isoStr);
@@ -149,10 +175,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (isRead) return;
 
   var timer = setTimeout(function () {
-    htmx.ajax('POST', '/htmx/articles/' + articleId + '/set-read?state=true', {
-      target: '#read-btn-' + articleId,
-      swap: 'innerHTML'
-    });
+    var target = document.getElementById('read-btn-' + articleId);
+    if (target) {
+      htmx.ajax('POST', '/htmx/articles/' + articleId + '/set-read?state=true', {
+        target: '#read-btn-' + articleId,
+        swap: 'innerHTML'
+      });
+    } else {
+      // Article no longer in view — mark as read server-side only, skip UI swap
+      fetch('/htmx/articles/' + articleId + '/set-read?state=true', { method: 'POST' });
+    }
   }, 1500);
 
   document.getElementById('article-detail').addEventListener(

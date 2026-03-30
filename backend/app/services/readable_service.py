@@ -20,6 +20,7 @@ _TIMEOUT = 15  # seconds per HTTP request
 _MAX_RETRIES = 3
 _BACKOFF_MINUTES = [5, 30, 120]  # retry delays after 1st, 2nd, 3rd failure
 _BATCH_SIZE = 20  # articles processed per scheduler run
+_MAX_REDIRECTS = 5  # maximum followed redirects per request
 
 # Auto-disable threshold: if this fraction of sampled articles have word_count > 500,
 # the feed is considered full-content and readable extraction is disabled.
@@ -74,10 +75,60 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
 
 
 def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
+    import re
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
-                                 no_fallback=False)
-    return result or None
+                                 include_links=True, include_images=True,
+                                 include_formatting=True, no_fallback=False)
+    if not result:
+        return None
+    # trafilatura outputs <graphic src="..." alt="..."/> instead of <img>
+    result = re.sub(r'<graphic\b([^>]*)/>', r'<img\1>', result)
+    return result
+
+
+def _collect_video_figures(html: str) -> list[str]:
+    """
+    Find YouTube/Vimeo iframes in raw HTML and return replacement <figure> strings.
+    Trafilatura drops iframes, so we collect replacements before extraction
+    and append them to the final content.
+    """
+    import re
+    figures = []
+
+    for m in re.finditer(r'<iframe\b[^>]*>.*?</iframe>', html, flags=re.DOTALL | re.IGNORECASE):
+        iframe = m.group(0)
+        src_m = re.search(r'\bsrc=["\']([^"\']+)["\']', iframe)
+        if not src_m:
+            continue
+        src = src_m.group(1)
+
+        yt = re.search(r'youtube\.com/embed/([A-Za-z0-9_-]+)', src)
+        if yt:
+            vid = yt.group(1)
+            figures.append(
+                f'<figure>'
+                f'<a href="https://www.youtube.com/watch?v={vid}">'
+                f'<img src="https://img.youtube.com/vi/{vid}/hqdefault.jpg" alt="Video thumbnail">'
+                f'</a>'
+                f'<figcaption>&#9654; Watch on YouTube</figcaption>'
+                f'</figure>'
+            )
+            continue
+
+        vi = re.search(r'player\.vimeo\.com/video/(\d+)', src)
+        if vi:
+            vid = vi.group(1)
+            figures.append(
+                f'<figure>'
+                f'<a href="https://vimeo.com/{vid}">'
+                f'<img src="https://vumbnail.com/{vid}.jpg" alt="Video thumbnail">'
+                f'</a>'
+                f'<figcaption>&#9654; Watch on Vimeo</figcaption>'
+                f'</figure>'
+            )
+
+    return figures
 
 
 def _extract_with_readability(html: str) -> Optional[str]:
@@ -122,6 +173,7 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
     if not html:
         return None, fetch_error
 
+    video_figures = _collect_video_figures(html)
     content = _extract_with_trafilatura(html, url)
     if not content:
         content = _extract_with_readability(html)
@@ -130,7 +182,10 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
         logger.warning("readable extraction yielded no content for %s", url)
         return None, msg
 
-    return _sanitize(content), None
+    sanitized = _sanitize(content)
+    if video_figures:
+        sanitized += "\n" + "\n".join(video_figures)
+    return sanitized, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────

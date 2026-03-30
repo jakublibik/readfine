@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.fetcher.rss import fetch_and_parse_url, fetch_feed
+from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
@@ -59,6 +59,7 @@ async def subscribe(
         raise ValueError(f"Feed limit reached ({max_feeds})")
 
     feed: Feed | None = None
+    parsed = None
 
     if not is_private:
         # Look for existing public feed
@@ -104,11 +105,15 @@ async def subscribe(
         update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
     )
 
+    # If we fetched the feed fresh, check whether it delivers full content
+    extract_readable = not (parsed is not None and is_full_content_feed(parsed))
+
     user_feed = UserFeed(
         user_id=user.id,
         feed_id=feed.id,
         folder_id=folder_id,
         custom_title=custom_title[:255] if custom_title else None,
+        extract_readable=extract_readable,
     )
     db.add(user_feed)
     try:

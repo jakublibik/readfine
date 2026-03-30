@@ -1,6 +1,7 @@
 <article class="max-w-3xl px-6 py-6"
          data-article-id="{{ article.id }}"
-         data-is-read="{{ 'true' if article.is_read else 'false' }}">
+         data-is-read="{{ 'true' if article.is_read else 'false' }}"
+         data-title="{{ article.title or '' }}">
 
   <!-- Header -->
   <header class="mb-6">

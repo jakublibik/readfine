@@ -190,6 +190,22 @@ def _extract_image(entry) -> str | None:
     return None
 
 
+def is_full_content_feed(parsed: feedparser.FeedParserDict, sample: int = 5, threshold: int = 500) -> bool:
+    """
+    Heuristic: return True if the feed appears to deliver full article content.
+    Checks up to `sample` entries; returns True if the majority exceed `threshold` words.
+    """
+    counts = []
+    for entry in parsed.entries[:sample]:
+        content, _ = _extract_content(entry)
+        word_count, _ = _reading_stats(content)
+        if word_count is not None:
+            counts.append(word_count)
+    if not counts:
+        return False
+    return sum(1 for c in counts if c > threshold) / len(counts) >= 0.8
+
+
 def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
     if not content:
         return None, None
