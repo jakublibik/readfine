@@ -105,8 +105,23 @@ async def subscribe(
         update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
     )
 
-    # If we fetched the feed fresh, check whether it delivers full content
-    extract_readable = not (parsed is not None and is_full_content_feed(parsed))
+    # Determine whether readable extraction makes sense for this feed
+    if parsed is not None:
+        # New feed: check entries we just fetched
+        extract_readable = not is_full_content_feed(parsed)
+    else:
+        # Existing feed: derive from recent articles already in DB
+        sample_result = await db.execute(
+            select(Article.word_count)
+            .where(Article.feed_id == feed.id, Article.word_count.isnot(None))
+            .order_by(Article.id.desc())
+            .limit(5)
+        )
+        word_counts = [r[0] for r in sample_result]
+        if word_counts and sum(1 for c in word_counts if c > 500) / len(word_counts) >= 0.8:
+            extract_readable = False
+        else:
+            extract_readable = True
 
     user_feed = UserFeed(
         user_id=user.id,

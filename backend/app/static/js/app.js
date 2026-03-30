@@ -183,7 +183,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       });
     } else {
       // Article no longer in view — mark as read server-side only, skip UI swap
-      fetch('/htmx/articles/' + articleId + '/set-read?state=true', { method: 'POST' });
+      var csrfToken = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
+      csrfToken = csrfToken ? csrfToken.split('=')[1] : '';
+      fetch('/htmx/articles/' + articleId + '/set-read?state=true', {
+        method: 'POST',
+        headers: { 'x-csrftoken': csrfToken },
+      }).then(function (r) {
+        if (!r.ok) console.warn('mark-as-read fallback failed: ' + r.status);
+      }).catch(function () {});
     }
   }, 1500);
 

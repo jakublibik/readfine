@@ -182,10 +182,9 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
         logger.warning("readable extraction yielded no content for %s", url)
         return None, msg
 
-    sanitized = _sanitize(content)
     if video_figures:
-        sanitized += "\n" + "\n".join(video_figures)
-    return sanitized, None
+        content += "\n" + "\n".join(video_figures)
+    return _sanitize(content), None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
