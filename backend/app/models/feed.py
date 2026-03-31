@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, CheckConstraint
+from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +42,7 @@ class Feed(Base):
 
 class Folder(Base):
     __tablename__ = "folders"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_folders_user_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
