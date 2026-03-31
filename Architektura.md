@@ -331,10 +331,14 @@ Indexy: `(user_id, label_id)`, `article_id`
 | `match_operator` | `VARCHAR(5)` | NOT NULL, DEFAULT `'AND'` | `AND`, `OR` |
 | `position` | `SMALLINT` | NOT NULL, DEFAULT `0` | Priorita (pořadí aplikace) |
 | `stop_on_match` | `BOOLEAN` | NOT NULL, DEFAULT `FALSE` | Zastavit aplikaci dalších filtrů |
+| `scope_include` | `TEXT` | NULL | JSON list `["feed:N", "folder:N", …]`; NULL = všechny feedy |
+| `scope_except` | `TEXT` | NULL | JSON list výjimek ze scope; NULL = bez výjimek |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum vytvoření |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Poslední změna |
 
 Indexy: `user_id`, `(user_id, is_active, position)`
+
+> **Scope sémantika:** `scope_include = NULL` znamená všechny feedy. Neprázdný list omezuje filtr na vybrané feedy/složky. `scope_except` odebírá konkrétní feedy/složky ze scope. Formát položek: `feed:<id>` nebo `folder:<id>` (speciální `folder:0` = feedy bez složky). Max 50 položek na list.
 
 ---
 
