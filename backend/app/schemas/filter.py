@@ -4,7 +4,6 @@ from typing import Literal
 from pydantic import BaseModel, field_validator
 
 FieldType = Literal["title_or_content", "title", "content", "author", "url", "published_at"]
-ScopeType = Literal["all", "feed", "folder"]
 OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "lt"]
 ActionType = Literal["label", "mark_read", "star", "hide", "notify"]
 MatchOperator = Literal["AND", "OR"]
@@ -28,9 +27,7 @@ class FilterCreate(BaseModel):
     match_operator: MatchOperator = "AND"
     position: int = 0
     stop_on_match: bool = False
-    scope_type: ScopeType = "all"
-    scope_feed_id: int | None = None
-    scope_folder_id: int | None = None
+    scope_include: list[str] = []
     scope_except: list[str] = []
     conditions: list[FilterConditionCreate] = []
     actions: list[FilterActionCreate] = []
@@ -42,9 +39,7 @@ class FilterUpdate(BaseModel):
     match_operator: MatchOperator | None = None
     position: int | None = None
     stop_on_match: bool | None = None
-    scope_type: ScopeType | None = None
-    scope_feed_id: int | None = None
-    scope_folder_id: int | None = None
+    scope_include: list[str] | None = None
     scope_except: list[str] | None = None
     conditions: list[FilterConditionCreate] | None = None
     actions: list[FilterActionCreate] | None = None
@@ -68,6 +63,17 @@ class FilterActionResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def _parse_json_list(v) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return v
+    try:
+        return json.loads(v)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 class FilterResponse(BaseModel):
     id: int
     name: str
@@ -75,9 +81,7 @@ class FilterResponse(BaseModel):
     match_operator: str
     position: int
     stop_on_match: bool
-    scope_type: str
-    scope_feed_id: int | None
-    scope_folder_id: int | None
+    scope_include: list[str]
     scope_except: list[str]
     created_at: datetime
     updated_at: datetime
@@ -86,17 +90,10 @@ class FilterResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    @field_validator("scope_except", mode="before")
+    @field_validator("scope_include", "scope_except", mode="before")
     @classmethod
-    def parse_scope_except(cls, v):
-        if v is None:
-            return []
-        if isinstance(v, list):
-            return v
-        try:
-            return json.loads(v)
-        except (json.JSONDecodeError, TypeError):
-            return []
+    def parse_json_list(cls, v):
+        return _parse_json_list(v)
 
 
 class FilterTestSample(BaseModel):

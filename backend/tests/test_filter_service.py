@@ -32,16 +32,14 @@ def make_condition(field, operator, value, position=0):
 
 
 def make_filter(conditions, match_operator="AND", is_active=True, stop_on_match=False,
-                scope_type="all", scope_feed_id=None, scope_folder_id=None, scope_except=None):
+                scope_include=None, scope_except=None):
     return SimpleNamespace(
         conditions=conditions,
         actions=[],
         match_operator=match_operator,
         is_active=is_active,
         stop_on_match=stop_on_match,
-        scope_type=scope_type,
-        scope_feed_id=scope_feed_id,
-        scope_folder_id=scope_folder_id,
+        scope_include=scope_include,
         scope_except=scope_except,
     )
 
@@ -230,65 +228,96 @@ class TestEvaluateFilter:
 
 
 class TestScope:
+    import json as _json
+
     def test_scope_all_always_passes(self):
-        article = make_article(feed_id=99)
-        f = make_filter([make_condition("title", "contains", "x")], scope_type="all")
-        # scope passes, but condition doesn't match
+        f = make_filter([make_condition("title", "contains", "x")])
+        # scope passes (include=all), but condition doesn't match
         assert evaluate_filter(f, make_article(title="no match")) is False
 
-    def test_scope_feed_matches(self):
+    # ── scope_include: feed ───────────────────────────────────────────────────
+
+    def test_scope_include_feed_matches(self):
+        import json
         article = make_article(feed_id=10, title="Python")
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="feed", scope_feed_id=10)
+                        scope_include=json.dumps(["feed:10"]))
         assert evaluate_filter(f, article) is True
 
-    def test_scope_feed_no_match(self):
+    def test_scope_include_feed_no_match(self):
+        import json
         article = make_article(feed_id=99, title="Python")
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="feed", scope_feed_id=10)
+                        scope_include=json.dumps(["feed:10"]))
         assert evaluate_filter(f, article) is False
 
-    def test_scope_folder_matches(self):
+    def test_scope_include_multiple_feeds(self):
+        import json
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include=json.dumps(["feed:10", "feed:20"]))
+        assert evaluate_filter(f, make_article(feed_id=10, title="Python")) is True
+        assert evaluate_filter(f, make_article(feed_id=20, title="Python")) is True
+        assert evaluate_filter(f, make_article(feed_id=99, title="Python")) is False
+
+    # ── scope_include: folder ─────────────────────────────────────────────────
+
+    def test_scope_include_folder_matches(self):
+        import json
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=5)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=5)
+                        scope_include=json.dumps(["folder:5"]))
         assert evaluate_filter(f, article, uf) is True
 
-    def test_scope_folder_no_match(self):
+    def test_scope_include_folder_no_match(self):
+        import json
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=7)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=5)
+                        scope_include=json.dumps(["folder:5"]))
         assert evaluate_filter(f, article, uf) is False
 
-    def test_scope_folder_no_user_feed(self):
+    def test_scope_include_folder_no_user_feed(self):
+        import json
         article = make_article(title="Python")
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=5)
+                        scope_include=json.dumps(["folder:5"]))
         assert evaluate_filter(f, article, None) is False
 
     # ── folder:0 sentinel (no folder) ─────────────────────────────────────────
 
-    def test_scope_folder0_matches_no_folder(self):
+    def test_scope_include_folder0_matches_no_folder(self):
+        import json
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=None)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=0)
+                        scope_include=json.dumps(["folder:0"]))
         assert evaluate_filter(f, article, uf) is True
 
-    def test_scope_folder0_no_match_has_folder(self):
+    def test_scope_include_folder0_no_match_has_folder(self):
+        import json
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=5)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=0)
+                        scope_include=json.dumps(["folder:0"]))
         assert evaluate_filter(f, article, uf) is False
 
-    def test_scope_folder0_no_match_no_user_feed(self):
+    def test_scope_include_folder0_no_match_no_user_feed(self):
+        import json
         article = make_article(title="Python")
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="folder", scope_folder_id=0)
+                        scope_include=json.dumps(["folder:0"]))
         assert evaluate_filter(f, article, None) is False
+
+    def test_scope_include_mixed_feed_and_folder(self):
+        import json
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include=json.dumps(["folder:5", "feed:20"]))
+        uf_in_folder = make_user_feed(feed_id=10, folder_id=5)
+        uf_other = make_user_feed(feed_id=20, folder_id=7)
+        assert evaluate_filter(f, make_article(feed_id=10, title="Python"), uf_in_folder) is True
+        assert evaluate_filter(f, make_article(feed_id=20, title="Python"), uf_other) is True
+        assert evaluate_filter(f, make_article(feed_id=99, title="Python"), make_user_feed(folder_id=9)) is False
 
     # ── scope_except ──────────────────────────────────────────────────────────
 
@@ -297,7 +326,6 @@ class TestScope:
         article = make_article(feed_id=10, title="Python")
         uf = make_user_feed(folder_id=None)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["feed:10"]))
         assert evaluate_filter(f, article, uf) is False
 
@@ -306,7 +334,6 @@ class TestScope:
         article = make_article(feed_id=99, title="Python")
         uf = make_user_feed(folder_id=None)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["feed:10"]))
         assert evaluate_filter(f, article, uf) is True
 
@@ -315,7 +342,6 @@ class TestScope:
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=5)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["folder:5"]))
         assert evaluate_filter(f, article, uf) is False
 
@@ -324,7 +350,6 @@ class TestScope:
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=7)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["folder:5"]))
         assert evaluate_filter(f, article, uf) is True
 
@@ -333,7 +358,6 @@ class TestScope:
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=None)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["folder:0"]))
         assert evaluate_filter(f, article, uf) is False
 
@@ -342,7 +366,6 @@ class TestScope:
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=3)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["folder:0"]))
         assert evaluate_filter(f, article, uf) is True
 
@@ -351,7 +374,6 @@ class TestScope:
         article = make_article(feed_id=10, title="Python")
         uf = make_user_feed(folder_id=5)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["feed:10", "folder:5"]))
         assert evaluate_filter(f, article, uf) is False
 
@@ -359,7 +381,6 @@ class TestScope:
         article = make_article(title="Python")
         uf = make_user_feed(folder_id=None)
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except="not-valid-json")
         assert evaluate_filter(f, article, uf) is True
 
@@ -369,7 +390,6 @@ class TestScope:
         uf = make_user_feed(folder_id=None)
         # "feed:" without a number — should not raise, should be ignored
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps(["feed:", "folder:abc", "feed:10"]))
         assert evaluate_filter(f, article, uf) is False  # feed:10 still matches
 
@@ -379,7 +399,6 @@ class TestScope:
         uf = make_user_feed(folder_id=None)
         # [1] — integer items should not raise AttributeError
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps([1, 2, 3]))
         assert evaluate_filter(f, article, uf) is True
 
@@ -389,7 +408,6 @@ class TestScope:
         uf = make_user_feed(folder_id=None)
         # [null] — None items should not raise
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps([None, None]))
         assert evaluate_filter(f, article, uf) is True
 
@@ -399,6 +417,34 @@ class TestScope:
         uf = make_user_feed(folder_id=None)
         # mix of non-strings and valid string — string entry should still work
         f = make_filter([make_condition("title", "contains", "python")],
-                        scope_type="all",
                         scope_except=json.dumps([1, None, {}, "feed:10"]))
         assert evaluate_filter(f, article, uf) is False  # "feed:10" still excludes
+
+    # ── scope_include + scope_except combined ─────────────────────────────────
+
+    def test_scope_include_with_except_excludes(self):
+        import json
+        # folder:5 included, but feed:10 excepted — feed:10 is in folder:5
+        uf = make_user_feed(feed_id=10, folder_id=5)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include=json.dumps(["folder:5"]),
+                        scope_except=json.dumps(["feed:10"]))
+        assert evaluate_filter(f, make_article(feed_id=10, title="Python"), uf) is False
+
+    def test_scope_include_with_except_allows_other(self):
+        import json
+        # folder:5 included, feed:10 excepted — feed:20 (also in folder:5) still passes
+        uf20 = make_user_feed(feed_id=20, folder_id=5)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include=json.dumps(["folder:5"]),
+                        scope_except=json.dumps(["feed:10"]))
+        assert evaluate_filter(f, make_article(feed_id=20, title="Python"), uf20) is True
+
+    def test_scope_include_not_matched_except_irrelevant(self):
+        import json
+        # feed:99 not in scope_include — should fail on include, not even reach except
+        uf = make_user_feed(feed_id=99, folder_id=9)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include=json.dumps(["folder:5"]),
+                        scope_except=json.dumps(["feed:10"]))
+        assert evaluate_filter(f, make_article(feed_id=99, title="Python"), uf) is False

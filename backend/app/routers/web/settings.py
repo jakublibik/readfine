@@ -625,20 +625,7 @@ def _parse_filter_form(form) -> FilterCreate:
                 action_value=a_val or None,
             ))
 
-    scope_target = form.get("scope_target", "all")
-    if scope_target.startswith("feed:"):
-        scope_type = "feed"
-        scope_feed_id = _safe_int(scope_target[5:])
-        scope_folder_id = None
-    elif scope_target.startswith("folder:"):
-        scope_type = "folder"
-        scope_folder_id = _safe_int(scope_target[7:])
-        scope_feed_id = None
-    else:
-        scope_type = "all"
-        scope_feed_id = None
-        scope_folder_id = None
-
+    scope_include = [v for v in form.getlist("scope_include") if v]
     scope_except = [v for v in form.getlist("scope_except") if v]
 
     return FilterCreate(
@@ -647,9 +634,7 @@ def _parse_filter_form(form) -> FilterCreate:
         match_operator=form.get("match_operator", "AND"),
         position=_safe_int(form.get("position"), 0),
         stop_on_match=form.get("stop_on_match") == "true",
-        scope_type=scope_type,
-        scope_feed_id=scope_feed_id,
-        scope_folder_id=scope_folder_id,
+        scope_include=scope_include,
         scope_except=scope_except,
         conditions=conditions,
         actions=actions,

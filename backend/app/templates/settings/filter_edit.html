@@ -55,72 +55,88 @@
     </div>
 
     <!-- Scope -->
-    {% if not filter or filter.scope_type == 'all' %}
-      {% set scope_target = 'all' %}
-    {% elif filter.scope_type == 'feed' %}
-      {% set scope_target = 'feed:' ~ filter.scope_feed_id %}
-    {% else %}
-      {% set scope_target = 'folder:' ~ filter.scope_folder_id %}
-    {% endif %}
-    {% set scope_except_list = filter.scope_except if filter else [] %}
+    {% set scope_include_list = filter.scope_include if filter else [] %}
+    {% set scope_except_list  = filter.scope_except  if filter else [] %}
+    {% set scope_is_all = not scope_include_list %}
     {% set ns_nf = namespace(feeds=[]) %}
     {% for uf in user_feeds %}{% if uf.folder_id is none %}{% set ns_nf.feeds = ns_nf.feeds + [uf] %}{% endif %}{% endfor %}
+
+    {# Macro: renders a checkbox list of folders + feeds #}
+    {# name_attr = form field name, selected_list = list of "feed:X"/"folder:X" to pre-check #}
+    {# disable_all = whether to start disabled (scope_include panel when scope_is_all) #}
+    {% macro feed_checkbox_list(name_attr, selected_list, disable_all=false) %}
+      {% for folder in folders %}
+        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+          <input type="checkbox" name="{{ name_attr }}" value="folder:{{ folder.id }}"
+                 {% if 'folder:' ~ folder.id in selected_list %}checked{% endif %}
+                 {% if disable_all %}disabled{% endif %}
+                 class="rounded scope-cb">
+          📁 {{ folder.name }}
+        </label>
+        {% for uf in user_feeds if uf.folder_id == folder.id %}
+          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
+            <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
+                   {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
+                   {% if disable_all %}disabled{% endif %}
+                   class="rounded scope-cb">
+            {{ uf.custom_title or uf.feed.title }}
+          </label>
+        {% endfor %}
+      {% endfor %}
+      {% if ns_nf.feeds %}
+        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+          <input type="checkbox" name="{{ name_attr }}" value="folder:0"
+                 {% if 'folder:0' in selected_list %}checked{% endif %}
+                 {% if disable_all %}disabled{% endif %}
+                 class="rounded scope-cb">
+          📁 No folder
+        </label>
+        {% for uf in ns_nf.feeds %}
+          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
+            <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
+                   {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
+                   {% if disable_all %}disabled{% endif %}
+                   class="rounded scope-cb">
+            {{ uf.custom_title or uf.feed.title }}
+          </label>
+        {% endfor %}
+      {% endif %}
+    {% endmacro %}
+
     <div>
       <h2 class="text-sm font-medium text-gray-700 mb-2">Scope</h2>
-      <div class="flex items-center gap-3 flex-wrap">
-        <span class="text-sm text-gray-600">Apply to</span>
-        <select name="scope_target" class="border border-gray-300 rounded px-2 py-1 text-sm">
-          <option value="all" {% if scope_target == 'all' %}selected{% endif %}>All feeds</option>
-          {% for folder in folders %}
-            <option value="folder:{{ folder.id }}" {% if scope_target == 'folder:' ~ folder.id %}selected{% endif %}>
-              📁 {{ folder.name }}
-            </option>
-            {% for uf in user_feeds if uf.folder_id == folder.id %}
-              <option value="feed:{{ uf.feed_id }}" {% if scope_target == 'feed:' ~ uf.feed_id %}selected{% endif %}>
-                &nbsp;&nbsp;&nbsp;&nbsp;{{ uf.custom_title or uf.feed.title }}
-              </option>
-            {% endfor %}
-          {% endfor %}
-          {% if ns_nf.feeds %}
-            <option value="folder:0" {% if scope_target == 'folder:0' %}selected{% endif %}>📁 No folder</option>
-            {% for uf in ns_nf.feeds %}
-              <option value="feed:{{ uf.feed_id }}" {% if scope_target == 'feed:' ~ uf.feed_id %}selected{% endif %}>
-                &nbsp;&nbsp;&nbsp;&nbsp;{{ uf.custom_title or uf.feed.title }}
-              </option>
-            {% endfor %}
-          {% endif %}
-        </select>
-        <label class="flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer select-none">
-          <input type="checkbox" id="except-toggle"
-                 {% if scope_except_list %}checked{% endif %}
-                 class="rounded">
-          except
-        </label>
-        <div id="except-panel" class="{% if not scope_except_list %}hidden{% endif %}">
-          <select name="scope_except" id="except-select" multiple size="5"
-                  {% if not scope_except_list %}disabled{% endif %}
-                  class="border border-gray-300 rounded px-2 py-1 text-sm"
-                  title="Hold Ctrl/Cmd to select multiple">
-            {% for folder in folders %}
-              <option value="folder:{{ folder.id }}" {% if 'folder:' ~ folder.id in scope_except_list %}selected{% endif %}>
-                📁 {{ folder.name }}
-              </option>
-              {% for uf in user_feeds if uf.folder_id == folder.id %}
-                <option value="feed:{{ uf.feed_id }}" {% if 'feed:' ~ uf.feed_id in scope_except_list %}selected{% endif %}>
-                  &nbsp;&nbsp;&nbsp;&nbsp;{{ uf.custom_title or uf.feed.title }}
-                </option>
-              {% endfor %}
-            {% endfor %}
-            {% if ns_nf.feeds %}
-              <option value="folder:0" {% if 'folder:0' in scope_except_list %}selected{% endif %}>📁 No folder</option>
-              {% for uf in ns_nf.feeds %}
-                <option value="feed:{{ uf.feed_id }}" {% if 'feed:' ~ uf.feed_id in scope_except_list %}selected{% endif %}>
-                  &nbsp;&nbsp;&nbsp;&nbsp;{{ uf.custom_title or uf.feed.title }}
-                </option>
-              {% endfor %}
+      <div class="grid grid-cols-2 gap-4">
+
+        <!-- scope_include -->
+        <div>
+          <p class="text-xs text-gray-500 mb-1">Apply to:</p>
+          <div class="border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100" id="scope-include-list">
+            <label class="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer py-0.5">
+              <input type="checkbox" id="scope-all" class="rounded"
+                     {% if scope_is_all %}checked{% endif %}>
+              All feeds
+            </label>
+            {% if not scope_is_all or folders or ns_nf.feeds %}
+              <hr class="border-gray-100 my-1">
             {% endif %}
-          </select>
+            {{ feed_checkbox_list("scope_include", scope_include_list, disable_all=scope_is_all) }}
+          </div>
         </div>
+
+        <!-- scope_except -->
+        <div>
+          <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none mb-1">
+            <input type="checkbox" id="except-toggle"
+                   {% if scope_except_list %}checked{% endif %}
+                   class="rounded">
+            Except:
+          </label>
+          <div id="except-panel" class="{% if not scope_except_list %}hidden{% endif %}
+                                        border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100">
+            {{ feed_checkbox_list("scope_except", scope_except_list) }}
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -187,7 +203,7 @@
         {% if filter %}Save changes{% else %}Create filter{% endif %}
       </button>
       <button type="submit" name="save_and_test" value="1"
-              class="px-3 py-2 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50">
+              class="px-3 py-2 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-100">
         Save & Test
       </button>
       <a href="/settings/filters" class="text-sm text-gray-500 hover:underline">Cancel</a>
