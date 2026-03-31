@@ -41,27 +41,25 @@ def downgrade() -> None:
     op.add_column("filters", sa.Column("scope_feed_id", sa.Integer(), nullable=True))
     op.add_column("filters", sa.Column("scope_folder_id", sa.Integer(), nullable=True))
 
-    # Restore single-value scope from scope_include (first element only)
+    # Restore single-value scope from scope_include (first element only).
+    # Rows with multi-item or unparseable scope_include fall back to 'all'.
+    # Regex guards ensure we only CAST values that are valid integers.
     op.execute("""
         UPDATE filters
         SET
             scope_type = CASE
-                WHEN scope_include LIKE '["feed:%'   THEN 'feed'
-                WHEN scope_include LIKE '["folder:%' THEN 'folder'
+                WHEN scope_include ~ E'^\\["feed:\\d+"\\]$'   THEN 'feed'
+                WHEN scope_include ~ E'^\\["folder:\\d+"\\]$' THEN 'folder'
                 ELSE 'all'
             END,
             scope_feed_id = CASE
-                WHEN scope_include LIKE '["feed:%'
-                THEN CAST(
-                    SUBSTRING(scope_include FROM 8 FOR POSITION('"' IN SUBSTRING(scope_include FROM 8)) - 1)
-                    AS INTEGER)
+                WHEN scope_include ~ E'^\\["feed:\\d+"\\]$'
+                THEN split_part(scope_include::jsonb->>0, ':', 2)::integer
                 ELSE NULL
             END,
             scope_folder_id = CASE
-                WHEN scope_include LIKE '["folder:%'
-                THEN CAST(
-                    SUBSTRING(scope_include FROM 11 FOR POSITION('"' IN SUBSTRING(scope_include FROM 11)) - 1)
-                    AS INTEGER)
+                WHEN scope_include ~ E'^\\["folder:\\d+"\\]$'
+                THEN split_part(scope_include::jsonb->>0, ':', 2)::integer
                 ELSE NULL
             END
     """)
