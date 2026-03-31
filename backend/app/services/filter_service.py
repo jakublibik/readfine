@@ -39,33 +39,50 @@ def _validate_regex_conditions(conditions) -> None:
 
 # ── CRUD helpers ─────────────────────────────────────────────────────────────
 
+_MAX_SCOPE_ITEMS = 50
+
+
 async def _validate_scope_list(user_id: int, scope_list: list[str], db: AsyncSession) -> None:
-    """Raise ValueError if any feed/folder in the scope list doesn't belong to the user."""
+    """Raise ValueError if scope list is too long or contains items not belonging to the user."""
+    if len(scope_list) > _MAX_SCOPE_ITEMS:
+        raise ValueError(f"Too many scope items (max {_MAX_SCOPE_ITEMS})")
+
+    feed_ids: list[int] = []
+    folder_ids: list[int] = []
     for item in scope_list:
         try:
             if item.startswith("feed:"):
-                feed_id = int(item[5:])
-                result = await db.execute(
-                    select(UserFeed.id).where(
-                        UserFeed.user_id == user_id, UserFeed.feed_id == feed_id
-                    )
-                )
-                if not result.scalar_one_or_none():
-                    raise ValueError(f"Feed {feed_id} not in your subscriptions")
+                feed_ids.append(int(item[5:]))
             elif item.startswith("folder:"):
                 folder_id = int(item[7:])
-                if folder_id != 0:  # 0 = sentinel for "no folder"
-                    result = await db.execute(
-                        select(Folder.id).where(
-                            Folder.id == folder_id, Folder.user_id == user_id
-                        )
-                    )
-                    if not result.scalar_one_or_none():
-                        raise ValueError(f"Folder {folder_id} not found")
+                if folder_id != 0:  # 0 = sentinel for "no folder", no DB check needed
+                    folder_ids.append(folder_id)
             else:
                 raise ValueError(f"Invalid scope item: {item!r}")
         except (ValueError, IndexError) as exc:
             raise ValueError(str(exc)) from exc
+
+    if feed_ids:
+        result = await db.execute(
+            select(UserFeed.feed_id).where(
+                UserFeed.user_id == user_id, UserFeed.feed_id.in_(feed_ids)
+            )
+        )
+        found = {row[0] for row in result}
+        missing = sorted(set(feed_ids) - found)
+        if missing:
+            raise ValueError(f"Feed(s) not in your subscriptions: {missing}")
+
+    if folder_ids:
+        result = await db.execute(
+            select(Folder.id).where(
+                Folder.id.in_(folder_ids), Folder.user_id == user_id
+            )
+        )
+        found = {row[0] for row in result}
+        missing = sorted(set(folder_ids) - found)
+        if missing:
+            raise ValueError(f"Folder(s) not found: {missing}")
 
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -253,14 +270,21 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
     return _eval_op(op, val, _get_field_value(article, user_feed, condition.field))
 
 
-def _parse_scope_list(value: str | None) -> list[str]:
+def _parse_scope_list(value: str | None) -> list[str] | None:
+    """Parse a JSON scope list.
+
+    Returns:
+        []   — value is empty/null (intentional "all" for scope_include)
+        list — successfully parsed
+        None — JSON parse error (corrupt data; caller decides semantics)
+    """
     if not value:
         return []
     try:
         parsed = json.loads(value)
         return [item for item in parsed if isinstance(item, str)]
     except (json.JSONDecodeError, TypeError):
-        return []
+        return None
 
 
 def _item_matches_article(item: str, article: Article, user_feed: UserFeed | None) -> bool:
@@ -280,13 +304,16 @@ def _item_matches_article(item: str, article: Article, user_feed: UserFeed | Non
 
 def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> bool:
     """Return True if the article is within the filter's scope (and not excluded)."""
-    # Inclusion: empty list = all feeds
+    # Inclusion: None = parse error → fail-closed; [] = all feeds; list = specific items
     include_list = _parse_scope_list(f.scope_include)
+    if include_list is None:
+        logger.warning("filter %s: corrupt scope_include — skipping (fail-closed)", getattr(f, "id", "?"))
+        return False
     if include_list and not any(_item_matches_article(item, article, user_feed) for item in include_list):
         return False
 
-    # Exclusion: article must not match any except item
-    except_list = _parse_scope_list(f.scope_except)
+    # Exclusion: None = parse error → ignore (fail-safe: don't exclude anything)
+    except_list = _parse_scope_list(f.scope_except) or []
     if any(_item_matches_article(item, article, user_feed) for item in except_list):
         return False
 

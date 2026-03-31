@@ -448,3 +448,23 @@ class TestScope:
                         scope_include=json.dumps(["folder:5"]),
                         scope_except=json.dumps(["feed:10"]))
         assert evaluate_filter(f, make_article(feed_id=99, title="Python"), uf) is False
+
+    # ── fail-closed / corrupt data ────────────────────────────────────────────
+
+    def test_scope_include_corrupt_json_fail_closed(self):
+        # Corrupt scope_include must NOT expand to all feeds — filter must not match
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include="not-valid-json")
+        assert evaluate_filter(f, make_article(title="Python")) is False
+
+    def test_scope_include_corrupt_json_fail_closed_regardless_of_condition(self):
+        # Even if condition matches perfectly, corrupt scope_include → no match
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_include="{bad}")
+        assert evaluate_filter(f, make_article(feed_id=10, title="Python")) is False
+
+    def test_scope_except_corrupt_json_ignored(self):
+        # Corrupt scope_except is treated as empty (fail-safe: nothing excluded)
+        f = make_filter([make_condition("title", "contains", "python")],
+                        scope_except="not-valid-json")
+        assert evaluate_filter(f, make_article(title="Python")) is True
