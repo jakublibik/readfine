@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 class FolderCreate(BaseModel):
@@ -43,7 +43,7 @@ class FeedSubscribeRequest(BaseModel):
     folder_id: int | None = None
     custom_title: str | None = None
     fetch_auth_user: str | None = None
-    fetch_auth_pass: str | None = None
+    fetch_auth_pass: SecretStr | None = None
 
     @field_validator("url")
     @classmethod
@@ -91,4 +91,4 @@ class UserFeedUpdate(BaseModel):
     purge_keep_count: int | None = Field(None, ge=1)
     position: int | None = None
     fetch_auth_user: str | None = None
-    fetch_auth_pass: str | None = None
+    fetch_auth_pass: SecretStr | None = None

@@ -35,7 +35,7 @@ async def subscribe_feed(
             folder_id=payload.folder_id,
             custom_title=payload.custom_title,
             fetch_auth_user=payload.fetch_auth_user,
-            fetch_auth_pass=payload.fetch_auth_pass,
+            fetch_auth_pass=payload.fetch_auth_pass.get_secret_value() if payload.fetch_auth_pass else None,
             db=db,
         )
     except ValueError as e:
@@ -118,7 +118,7 @@ async def update_feed(
         if "fetch_auth_user" in payload.model_fields_set:
             feed.fetch_auth_user = payload.fetch_auth_user
         if "fetch_auth_pass" in payload.model_fields_set and payload.fetch_auth_pass:
-            feed.fetch_auth_pass_encrypted = encrypt(payload.fetch_auth_pass)
+            feed.fetch_auth_pass_encrypted = encrypt(payload.fetch_auth_pass.get_secret_value())
 
     await db.commit()
     await db.refresh(user_feed)
