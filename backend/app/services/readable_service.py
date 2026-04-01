@@ -30,14 +30,14 @@ _FULL_CONTENT_SAMPLE = 10  # how many recent articles to sample
 
 # ── core extraction ───────────────────────────────────────────────────────────
 
-def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str]]:
-    """Download article HTML. Returns (html, error_message)."""
+def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[int]]:
+    """Download article HTML. Returns (html, error_message, http_status_code)."""
     from app.utils.url_validator import validate_feed_url
     try:
         validate_feed_url(url)
     except ValueError as exc:
         logger.warning("readable URL blocked (SSRF): %s — %s", url, exc)
-        return None, str(exc)
+        return None, str(exc), None
 
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
@@ -49,29 +49,34 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
                 if not resp.is_redirect:
                     break
                 redirect_url = resp.headers.get("location", "")
+                # Resolve relative redirects against the current URL
+                if redirect_url and not redirect_url.startswith(("http://", "https://")):
+                    from urllib.parse import urljoin
+                    redirect_url = urljoin(current_url, redirect_url)
                 try:
                     validate_feed_url(redirect_url)
                 except ValueError as exc:
                     logger.warning("readable redirect blocked (SSRF): %s — %s", redirect_url, exc)
-                    return None, f"Redirect blocked: {exc}"
+                    return None, f"Redirect blocked: {exc}", None
                 current_url = redirect_url
             else:
-                return None, f"Too many redirects (max {_MAX_REDIRECTS})"
+                return None, f"Too many redirects (max {_MAX_REDIRECTS})", None
 
         resp.raise_for_status()
-        return resp.text, None
+        return resp.text, None, None
     except httpx.HTTPStatusError as exc:
-        msg = f"HTTP {exc.response.status_code} {exc.response.reason_phrase}"
+        status_code = exc.response.status_code
+        msg = f"HTTP {status_code} {exc.response.reason_phrase}"
         logger.warning("readable fetch failed for %s: %s", url, msg)
-        return None, msg
+        return None, msg, status_code
     except httpx.TimeoutException:
         msg = f"Timeout after {_TIMEOUT}s"
         logger.warning("readable fetch timed out for %s", url)
-        return None, msg
+        return None, msg, None
     except Exception as exc:
         msg = str(exc)[:200]
         logger.warning("readable fetch failed for %s: %s", url, msg)
-        return None, msg
+        return None, msg, None
 
 
 def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
@@ -163,14 +168,14 @@ def _sanitize(html: str) -> str:
 
 
 def extract_readable(url: str, auth_user: Optional[str] = None,
-                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
+                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int]]:
     """
     Download URL and extract readable HTML.
-    Returns (sanitized HTML, error_message). One of the two is always None.
+    Returns (sanitized HTML, error_message, http_status_code). On success, only the first element is set.
     """
-    html, fetch_error = _fetch_html(url, auth_user, auth_pass)
+    html, fetch_error, http_status = _fetch_html(url, auth_user, auth_pass)
     if not html:
-        return None, fetch_error
+        return None, fetch_error, http_status
 
     video_figures = _collect_video_figures(html)
     content = _extract_with_trafilatura(html, url)
@@ -179,11 +184,11 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
     if not content:
         msg = "No content could be extracted from the page"
         logger.warning("readable extraction yielded no content for %s", url)
-        return None, msg
+        return None, msg, None
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    return _sanitize(content), None
+    return _sanitize(content), None, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -236,11 +241,11 @@ async def process_pending_readable(db: AsyncSession) -> int:
     for article in articles:
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
         try:
-            content, error = await loop.run_in_executor(
+            content, error, http_status = await loop.run_in_executor(
                 None, extract_readable, article.url, auth_user, auth_pass
             )
         except Exception as exc:
-            content, error = None, str(exc)[:200]
+            content, error, http_status = None, str(exc)[:200], None
             logger.warning("readable extraction error for article %d: %s", article.id, exc)
 
         # Re-check status — on-demand extraction may have already processed this article
@@ -255,8 +260,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
             article.readable_error = None
         else:
             article.readable_error = error
-            is_4xx = error and any(f" {c}" in error for c in ("400", "401", "403", "404", "410", "451"))
-            is_403 = error and " 403" in error
+            is_4xx = http_status is not None and 400 <= http_status < 500
+            is_403 = http_status == 403
             if is_4xx:
                 article.readable_status = "failed"
                 article.readable_next_retry_at = None

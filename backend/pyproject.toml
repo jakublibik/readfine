@@ -30,6 +30,8 @@ dependencies = [
     "readability-lxml>=0.8.1",
     # HTML sanitization
     "nh3>=0.2.17",
+    # Safe XML parsing
+    "defusedxml>=0.7.1",
     # Scheduler
     "apscheduler>=3.10.4",
     # Email

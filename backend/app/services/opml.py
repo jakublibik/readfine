@@ -5,10 +5,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
-from xml.etree import ElementTree as ET
-from xml.etree.ElementTree import Element, SubElement
+import defusedxml.ElementTree as _safe_ET
+from xml.etree.ElementTree import Element, SubElement, indent, tostring
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -23,6 +23,10 @@ from app.services.filter_service import create_filter
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 1 * 1024 * 1024  # 1 MB
+
+
+class _FeedLimitReached(Exception):
+    """Raised when the user's feed subscription limit is hit during OPML import."""
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
 
@@ -55,15 +59,19 @@ async def export_opml(user: User, db: AsyncSession) -> str:
 
     # Load data
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+        select(Folder).where(Folder.user_id == user.id).order_by(func.lower(Folder.name))
     )
     folders = {f.id: f for f in folders_result.scalars()}
 
     feeds_result = await db.execute(
         select(UserFeed, Feed)
         .join(Feed, Feed.id == UserFeed.feed_id)
+        .outerjoin(Folder, Folder.id == UserFeed.folder_id)
         .where(UserFeed.user_id == user.id)
-        .order_by(UserFeed.folder_id.nullsfirst(), UserFeed.position)
+        .order_by(
+            func.lower(Folder.name).nullsfirst(),
+            func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
+        )
     )
     user_feeds = feeds_result.all()
 
@@ -175,8 +183,8 @@ async def export_opml(user: User, db: AsyncSession) -> str:
         filters_el = SubElement(body, "outline", text="tt-rss-filters")
         filters_el.text = json.dumps(filters_payload, ensure_ascii=False)
 
-    ET.indent(root, space="  ")
-    return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(root, encoding="unicode")
+    indent(root, space="  ")
+    return '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode")
 
 
 def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
@@ -249,8 +257,8 @@ async def import_opml(
     result = ImportResult()
 
     try:
-        root = ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
-    except ET.ParseError as exc:
+        root = _safe_ET.fromstring(xml_bytes.decode("utf-8", errors="replace"))
+    except _safe_ET.ParseError as exc:
         raise ValueError(f"Invalid OPML file: {exc}") from exc
 
     body = root.find("body")
@@ -298,7 +306,11 @@ async def import_opml(
             if folder_name:
                 folder_id = await _get_or_create_folder(user, folder_name, folder_name_to_id, db)
             xml_url = outline.get("xmlUrl", "")
-            added_id = await _import_feed(user, outline, folder_id, result, db)
+            try:
+                added_id = await _import_feed(user, outline, folder_id, result, db)
+            except _FeedLimitReached:
+                result.warnings.append("Feed limit reached — remaining feeds skipped")
+                break
             if added_id and xml_url:
                 feed_url_to_id[xml_url] = added_id
 
@@ -478,8 +490,7 @@ async def _import_feed(
         if "Already subscribed" in msg:
             result.feeds_skipped += 1
         elif "Feed limit" in msg:
-            result.feeds_failed += 1
-            result.warnings.append(f"Feed limit reached, stopped at {xml_url}")
+            raise _FeedLimitReached()
         else:
             result.feeds_failed += 1
             result.warnings.append(f"Failed to import {xml_url}: {msg}")

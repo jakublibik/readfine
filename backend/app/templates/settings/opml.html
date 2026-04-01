@@ -89,7 +89,8 @@
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Import</h2>
     <p class="text-sm text-gray-500 mb-4">
       Import feeds and settings from an OPML file. Existing feeds and labels with the same
-      URL / name are skipped. Max file size: 1 MB.
+      URL / name are skipped. Max file size: 1 MB.<br>
+      <span class="text-gray-400">Import is best-effort — each section is saved independently, so partial results are kept if a later section fails.</span>
     </p>
     <form id="opml-import-form" method="POST" action="/settings/opml/import" enctype="multipart/form-data" class="space-y-4">
       <div>

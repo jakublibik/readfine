@@ -477,7 +477,7 @@ async def htmx_extract_readable(
             pass
 
     loop = asyncio.get_running_loop()
-    content, error = await loop.run_in_executor(
+    content, error, _http_status = await loop.run_in_executor(
         None, extract_readable, article.url, auth_user, auth_pass
     )
 
