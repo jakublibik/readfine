@@ -2,7 +2,7 @@
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -38,6 +38,15 @@ def _format_date(dt: datetime | None) -> str:
     return dt.strftime("%H:%M") if dt.date() == today else dt.strftime("%b %d, %H:%M")
 
 
+_FTS_VECTOR = (
+    "to_tsvector('simple',"
+    " coalesce(articles.title,'') || ' ' ||"
+    " coalesce(articles.summary,'') || ' ' ||"
+    " coalesce(articles.content,'') || ' ' ||"
+    " coalesce(articles.readable_content,''))"
+)
+
+
 async def list_articles(
     user: User,
     db: AsyncSession,
@@ -48,6 +57,7 @@ async def list_articles(
     starred_only: bool = False,
     archived_only: bool = False,
     labeled_only: bool = False,
+    q: str | None = None,
     sort_order: str = "newest",
     limit: int = 50,
     offset: int = 0,
@@ -127,8 +137,15 @@ async def list_articles(
     if archived_only:
         stmt = stmt.where(UserArticleState.is_archived == True)  # noqa: E712
 
-    order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
-    stmt = stmt.order_by(order).limit(limit).offset(offset)
+    if q:
+        fts_vec = literal_column(_FTS_VECTOR)
+        tsquery = func.websearch_to_tsquery('simple', q)
+        stmt = stmt.where(fts_vec.op('@@')(tsquery))
+        stmt = stmt.order_by(func.ts_rank(fts_vec, tsquery).desc())
+    else:
+        order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
+        stmt = stmt.order_by(order)
+    stmt = stmt.limit(limit).offset(offset)
 
     rows = (await db.execute(stmt)).all()
 

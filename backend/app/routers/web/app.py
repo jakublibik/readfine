@@ -196,6 +196,31 @@ async def htmx_sidebar_pin(
     return response
 
 
+@router.get("/htmx/search-modal", response_class=HTMLResponse)
+async def htmx_search_modal(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user_feeds = await list_user_feeds(user, db)
+
+    seen_folder_ids: set[int] = set()
+    folders: list[tuple[int, str]] = []
+    for uf in user_feeds:
+        if uf.folder_id and uf.folder_id not in seen_folder_ids:
+            seen_folder_ids.add(uf.folder_id)
+            folders.append((uf.folder_id, uf.folder.name))
+    folders.sort(key=lambda x: x[1].lower())
+
+    feeds = [(uf.feed_id, uf.custom_title or uf.feed.title) for uf in user_feeds]
+    feeds.sort(key=lambda x: x[1].lower())
+
+    return templates.TemplateResponse(request, "app/partials/search_modal.html", {
+        "folders": folders,
+        "feeds": feeds,
+    })
+
+
 @router.get("/htmx/articles", response_class=HTMLResponse)
 async def htmx_article_list(
     request: Request,
@@ -206,6 +231,7 @@ async def htmx_article_list(
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
     labeled_only: bool = Query(False),
+    q: str | None = Query(None),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -223,8 +249,8 @@ async def htmx_article_list(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
-    if starred_only or archived_only:
-        # State-based views always show everything
+    if q or starred_only or archived_only:
+        # Search and state-based views always show everything
         effective_unread_only = False
     elif unread_only:
         # Explicit "Unread" nav item — always filter
@@ -254,6 +280,7 @@ async def htmx_article_list(
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
+        q=q or None,
         sort_order=sort_order,
         limit=articles_per_page,
         offset=offset,
@@ -266,6 +293,7 @@ async def htmx_article_list(
         "unread_only": effective_unread_only,
         "starred_only": starred_only,
         "archived_only": archived_only,
+        "search_query": q.strip() if q and q.strip() else None,
         "mark_read_on_scroll": mark_read_on_scroll,
         "density": density,
     })

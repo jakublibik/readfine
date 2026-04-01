@@ -74,6 +74,7 @@
   {% endfor %}
   {% endif %}
 
+
 </div>
 
 {% else %}
@@ -82,22 +83,26 @@
 
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-    <span class="font-semibold text-gray-800">Filtread</span>
-    <div class="flex items-center gap-2">
-      {% if user.role == "admin" %}<a href="/admin" class="text-xs text-gray-400 hover:text-gray-600">Admin</a>{% endif %}
-      <a href="/settings/feeds" class="text-xs text-gray-400 hover:text-gray-600">Settings</a>
-      <form method="POST" action="/logout" hx-boost="true" class="contents">
-        <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer">Logout</button>
-      </form>
-      <!-- Collapse button -->
-      <button hx-post="/htmx/sidebar/pin" hx-swap="none"
-              class="text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer"
-              title="Collapse sidebar">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-        </svg>
+    <!-- Avatar + user menu -->
+    <div class="relative" id="full-menu-container">
+      <button onclick="toggleUserMenu('full-menu-dropdown')"
+              class="w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 text-[10px] font-semibold cursor-pointer border-0 hover:bg-blue-300 flex-shrink-0"
+              title="{{ user.display_name }}">
+        {{ user.display_name[0] | upper }}
       </button>
+      <div id="full-menu-dropdown"
+           class="hidden absolute top-full left-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-50 w-44">
+        {% include "app/partials/user_menu_items.html" %}
+      </div>
     </div>
+    <!-- Collapse button -->
+    <button hx-post="/htmx/sidebar/pin" hx-swap="none"
+            class="text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer"
+            title="Collapse sidebar">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </button>
   </div>
 
   <!-- Nav -->
@@ -182,6 +187,7 @@
       <p class="px-3 py-2 text-sm text-gray-400">No feeds yet.</p>
     {% endfor %}
   </div>
+
 
 </div>
 {% endif %}

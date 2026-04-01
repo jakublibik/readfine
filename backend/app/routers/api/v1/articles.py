@@ -17,6 +17,7 @@ async def get_articles(
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
+    q: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_api_user),
@@ -30,6 +31,7 @@ async def get_articles(
         unread_only=unread_only,
         starred_only=starred_only,
         archived_only=archived_only,
+        q=q or None,
         limit=limit,
         offset=offset,
     )
