@@ -124,7 +124,7 @@ async def list_articles(
             ArticleLabel,
             (ArticleLabel.article_id == Article.id)
             & (ArticleLabel.user_id == user.id),
-        ).distinct()
+        ).distinct(Article.id)
 
     if unread_only:
         stmt = stmt.where(
@@ -141,7 +141,11 @@ async def list_articles(
         fts_vec = literal_column(_FTS_VECTOR)
         tsquery = func.websearch_to_tsquery('simple', q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
-        stmt = stmt.order_by(func.ts_rank(fts_vec, tsquery).desc())
+        stmt = stmt.order_by(
+            func.ts_rank(fts_vec, tsquery).desc(),
+            Article.published_at.desc().nulls_last(),
+            Article.id.desc(),
+        )
     else:
         order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
         stmt = stmt.order_by(order)
