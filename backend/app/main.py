@@ -59,7 +59,15 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CSRFMiddleware,
         secret=settings.secret_key,
-        exempt_urls=[re.compile(r"^/api/")],  # API uses Bearer tokens
+        # API uses Bearer tokens; auth forms are exempt (no session yet, or low-risk logout)
+        exempt_urls=[
+            re.compile(r"^/api/"),
+            re.compile(r"^/login$"),
+            re.compile(r"^/logout$"),
+            re.compile(r"^/register$"),
+            re.compile(r"^/reset-password"),
+        ],
+        sensitive_cookies={"session"},
     )
 
     # Rate limiting
