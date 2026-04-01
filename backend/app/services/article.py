@@ -120,11 +120,14 @@ async def list_articles(
             & (ArticleLabel.label_id == label_id),
         )
     elif labeled_only:
-        stmt = stmt.join(
-            ArticleLabel,
-            (ArticleLabel.article_id == Article.id)
-            & (ArticleLabel.user_id == user.id),
-        ).distinct(Article.id)
+        stmt = stmt.where(
+            select(ArticleLabel.article_id)
+            .where(
+                (ArticleLabel.article_id == Article.id)
+                & (ArticleLabel.user_id == user.id)
+            )
+            .exists()
+        )
 
     if unread_only:
         stmt = stmt.where(
