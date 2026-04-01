@@ -86,7 +86,7 @@
     <div class="flex items-center gap-2">
       {% if user.role == "admin" %}<a href="/admin" class="text-xs text-gray-400 hover:text-gray-600">Admin</a>{% endif %}
       <a href="/settings/feeds" class="text-xs text-gray-400 hover:text-gray-600">Settings</a>
-      <form method="POST" action="/logout" hx-boost="true" style="display:inline">
+      <form method="POST" action="/logout" hx-boost="true" class="contents">
         <button type="submit" class="text-xs text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer">Logout</button>
       </form>
       <!-- Collapse button -->
@@ -102,7 +102,7 @@
 
   <!-- Nav -->
   <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
-    <a class="nav-item active flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
        hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
        hx-push-url="false">
       <span class="flex-1">All articles</span>

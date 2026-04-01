@@ -228,11 +228,16 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
 
 
 async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
-    """Return all subscriptions for a user, ordered by folder/position."""
+    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical)."""
     result = await db.execute(
         select(UserFeed)
+        .join(Feed, Feed.id == UserFeed.feed_id)
+        .outerjoin(Folder, Folder.id == UserFeed.folder_id)
         .options(selectinload(UserFeed.feed), selectinload(UserFeed.folder))
         .where(UserFeed.user_id == user.id)
-        .order_by(UserFeed.folder_id.nulls_last(), UserFeed.position)
+        .order_by(
+            func.lower(Folder.name).nulls_last(),
+            func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
+        )
     )
     return result.scalars().all()

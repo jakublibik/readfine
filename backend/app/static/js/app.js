@@ -102,12 +102,28 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
   if (menu) menu.classList.add('hidden');
 });
 
-// Nav active state — event delegation, survives HTMX sidebar swaps
+// Nav active state — persists across sidebarRefresh swaps
+var _activeNavGet = null;
+
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');
   if (!navItem) return;
   document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
   navItem.classList.add('active');
+  _activeNavGet = navItem.getAttribute('hx-get');
+});
+
+document.body.addEventListener('htmx:beforeSwap', function (evt) {
+  if (evt.detail.target.id !== 'sidebar') return;
+  var navGet = _activeNavGet || '/htmx/articles';
+  var temp = document.createElement('div');
+  temp.innerHTML = evt.detail.serverResponse;
+  var match = temp.querySelector('.nav-item[hx-get="' + navGet + '"]');
+  if (match) {
+    temp.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
+    match.classList.add('active');
+  }
+  evt.detail.serverResponse = temp.innerHTML;
 });
 
 // Article list: IntersectionObserver for mark-as-read on scroll

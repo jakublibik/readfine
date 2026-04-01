@@ -3,7 +3,10 @@
 {% block content %}
 <div class="max-w-2xl mx-auto px-4 py-8">
   <div class="flex items-center justify-between mb-6">
-    <h1 class="text-xl font-semibold text-gray-900">Labels</h1>
+    <div>
+      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
+      <h1 class="text-xl font-semibold text-gray-900">Labels</h1>
+    </div>
     <div class="flex items-center gap-4">
       <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
       <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
@@ -30,8 +33,6 @@
     {% include "settings/partials/labels_list.html" %}
   </div>
 
-  <div class="mt-6">
-    <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-  </div>
+
 </div>
 {% endblock %}

@@ -1,4 +1,4 @@
-"""Web routes for settings: feeds, folders, labels, filters, and API tokens."""
+"""Web routes for settings: feeds, folders, labels, filters, API tokens, and OPML."""
 import logging
 import secrets
 from datetime import datetime, timezone
@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import asyncio
 import httpx
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -46,6 +46,7 @@ from app.services.label_service import (
     list_labels,
     update_label,
 )
+from app.services.opml import MAX_UPLOAD_BYTES, ImportResult, export_opml, import_opml
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 templates = Jinja2Templates(directory="app/templates")
@@ -821,4 +822,65 @@ async def settings_password_change(
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
         "pw_saved": True,
+    })
+
+
+# ── OPML ──────────────────────────────────────────────────────────────────────
+
+@router.get("/opml", response_class=HTMLResponse)
+async def settings_opml(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    return templates.TemplateResponse(request, "settings/opml.html", {})
+
+
+@router.get("/opml/export")
+async def settings_opml_export(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    xml = await export_opml(user, db)
+    filename = f"filtread-{datetime.now(timezone.utc).strftime('%Y%m%d')}.opml"
+    return Response(
+        content=xml.encode("utf-8"),
+        media_type="application/xml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/opml/import", response_class=HTMLResponse)
+async def settings_opml_import(
+    request: Request,
+    file: UploadFile = File(...),
+    import_feeds: bool = Form(False),
+    import_labels: bool = Form(False),
+    import_prefs: bool = Form(False),
+    import_filters: bool = Form(False),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        return templates.TemplateResponse(request, "settings/opml.html", {
+            "error": "File too large (max 1 MB).",
+        })
+
+    try:
+        result = await import_opml(
+            user=user,
+            xml_bytes=raw,
+            import_feeds=import_feeds,
+            import_labels=import_labels,
+            import_prefs=import_prefs,
+            import_filters=import_filters,
+            db=db,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(request, "settings/opml.html", {
+            "error": str(exc),
+        })
+
+    return templates.TemplateResponse(request, "settings/opml.html", {
+        "import_result": result,
     })
