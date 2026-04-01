@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
-from app.main import limiter
+from app.rate_limit import limiter
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
@@ -64,19 +64,19 @@ async def htmx_sidebar(
     )).scalar() or 0
     nav_starred = (await db.execute(
         select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)  # noqa: E712
+        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)
     )).scalar() or 0
     nav_unread_starred = (await db.execute(
         select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True, UserArticleState.is_read == False)  # noqa: E712
+        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True, UserArticleState.is_read == False)
     )).scalar() or 0
     nav_archived = (await db.execute(
         select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)  # noqa: E712
+        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
     )).scalar() or 0
     nav_unread_archived = (await db.execute(
         select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True, UserArticleState.is_read == False)  # noqa: E712
+        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True, UserArticleState.is_read == False)
     )).scalar() or 0
     nav_labeled = (await db.execute(
         select(func.count()).select_from(
@@ -88,7 +88,7 @@ async def htmx_sidebar(
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))  # noqa: E711
+        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
     )).scalar() or 0
 
     # Feed total + unread counts (batch, computed from DB — not cached unread_count)
@@ -106,7 +106,7 @@ async def htmx_sidebar(
             )
             .where(
                 Article.feed_id.in_(feed_ids),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),  # noqa: E711
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
             .group_by(Article.feed_id)
         )).all())
@@ -140,7 +140,7 @@ async def htmx_sidebar(
             .where(
                 ArticleLabel.user_id == user.id,
                 ArticleLabel.label_id.in_(label_ids),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),  # noqa: E711
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
             .group_by(ArticleLabel.label_id)
         )).all())
@@ -428,9 +428,9 @@ async def htmx_toggle_share(
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711
-            | (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
+            (UserFeed.id != None)
+            | (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True),
         )
     )
     row = (await db.execute(stmt)).first()
@@ -481,9 +481,9 @@ async def htmx_extract_readable(
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711
-            | (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
+            (UserFeed.id != None)
+            | (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True),
         )
     )
     row = (await db.execute(stmt)).first()

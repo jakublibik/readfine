@@ -17,8 +17,9 @@ from sqlalchemy import select
 
 from app.auth.security import hash_password, verify_password, hash_token
 from app.config import settings as app_settings_config
-from app.main import limiter
+from app.rate_limit import limiter
 from app.utils.crypto import encrypt
+from app.utils.parsing import safe_int
 from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
@@ -50,13 +51,6 @@ from app.services.opml import MAX_UPLOAD_BYTES, ImportResult, export_opml, impor
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 templates = Jinja2Templates(directory="app/templates")
-
-
-def _safe_int(value, default=None) -> int | None:
-    try:
-        return int(value) if value else default
-    except (ValueError, TypeError):
-        return default
 
 
 # ── Labels ────────────────────────────────────────────────────────────────────
@@ -224,7 +218,7 @@ async def settings_feeds_subscribe(
     url = form.get("url", "").strip()
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
-    folder_id = _safe_int(folder_id_raw)
+    folder_id = safe_int(folder_id_raw)
     fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
     fetch_auth_pass = form.get("fetch_auth_pass", "") or None
     is_private = form.get("is_private") == "on"
@@ -296,7 +290,7 @@ async def settings_feed_update(
     form = await request.form()
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
-    folder_id = _safe_int(folder_id_raw)
+    folder_id = safe_int(folder_id_raw)
 
     if folder_id is not None:
         folder_check = await db.execute(
@@ -633,7 +627,7 @@ def _parse_filter_form(form) -> FilterCreate:
         name=form.get("name", ""),
         is_active=form.get("is_active") == "true",
         match_operator=form.get("match_operator", "AND"),
-        position=_safe_int(form.get("position"), 0),
+        position=safe_int(form.get("position"), 0),
         stop_on_match=form.get("stop_on_match") == "true",
         scope_include=scope_include,
         scope_except=scope_except,
@@ -647,7 +641,7 @@ def _parse_filter_form(form) -> FilterCreate:
 async def _list_tokens(user_id: int, db: AsyncSession) -> list[ApiToken]:
     result = await db.execute(
         select(ApiToken)
-        .where(ApiToken.user_id == user_id, ApiToken.revoked_at == None)  # noqa: E711
+        .where(ApiToken.user_id == user_id, ApiToken.revoked_at == None)
         .order_by(ApiToken.created_at.desc())
     )
     return list(result.scalars().all())
@@ -775,7 +769,7 @@ async def settings_preferences_save(
 
     s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
 
-    articles_per_page = _safe_int(form.get("articles_per_page"), 50)
+    articles_per_page = safe_int(form.get("articles_per_page"), 50)
     if articles_per_page is not None:
         s.articles_per_page = max(10, min(200, articles_per_page))
 

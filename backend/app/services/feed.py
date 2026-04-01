@@ -64,7 +64,7 @@ async def subscribe(
     if not is_private:
         # Look for existing public feed
         existing = await db.execute(
-            select(Feed).where(Feed.feed_url == url, Feed.is_private == False)  # noqa: E712
+            select(Feed).where(Feed.feed_url == url, Feed.is_private == False)
         )
         feed = existing.scalar_one_or_none()
 
@@ -179,8 +179,8 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
         delete(UserArticleState).where(
             UserArticleState.user_id == user.id,
             UserArticleState.article_id.in_(article_ids_subq),
-            UserArticleState.is_starred == False,  # noqa: E712
-            UserArticleState.is_archived == False,  # noqa: E712
+            UserArticleState.is_starred == False,
+            UserArticleState.is_archived == False,
         )
     )
 
@@ -203,7 +203,7 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
                 select(UserArticleState.article_id)
                 .where(
                     UserArticleState.article_id == Article.id,
-                    (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),  # noqa: E712
+                    (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
                 )
                 .correlate(Article)
                 .exists()

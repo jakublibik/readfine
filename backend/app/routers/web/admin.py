@@ -31,19 +31,13 @@ from app.services.admin_service import (
     update_app_settings,
 )
 from app.utils.crypto import encrypt
+from app.utils.parsing import clamp, safe_int
 from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory="app/templates")
-
-
-def _safe_int(value, default=None) -> int | None:
-    try:
-        return int(value) if value else default
-    except (ValueError, TypeError):
-        return default
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -118,20 +112,15 @@ async def admin_settings_save(
 
     smtp_password_plain = form.get("smtp_password", "").strip()
 
-    def _clamp(value: int | None, lo: int, hi: int, default: int) -> int:
-        if value is None:
-            return default
-        return max(lo, min(hi, value))
-
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
-        "default_fetch_interval_min": _clamp(_safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
-        "min_fetch_interval_min": _clamp(_safe_int(form.get("min_fetch_interval_min")), 1, 1440, 15),
-        "max_feeds_per_user": _clamp(_safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
-        "default_purge_after_days": _clamp(_safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
-        "default_purge_keep_count": _clamp(_safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,
+        "default_fetch_interval_min": clamp(safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
+        "min_fetch_interval_min": clamp(safe_int(form.get("min_fetch_interval_min")), 1, 1440, 15),
+        "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
+        "default_purge_after_days": clamp(safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
+        "default_purge_keep_count": clamp(safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,
         "smtp_host": form.get("smtp_host", "").strip() or None,
-        "smtp_port": _clamp(_safe_int(form.get("smtp_port")), 1, 65535, 587),
+        "smtp_port": clamp(safe_int(form.get("smtp_port")), 1, 65535, 587),
         "smtp_user": form.get("smtp_user", "").strip() or None,
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
@@ -174,7 +163,7 @@ async def admin_test_smtp(
     # fall back to saved values for anything not in the form.
     s = SimpleNamespace(
         smtp_host=form.get("smtp_host", "").strip() or saved.smtp_host,
-        smtp_port=_safe_int(form.get("smtp_port"), saved.smtp_port or 587),
+        smtp_port=safe_int(form.get("smtp_port"), saved.smtp_port or 587),
         smtp_user=form.get("smtp_user", "").strip() or saved.smtp_user,
         smtp_from_email=form.get("smtp_from_email", "").strip() or saved.smtp_from_email,
         smtp_use_tls=form.get("smtp_use_tls") == "true" if "smtp_use_tls" in form else saved.smtp_use_tls,
@@ -255,8 +244,8 @@ async def admin_revoke_invitation(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    revoked = await revoke_invitation(db, invitation_id)
-    if revoked:
+    inv = await revoke_invitation(db, invitation_id)
+    if inv:
         await log_audit(db, user.id, "invitation_revoke", target_type="invitation", target_id=invitation_id)
     invitations = await list_invitations(db)
     return templates.TemplateResponse(request, "admin/partials/invitations_table.html", {

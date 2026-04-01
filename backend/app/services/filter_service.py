@@ -406,7 +406,7 @@ async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
     for uf in user_feeds:
         filters_result = await db.execute(
             select(Filter)
-            .where(Filter.user_id == uf.user_id, Filter.is_active == True)  # noqa: E712
+            .where(Filter.user_id == uf.user_id, Filter.is_active == True)
             .options(selectinload(Filter.conditions), selectinload(Filter.actions))
             .order_by(Filter.position)
         )

@@ -227,12 +227,6 @@ def _latest_published(entries) -> datetime | None:
     return max(dates) if dates else None
 
 
-def _val_or_none(value: str | None, max_len: int) -> str | None:
-    if not value:
-        return None
-    return value[:max_len]
-
-
 def _safe_url(value: str | None, max_len: int = 2048) -> str | None:
     """Allow only http/https URLs to prevent javascript: and other dangerous schemes."""
     if not value:

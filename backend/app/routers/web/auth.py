@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from app.auth.security import hash_password, verify_password
 from app.config import settings as app_settings_config
 from app.database import get_db
-from app.main import limiter
+from app.rate_limit import limiter
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
 from app.models.settings import AppSettings

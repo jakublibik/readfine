@@ -108,14 +108,14 @@ async def create_invitation(
     return inv
 
 
-async def revoke_invitation(db: AsyncSession, invitation_id: int) -> bool:
+async def revoke_invitation(db: AsyncSession, invitation_id: int) -> "Invitation | None":
     result = await db.execute(select(Invitation).where(Invitation.id == invitation_id))
     inv = result.scalar_one_or_none()
     if not inv or inv.used_at is not None:
-        return False
+        return None
     await db.delete(inv)
     await db.commit()
-    return True
+    return inv
 
 
 async def list_fetch_logs(db: AsyncSession, limit: int = 100) -> list[FetchLog]:
@@ -207,7 +207,7 @@ async def list_feeds_with_stats(db: AsyncSession) -> list[dict]:
 async def get_dashboard_stats(db: AsyncSession) -> dict:
     user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
     active_user_count = (await db.execute(
-        select(func.count(User.id)).where(User.is_active == True)  # noqa: E712
+        select(func.count(User.id)).where(User.is_active == True)
     )).scalar() or 0
     feed_count = (await db.execute(select(func.count(Feed.id)))).scalar() or 0
     article_count = (await db.execute(select(func.count(Article.id)))).scalar() or 0

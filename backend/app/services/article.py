@@ -108,7 +108,7 @@ async def list_articles(
 
     if folder_id is not None:
         if folder_id == 0:
-            stmt = stmt.where(UserFeed.folder_id == None)  # noqa: E711
+            stmt = stmt.where(UserFeed.folder_id == None)
         else:
             stmt = stmt.where(UserFeed.folder_id == folder_id)
 
@@ -131,14 +131,14 @@ async def list_articles(
 
     if unread_only:
         stmt = stmt.where(
-            (UserArticleState.is_read == False) | (UserArticleState.is_read == None)  # noqa: E711
+            (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
 
     if starred_only:
-        stmt = stmt.where(UserArticleState.is_starred == True)  # noqa: E712
+        stmt = stmt.where(UserArticleState.is_starred == True)
 
     if archived_only:
-        stmt = stmt.where(UserArticleState.is_archived == True)  # noqa: E712
+        stmt = stmt.where(UserArticleState.is_archived == True)
 
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
@@ -199,9 +199,9 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711 — subscribed
-            | (UserArticleState.is_starred == True)  # noqa: E712 — starred orphan
-            | (UserArticleState.is_archived == True),  # noqa: E712 — archived orphan
+            UserFeed.id.is_not(None)
+            | UserArticleState.is_starred.is_(True)
+            | UserArticleState.is_archived.is_(True),
         )
     )
     row = (await db.execute(stmt)).first()
@@ -259,9 +259,9 @@ async def toggle_article_state(
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711
-            | (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
+            (UserFeed.id != None)
+            | (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True),
         )
     )
     row = (await db.execute(stmt)).first()
@@ -335,9 +335,9 @@ async def update_article_state(
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711
-            | (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
+            (UserFeed.id != None)
+            | (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True),
         )
     )
     row = (await db.execute(stmt)).first()

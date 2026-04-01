@@ -79,7 +79,7 @@ async def get_api_user(
         result = await db.execute(
             select(ApiToken).where(
                 ApiToken.token_hash == token_hash,
-                ApiToken.revoked_at == None,  # noqa: E711
+                ApiToken.revoked_at == None,
             )
         )
         api_token = result.scalar_one_or_none()

@@ -6,7 +6,7 @@ from app.auth.dependencies import get_api_user
 from app.auth.security import create_access_token, verify_password
 from app.config import settings as app_settings_config
 from app.database import get_db
-from app.main import limiter
+from app.rate_limit import limiter
 from app.models.user import User
 from app.schemas.user import LoginRequest, UserResponse
 

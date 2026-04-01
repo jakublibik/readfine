@@ -318,7 +318,7 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
     user_feeds_result = await db.execute(
         select(UserFeed).where(
             UserFeed.feed_id == feed_id,
-            UserFeed.extract_readable == True,  # noqa: E712
+            UserFeed.extract_readable == True,
         )
     )
     user_feeds = user_feeds_result.scalars().all()
@@ -384,7 +384,7 @@ async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> Non
     user_feeds_result = await db.execute(
         select(UserFeed).where(
             UserFeed.feed_id == feed_id,
-            UserFeed.extract_readable == True,  # noqa: E712
+            UserFeed.extract_readable == True,
         )
     )
     user_feeds = user_feeds_result.scalars().all()

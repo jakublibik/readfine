@@ -50,8 +50,8 @@ def _protected_subquery():
     return (
         select(UserArticleState.article_id)
         .where(
-            (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True)  # noqa: E712
+            (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True)
         )
     )
 

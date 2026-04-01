@@ -47,16 +47,16 @@ async def update_label(
     return LabelResponse.model_validate(label)
 
 
-async def delete_label(user: User, label_id: int, db: AsyncSession) -> bool:
+async def delete_label(user: User, label_id: int, db: AsyncSession) -> "Label | None":
     result = await db.execute(
         select(Label).where(Label.id == label_id, Label.user_id == user.id)
     )
     label = result.scalar_one_or_none()
     if not label:
-        return False
+        return None
     await db.delete(label)
     await db.commit()
-    return True
+    return label
 
 
 async def assign_label(
@@ -78,9 +78,9 @@ async def assign_label(
         )
         .where(
             Article.id == article_id,
-            (UserFeed.id != None)  # noqa: E711 — subscribed
-            | (UserArticleState.is_starred == True)  # noqa: E712 — starred orphan
-            | (UserArticleState.is_archived == True),  # noqa: E712 — archived orphan
+            UserFeed.id.is_not(None)
+            | UserArticleState.is_starred.is_(True)
+            | UserArticleState.is_archived.is_(True),
         )
     )
     if not article_access.scalar_one_or_none():
