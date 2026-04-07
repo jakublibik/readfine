@@ -151,7 +151,7 @@ async def settings_feeds_test(
                                           {"error": str(e)})
 
     _headers = {
-        "User-Agent": "Filtread/1.0",
+        "User-Agent": "Readfine/1.0",
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
     has_auth = bool(auth_user and auth_pass)
@@ -835,7 +835,7 @@ async def settings_opml_export(
     db: AsyncSession = Depends(get_db),
 ):
     xml = await export_opml(user, db)
-    filename = f"filtread-{datetime.now(timezone.utc).strftime('%Y%m%d')}.opml"
+    filename = f"readfine-{datetime.now(timezone.utc).strftime('%Y%m%d')}.opml"
     return Response(
         content=xml.encode("utf-8"),
         media_type="application/xml",

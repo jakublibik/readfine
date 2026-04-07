@@ -104,7 +104,7 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     # Build XML
     root = Element("opml", version="2.0")
     head = SubElement(root, "head")
-    SubElement(head, "title").text = "Filtread subscriptions"
+    SubElement(head, "title").text = "Readfine subscriptions"
     SubElement(head, "dateCreated").text = datetime.now(timezone.utc).strftime(
         "%a, %d %b %Y %H:%M:%S +0000"
     )
@@ -564,7 +564,7 @@ async def _import_filters(
 
             # Detect format: our own export (has "match_operator") vs TTRSS (has "match_any_rule" / "rules")
             if "match_operator" in fd:
-                payload = _parse_filtread_filter(fd, label_name_to_id, feed_url_to_id, folder_name_to_id, result)
+                payload = _parse_readfine_filter(fd, label_name_to_id, feed_url_to_id, folder_name_to_id, result)
             else:
                 payload = _parse_ttrss_filter(fd, label_name_to_id, result)
 
@@ -581,7 +581,7 @@ async def _import_filters(
             result.warnings.append(f"Filter '{fd.get('name', i)}' skipped: {exc}")
 
 
-def _parse_filtread_filter(
+def _parse_readfine_filter(
     fd: dict,
     label_name_to_id: dict[str, int],
     feed_url_to_id: dict[str, int],

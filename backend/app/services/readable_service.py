@@ -41,7 +41,7 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
 
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
-        headers = {"User-Agent": "Filtread/1.0 (+https://github.com/filtread)"}
+        headers = {"User-Agent": "Readfine/1.0 (+https://github.com/readfine)"}
         current_url = url
         with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers) as client:
             for _ in range(_MAX_REDIRECTS + 1):

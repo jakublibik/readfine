@@ -236,7 +236,7 @@ async def reset_password_request(
                 send_email,
                 app_settings,
                 user.email,
-                "Filtread – Password reset",
+                "Readfine – Password reset",
                 f"Click the link below to reset your password (valid for 1 hour):\n\n{reset_url}\n\nIf you did not request this, ignore this email.",
             )
         except Exception as e:

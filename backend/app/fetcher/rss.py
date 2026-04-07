@@ -21,7 +21,7 @@ from app.utils.url_validator import validate_feed_url
 logger = logging.getLogger(__name__)
 
 _HEADERS = {
-    "User-Agent": "Filtread/1.0 (+https://github.com/filtread/filtread)",
+    "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
 }
 _TIMEOUT = 30  # seconds
