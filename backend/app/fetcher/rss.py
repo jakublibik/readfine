@@ -99,12 +99,17 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
 async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     new_articles: list[Article] = []
+    seen_guids: set[str] = set()
     for entry in parsed.entries:
         guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         if not guid:
             continue
 
         guid_hash = hashlib.sha256(guid.encode()).hexdigest()
+
+        if guid_hash in seen_guids:
+            continue
+        seen_guids.add(guid_hash)
 
         existing = await db.execute(
             select(Article.id).where(

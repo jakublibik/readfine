@@ -1,8 +1,7 @@
-# Projekt: Filtread
+# Projekt: Readfine
 
 Self-hosted webová RSS čtečka podobná Tiny Tiny RSS.
 Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
-Reference funkcí TTRSS: `TinyTinyRSS_Funkce_Reference.docx`
 
 ## Tech stack
 - Backend: Python 3.12 + FastAPI

@@ -3,15 +3,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: filtread
-      POSTGRES_USER: filtread
-      POSTGRES_PASSWORD: filtread
+      POSTGRES_DB: readfine
+      POSTGRES_USER: readfine
+      POSTGRES_PASSWORD: readfine
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U filtread"]
+      test: ["CMD-SHELL", "pg_isready -U readfine"]
       interval: 5s
       timeout: 5s
       retries: 5
