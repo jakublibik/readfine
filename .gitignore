@@ -34,6 +34,12 @@ Thumbs.db
 # Docker
 *.log
 
+# SSL certificates — never commit private keys
+certs/
+*.pem
+*.key
+*.crt
+
 # Tailwind
 node_modules/
 frontend/node_modules/
