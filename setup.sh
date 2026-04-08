@@ -98,8 +98,8 @@ success "Keys generated."
 info "Writing .env..."
 
 # URL-encode credentials (handles special chars like @, :, /, ?)
-DB_USER_URL=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['DB_USER'], safe=''))" )
-DB_PASSWORD_URL=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['DB_PASSWORD'], safe=''))" )
+DB_USER_URL=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$DB_USER")
+DB_PASSWORD_URL=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$DB_PASSWORD")
 
 umask 077
 cat > .env <<EOF
