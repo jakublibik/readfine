@@ -4,20 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Readfine{% endblock %}</title>
-    <script>
-      window.tailwind = {
-        config: {
-          theme: {
-            extend: {
-              typography: {
-                DEFAULT: { css: { p: { marginTop: '0.4em', marginBottom: '0.4em' } } },
-                sm:      { css: { p: { marginTop: '0.3em', marginBottom: '0.3em' } } },
-              }
-            }
-          }
-        }
-      };
-    </script>
+    <script src="/static/js/tailwind-config.js"></script>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <style>
       .prose h1 { font-size: 1.1em !important; }

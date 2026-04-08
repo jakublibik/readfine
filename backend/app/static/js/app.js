@@ -215,6 +215,35 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   );
 });
 
+// OPML import form: intercept submit to send CSRF header with multipart upload
+document.addEventListener('DOMContentLoaded', function () {
+  var form = document.getElementById('opml-import-form');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var btn = document.getElementById('opml-submit-btn');
+    var busy = document.getElementById('opml-busy');
+    btn.disabled = true;
+    btn.classList.add('opacity-50', 'cursor-not-allowed');
+    busy.classList.remove('hidden');
+    busy.classList.add('inline-flex');
+    var token = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
+    token = token ? token.split('=')[1] : '';
+    fetch(form.action, {
+      method: 'POST',
+      headers: { 'x-csrftoken': token },
+      body: new FormData(form),
+    }).then(function (r) { return r.text(); }).then(function (html) {
+      document.open(); document.write(html); document.close();
+    }).catch(function () {
+      btn.disabled = false;
+      btn.classList.remove('opacity-50', 'cursor-not-allowed');
+      busy.classList.add('hidden');
+      busy.classList.remove('inline-flex');
+    });
+  });
+});
+
 // Feed subscribe form: auto-check "Private feed" when auth fields are filled
 (function () {
   var cb = document.getElementById('feed-is-private');

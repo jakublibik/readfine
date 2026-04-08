@@ -136,30 +136,3 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}
-<script>
-  document.getElementById('opml-import-form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    const form = e.target;
-    const btn = document.getElementById('opml-submit-btn');
-    const busy = document.getElementById('opml-busy');
-    btn.disabled = true;
-    btn.classList.add('opacity-50', 'cursor-not-allowed');
-    busy.classList.remove('hidden');
-    busy.classList.add('inline-flex');
-    const token = document.cookie.split('; ').find(r => r.startsWith('csrftoken='))?.split('=')[1];
-    fetch(form.action, {
-      method: 'POST',
-      headers: { 'x-csrftoken': token || '' },
-      body: new FormData(form),
-    }).then(r => r.text()).then(html => {
-      document.open(); document.write(html); document.close();
-    }).catch(() => {
-      btn.disabled = false;
-      btn.classList.remove('opacity-50', 'cursor-not-allowed');
-      busy.classList.add('hidden');
-      busy.classList.remove('inline-flex');
-    });
-  });
-</script>
-{% endblock %}

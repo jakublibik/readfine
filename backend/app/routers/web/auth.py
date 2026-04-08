@@ -50,10 +50,12 @@ async def root(request: Request):
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request):
+async def login_page(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
-    return templates.TemplateResponse(request, "auth/login.html")
+    app_settings = await _get_app_settings(db)
+    registration_open = not app_settings or app_settings.registration_enabled
+    return templates.TemplateResponse(request, "auth/login.html", {"registration_open": registration_open})
 
 
 @router.post("/login", response_class=HTMLResponse)
