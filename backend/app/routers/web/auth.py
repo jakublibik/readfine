@@ -42,6 +42,13 @@ async def _get_valid_invitation(db: AsyncSession, token: str) -> Invitation | No
     return inv
 
 
+@router.get("/")
+async def root(request: Request):
+    if request.session.get("user_id"):
+        return RedirectResponse(url="/app", status_code=302)
+    return RedirectResponse(url="/login", status_code=302)
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     if request.session.get("user_id"):
