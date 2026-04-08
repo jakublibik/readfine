@@ -228,3 +228,105 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   authPass.addEventListener('input', autoCheck);
 })();
 
+// ── User menu ──────────────────────────────────────────────────────────────
+function toggleUserMenu() {
+  var el = document.getElementById('full-menu-dropdown');
+  if (!el) return;
+  el.classList.toggle('hidden');
+}
+
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('#full-menu-container')) {
+    var el = document.getElementById('full-menu-dropdown');
+    if (el) el.classList.add('hidden');
+  }
+});
+
+// ── Search modal ───────────────────────────────────────────────────────────
+function openSearchModal() {
+  var el = document.getElementById('full-menu-dropdown');
+  if (el) el.classList.add('hidden');
+  var overlay = document.getElementById('search-modal-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+  htmx.ajax('GET', '/htmx/search-modal', { target: '#search-modal-content', swap: 'innerHTML' });
+}
+
+function closeSearchModal() {
+  var overlay = document.getElementById('search-modal-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+function updateSearchScope(value) {
+  var folderSel = document.getElementById('search-folder-select');
+  var feedSel = document.getElementById('search-feed-select');
+  if (folderSel) folderSel.disabled = value !== 'folder';
+  if (feedSel) feedSel.disabled = value !== 'feed';
+}
+
+function submitSearch() {
+  var input = document.getElementById('search-input');
+  if (!input) return;
+  var q = input.value.trim();
+  if (!q) { input.focus(); return; }
+  var scopeEl = document.querySelector('input[name="search-scope"]:checked');
+  if (!scopeEl) return;
+  var params = new URLSearchParams({ q: q });
+  if (scopeEl.value === 'folder') {
+    var sel = document.getElementById('search-folder-select');
+    if (sel && sel.value) params.set('folder_id', sel.value);
+  } else if (scopeEl.value === 'feed') {
+    var sel = document.getElementById('search-feed-select');
+    if (sel && sel.value) params.set('feed_id', sel.value);
+  }
+  htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
+  closeSearchModal();
+}
+
+// Focus search input when modal loads
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (evt.detail.target.id === 'search-modal-content') {
+    var input = document.getElementById('search-input');
+    if (input) input.focus();
+  }
+});
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') { closeSearchModal(); return; }
+  if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
+  if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+    e.preventDefault();
+    openSearchModal();
+  }
+});
+
+// ── data-action delegation ─────────────────────────────────────────────────
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-action]');
+  if (!el) return;
+  var action = el.dataset.action;
+  if (action === 'toggle-user-menu') { toggleUserMenu(); return; }
+  if (action === 'open-search') { openSearchModal(); return; }
+  if (action === 'close-search') { closeSearchModal(); return; }
+  if (action === 'submit-search') { submitSearch(); return; }
+  if (action === 'select-all') { el.select(); return; }
+  if (action === 'refresh-articles') {
+    htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+    return;
+  }
+});
+
+document.addEventListener('change', function (e) {
+  if (e.target.name === 'search-scope') { updateSearchScope(e.target.value); }
+});
+
+// ── stopPropagation for action buttons inside article rows ─────────────────
+// Attached via htmx:afterSettle so each button gets its own listener —
+// bubbling phase only, so hx-post on the button fires first.
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (evt.detail.target.id !== 'article-list') return;
+  evt.detail.target.querySelectorAll('[data-stop-propagation]').forEach(function (el) {
+    el.addEventListener('click', function (e) { e.stopPropagation(); });
+  });
+});
+

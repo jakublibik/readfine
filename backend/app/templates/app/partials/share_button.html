@@ -12,7 +12,7 @@
       </button>
     </div>
     <input type="text" readonly value="{{ resolved_share_url }}"
-           onclick="this.select()"
+           data-action="select-all"
            class="w-full text-xs border border-gray-300 rounded px-1.5 py-0.5 font-mono bg-gray-50 cursor-pointer mt-0.5">
   {% else %}
     <button

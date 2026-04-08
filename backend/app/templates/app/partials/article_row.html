@@ -15,7 +15,7 @@
   <div class="flex items-center gap-1.5">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
-            onclick="event.stopPropagation()"
+            data-stop-propagation
             class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
@@ -39,7 +39,7 @@
   <div class="flex items-baseline gap-1.5">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
-            onclick="event.stopPropagation()"
+            data-stop-propagation
             class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}

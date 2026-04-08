@@ -85,7 +85,7 @@
   <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200">
     <!-- Avatar + user menu -->
     <div class="relative" id="full-menu-container">
-      <button onclick="toggleUserMenu('full-menu-dropdown')"
+      <button data-action="toggle-user-menu"
               class="w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 text-[10px] font-semibold cursor-pointer border-0 hover:bg-blue-300 flex-shrink-0"
               title="{{ user.display_name }}">
         {{ user.display_name[0] | upper }}

@@ -1,7 +1,7 @@
 <div class="p-6">
   <div class="flex items-center justify-between mb-5">
     <h2 class="text-lg font-semibold text-gray-800">Search articles</h2>
-    <button onclick="closeSearchModal()" class="text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-1">
+    <button data-action="close-search" class="text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-1">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
       </svg>
@@ -23,7 +23,6 @@
 
       <label class="flex items-center gap-3 cursor-pointer">
         <input type="radio" name="search-scope" value="all" checked
-               onchange="updateSearchScope('all')"
                class="w-4 h-4 text-blue-600">
         <span class="text-sm text-gray-700">All subscribed feeds</span>
       </label>
@@ -31,7 +30,6 @@
       {% if folders %}
       <label class="flex items-center gap-3 cursor-pointer">
         <input type="radio" name="search-scope" value="folder"
-               onchange="updateSearchScope('folder')"
                class="w-4 h-4 text-blue-600">
         <span class="text-sm text-gray-700">Folder</span>
         <select id="search-folder-select"
@@ -47,7 +45,6 @@
       {% if feeds %}
       <label class="flex items-center gap-3 cursor-pointer">
         <input type="radio" name="search-scope" value="feed"
-               onchange="updateSearchScope('feed')"
                class="w-4 h-4 text-blue-600">
         <span class="text-sm text-gray-700">Feed</span>
         <select id="search-feed-select"
@@ -65,49 +62,14 @@
 
   <!-- Actions -->
   <div class="flex items-center justify-end gap-2">
-    <button type="button" onclick="closeSearchModal()"
+    <button type="button" data-action="close-search"
             class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 bg-transparent border-0 cursor-pointer">
       Cancel
     </button>
-    <button type="button" onclick="submitSearch()"
+    <button type="button" data-action="submit-search"
             class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer border-0">
       Search
     </button>
   </div>
 </div>
 
-<script>
-  function updateSearchScope(value) {
-    const folderSel = document.getElementById('search-folder-select');
-    const feedSel = document.getElementById('search-feed-select');
-    if (folderSel) folderSel.disabled = value !== 'folder';
-    if (feedSel) feedSel.disabled = value !== 'feed';
-  }
-
-  function submitSearch() {
-    const q = document.getElementById('search-input').value.trim();
-    if (!q) { document.getElementById('search-input').focus(); return; }
-
-    const scope = document.querySelector('input[name="search-scope"]:checked').value;
-    const params = new URLSearchParams({ q });
-
-    if (scope === 'folder') {
-      const sel = document.getElementById('search-folder-select');
-      if (sel && sel.value) params.set('folder_id', sel.value);
-    } else if (scope === 'feed') {
-      const sel = document.getElementById('search-feed-select');
-      if (sel && sel.value) params.set('feed_id', sel.value);
-    }
-
-    htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
-    closeSearchModal();
-  }
-
-  // Allow Enter key to submit
-  document.getElementById('search-input').addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') submitSearch();
-  });
-
-  // Focus input
-  document.getElementById('search-input').focus();
-</script>

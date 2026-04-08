@@ -6,7 +6,7 @@
 <!-- Search modal overlay -->
 <div id="search-modal-overlay"
      class="hidden fixed inset-0 z-50 flex items-center justify-center">
-  <div class="absolute inset-0 bg-black/40" onclick="closeSearchModal()"></div>
+  <div class="absolute inset-0 bg-black/40" data-action="close-search"></div>
   <div id="search-modal-content"
        class="relative bg-white rounded-xl shadow-2xl w-[480px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
   </div>
@@ -46,42 +46,4 @@
   </main>
 
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  // ── User menu dropdown ──────────────────────────────────────────
-  function toggleUserMenu(dropdownId) {
-    const el = document.getElementById(dropdownId);
-    if (!el) return;
-    const isHidden = el.classList.contains('hidden');
-    document.querySelectorAll('#full-menu-dropdown').forEach(d => d.classList.add('hidden'));
-    if (isHidden) el.classList.remove('hidden');
-  }
-
-  document.addEventListener('click', function(e) {
-    if (!e.target.closest('#full-menu-container')) {
-      document.querySelectorAll('#full-menu-dropdown').forEach(d => d.classList.add('hidden'));
-    }
-  });
-
-  // ── Search modal ────────────────────────────────────────────────
-  function openSearchModal() {
-    document.querySelectorAll('#full-menu-dropdown').forEach(d => d.classList.add('hidden'));
-    document.getElementById('search-modal-overlay').classList.remove('hidden');
-    htmx.ajax('GET', '/htmx/search-modal', { target: '#search-modal-content', swap: 'innerHTML' });
-  }
-
-  function closeSearchModal() {
-    document.getElementById('search-modal-overlay').classList.add('hidden');
-  }
-
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') { closeSearchModal(); return; }
-    if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
-      e.preventDefault();
-      openSearchModal();
-    }
-  });
-</script>
 {% endblock %}
