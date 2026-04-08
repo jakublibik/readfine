@@ -32,6 +32,18 @@ read -rsp "  DB password [random]:   " DB_PASSWORD; echo ""
 if [[ -z "$DB_PASSWORD" ]]; then
     DB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(18))")
     info "Generated DB password: ${YELLOW}${DB_PASSWORD}${NC}"
+else
+    read -rsp "  Confirm DB password:    " DB_PASSWORD2; echo ""
+    while [[ "$DB_PASSWORD" != "$DB_PASSWORD2" ]]; do
+        warn "Passwords do not match. Try again."
+        read -rsp "  DB password [random]:   " DB_PASSWORD; echo ""
+        if [[ -z "$DB_PASSWORD" ]]; then
+            DB_PASSWORD=$(python3 -c "import secrets; print(secrets.token_urlsafe(18))")
+            info "Generated DB password: ${YELLOW}${DB_PASSWORD}${NC}"
+            break
+        fi
+        read -rsp "  Confirm DB password:    " DB_PASSWORD2; echo ""
+    done
 fi
 
 echo ""
@@ -42,9 +54,17 @@ while [[ -z "$ADMIN_EMAIL" ]]; do
     warn "Email cannot be empty."; read -rp "  Admin email: " ADMIN_EMAIL
 done
 
-read -rsp "  Admin password: " ADMIN_PASSWORD; echo ""
-while [[ -z "$ADMIN_PASSWORD" ]]; do
-    warn "Password cannot be empty."; read -rsp "  Admin password: " ADMIN_PASSWORD; echo ""
+while true; do
+    read -rsp "  Admin password: " ADMIN_PASSWORD; echo ""
+    if [[ -z "$ADMIN_PASSWORD" ]]; then
+        warn "Password cannot be empty."
+        continue
+    fi
+    read -rsp "  Confirm password: " ADMIN_PASSWORD2; echo ""
+    if [[ "$ADMIN_PASSWORD" == "$ADMIN_PASSWORD2" ]]; then
+        break
+    fi
+    warn "Passwords do not match. Try again."
 done
 
 echo ""
