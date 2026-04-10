@@ -44,7 +44,7 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     return parsed
 
 
-async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
+async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None) -> int:
     """Fetch a feed and store new articles. Returns number of new articles saved."""
     start_ms = int(time.monotonic() * 1000)
 
@@ -64,7 +64,7 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
 
-        new_count = await _save_articles(feed, parsed, db)
+        new_count = await _save_articles(feed, parsed, db, limit=initial_limit)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = datetime.now(timezone.utc)
@@ -96,11 +96,12 @@ async def fetch_feed(feed: Feed, db: AsyncSession) -> int:
         return 0
 
 
-async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession) -> int:
+async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession, limit: int | None = None) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     new_articles: list[Article] = []
     seen_guids: set[str] = set()
-    for entry in parsed.entries:
+    entries = parsed.entries[:limit] if limit is not None else parsed.entries
+    for entry in entries:
         guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         if not guid:
             continue

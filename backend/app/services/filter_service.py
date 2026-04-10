@@ -97,10 +97,33 @@ async def list_filters(user_id: int, db: AsyncSession) -> list[FilterResponse]:
     return [FilterResponse.model_validate(f) for f in result.scalars()]
 
 
+async def _validate_label_actions(user_id: int, actions, db: AsyncSession) -> None:
+    """Raise ValueError if any label action has a missing or invalid action_value."""
+    label_ids = []
+    for a in actions:
+        if a.action_type != "label":
+            continue
+        if not a.action_value:
+            raise ValueError("Label action requires a label to be selected.")
+        try:
+            label_ids.append(int(a.action_value))
+        except (ValueError, TypeError):
+            raise ValueError(f"Invalid label id: {a.action_value!r}")
+    if label_ids:
+        result = await db.execute(
+            select(Label.id).where(Label.user_id == user_id, Label.id.in_(label_ids))
+        )
+        found = {row[0] for row in result}
+        missing = sorted(set(label_ids) - found)
+        if missing:
+            raise ValueError(f"Label(s) not found: {missing}")
+
+
 async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -> FilterResponse:
     _validate_regex_conditions(payload.conditions)
     await _validate_scope_list(user_id, payload.scope_include, db)
     await _validate_scope_list(user_id, payload.scope_except, db)
+    await _validate_label_actions(user_id, payload.actions, db)
     f = Filter(
         user_id=user_id,
         name=payload.name,
@@ -156,6 +179,8 @@ async def update_filter(
         await _validate_scope_list(user_id, payload.scope_include, db)
     if payload.scope_except is not None:
         await _validate_scope_list(user_id, payload.scope_except, db)
+    if payload.actions is not None:
+        await _validate_label_actions(user_id, payload.actions, db)
 
     scalar_fields = payload.model_dump(
         exclude_unset=True, exclude={"conditions", "actions", "scope_include", "scope_except"}
@@ -334,7 +359,9 @@ def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = No
 
 async def _execute_actions(
     f: Filter, article: Article, user_id: int, user_feed: UserFeed, db: AsyncSession
-) -> None:
+) -> bool:
+    """Execute filter actions for an article. Returns True if any action changed DB state."""
+    changed = False
     for action in f.actions:
         try:
             if action.action_type == "label" and action.action_value:
@@ -359,6 +386,7 @@ async def _execute_actions(
                         label_id=label_id,
                         assigned_by_filter=True,
                     ))
+                    changed = True
 
             elif action.action_type in ("mark_read", "star", "hide"):
                 state_result = await db.execute(
@@ -380,10 +408,13 @@ async def _execute_actions(
                         .where(UserFeed.user_id == user_id, UserFeed.feed_id == article.feed_id)
                         .values(unread_count=func.greatest(UserFeed.unread_count - 1, 0))
                     )
-                elif action.action_type == "star":
+                    changed = True
+                elif action.action_type == "star" and not state.is_starred:
                     state.is_starred = True
-                elif action.action_type == "hide":
+                    changed = True
+                elif action.action_type == "hide" and not state.is_hidden:
                     state.is_hidden = True
+                    changed = True
             # "notify" is a no-op stub for MVP
 
         except Exception as exc:
@@ -391,6 +422,7 @@ async def _execute_actions(
                 "Filter %d action '%s' failed for article %d: %s",
                 f.id, action.action_type, article.id, exc,
             )
+    return changed
 
 
 async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
@@ -466,8 +498,15 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     )
 
 
-async def apply_filter_retroactively(user_id: int, filter_id: int, db: AsyncSession) -> int:
-    """Apply an existing filter to all user's articles. Returns count of affected articles."""
+async def apply_filter_retroactively(
+    user_id: int, filter_id: int, db: AsyncSession
+) -> tuple[int, int]:
+    """Apply an existing filter to all user's articles.
+
+    Returns (matched_count, changed_count):
+      matched_count — articles where filter conditions evaluated to True
+      changed_count — articles where at least one action actually modified DB state
+    """
     result = await db.execute(
         select(Filter)
         .where(Filter.id == filter_id, Filter.user_id == user_id)
@@ -475,7 +514,7 @@ async def apply_filter_retroactively(user_id: int, filter_id: int, db: AsyncSess
     )
     f = result.scalar_one_or_none()
     if not f:
-        return 0
+        return 0, 0
 
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
@@ -492,14 +531,17 @@ async def apply_filter_retroactively(user_id: int, filter_id: int, db: AsyncSess
     action_types = {a.action_type for a in f.actions}
     triggers_readable = bool(action_types & {"star", "label"})
 
-    count = 0
+    matched = 0
+    changed = 0
     for article in articles:
         uf = user_feeds_map.get(article.feed_id)
         if evaluate_filter(f, article, uf):
-            await _execute_actions(f, article, user_id, uf, db)
-            if triggers_readable and uf and uf.extract_readable and article.readable_status == "skipped":
-                article.readable_status = "pending"
-            count += 1
+            matched += 1
+            action_changed = await _execute_actions(f, article, user_id, uf, db)
+            if action_changed:
+                changed += 1
+                if triggers_readable and uf and uf.extract_readable and article.readable_status == "skipped":
+                    article.readable_status = "pending"
 
     await db.commit()
-    return count
+    return matched, changed

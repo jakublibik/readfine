@@ -587,9 +587,10 @@ async def settings_filter_apply(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    count = await apply_filter_retroactively(user.id, filter_id, db)
+    matched, changed = await apply_filter_retroactively(user.id, filter_id, db)
     return templates.TemplateResponse(request, "settings/partials/filter_apply_result.html", {
-        "count": count,
+        "matched": matched,
+        "changed": changed,
     })
 
 

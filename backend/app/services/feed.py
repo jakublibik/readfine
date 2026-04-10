@@ -151,8 +151,13 @@ async def _initial_fetch(feed_id: int) -> None:
         return
     async with db_module.async_session_factory() as session:
         feed = await session.get(Feed, feed_id)
-        if feed:
-            await fetch_feed(feed, session)
+        if not feed:
+            return
+        settings_row = await session.execute(
+            select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
+        )
+        initial_limit = settings_row.scalar_one_or_none() or 500
+        await fetch_feed(feed, session, initial_limit=initial_limit)
 
 
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
