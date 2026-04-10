@@ -47,14 +47,16 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
 async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None) -> int:
     """Fetch a feed and store new articles. Returns number of new articles saved."""
     start_ms = int(time.monotonic() * 1000)
+    feed_id = feed.id
+    feed_url = feed.feed_url
 
     try:
-        validate_feed_url(feed.feed_url)
+        validate_feed_url(feed_url)
         auth = None
         if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
             auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
-            response = await client.get(feed.feed_url, headers=_HEADERS, auth=auth)
+            response = await client.get(feed_url, headers=_HEADERS, auth=auth)
             response.raise_for_status()
             content = response.text
 
@@ -77,56 +79,68 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
             feed.last_published_at = latest_pub
 
         await db.commit()
-        logger.info("Fetched feed %d: %d new articles in %dms", feed.id, new_count, duration_ms)
+        logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
     except Exception as exc:
-        logger.error("Error fetching feed %d (%s): %s", feed.id, feed.feed_url, exc)
+        await db.rollback()
+        logger.error("Error fetching feed %d (%s): %s", feed_id, feed_url, exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        feed.status = "error"
-        feed.last_error = str(exc)[:500]
-        feed.last_fetched_at = datetime.now(timezone.utc)
         db.add(FetchLog(
-            feed_id=feed.id,
+            feed_id=feed_id,
             failed_at=datetime.now(timezone.utc),
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
+        from sqlalchemy import update as sa_update
+        await db.execute(
+            sa_update(Feed).where(Feed.id == feed_id).values(
+                status="error",
+                last_error=str(exc)[:500],
+                last_fetched_at=datetime.now(timezone.utc),
+            )
+        )
         await db.commit()
         return 0
 
 
 async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession, limit: int | None = None) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
-    new_articles: list[Article] = []
-    seen_guids: set[str] = set()
     entries = parsed.entries[:limit] if limit is not None else parsed.entries
+
+    # Deduplicate within this batch and compute guid_hashes up front
+    candidates: dict[str, feedparser.util.FeedParserDict] = {}  # hash → entry (first wins)
     for entry in entries:
         guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         if not guid:
             continue
-
         guid_hash = hashlib.sha256(guid.encode()).hexdigest()
+        candidates.setdefault(guid_hash, entry)
 
-        if guid_hash in seen_guids:
-            continue
-        seen_guids.add(guid_hash)
+    if not candidates:
+        return 0
 
-        existing = await db.execute(
-            select(Article.id).where(
-                Article.feed_id == feed.id,
-                Article.guid_hash == guid_hash,
-            )
+    # Bulk-check which hashes already exist — one query, no per-article SELECTs,
+    # which prevents autoflush of not-yet-committed articles (race condition guard).
+    existing_result = await db.execute(
+        select(Article.guid_hash).where(
+            Article.feed_id == feed.id,
+            Article.guid_hash.in_(candidates.keys()),
         )
-        if existing.scalar_one_or_none() is not None:
+    )
+    existing_hashes: set[str] = set(existing_result.scalars())
+
+    new_articles: list[Article] = []
+    for guid_hash, entry in candidates.items():
+        if guid_hash in existing_hashes:
             continue
 
+        guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
             content = nh3.clean(content)
 
         word_count, estimated_read_min = _reading_stats(content)
-
         pub = entry.get("published_parsed") or entry.get("updated_parsed")
         published_at = _struct_to_dt(pub) if pub else None
 
@@ -149,7 +163,9 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
         new_articles.append(article)
 
     if new_articles:
-        # Flush to get IDs, then apply filters before the outer commit
+        # Flush to get IDs, then apply filters before the outer commit.
+        # A concurrent fetch may have inserted the same article between our SELECT and now;
+        # the IntegrityError propagates to fetch_feed's except clause which handles it.
         await db.flush()
         from app.services.filter_service import apply_filters_to_article
         for article in new_articles:
