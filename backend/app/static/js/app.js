@@ -208,7 +208,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         if (!r.ok) console.warn('mark-as-read fallback failed: ' + r.status);
       }).catch(function () {});
     }
-  }, 1500);
+  }, 700);
 
   document.getElementById('article-detail').addEventListener(
     'htmx:beforeRequest', function () { clearTimeout(timer); }, { once: true }

@@ -1,4 +1,5 @@
 """OPML import and export service."""
+import asyncio
 import json
 import logging
 import re
@@ -93,13 +94,16 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     )
     user_settings = settings_result.scalar_one_or_none()
 
-    # Lookup maps for scope export
+    # Lookup maps for scope export and label resolution
     feed_id_to_url: dict[int, str] = {}
     folder_id_to_name: dict[int, str] = {}
+    label_id_to_name: dict[int, str] = {}
     for uf, feed in user_feeds:
         feed_id_to_url[feed.id] = feed.feed_url
     for folder in folders.values():
         folder_id_to_name[folder.id] = folder.name
+    for label in labels:
+        label_id_to_name[label.id] = label.name
 
     # Build XML
     root = Element("opml", version="2.0")
@@ -174,7 +178,11 @@ async def export_opml(user: User, db: AsyncSession) -> str:
                 "actions": [
                     {
                         "action_type": a.action_type,
-                        "action_value": a.action_value,
+                        "action_value": (
+                            label_id_to_name.get(int(a.action_value), a.action_value)
+                            if a.action_type == "label" and a.action_value and a.action_value.isdigit()
+                            else a.action_value
+                        ),
                     }
                     for a in f.actions
                 ],
@@ -297,6 +305,7 @@ async def import_opml(
     # Pass 2: import feeds + folders
     feed_url_to_id: dict[str, int] = {}
     folder_name_to_id: dict[str, int] = {}
+    new_feed_ids: list[int] = []  # collected for deferred initial fetch
 
     if import_feeds:
         # Collect all top-level feed outlines, unwrapping TTRSS "All articles" wrapper
@@ -313,6 +322,7 @@ async def import_opml(
                 break
             if added_id and xml_url:
                 feed_url_to_id[xml_url] = added_id
+                new_feed_ids.append(added_id)
 
         # Refresh existing subscriptions into lookup map
         existing_uf_result = await db.execute(
@@ -378,6 +388,13 @@ async def import_opml(
             await _import_filters_element(
                 user, filters_el, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db
             )
+
+    # Kick off initial fetches after all filters are in DB
+    import app.database as db_module
+    from app.services.feed import _initial_fetch
+    if new_feed_ids and db_module.async_session_factory is not None:
+        for feed_id in new_feed_ids:
+            asyncio.create_task(_initial_fetch(feed_id))
 
     return result
 
@@ -482,6 +499,7 @@ async def _import_feed(
             fetch_auth_user=None,
             fetch_auth_pass=None,
             db=db,
+            trigger_initial_fetch=False,
         )
         result.feeds_added += 1
         return uf.feed_id

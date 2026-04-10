@@ -27,6 +27,7 @@ async def subscribe(
     fetch_auth_pass: str | None,
     db: AsyncSession,
     is_private: bool = False,
+    trigger_initial_fetch: bool = True,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -139,7 +140,8 @@ async def subscribe(
     await db.refresh(user_feed)
 
     # Kick off initial fetch in the background
-    asyncio.create_task(_initial_fetch(feed.id))
+    if trigger_initial_fetch:
+        asyncio.create_task(_initial_fetch(feed.id))
 
     return user_feed
 
