@@ -237,8 +237,17 @@ async def process_pending_readable(db: AsyncSession) -> int:
     loop = asyncio.get_running_loop()
 
     processed = 0
-    feeds_with_403: set[int] = set()
+    feed_403_streak: dict[int, int] = {}   # consecutive 403s per feed in this batch
+    feeds_to_disable: set[int] = set()     # feeds that already hit the threshold
+    feeds_with_403: set[int] = set()       # feeds with any 403 (cross-batch check)
+
     for article in articles:
+        # Feed hit threshold earlier in this batch — skip without fetching
+        if article.feed_id in feeds_to_disable:
+            article.readable_status = "skipped"
+            processed += 1
+            continue
+
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
         try:
             content, error, http_status = await loop.run_in_executor(
@@ -258,6 +267,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
             article.readable_content = content
             article.readable_status = "success"
             article.readable_error = None
+            feed_403_streak.pop(article.feed_id, None)  # reset streak on success
         else:
             article.readable_error = error
             is_4xx = http_status is not None and 400 <= http_status < 500
@@ -276,13 +286,22 @@ async def process_pending_readable(db: AsyncSession) -> int:
                     article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
 
             if is_403:
+                streak = feed_403_streak.get(article.feed_id, 0) + 1
+                feed_403_streak[article.feed_id] = streak
                 feeds_with_403.add(article.feed_id)
+                if streak >= _CONSECUTIVE_403_THRESHOLD:
+                    feeds_to_disable.add(article.feed_id)
 
         processed += 1
 
     await db.commit()
 
-    for feed_id in feeds_with_403:
+    # Feeds that hit the threshold within this batch — disable immediately
+    for feed_id in feeds_to_disable:
+        await _disable_readable_for_403(feed_id, db)
+
+    # Feeds with some 403s but not yet at threshold — check cross-batch consecutive count
+    for feed_id in feeds_with_403 - feeds_to_disable:
         await _maybe_disable_readable_for_403(feed_id, db)
 
     logger.info("readable: processed %d articles", processed)
@@ -352,12 +371,44 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 _CONSECUTIVE_403_THRESHOLD = 3
 
 
-async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
-    """Disable readable extraction for a feed if the last N processed articles all returned 403.
+async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable extraction for a feed and cancel all pending articles."""
+    user_feeds_result = await db.execute(
+        select(UserFeed).where(
+            UserFeed.feed_id == feed_id,
+            UserFeed.extract_readable == True,
+        )
+    )
+    user_feeds = user_feeds_result.scalars().all()
+    if not user_feeds:
+        return
 
-    Checks the most recent articles that had readable processing attempted (status failed/success).
-    If all of the last _CONSECUTIVE_403_THRESHOLD have a 403 error, disables extract_readable
-    on all UserFeed rows for this feed and marks their pending articles as skipped.
+    for uf in user_feeds:
+        uf.extract_readable = False
+
+    pending_result = await db.execute(
+        select(Article).where(
+            Article.feed_id == feed_id,
+            Article.readable_status == "pending",
+        )
+    )
+    pending = pending_result.scalars().all()
+    for article in pending:
+        article.readable_status = "skipped"
+
+    await db.commit()
+    logger.warning(
+        "readable: disabled extraction for feed %d after %d consecutive 403 errors"
+        " (cancelled %d pending articles)",
+        feed_id, _CONSECUTIVE_403_THRESHOLD, len(pending),
+    )
+
+
+async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable if the last N processed articles for the feed all returned 403.
+
+    Used for cross-batch detection: when a feed accumulates 403s across multiple scheduler
+    runs (few articles per batch), this catches it once the consecutive count is reached.
     """
     result = await db.execute(
         select(Article.readable_status, Article.readable_error)
@@ -380,34 +431,4 @@ async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> Non
     if not all_403:
         return
 
-    # Disable extract_readable for all subscribers of this feed
-    user_feeds_result = await db.execute(
-        select(UserFeed).where(
-            UserFeed.feed_id == feed_id,
-            UserFeed.extract_readable == True,
-        )
-    )
-    user_feeds = user_feeds_result.scalars().all()
-    if not user_feeds:
-        return
-
-    for uf in user_feeds:
-        uf.extract_readable = False
-
-    # Cancel all pending readable jobs for this feed
-    pending_result = await db.execute(
-        select(Article).where(
-            Article.feed_id == feed_id,
-            Article.readable_status == "pending",
-        )
-    )
-    pending = pending_result.scalars().all()
-    for article in pending:
-        article.readable_status = "skipped"
-
-    await db.commit()
-    logger.warning(
-        "readable: disabled extraction for feed %d after %d consecutive 403 errors"
-        " (cancelled %d pending articles)",
-        feed_id, _CONSECUTIVE_403_THRESHOLD, len(pending),
-    )
+    await _disable_readable_for_403(feed_id, db)
