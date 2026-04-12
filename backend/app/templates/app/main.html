@@ -16,7 +16,7 @@
 
   <!-- Left panel: sidebar -->
   <aside id="sidebar"
-         class="{% if pinned %}w-64{% else %}w-12{% endif %} flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto transition-[width] duration-200"
+         class="{% if pinned %}w-56{% else %}w-12{% endif %} flex-shrink-0 border-r border-gray-200 bg-white overflow-y-auto transition-[width] duration-200"
          hx-get="/htmx/sidebar"
          hx-trigger="load, sidebarRefresh from:body, every 60s"
          hx-swap="innerHTML">
@@ -25,12 +25,17 @@
 
   <!-- Middle panel: article list -->
   <section id="article-list"
-           class="w-[28rem] flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto"
+           class="flex-shrink-0 border-gray-200 bg-gray-50 overflow-y-auto"
+           style="width:28rem"
            hx-get="/htmx/articles"
            hx-trigger="load"
            hx-swap="innerHTML">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
   </section>
+
+  <!-- Article list resizer -->
+  <div id="article-list-resizer"
+       class="flex-shrink-0 w-1 bg-gray-200 hover:bg-blue-400 active:bg-blue-500 transition-colors duration-100 cursor-col-resize"></div>
 
   <!-- Right panel: article detail -->
   <main id="article-detail" class="flex-1 overflow-y-auto bg-white">

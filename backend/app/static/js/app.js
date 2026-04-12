@@ -167,7 +167,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 document.body.addEventListener('sidebarPinChanged', function (e) {
   var sidebar = document.getElementById('sidebar');
   if (!sidebar) return;
-  sidebar.classList.toggle('w-64', e.detail.pinned);
+  sidebar.classList.toggle('w-56', e.detail.pinned);
   sidebar.classList.toggle('w-12', !e.detail.pinned);
 });
 
@@ -348,6 +348,55 @@ document.addEventListener('click', function (e) {
 document.addEventListener('change', function (e) {
   if (e.target.name === 'search-scope') { updateSearchScope(e.target.value); }
 });
+
+// ── Article list resizer ───────────────────────────────────────────────────
+(function () {
+  var STORAGE_KEY = 'article-list-width';
+  var MIN_WIDTH = 200;
+  var MAX_WIDTH = 900;
+
+  function applyWidth(px) {
+    var el = document.getElementById('article-list');
+    if (el) el.style.width = px + 'px';
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var saved = parseInt(localStorage.getItem(STORAGE_KEY), 10);
+    if (saved && saved >= MIN_WIDTH && saved <= MAX_WIDTH) applyWidth(saved);
+
+    var resizer = document.getElementById('article-list-resizer');
+    if (!resizer) return;
+
+    resizer.addEventListener('mousedown', function (e) {
+      e.preventDefault();
+      var list = document.getElementById('article-list');
+      var startX = e.clientX;
+      var startWidth = list.offsetWidth;
+
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      resizer.classList.add('bg-blue-500');
+
+      function onMove(e) {
+        var w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + e.clientX - startX));
+        applyWidth(w);
+      }
+
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        resizer.classList.remove('bg-blue-500');
+        var list = document.getElementById('article-list');
+        if (list) localStorage.setItem(STORAGE_KEY, list.offsetWidth);
+      }
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+})();
 
 // ── stopPropagation for action buttons inside article rows ─────────────────
 // Attached via htmx:afterSettle so each button gets its own listener —

@@ -199,7 +199,7 @@ async def list_feeds_with_stats(db: AsyncSession) -> list[dict]:
     rows = (await db.execute(
         select(Feed, func.coalesce(article_counts.c.article_count, 0))
         .outerjoin(article_counts, article_counts.c.feed_id == Feed.id)
-        .order_by(Feed.status.desc(), Feed.subscriber_count.desc())
+        .order_by(Feed.status.desc(), func.lower(Feed.title))
     )).all()
     return [{"feed": row[0], "article_count": row[1]} for row in rows]
 
