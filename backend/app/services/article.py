@@ -156,6 +156,20 @@ async def list_articles(
 
     rows = (await db.execute(stmt)).all()
 
+    # Batch-fetch labels for all articles
+    labels_by_article: dict[int, list[dict]] = {}
+    if rows:
+        from app.models.label import Label
+        article_ids = [row[0].id for row in rows]
+        labels_rows = (await db.execute(
+            select(ArticleLabel.article_id, Label.id, Label.name, Label.color)
+            .join(Label, Label.id == ArticleLabel.label_id)
+            .where(ArticleLabel.article_id.in_(article_ids), ArticleLabel.user_id == user.id)
+            .order_by(ArticleLabel.article_id, Label.position, Label.name)
+        )).all()
+        for aid, lid, lname, lcolor in labels_rows:
+            labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
+
     items = []
     for article, state, feed_title, custom_title in rows:
         items.append(ArticleListItem(
@@ -173,8 +187,20 @@ async def list_articles(
             is_read=state.is_read if state else False,
             is_starred=state.is_starred if state else False,
             is_archived=state.is_archived if state else False,
+            labels=labels_by_article.get(article.id, []),
         ))
     return items
+
+
+async def _fetch_labels(article_id: int, user_id: int, db: AsyncSession) -> list[dict]:
+    from app.models.label import Label
+    rows = (await db.execute(
+        select(ArticleLabel.label_id, Label.name, Label.color)
+        .join(Label, Label.id == ArticleLabel.label_id)
+        .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user_id)
+        .order_by(Label.position, Label.name)
+    )).all()
+    return [{"id": r[0], "name": r[1], "color": r[2]} for r in rows]
 
 
 async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleResponse | None:
@@ -305,6 +331,7 @@ async def toggle_article_state(
         is_starred=state.is_starred,
         is_archived=state.is_archived,
         read_at=state.read_at,
+        labels=await _fetch_labels(article_id, user.id, db),
     )
 
 
@@ -382,4 +409,5 @@ async def update_article_state(
         is_starred=state.is_starred,
         is_archived=state.is_archived,
         read_at=state.read_at,
+        labels=await _fetch_labels(article_id, user.id, db),
     )

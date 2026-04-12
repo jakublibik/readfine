@@ -1,0 +1,42 @@
+{% if all_labels %}
+  {% for label in all_labels %}
+  <button
+    class="flex w-full items-center gap-2 px-3 py-1.5 hover:bg-gray-50 text-left text-sm"
+    data-stop-propagation
+    hx-post="/htmx/articles/{{ article_id }}/labels/{{ label.id }}/toggle"
+    hx-target="#label-picker"
+    hx-swap="innerHTML">
+    <span class="w-3 h-3 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+    <span class="flex-1 truncate text-gray-700">{{ label.name }}</span>
+    {% if label.id in assigned %}
+    <svg class="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+    </svg>
+    {% endif %}
+  </button>
+  {% endfor %}
+{% else %}
+  <p class="px-3 py-2 text-xs text-gray-400">No labels created yet.</p>
+{% endif %}
+
+{% if show_oob %}
+<div id="article-labels-{{ article_id }}" hx-swap-oob="outerHTML" class="flex items-center">
+  {% if assigned_labels %}
+  <button
+    class="flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0 leading-none"
+    data-stop-propagation
+    data-label-trigger
+    hx-get="/htmx/articles/{{ article_id }}/labels"
+    hx-target="#label-picker"
+    hx-swap="innerHTML"
+    title="{{ assigned_labels | map(attribute='name') | join(', ') }}">
+    {% for label in assigned_labels[:3] %}
+      <span class="inline-block w-2 h-2 rounded-full opacity-80" style="background-color: {{ label.color }}"></span>
+    {% endfor %}
+    {% if assigned_labels | length > 3 %}
+      <span class="text-[10px] text-gray-400 leading-none ml-0.5">+{{ assigned_labels | length - 3 }}</span>
+    {% endif %}
+  </button>
+  {% endif %}
+</div>
+{% endif %}

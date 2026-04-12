@@ -349,6 +349,41 @@ document.addEventListener('change', function (e) {
   if (e.target.name === 'search-scope') { updateSearchScope(e.target.value); }
 });
 
+// ── Label picker ──────────────────────────────────────────────────────────
+(function () {
+  function closePicker() {
+    var p = document.getElementById('label-picker');
+    if (p) p.classList.add('hidden');
+  }
+
+  // Position picker near trigger button before HTMX request fires
+  document.body.addEventListener('htmx:beforeRequest', function (e) {
+    if (!e.target.hasAttribute('data-label-trigger')) return;
+    var rect = e.target.getBoundingClientRect();
+    var p = document.getElementById('label-picker');
+    if (!p) return;
+    var top = rect.bottom + 2;
+    var left = rect.left;
+    // Clamp to viewport right edge
+    if (left + 220 > window.innerWidth) left = window.innerWidth - 224;
+    p.style.top = top + 'px';
+    p.style.left = left + 'px';
+    p.classList.remove('hidden');
+  });
+
+  // Close on outside click
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#label-picker') && !e.target.closest('[data-label-trigger]')) {
+      closePicker();
+    }
+  });
+
+  // Close on Escape
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closePicker();
+  });
+})();
+
 // ── Article list resizer ───────────────────────────────────────────────────
 (function () {
   var STORAGE_KEY = 'article-list-width';

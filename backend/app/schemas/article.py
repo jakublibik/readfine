@@ -33,6 +33,7 @@ class ArticleListItem(BaseModel):
     is_read: bool
     is_starred: bool
     is_archived: bool
+    labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
 
     model_config = {"from_attributes": False}
 
@@ -57,5 +58,6 @@ class ArticleResponse(BaseModel):
     is_archived: bool
     read_at: datetime | None
     share_token: str | None = None
+    labels: list[dict] = []
 
     model_config = {"from_attributes": False}

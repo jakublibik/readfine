@@ -409,6 +409,74 @@ async def htmx_toggle_archive(
     return _archive_response(request, article)
 
 
+@router.get("/htmx/articles/{article_id}/labels", response_class=HTMLResponse)
+async def htmx_article_labels(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    all_labels = await list_labels(user, db)
+    assigned: set[int] = set((await db.execute(
+        select(ArticleLabel.label_id)
+        .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user.id)
+    )).scalars())
+    return templates.TemplateResponse(request, "app/partials/label_picker.html", {
+        "article_id": article_id,
+        "all_labels": all_labels,
+        "assigned": assigned,
+        "show_oob": False,
+        "assigned_labels": [],
+    })
+
+
+@router.post("/htmx/articles/{article_id}/labels/{label_id}/toggle", response_class=HTMLResponse)
+async def htmx_toggle_article_label(
+    article_id: int,
+    label_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.label import Label
+    from app.services.label_service import assign_label, remove_label
+
+    existing = (await db.execute(
+        select(ArticleLabel).where(
+            ArticleLabel.article_id == article_id,
+            ArticleLabel.label_id == label_id,
+            ArticleLabel.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+
+    if existing:
+        await remove_label(user, article_id, label_id, db)
+    else:
+        await assign_label(user, article_id, label_id, db)
+
+    all_labels = await list_labels(user, db)
+    assigned_labels_rows = (await db.execute(
+        select(Label.id, Label.name, Label.color)
+        .join(ArticleLabel, ArticleLabel.label_id == Label.id)
+        .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user.id)
+        .order_by(Label.position, Label.name)
+    )).all()
+    assigned_labels = [{"id": r[0], "name": r[1], "color": r[2]} for r in assigned_labels_rows]
+    assigned: set[int] = {l["id"] for l in assigned_labels}
+
+    picker_html = templates.env.get_template("app/partials/label_picker.html").render(
+        request=request,
+        article_id=article_id,
+        all_labels=all_labels,
+        assigned=assigned,
+        show_oob=True,
+        assigned_labels=assigned_labels,
+    )
+    response = HTMLResponse(picker_html)
+    response.headers["HX-Trigger"] = "sidebarRefresh"
+    return response
+
+
 @router.post("/htmx/articles/{article_id}/share", response_class=HTMLResponse)
 @limiter.limit(app_settings_config.rate_limit_share_token)
 async def htmx_toggle_share(
