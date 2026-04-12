@@ -567,6 +567,12 @@ async def _import_filters_element(
         await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db)
 
 
+def _filter_fingerprint(name: str, conditions: list[FilterConditionCreate]) -> tuple:
+    """Return a hashable key representing (name, conditions) for duplicate detection."""
+    cond_key = frozenset((c.field, c.operator, c.value) for c in conditions)
+    return (name, cond_key)
+
+
 async def _import_filters(
     user: User,
     filters_data: list[dict[str, Any]],
@@ -576,6 +582,17 @@ async def _import_filters(
     result: ImportResult,
     db: AsyncSession,
 ) -> None:
+    # Build set of existing filter fingerprints for duplicate detection
+    existing_result = await db.execute(
+        select(Filter)
+        .where(Filter.user_id == user.id)
+        .options(selectinload(Filter.conditions))
+    )
+    existing_fingerprints: set[tuple] = set()
+    for f in existing_result.scalars():
+        cond_key = frozenset((c.field, c.operator, c.value) for c in f.conditions)
+        existing_fingerprints.add((f.name, cond_key))
+
     for i, fd in enumerate(filters_data):
         try:
             name = str(fd.get("name") or f"Imported filter {i + 1}")[:100]
@@ -591,7 +608,14 @@ async def _import_filters(
                 continue
 
             payload.name = name
+
+            fp = _filter_fingerprint(name, payload.conditions)
+            if fp in existing_fingerprints:
+                result.filters_skipped += 1
+                continue
+
             await create_filter(user.id, payload, db)
+            existing_fingerprints.add(fp)
             result.filters_added += 1
 
         except Exception as exc:
