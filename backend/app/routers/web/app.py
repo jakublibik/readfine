@@ -469,9 +469,12 @@ async def htmx_toggle_article_label(
     )).scalar_one_or_none()
 
     if existing:
-        await remove_label(user, article_id, label_id, db)
+        ok = await remove_label(user, article_id, label_id, db)
     else:
-        await assign_label(user, article_id, label_id, db)
+        ok = await assign_label(user, article_id, label_id, db)
+
+    if not ok:
+        return HTMLResponse("", status_code=404)
 
     all_labels = await list_labels(user, db)
     assigned_labels_rows = (await db.execute(
