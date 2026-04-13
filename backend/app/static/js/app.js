@@ -349,6 +349,60 @@ document.addEventListener('change', function (e) {
   if (e.target.name === 'search-scope') { updateSearchScope(e.target.value); }
 });
 
+// ── Article read state (class toggle, no DOM swap) ────────────────────────
+document.addEventListener('articleReadChanged', function (e) {
+  var detail = e.detail;
+  var row = document.getElementById('article-row-' + detail.id);
+  if (!row) return;
+  var isRead = detail.isRead;
+  row.classList.toggle('opacity-60', isRead);
+  row.dataset.isRead = isRead ? 'true' : 'false';
+  var title = row.querySelector('p');
+  if (title) {
+    if (isRead) {
+      title.classList.remove('font-bold', 'text-gray-900');
+      title.classList.add('font-medium', 'text-gray-800');
+    } else {
+      title.classList.remove('font-medium', 'text-gray-800');
+      title.classList.add('font-bold', 'text-gray-900');
+    }
+  }
+});
+
+document.addEventListener('articleStarChanged', function (e) {
+  var detail = e.detail;
+  var row = document.getElementById('article-row-' + detail.id);
+  if (!row) return;
+  var btn = row.querySelector('[data-star-btn]');
+  if (!btn) return;
+  var isStarred = detail.isStarred;
+  var isRead = row.dataset.isRead === 'true';
+  var span = btn.querySelector('span');
+  if (span) {
+    if (isStarred) {
+      span.textContent = '★';
+      span.className = span.className
+        .replace('text-gray-300', isRead ? 'text-gray-800' : 'text-gray-900')
+        .replace(' hover:text-gray-800', '');
+    } else {
+      span.textContent = '☆';
+      span.className = span.className
+        .replace('text-gray-900', 'text-gray-300')
+        .replace('text-gray-800', 'text-gray-300');
+      if (!span.className.includes('hover:text-gray-800')) span.className += ' hover:text-gray-800';
+    }
+  }
+  btn.title = isStarred ? 'Remove star' : 'Star article';
+});
+
+document.addEventListener('articleArchiveChanged', function (e) {
+  var detail = e.detail;
+  var row = document.getElementById('article-row-' + detail.id);
+  if (!row) return;
+  var indicator = row.querySelector('[data-archived-indicator]');
+  if (indicator) indicator.classList.toggle('hidden', !detail.isArchived);
+});
+
 // ── Label picker ──────────────────────────────────────────────────────────
 (function () {
   function closePicker() {
@@ -373,6 +427,7 @@ document.addEventListener('change', function (e) {
 
   // Close on outside click
   document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-close-picker]')) { closePicker(); return; }
     if (!e.target.closest('#label-picker') && !e.target.closest('[data-label-trigger]')) {
       closePicker();
     }

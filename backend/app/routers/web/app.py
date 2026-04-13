@@ -244,6 +244,7 @@ async def htmx_article_list(
     sort_order = settings.default_sort_order if settings else "newest"
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
+    label_display = settings.label_display if settings else "indicator"
     ua = request.headers.get("user-agent", "")
     is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
@@ -296,6 +297,7 @@ async def htmx_article_list(
         "search_query": q.strip() if q and q.strip() else None,
         "mark_read_on_scroll": mark_read_on_scroll,
         "density": density,
+        "label_display": label_display,
     })
 
 
@@ -317,42 +319,55 @@ async def htmx_article_detail(
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {"article": article, "mark_read_on_scroll": mark_read_on_scroll})
 
 
-def _read_response(request: Request, article) -> HTMLResponse:
-    """Return read button HTML + OOB article row update + sidebarRefresh trigger."""
+async def _get_row_context(user, request: Request, db) -> dict:
+    """Return density and label_display for article row rendering."""
+    s = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
+    ua = request.headers.get("user-agent", "")
+    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
+    density = ((s.list_density_mobile if is_mobile else s.list_density_web) if s else "comfortable")
+    label_display = s.label_display if s else "indicator"
+    return {"density": density, "label_display": label_display}
+
+
+def _read_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+    """Return read button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
+    import json
     btn_html = templates.env.get_template("app/partials/read_button.html").render(
         article=article, request=request
     )
-    row_html = templates.env.get_template("app/partials/article_row.html").render(
-        article=article, request=request, oob=True
-    )
-    response = HTMLResponse(btn_html + row_html)
-    response.headers["HX-Trigger"] = "sidebarRefresh"
+    response = HTMLResponse(btn_html)
+    response.headers["HX-Trigger"] = json.dumps({
+        "sidebarRefresh": True,
+        "articleReadChanged": {"id": article.id, "isRead": article.is_read},
+    })
     return response
 
 
-def _star_response(request: Request, article) -> HTMLResponse:
-    """Return star icon HTML + OOB article row update + sidebarRefresh trigger."""
+def _star_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+    """Return star icon HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
+    import json
     btn_html = templates.env.get_template("app/partials/star_icon.html").render(
         article=article, request=request
     )
-    row_html = templates.env.get_template("app/partials/article_row.html").render(
-        article=article, request=request, oob=True
-    )
-    response = HTMLResponse(btn_html + row_html)
-    response.headers["HX-Trigger"] = "sidebarRefresh"
+    response = HTMLResponse(btn_html)
+    response.headers["HX-Trigger"] = json.dumps({
+        "sidebarRefresh": True,
+        "articleStarChanged": {"id": article.id, "isStarred": article.is_starred},
+    })
     return response
 
 
-def _archive_response(request: Request, article) -> HTMLResponse:
-    """Return archive button HTML + OOB article row update + sidebarRefresh trigger."""
+def _archive_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+    """Return archive button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
+    import json
     btn_html = templates.env.get_template("app/partials/archive_button.html").render(
         article=article, request=request
     )
-    row_html = templates.env.get_template("app/partials/article_row.html").render(
-        article=article, request=request, oob=True
-    )
-    response = HTMLResponse(btn_html + row_html)
-    response.headers["HX-Trigger"] = "sidebarRefresh"
+    response = HTMLResponse(btn_html)
+    response.headers["HX-Trigger"] = json.dumps({
+        "sidebarRefresh": True,
+        "articleArchiveChanged": {"id": article.id, "isArchived": article.is_archived},
+    })
     return response
 
 
@@ -366,7 +381,8 @@ async def htmx_toggle_read(
     article = await toggle_article_state(user, article_id, "is_read", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return _read_response(request, article)
+    ctx = await _get_row_context(user, request, db)
+    return _read_response(request, article, **ctx)
 
 
 @router.post("/htmx/articles/{article_id}/set-read", response_class=HTMLResponse)
@@ -380,7 +396,8 @@ async def htmx_set_read(
     article = await update_article_state(user, article_id, ArticleStateUpdate(is_read=state), db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return _read_response(request, article)
+    ctx = await _get_row_context(user, request, db)
+    return _read_response(request, article, **ctx)
 
 
 @router.post("/htmx/articles/{article_id}/star", response_class=HTMLResponse)
@@ -393,7 +410,8 @@ async def htmx_toggle_star(
     article = await toggle_article_state(user, article_id, "is_starred", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return _star_response(request, article)
+    ctx = await _get_row_context(user, request, db)
+    return _star_response(request, article, **ctx)
 
 
 @router.post("/htmx/articles/{article_id}/archive", response_class=HTMLResponse)
@@ -406,7 +424,8 @@ async def htmx_toggle_archive(
     article = await toggle_article_state(user, article_id, "is_archived", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    return _archive_response(request, article)
+    ctx = await _get_row_context(user, request, db)
+    return _archive_response(request, article, **ctx)
 
 
 @router.get("/htmx/articles/{article_id}/labels", response_class=HTMLResponse)
@@ -464,6 +483,10 @@ async def htmx_toggle_article_label(
     assigned_labels = [{"id": r[0], "name": r[1], "color": r[2]} for r in assigned_labels_rows]
     assigned: set[int] = {l["id"] for l in assigned_labels}
 
+    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    settings = settings_result.scalar_one_or_none()
+    label_display = settings.label_display if settings else "indicator"
+
     picker_html = templates.env.get_template("app/partials/label_picker.html").render(
         request=request,
         article_id=article_id,
@@ -471,6 +494,7 @@ async def htmx_toggle_article_label(
         assigned=assigned,
         show_oob=True,
         assigned_labels=assigned_labels,
+        label_display=label_display,
     )
     response = HTMLResponse(picker_html)
     response.headers["HX-Trigger"] = "sidebarRefresh"

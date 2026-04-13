@@ -770,6 +770,11 @@ async def settings_preferences_save(
 
     s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
 
+    label_display = form.get("label_display", "indicator")
+    if label_display not in {"none", "indicator", "dots"}:
+        label_display = "indicator"
+    s.label_display = label_display
+
     articles_per_page = safe_int(form.get("articles_per_page"), 50)
     if articles_per_page is not None:
         s.articles_per_page = max(10, min(200, articles_per_page))

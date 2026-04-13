@@ -102,6 +102,19 @@
           </select>
         </div>
 
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Label display</label>
+            <p class="text-xs text-gray-500 mt-0.5">How labels appear in the article list</p>
+          </div>
+          <select name="label_display"
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="none" {% if s.label_display == "none" %}selected{% endif %}>None</option>
+            <option value="indicator" {% if s.label_display == "indicator" %}selected{% endif %}>Indicator</option>
+            <option value="dots" {% if s.label_display == "dots" %}selected{% endif %}>Top 5</option>
+          </select>
+        </div>
+
       </div>
     </section>
 

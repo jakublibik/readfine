@@ -16,10 +16,11 @@
   {% for article in articles %}
     {% include "app/partials/article_row.html" %}
   {% endfor %}
+  <div aria-hidden="true" style="height:100vh"></div>
 {% else %}
   <div class="flex items-center justify-center h-48 text-gray-400 text-sm">
     {% if search_query %}No results found.{% else %}No articles found.{% endif %}
   </div>
 {% endif %}
 
-<script type="application/json" id="article-list-cfg">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}, "density": {{ density | default("comfortable") | tojson }}}</script>
+<script type="application/json" id="article-list-cfg">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}, "density": {{ density | default("comfortable") | tojson }}, "labelDisplay": {{ label_display | default("indicator") | tojson }}}</script>

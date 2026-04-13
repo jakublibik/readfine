@@ -4,8 +4,8 @@
         class="leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
         title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
   {% if article.is_starred %}
-    <span class="text-lg text-yellow-400">★</span>
+    <span class="text-lg text-gray-900">★</span>
   {% else %}
-    <span class="text-lg text-gray-300 hover:text-yellow-300">☆</span>
+    <span class="text-lg text-gray-300 hover:text-gray-500">☆</span>
   {% endif %}
 </button>

@@ -45,6 +45,7 @@ class UserSettings(Base):
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     language: Mapped[str] = mapped_column(String(10), default="en")
     keyboard_shortcuts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    label_display: Mapped[str] = mapped_column(String(20), default="indicator")
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")

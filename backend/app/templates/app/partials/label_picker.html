@@ -1,3 +1,10 @@
+<div class="flex justify-end px-2 pt-1 pb-0.5">
+  <button data-close-picker class="text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0.5 leading-none" title="Close">
+    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+    </svg>
+  </button>
+</div>
 {% if all_labels %}
   {% for label in all_labels %}
   <button
@@ -20,8 +27,9 @@
 {% endif %}
 
 {% if show_oob %}
+{% set ld = label_display | default("indicator") %}
 <div id="article-labels-{{ article_id }}" hx-swap-oob="outerHTML" class="flex items-center">
-  {% if assigned_labels %}
+  {% if ld != "none" %}
   <button
     class="flex items-center gap-0.5 cursor-pointer bg-transparent border-0 p-0 leading-none"
     data-stop-propagation
@@ -29,12 +37,24 @@
     hx-get="/htmx/articles/{{ article_id }}/labels"
     hx-target="#label-picker"
     hx-swap="innerHTML"
-    title="{{ assigned_labels | map(attribute='name') | join(', ') }}">
-    {% for label in assigned_labels[:3] %}
-      <span class="inline-block w-2 h-2 rounded-full opacity-80" style="background-color: {{ label.color }}"></span>
-    {% endfor %}
-    {% if assigned_labels | length > 3 %}
-      <span class="text-[10px] text-gray-400 leading-none ml-0.5">+{{ assigned_labels | length - 3 }}</span>
+    title="{% if assigned_labels %}{{ assigned_labels | map(attribute='name') | join(', ') }}{% else %}Labels{% endif %}">
+    {% if ld == "indicator" %}
+      {% if assigned_labels %}
+        <span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
+      {% else %}
+        <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+      {% endif %}
+    {% else %}
+      {% if assigned_labels %}
+        {% for label in assigned_labels[:5] %}
+          <span class="inline-block w-[9px] h-[9px] rounded-full opacity-80" style="background-color: {{ label.color }}"></span>
+        {% endfor %}
+        {% if assigned_labels | length > 5 %}
+          <span class="text-[10px] text-gray-400 leading-none ml-0.5">+{{ assigned_labels | length - 5 }}</span>
+        {% endif %}
+      {% else %}
+        <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+      {% endif %}
     {% endif %}
   </button>
   {% endif %}
