@@ -779,6 +779,14 @@ async def settings_preferences_save(
     if articles_per_page is not None:
         s.articles_per_page = max(10, min(200, articles_per_page))
 
+    bucket_small_max = safe_int(form.get("bucket_small_max"), 640)
+    bucket_medium_max = safe_int(form.get("bucket_medium_max"), 1100)
+    if bucket_small_max is not None and bucket_medium_max is not None:
+        bucket_small_max = max(320, min(1000, bucket_small_max))
+        bucket_medium_max = max(bucket_small_max + 100, min(2000, bucket_medium_max))
+        s.bucket_small_max = bucket_small_max
+        s.bucket_medium_max = bucket_medium_max
+
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,

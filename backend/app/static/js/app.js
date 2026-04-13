@@ -1,4 +1,44 @@
-// Open article content links in a new tab
+// ── Layout bucket system ──────────────────────────────────────────────────
+(function () {
+  var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
+
+  function getBuckets() {
+    return window._buckets || { smallMax: 640, mediumMax: 1100 };
+  }
+
+  function getCurrentBucket() {
+    var b = getBuckets();
+    var w = window.innerWidth;
+    if (w <= b.smallMax) return 'small';
+    if (w <= b.mediumMax) return 'medium';
+    return 'large';
+  }
+
+  function getLayout(bucket) {
+    try {
+      return localStorage.getItem('layout_' + bucket) || LAYOUT_DEFAULTS[bucket];
+    } catch (e) {
+      return LAYOUT_DEFAULTS[bucket];
+    }
+  }
+
+  function applyBucket() {
+    var bucket = getCurrentBucket();
+    var layout = getLayout(bucket);
+    var html = document.documentElement;
+    html.dataset.bucket = bucket;
+    html.dataset.layout = layout;
+  }
+
+  window._getLayout = getLayout;
+  window._getCurrentBucket = getCurrentBucket;
+  window._applyBucket = applyBucket;
+
+  document.addEventListener('DOMContentLoaded', applyBucket);
+  window.addEventListener('resize', applyBucket);
+})();
+
+// ── Open article content links in a new tab
 function openProseLinksInNewTab(root) {
   (root || document).querySelectorAll('.prose a[href]').forEach(function (a) {
     a.setAttribute('target', '_blank');

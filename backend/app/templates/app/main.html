@@ -2,6 +2,12 @@
 
 {% block title %}Readfine{% endblock %}
 
+{% block scripts %}
+<script>
+  window._buckets = { smallMax: {{ bucket_small_max }}, mediumMax: {{ bucket_medium_max }} };
+</script>
+{% endblock %}
+
 {% block content %}
 <!-- Search modal overlay -->
 <div id="search-modal-overlay"

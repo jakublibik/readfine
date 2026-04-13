@@ -45,6 +45,8 @@ class UserSettings(Base):
     language: Mapped[str] = mapped_column(String(10), default="en")
     keyboard_shortcuts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     label_display: Mapped[str] = mapped_column(String(20), default="indicator")
+    bucket_small_max: Mapped[int] = mapped_column(SmallInteger, default=640)
+    bucket_medium_max: Mapped[int] = mapped_column(SmallInteger, default=1100)
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")

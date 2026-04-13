@@ -118,6 +118,34 @@
       </div>
     </section>
 
+    <section>
+      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Layout breakpoints</h2>
+      <p class="text-xs text-gray-500 mb-3">Viewport widths (px) that separate small / medium / large buckets.</p>
+      <div class="space-y-4">
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Small → Medium</label>
+            <p class="text-xs text-gray-500 mt-0.5">Below this width = small bucket</p>
+          </div>
+          <input type="number" name="bucket_small_max" value="{{ s.bucket_small_max }}"
+                 min="320" max="1000"
+                 class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+        </div>
+
+        <div class="flex items-center justify-between">
+          <div>
+            <label class="text-sm font-medium text-gray-700">Medium → Large</label>
+            <p class="text-xs text-gray-500 mt-0.5">Below this width = medium bucket</p>
+          </div>
+          <input type="number" name="bucket_medium_max" value="{{ s.bucket_medium_max }}"
+                 min="420" max="2000"
+                 class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+        </div>
+
+      </div>
+    </section>
+
     <div>
       <button type="submit"
               class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
@@ -126,6 +154,65 @@
     </div>
 
   </form>
+
+  <!-- Layout per bucket (per-device, stored in localStorage) -->
+  <section class="mt-8 pt-6 border-t border-gray-200">
+    <h2 class="text-sm font-medium text-gray-700 mb-1">Layout per bucket</h2>
+    <p class="text-xs text-gray-500 mb-4">Saved for this device only. 1 = single panel, 2 = two panels, 3 = three panels.</p>
+    <div class="space-y-4">
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Small bucket</label>
+          <p class="text-xs text-gray-500 mt-0.5">≤ {{ s.bucket_small_max }}px</p>
+        </div>
+        <select data-layout-bucket="small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="1">1 panel</option>
+          <option value="2">2 panels</option>
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Medium bucket</label>
+          <p class="text-xs text-gray-500 mt-0.5">{{ s.bucket_small_max + 1 }}–{{ s.bucket_medium_max }}px</p>
+        </div>
+        <select data-layout-bucket="medium" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="1">1 panel</option>
+          <option value="2">2 panels</option>
+          <option value="3">3 panels</option>
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Large bucket</label>
+          <p class="text-xs text-gray-500 mt-0.5">&gt; {{ s.bucket_medium_max }}px</p>
+        </div>
+        <select data-layout-bucket="large" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="2">2 panels</option>
+          <option value="3">3 panels</option>
+        </select>
+      </div>
+
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      var defaults = { small: '1', medium: '2', large: '3' };
+      document.querySelectorAll('[data-layout-bucket]').forEach(function (sel) {
+        var bucket = sel.dataset.layoutBucket;
+        var val;
+        try { val = localStorage.getItem('layout_' + bucket); } catch (e) {}
+        sel.value = val || defaults[bucket];
+        sel.addEventListener('change', function () {
+          try { localStorage.setItem('layout_' + bucket, sel.value); } catch (e) {}
+          if (window._applyBucket) window._applyBucket();
+        });
+      });
+    })();
+  </script>
 
   <!-- Change password -->
   <section class="mt-10 pt-6 border-t border-gray-200">

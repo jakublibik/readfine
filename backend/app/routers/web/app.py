@@ -37,7 +37,15 @@ async def main_app(
     if not user.last_active_at or user.last_active_at < now - timedelta(hours=1):
         user.last_active_at = now
         await db.commit()
-    return templates.TemplateResponse(request, "app/main.html", {"user": user})
+    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
+    settings = settings_result.scalar_one_or_none()
+    bucket_small_max = settings.bucket_small_max if settings else 640
+    bucket_medium_max = settings.bucket_medium_max if settings else 1100
+    return templates.TemplateResponse(request, "app/main.html", {
+        "user": user,
+        "bucket_small_max": bucket_small_max,
+        "bucket_medium_max": bucket_medium_max,
+    })
 
 
 # ── HTMX fragments ────────────────────────────────────────────────────────────
