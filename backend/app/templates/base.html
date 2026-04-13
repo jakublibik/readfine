@@ -16,10 +16,10 @@
     </style>
     <script>
       (function () {
-        try {
-          if (localStorage.getItem('sidebarPinned') === 'false')
-            document.documentElement.classList.add('sidebar-unpinned');
-        } catch (e) {}
+        var pinned = true;
+        try { pinned = localStorage.getItem('sidebarPinned') !== 'false'; } catch (e) {}
+        window._sidebarPinned = pinned;
+        if (!pinned) document.documentElement.classList.add('sidebar-unpinned');
       })();
     </script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>

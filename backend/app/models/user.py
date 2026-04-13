@@ -40,7 +40,6 @@ class UserSettings(Base):
     mark_read_on_scroll: Mapped[bool] = mapped_column(Boolean, default=True)
     unread_filter: Mapped[str] = mapped_column(String(20), default="adaptive")
     default_sort_order: Mapped[str] = mapped_column(String(10), default="newest")
-    left_panel_pinned: Mapped[bool] = mapped_column(Boolean, default=True)
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     language: Mapped[str] = mapped_column(String(10), default="en")

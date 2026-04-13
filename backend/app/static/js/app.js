@@ -166,8 +166,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 // Sidebar pin toggle — localStorage + CSS class, no server state
 document.body.addEventListener('click', function (e) {
   if (!e.target.closest('[data-action="toggle-sidebar-pin"]')) return;
-  var pinned = localStorage.getItem('sidebarPinned') !== 'false';
-  var next = !pinned;
+  var next = !window._sidebarPinned;
+  window._sidebarPinned = next;
   try { localStorage.setItem('sidebarPinned', next ? 'true' : 'false'); } catch (err) {}
   var html = document.documentElement;
   html.classList.toggle('sidebar-unpinned', !next);
