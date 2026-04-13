@@ -12,7 +12,16 @@
       .prose h3 { font-size: 0.95em !important; }
       .prose h4 { font-size: 0.9em !important; }
       .article-row { transition: opacity 150ms ease; }
+      html.sidebar-unpinned #sidebar { width: 3rem; }
     </style>
+    <script>
+      (function () {
+        try {
+          if (localStorage.getItem('sidebarPinned') === 'false')
+            document.documentElement.classList.add('sidebar-unpinned');
+        } catch (e) {}
+      })();
+    </script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     <script src="/static/js/csrf.js"></script>
     <script src="/static/js/app.js" defer></script>

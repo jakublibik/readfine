@@ -163,12 +163,20 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 });
 
-// Sidebar pin toggle — width class swap on sidebarPinChanged event
-document.body.addEventListener('sidebarPinChanged', function (e) {
+// Sidebar pin toggle — localStorage + CSS class, no server state
+document.body.addEventListener('click', function (e) {
+  if (!e.target.closest('[data-action="toggle-sidebar-pin"]')) return;
+  var pinned = localStorage.getItem('sidebarPinned') !== 'false';
+  var next = !pinned;
+  try { localStorage.setItem('sidebarPinned', next ? 'true' : 'false'); } catch (err) {}
+  var html = document.documentElement;
+  html.classList.toggle('sidebar-unpinned', !next);
   var sidebar = document.getElementById('sidebar');
-  if (!sidebar) return;
-  sidebar.classList.toggle('w-56', e.detail.pinned);
-  sidebar.classList.toggle('w-12', !e.detail.pinned);
+  if (sidebar) {
+    sidebar.classList.toggle('w-56', next);
+    sidebar.classList.toggle('w-12', !next);
+  }
+  htmx.trigger(document.body, 'sidebarRefresh');
 });
 
 // Focus pw-error element when present (password change error in preferences)

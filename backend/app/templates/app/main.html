@@ -20,9 +20,10 @@
 
   <!-- Left panel: sidebar -->
   <aside id="sidebar"
-         class="{% if pinned %}w-56{% else %}w-12{% endif %} flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
+         class="w-56 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
          hx-get="/htmx/sidebar"
          hx-trigger="load, sidebarRefresh from:body, every 60s"
+         hx-vals="js:{pinned: localStorage.getItem('sidebarPinned') !== 'false'}"
          hx-swap="innerHTML">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
   </aside>

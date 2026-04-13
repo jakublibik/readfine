@@ -37,10 +37,7 @@ async def main_app(
     if not user.last_active_at or user.last_active_at < now - timedelta(hours=1):
         user.last_active_at = now
         await db.commit()
-    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
-    settings = settings_result.scalar_one_or_none()
-    pinned = settings.left_panel_pinned if settings else True
-    return templates.TemplateResponse(request, "app/main.html", {"user": user, "pinned": pinned})
+    return templates.TemplateResponse(request, "app/main.html", {"user": user})
 
 
 # ── HTMX fragments ────────────────────────────────────────────────────────────
@@ -148,9 +145,7 @@ async def htmx_sidebar(
         label_counts = {}
         label_unread_counts = {}
 
-    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
-    settings = settings_result.scalar_one_or_none()
-    pinned = settings.left_panel_pinned if settings else True
+    pinned = request.query_params.get("pinned", "true").lower() != "false"
 
     return templates.TemplateResponse(request, "app/partials/sidebar.html", {
         "user": user,
@@ -178,22 +173,9 @@ async def htmx_sidebar(
 async def htmx_sidebar_pin(
     request: Request,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
 ):
-    settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
-    settings = settings_result.scalar_one_or_none()
-    if settings is None:
-        settings = UserSettings(user_id=user.id)
-        db.add(settings)
-    settings.left_panel_pinned = not settings.left_panel_pinned
-    await db.commit()
-    pinned = settings.left_panel_pinned
-    response = HTMLResponse("")
-    response.headers["HX-Trigger"] = json.dumps({
-        "sidebarRefresh": True,
-        "sidebarPinChanged": {"pinned": pinned},
-    })
-    return response
+    # Pin state is now managed client-side via localStorage; endpoint kept for compatibility.
+    return HTMLResponse("", status_code=204)
 
 
 @router.get("/htmx/search-modal", response_class=HTMLResponse)

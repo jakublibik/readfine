@@ -6,7 +6,7 @@
 <div class="flex flex-col items-center py-2 gap-1 h-full">
 
   <!-- Expand button -->
-  <button hx-post="/htmx/sidebar/pin" hx-swap="none"
+  <button data-action="toggle-sidebar-pin"
           class="w-8 h-8 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 cursor-pointer bg-transparent border-0 mb-2"
           title="Expand sidebar">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -96,7 +96,7 @@
       </div>
     </div>
     <!-- Collapse button -->
-    <button hx-post="/htmx/sidebar/pin" hx-swap="none"
+    <button data-action="toggle-sidebar-pin"
             class="text-gray-400 hover:text-gray-600 bg-transparent border-0 p-0 cursor-pointer"
             title="Collapse sidebar">
       <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
