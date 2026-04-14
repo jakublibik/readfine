@@ -176,6 +176,7 @@ async def list_articles(
             id=article.id,
             feed_id=article.feed_id,
             feed_title=custom_title or feed_title,
+            url=article.url,
             title=article.title,
             author=article.author,
             summary=article.summary,

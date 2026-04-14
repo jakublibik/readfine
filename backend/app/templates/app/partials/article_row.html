@@ -6,7 +6,9 @@
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
      class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %} {% if d == 'compact' %}px-4 py-1.5{% else %}px-4 py-2{% endif %}"
      data-article-id="{{ article.id }}"
+     data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
+     data-url="{{ article.url or '' }}"
      hx-get="/htmx/articles/{{ article.id }}"
      hx-target="#article-detail"
      hx-swap="innerHTML">
@@ -26,9 +28,11 @@
         <span class="text-base text-gray-300 hover:text-gray-500">☆</span>
       {% endif %}
     </button>
-    <p class="text-sm leading-snug line-clamp-1 flex-1 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">
-      {{ article.title }}
-    </p>
+    <div class="flex-1 min-w-0 truncate">
+      <a data-article-title
+         {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
+         class="text-sm leading-snug whitespace-nowrap text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
+    </div>
     <div class="flex items-center gap-1 flex-shrink-0">
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
@@ -76,7 +80,7 @@
             hx-swap="none"
             data-stop-propagation
             data-star-btn
-            class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+            class="flex-shrink-0 w-5 text-center leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
         <span class="text-lg {% if article.is_read %}text-gray-700{% else %}text-gray-900{% endif %}">★</span>
@@ -84,11 +88,16 @@
         <span class="text-lg text-gray-300 hover:text-gray-500">☆</span>
       {% endif %}
     </button>
-    <p class="text-sm leading-snug line-clamp-2 {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</p>
+    <a data-article-title
+       {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
+       class="text-sm leading-snug line-clamp-2 text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
   </div>
 
-  <div class="flex items-center justify-between mt-0.5 pl-5">
-    <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+  <div class="flex items-center justify-between mt-0.5">
+    <div class="flex items-center gap-1.5 min-w-0">
+      <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-400 leading-none">▲</span>
+      <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+    </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
@@ -130,7 +139,7 @@
   </div>
 
   {% if d == "summary" and article.snippet %}
-    <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ article.snippet }}</p>
+    <p class="text-xs text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
   {% endif %}
 

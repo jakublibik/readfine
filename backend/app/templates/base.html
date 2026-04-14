@@ -13,6 +13,18 @@
       .prose h4 { font-size: 0.9em !important; }
       .article-row { transition: opacity 150ms ease; }
       html.sidebar-unpinned #sidebar { width: 3rem; }
+      html[data-layout="2"] #article-detail { display: none; }
+      html[data-layout="2"] #article-list-resizer { display: none; }
+      html[data-layout="2"] #article-list { flex: 1 !important; width: auto !important; }
+      .article-row .expand-indicator { visibility: hidden; }
+      .article-row.inline-expanded .expand-indicator { visibility: visible; }
+      .article-row.inline-expanded { box-shadow: inset 0 6px 8px -6px rgba(0,0,0,0.10); }
+      .article-row.inline-expanded [data-article-title] { font-weight: 700 !important; }
+      .article-row [data-article-title] { color: inherit; text-decoration: none; }
+      .article-row.inline-expanded [data-article-title] { cursor: pointer; }
+      #inline-article-detail-content .article-detail-title-row { display: none; }
+      #inline-article-detail-content .article-detail-meta { padding-left: 0 !important; }
+      #inline-article-detail-content article { padding-top: 0.75rem; }
     </style>
     <script>
       (function () {
@@ -20,6 +32,14 @@
         try { pinned = localStorage.getItem('sidebarPinned') !== 'false'; } catch (e) {}
         window._sidebarPinned = pinned;
         if (!pinned) document.documentElement.classList.add('sidebar-unpinned');
+
+        // Set initial data-layout before first paint (hardcoded defaults; app.js refines after DOMContentLoaded)
+        var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
+        var w = window.innerWidth;
+        var bucket = w <= 640 ? 'small' : w <= 1100 ? 'medium' : 'large';
+        var layout;
+        try { layout = localStorage.getItem('layout_' + bucket); } catch (e) {}
+        document.documentElement.dataset.layout = layout || LAYOUT_DEFAULTS[bucket];
       })();
     </script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>

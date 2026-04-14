@@ -50,7 +50,8 @@ document.body.addEventListener('htmx:afterSettle', function () { openProseLinksI
 
 // Hide duplicate h1 if it matches the article title (first 50 chars)
 function hideDuplicateH1() {
-  var articleEl = document.querySelector('#article-detail [data-article-id]');
+  var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
+                   document.querySelector('#inline-article-detail-content [data-article-id]'));
   if (!articleEl) return;
   var prose = articleEl.querySelector('.prose');
   if (!prose) return;
@@ -229,9 +230,11 @@ document.body.addEventListener('htmx:afterSettle', _focusPwError);
 
 // Article detail: auto mark-as-read timer
 document.body.addEventListener('htmx:afterSettle', function (evt) {
-  if (evt.detail.target.id !== 'article-detail') return;
+  var targetId = evt.detail.target.id;
+  var isDetailTarget = targetId === 'article-detail' || targetId === 'inline-article-detail-content';
+  if (!isDetailTarget) return;
 
-  var articleEl = document.querySelector('#article-detail [data-article-id]');
+  var articleEl = evt.detail.target.querySelector('[data-article-id]');
   if (!articleEl) return;
 
   var articleId = articleEl.dataset.articleId;
@@ -239,8 +242,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (isRead) return;
 
   var timer = setTimeout(function () {
-    var target = document.getElementById('read-btn-' + articleId);
-    if (target) {
+    var readBtn = evt.detail.target.querySelector('#read-btn-' + articleId);
+    if (readBtn) {
       htmx.ajax('POST', '/htmx/articles/' + articleId + '/set-read?state=true', {
         target: '#read-btn-' + articleId,
         swap: 'innerHTML'
@@ -258,7 +261,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }, 700);
 
-  document.getElementById('article-detail').addEventListener(
+  evt.detail.target.addEventListener(
     'htmx:beforeRequest', function () { clearTimeout(timer); }, { once: true }
   );
 });
@@ -405,7 +408,7 @@ document.addEventListener('articleReadChanged', function (e) {
   var isRead = detail.isRead;
   row.classList.toggle('opacity-60', isRead);
   row.dataset.isRead = isRead ? 'true' : 'false';
-  var title = row.querySelector('p');
+  var title = row.querySelector('p, [data-article-title]');
   if (title) {
     if (isRead) {
       title.classList.remove('font-bold', 'text-gray-900');
@@ -533,6 +536,91 @@ document.addEventListener('articleArchiveChanged', function (e) {
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
     });
+  });
+})();
+
+// ── 2-panel: inline article detail ────────────────────────────────────────
+(function () {
+  var INLINE_ID = 'inline-article-detail';
+  var CONTENT_ID = INLINE_ID + '-content';
+
+  // Title <a> click handling: prevent native navigation except when row is expanded in 2-panel
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest('[data-article-title]');
+    if (!a || !a.href) return;
+    var row = a.closest('.article-row');
+    if (!row) return;
+    var isExpanded = document.documentElement.dataset.layout === '2' && row.classList.contains('inline-expanded');
+    if (isExpanded) {
+      if (row.dataset.density !== 'compact') {
+        e.stopImmediatePropagation(); // comfortable: block HTMX, let <a> open new tab (row stays expanded)
+      }
+      // compact: do nothing — <a> opens link naturally, HTMX bubbles up and closeInline fires
+    } else {
+      e.preventDefault(); // block link navigation, let HTMX load detail
+    }
+  }, true);
+
+  function closeInline() {
+    var el = document.getElementById(INLINE_ID);
+    if (el) el.remove();
+    var expandedRow = document.querySelector('.article-row.inline-expanded');
+    if (expandedRow) expandedRow.classList.remove('inline-expanded');
+  }
+
+  window._closeInlineDetail = closeInline;
+
+  // Intercept HTMX requests targeting #article-detail when in 2-panel mode
+  document.body.addEventListener('htmx:beforeRequest', function (e) {
+    if (document.documentElement.dataset.layout !== '2') return;
+    if (!e.detail.target || e.detail.target.id !== 'article-detail') return;
+
+    e.preventDefault();
+
+    var row = e.detail.elt.closest('.article-row') || e.detail.elt;
+    if (!row || !row.dataset.articleId) return;
+
+    var articleId = row.dataset.articleId;
+
+    if (row.classList.contains('inline-expanded')) {
+      // Title clicks are intercepted by capture listener before HTMX sees them.
+      // Any click reaching here (▲, feed name, date, padding…) collapses the row.
+      closeInline();
+      return;
+    }
+
+    // Different article: close previous, open new
+    closeInline();
+
+    // Build inline container
+    var container = document.createElement('div');
+    container.id = INLINE_ID;
+    container.dataset.articleId = articleId;
+    container.className = 'border-b border-gray-200 bg-white';
+    container.style.boxShadow = 'inset 0 -6px 8px -6px rgba(0,0,0,0.06)';
+
+    var content = document.createElement('div');
+    content.id = CONTENT_ID;
+    container.appendChild(content);
+
+    row.insertAdjacentElement('afterend', container);
+    row.classList.add('inline-expanded');
+
+    // Load article content
+    htmx.ajax('GET', '/htmx/articles/' + articleId, {
+      target: '#' + CONTENT_ID,
+      swap: 'innerHTML'
+    });
+
+    // Scroll row into view
+    setTimeout(function () {
+      row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  });
+
+  // Close inline when article list reloads (nav change)
+  document.body.addEventListener('htmx:beforeSwap', function (e) {
+    if (e.detail.target.id === 'article-list') closeInline();
   });
 })();
 

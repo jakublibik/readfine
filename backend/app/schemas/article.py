@@ -21,6 +21,7 @@ class ArticleListItem(BaseModel):
     id: int
     feed_id: int | None
     feed_title: str | None  # resolved from Feed or UserFeed.custom_title
+    url: str | None
     title: str
     author: str | None
     summary: str | None

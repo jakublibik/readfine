@@ -7,7 +7,7 @@
   <header class="mb-6">
 
     <!-- Title row: star + title -->
-    <div class="flex items-baseline gap-2 mb-1">
+    <div class="article-detail-title-row flex items-baseline gap-2 mb-1">
       <div id="star-btn-{{ article.id }}" class="flex-shrink-0">
         {% include "app/partials/star_icon.html" %}
       </div>
@@ -22,7 +22,7 @@
     </div>
 
     <!-- Metadata row + ··· menu -->
-    <div class="flex items-center gap-x-2 text-sm text-gray-500 pl-5">
+    <div class="article-detail-meta flex items-center gap-x-2 text-sm text-gray-500 pl-5">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 flex-1 min-w-0">
         {% if article.feed_title %}<span class="truncate">{{ article.feed_title }}</span>{% endif %}
         {% if article.author %}<span class="shrink-0">· {{ article.author }}</span>{% endif %}
