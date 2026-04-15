@@ -281,10 +281,18 @@
   .mark-read-row { touch-action: manipulation; }
   .mark-read-row.touch-active [data-action="mark-read"] { opacity: 1; }
   .mark-read-row.touch-active .mark-read-badge { transform: translateX(-1.5rem); }
-  @media (hover: hover) {
+  @media (any-hover: hover) {
     .mark-read-row [data-action="mark-read"] { transition: opacity 150ms 0ms; }
-    .mark-read-row:hover [data-action="mark-read"] { opacity: 1; transition: opacity 150ms 1200ms; }
+    .mark-read-row:hover [data-action="mark-read"],
+    .mark-read-row:focus-within [data-action="mark-read"] { opacity: 1; transition: opacity 150ms 1200ms; }
     .mark-read-row .mark-read-badge { transition: transform 150ms 0ms; }
-    .mark-read-row:hover .mark-read-badge { transform: translateX(-1.5rem); transition: transform 150ms 1200ms; }
+    .mark-read-row:hover .mark-read-badge,
+    .mark-read-row:focus-within .mark-read-badge { transform: translateX(-1.5rem); transition: transform 150ms 1200ms; }
+  }
+  @media (any-hover: hover) and (pointer: coarse) {
+    .mark-read-row:hover [data-action="mark-read"],
+    .mark-read-row:focus-within [data-action="mark-read"] { transition-delay: 600ms; }
+    .mark-read-row:hover .mark-read-badge,
+    .mark-read-row:focus-within .mark-read-badge { transition-delay: 600ms; }
   }
 </style>

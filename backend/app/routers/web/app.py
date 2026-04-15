@@ -3,7 +3,7 @@ import json
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
-from app.services.article import get_article, list_articles, toggle_article_state, update_article_state
+from app.services.article import get_article, list_articles, mark_scope_read, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
 
@@ -184,6 +184,60 @@ async def htmx_sidebar_pin(
 ):
     # Pin state is now managed client-side via localStorage; endpoint kept for compatibility.
     return HTMLResponse("", status_code=204)
+
+
+@router.post("/htmx/articles/mark-read", response_class=HTMLResponse)
+async def htmx_mark_articles_read(
+    before: str = Form(...),
+    starred_only: str = Form(""),
+    archived_only: str = Form(""),
+    labeled_only: str = Form(""),
+    label_id: str = Form(""),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+    except ValueError:
+        return HTMLResponse("", status_code=400)
+    await mark_scope_read(
+        user, db, before=before_dt,
+        starred_only=starred_only == "1",
+        archived_only=archived_only == "1",
+        labeled_only=labeled_only == "1",
+        label_id=int(label_id) if label_id else None,
+    )
+    return HTMLResponse("", status_code=200)
+
+
+@router.post("/htmx/feeds/{feed_id}/mark-read", response_class=HTMLResponse)
+async def htmx_mark_feed_read(
+    feed_id: int,
+    before: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+    except ValueError:
+        return HTMLResponse("", status_code=400)
+    await mark_scope_read(user, db, before=before_dt, feed_id=feed_id)
+    return HTMLResponse("", status_code=200)
+
+
+@router.post("/htmx/folders/{folder_id}/mark-read", response_class=HTMLResponse)
+async def htmx_mark_folder_read(
+    folder_id: int,
+    before: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
+    except ValueError:
+        return HTMLResponse("", status_code=400)
+    await mark_scope_read(user, db, before=before_dt, folder_id=folder_id)
+    return HTMLResponse("", status_code=200)
 
 
 @router.get("/htmx/search-modal", response_class=HTMLResponse)

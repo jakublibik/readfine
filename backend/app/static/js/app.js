@@ -663,8 +663,10 @@ restoreSidebarCollapse();
 // ── Sidebar mark-all-as-read: refresh sidebar + article list after action ──
 document.body.addEventListener('htmx:afterRequest', function (e) {
   if (!e.detail.elt || e.detail.elt.dataset.action !== 'mark-read') return;
-  var row = e.detail.elt.closest('.mark-read-row');
-  if (row) row.classList.remove('touch-active');
+  document.querySelectorAll('.mark-read-row.touch-active').forEach(function (r) {
+    r.classList.remove('touch-active');
+  });
+  if (!e.detail.successful) return;
   htmx.trigger(document.body, 'sidebarRefresh');
   var active = document.querySelector('.nav-item.active[hx-get]');
   var url = active ? active.getAttribute('hx-get') : '/htmx/articles';
@@ -675,24 +677,36 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
 (function () {
   var _lpTimer = null;
   var _lpRow = null;
+  var _lpHideTimer = null;
   var _lpX = 0, _lpY = 0;
+
+  function hideActive() {
+    if (_lpHideTimer) { clearTimeout(_lpHideTimer); _lpHideTimer = null; }
+    document.querySelectorAll('.mark-read-row.touch-active').forEach(function (r) {
+      r.classList.remove('touch-active');
+    });
+    _lpRow = null;
+  }
 
   function clearLongPress() {
     if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
-    if (_lpRow) { _lpRow.classList.remove('touch-active'); _lpRow = null; }
+    hideActive();
   }
 
   document.body.addEventListener('pointerdown', function (e) {
     if (e.pointerType !== 'touch') return;
-    if (_lpRow && !e.target.closest('.mark-read-row')) { clearLongPress(); return; }
     var row = e.target.closest('.mark-read-row');
-    if (!row) return;
+    if (!row) { hideActive(); return; }
+    // New row tapped — hide any currently active button
+    hideActive();
     _lpRow = row;
     _lpX = e.clientX;
     _lpY = e.clientY;
     _lpTimer = setTimeout(function () {
       row.classList.add('touch-active');
       _lpTimer = null;
+      // Auto-hide after 3s if no action taken
+      _lpHideTimer = setTimeout(hideActive, 3000);
     }, 600);
   });
 
@@ -705,7 +719,7 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
     if (e.pointerType !== 'touch' || !_lpTimer) return;
     var dx = e.clientX - _lpX;
     var dy = e.clientY - _lpY;
-    if (Math.sqrt(dx * dx + dy * dy) > 10) clearLongPress();
+    if (Math.sqrt(dx * dx + dy * dy) > 10) { clearTimeout(_lpTimer); _lpTimer = null; }
   });
 
   // Prevent browser context menu (Firefox long-press) on sidebar rows
