@@ -2,7 +2,8 @@
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal_column, select
+from sqlalchemy import func, literal_column, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -257,6 +258,101 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         read_at=state.read_at if state else None,
         share_token=state.share_token if state else None,
     )
+
+
+async def mark_scope_read(
+    user: User,
+    db: AsyncSession,
+    before: datetime,
+    feed_id: int | None = None,
+    folder_id: int | None = None,
+    label_id: int | None = None,
+    starred_only: bool = False,
+    archived_only: bool = False,
+    labeled_only: bool = False,
+) -> None:
+    """Bulk mark as read all articles in scope with fetched_at <= before.
+
+    Starred/archived scopes only UPDATE (state row is guaranteed to exist).
+    All other scopes upsert to handle articles with and without existing state rows.
+    """
+    from app.models.label import ArticleLabel
+
+    now = datetime.now(timezone.utc)
+
+    if starred_only or archived_only:
+        # Articles in these views already have a state row by definition – plain UPDATE suffices.
+        subq = (
+            select(UserArticleState.article_id)
+            .join(Article, Article.id == UserArticleState.article_id)
+            .where(UserArticleState.user_id == user.id, Article.fetched_at <= before)
+        )
+        if starred_only:
+            subq = subq.where(UserArticleState.is_starred == True)
+        else:
+            subq = subq.where(UserArticleState.is_archived == True)
+        await db.execute(
+            update(UserArticleState)
+            .where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id.in_(subq),
+                UserArticleState.is_read == False,
+            )
+            .values(is_read=True, read_at=now)
+        )
+        await db.commit()
+        return
+
+    # All other scopes: user must be subscribed; upsert to handle missing state rows.
+    subq = (
+        select(Article.id)
+        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(Article.fetched_at <= before)
+    )
+    if feed_id is not None:
+        subq = subq.where(Article.feed_id == feed_id)
+    elif folder_id is not None:
+        if folder_id == 0:
+            subq = subq.where(UserFeed.folder_id.is_(None))
+        else:
+            subq = subq.where(UserFeed.folder_id == folder_id)
+    elif label_id is not None:
+        subq = subq.join(
+            ArticleLabel,
+            (ArticleLabel.article_id == Article.id)
+            & (ArticleLabel.user_id == user.id)
+            & (ArticleLabel.label_id == label_id),
+        )
+    elif labeled_only:
+        subq = subq.where(
+            select(ArticleLabel.article_id)
+            .where((ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
+            .exists()
+        )
+    # else: no extra filter → all subscribed articles
+
+    article_ids = (await db.execute(subq)).scalars().all()
+    if not article_ids:
+        return
+
+    stmt = pg_insert(UserArticleState).values([
+        {
+            "user_id": user.id,
+            "article_id": aid,
+            "is_read": True,
+            "is_starred": False,
+            "is_archived": False,
+            "is_hidden": False,
+            "read_at": now,
+        }
+        for aid in article_ids
+    ]).on_conflict_do_update(
+        index_elements=["user_id", "article_id"],
+        set_={"is_read": True, "read_at": now},
+        where=(UserArticleState.__table__.c.is_read == False),
+    )
+    await db.execute(stmt)
+    await db.commit()
 
 
 async def toggle_article_state(
