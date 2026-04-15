@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -111,9 +112,10 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     # Deduplicate within this batch and compute guid_hashes up front
     candidates: dict[str, feedparser.util.FeedParserDict] = {}  # hash → entry (first wins)
     for entry in entries:
-        guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
-        if not guid:
+        raw_guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
+        if not raw_guid:
             continue
+        guid = _normalize_guid(raw_guid)
         guid_hash = hashlib.sha256(guid.encode()).hexdigest()
         candidates.setdefault(guid_hash, entry)
 
@@ -130,12 +132,30 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     )
     existing_hashes: set[str] = set(existing_result.scalars())
 
+    # Secondary dedup by URL — catches feeds that rotate GUIDs on updates (e.g. BBC).
+    candidate_urls = [
+        _safe_url(e.get("link")) for e in candidates.values()
+        if _safe_url(e.get("link"))
+    ]
+    existing_urls: set[str] = set()
+    if candidate_urls:
+        url_result = await db.execute(
+            select(Article.url).where(
+                Article.feed_id == feed.id,
+                Article.url.in_(candidate_urls),
+            )
+        )
+        existing_urls = set(url_result.scalars())
+
     new_articles: list[Article] = []
     for guid_hash, entry in candidates.items():
         if guid_hash in existing_hashes:
             continue
+        article_url = _safe_url(entry.get("link"))
+        if article_url and article_url in existing_urls:
+            continue
 
-        guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
+        guid = _normalize_guid(entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
             content = nh3.clean(content)
@@ -247,6 +267,22 @@ def _latest_published(entries) -> datetime | None:
         if t:
             dates.append(_struct_to_dt(t))
     return max(dates) if dates else None
+
+
+def _normalize_guid(raw: str) -> str:
+    """Strip URL fragment from GUIDs that are HTTP URLs.
+
+    Some feeds (e.g. BBC) append a changing fragment (#0, #2, …) to article URLs
+    used as GUIDs, causing the same article to be stored multiple times.
+    Non-URL GUIDs (UUIDs, opaque strings) are returned unchanged.
+    """
+    try:
+        p = urlparse(raw)
+        if p.scheme in ("http", "https"):
+            return urlunparse(p._replace(fragment=""))
+    except Exception:
+        pass
+    return raw
 
 
 def _safe_url(value: str | None, max_len: int = 2048) -> str | None:
