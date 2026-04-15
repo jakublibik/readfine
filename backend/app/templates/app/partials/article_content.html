@@ -1,6 +1,17 @@
-<div id="article-content-{{ article.id }}">
+<div id="article-content-{{ article.id }}"
+     {% if article.readable_status == 'pending' %}
+     hx-get="/htmx/articles/{{ article.id }}/readable-poll"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     {% endif %}>
   {% if article.readable_status == 'pending' %}
-  <p class="text-xs text-gray-400 italic mb-4">Readable content extraction in progress…</p>
+  <div class="flex items-center gap-2 text-xs text-gray-400 italic mb-4">
+    <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+    </svg>
+    Extracting full content…
+  </div>
   {% elif article.readable_status == 'failed' %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}

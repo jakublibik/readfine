@@ -1,5 +1,7 @@
 """Web routes for the main application UI."""
+import asyncio
 import json
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -8,7 +10,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update as sa_update
+
+logger = logging.getLogger(__name__)
 
 from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
@@ -25,6 +29,51 @@ from app.services.label_service import list_labels
 
 router = APIRouter(tags=["web-app"])
 templates = Jinja2Templates(directory="app/templates")
+
+
+async def _extract_readable_bg(
+    article_id: int,
+    url: str,
+    auth_user: str | None,
+    auth_pass_enc: str | None,
+) -> None:
+    """Background readable extraction fired when user opens an article."""
+    from app.database import async_session_factory
+    from app.services.readable_service import extract_readable
+    from app.utils.crypto import decrypt
+
+    auth_pass: str | None = None
+    if auth_pass_enc:
+        try:
+            auth_pass = decrypt(auth_pass_enc)
+        except Exception:
+            logger.warning("readable bg: decrypt failed for article %d", article_id)
+
+    loop = asyncio.get_event_loop()
+    try:
+        content, error, _http_status = await loop.run_in_executor(
+            None, extract_readable, url, auth_user, auth_pass
+        )
+    except Exception as exc:
+        content, error = None, str(exc)[:200]
+        logger.warning("readable bg: extraction error for article %d: %s", article_id, exc)
+
+    async with async_session_factory() as db:
+        article = (await db.execute(
+            select(Article).where(Article.id == article_id)
+        )).scalar_one_or_none()
+        if not article:
+            return
+        if content:
+            article.readable_content = content
+            article.readable_status = "success"
+            article.readable_error = None
+        else:
+            article.readable_status = "failed"
+            article.readable_error = error
+            article.readable_retries = (article.readable_retries or 0) + 1
+        await db.commit()
+        logger.info("readable bg: article %d → %s", article_id, article.readable_status)
 
 
 @router.get("/app", response_class=HTMLResponse)
@@ -352,6 +401,37 @@ async def htmx_article_detail(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Auto-trigger readable extraction if feed has it enabled and article wasn't extracted yet
+    trigger_row = (await db.execute(
+        select(
+            Article.readable_status,
+            Article.url,
+            Feed.fetch_auth_user,
+            Feed.fetch_auth_pass_encrypted,
+            UserFeed.extract_readable,
+        )
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(Article.id == article_id)
+    )).first()
+
+    if (
+        trigger_row is not None
+        and trigger_row.extract_readable
+        and trigger_row.readable_status == "skipped"
+        and trigger_row.url
+    ):
+        await db.execute(
+            sa_update(Article).where(Article.id == article_id).values(readable_status="pending")
+        )
+        await db.commit()
+        asyncio.create_task(_extract_readable_bg(
+            article_id,
+            trigger_row.url,
+            trigger_row.fetch_auth_user,
+            trigger_row.fetch_auth_pass_encrypted,
+        ))
+
     article = await get_article(user, article_id, db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-4'>Article not found.</p>", status_code=404)
@@ -361,6 +441,20 @@ async def htmx_article_detail(
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {"article": article, "mark_read_on_scroll": mark_read_on_scroll})
+
+
+@router.get("/htmx/articles/{article_id}/readable-poll", response_class=HTMLResponse)
+async def htmx_readable_poll(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Polling endpoint: returns article content fragment. HTMX polling stops once status leaves 'pending'."""
+    article = await get_article(user, article_id, db)
+    if not article:
+        return HTMLResponse("", status_code=404)
+    return templates.TemplateResponse(request, "app/partials/article_content.html", {"article": article})
 
 
 async def _get_row_context(user, request: Request, db) -> dict:

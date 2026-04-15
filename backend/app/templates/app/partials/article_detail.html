@@ -48,7 +48,7 @@
           <div id="share-btn-{{ article.id }}" class="px-2 py-0.5">
             {% include "app/partials/share_button.html" %}
           </div>
-          {% if article.url and article.readable_status in ('skipped', 'failed') %}
+          {% if article.url and article.readable_status == 'failed' %}
           <div class="px-2 py-0.5">
             <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
                     hx-target="#article-content-{{ article.id }}"

@@ -797,17 +797,24 @@ Výsledek do `articles.readable_content`. UI přepínač volí, který sloupec z
 - `failed` → zobrazí se „Fulltext nedostupný", původní obsah z feedu
 - `skipped` → rovnou zobrazit původní obsah, žádný polling
 
-**Rozhodovací logika – extrakce se přeskočí pokud:**
-- `feeds.extract_readable = FALSE` – uživatel vypnul per kanál
-- Článek nemá URL – nemáme co stahovat
-- `word_count > 500` – feed pravděpodobně posílá plný obsah (hranice konfigurovatelná)
-- Článek po aplikaci filtrů nedostal hvězdičku ani štítek – nezajímavý článek, šetříme DB a cílový web
+**Trigger podmínky – extrakce se spustí při:**
+- Hvězdičkování článku (toggle star)
+- Přiřazení štítku
+- Otevření článku v UI (pokud `feeds.extract_readable = TRUE` a `readable_status = 'skipped'`) → background task, response se vrátí okamžitě, UI polluje
 
-**Pořadí operací v `article_processor.py`:**
-1. Ulož článek (bez readable)
+**Extrakce se přeskočí pokud:**
+- `feeds.extract_readable = FALSE` – uživatel vypnul per kanál
+- Článek nemá URL
+- `word_count > 500` – feed pravděpodobně posílá plný obsah (hranice konfigurovatelná)
+
+**Pořadí operací při fetchování (`_save_articles`):**
+1. Ulož článek (`readable_status = 'skipped'`)
 2. Aplikuj filtry
-3. Pokud článek dostal hvězdičku nebo štítek → spusť readable extrakci
-4. Jinak → přeskoč
+3. Pokud článek dostal hvězdičku nebo štítek → nastav `pending`, přidej do fronty scheduleru
+
+**Při otevření článku (`htmx_article_detail`):**
+1. Pokud `extract_readable = TRUE` a `readable_status = 'skipped'` → nastav `pending`, spusť `asyncio.create_task(_extract_readable_bg(...))`
+2. Vrátit detail ihned; `article_content.html` polluje `/htmx/articles/{id}/readable-poll` každé 2s dokud status není `success`/`failed`
 
 **Automatická detekce plného obsahu:** pokud prvních N článků kanálu má `word_count > 500`, nastaví se `feeds.extract_readable = FALSE` automaticky.
 
