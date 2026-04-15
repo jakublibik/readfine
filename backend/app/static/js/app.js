@@ -16,7 +16,9 @@ document.body.addEventListener('htmx:configRequest', function (e) {
   var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
 
   function getBuckets() {
-    return window._buckets || { smallMax: 640, mediumMax: 1100 };
+    var m = document.querySelector('meta[name="app-buckets"]');
+    if (m) return { smallMax: parseInt(m.dataset.small), mediumMax: parseInt(m.dataset.medium) };
+    return { smallMax: 640, mediumMax: 1100 };
   }
 
   function getCurrentBucket() {
@@ -738,6 +740,23 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
   // Prevent browser context menu (Firefox long-press) on sidebar rows
   document.body.addEventListener('contextmenu', function (e) {
     if (e.target.closest('.mark-read-row')) e.preventDefault();
+  });
+})();
+
+// ── Preferences: layout bucket selects ────────────────────────────────────
+(function () {
+  var defaults = { small: '1', medium: '2', large: '3' };
+  var minimums = { small: '1', medium: '2', large: '2' };
+  document.querySelectorAll('[data-layout-bucket]').forEach(function (sel) {
+    var bucket = sel.dataset.layoutBucket;
+    var val;
+    try { val = localStorage.getItem('layout_' + bucket); } catch (e) {}
+    if (val && parseInt(val) < parseInt(minimums[bucket])) val = minimums[bucket];
+    sel.value = val || defaults[bucket];
+    sel.addEventListener('change', function () {
+      try { localStorage.setItem('layout_' + bucket, sel.value); } catch (e) {}
+      if (window._applyBucket) window._applyBucket();
+    });
   });
 })();
 

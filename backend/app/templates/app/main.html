@@ -3,9 +3,7 @@
 {% block title %}Readfine{% endblock %}
 
 {% block scripts %}
-<script>
-  window._buckets = { smallMax: {{ bucket_small_max }}, mediumMax: {{ bucket_medium_max }} };
-</script>
+<meta name="app-buckets" data-small="{{ bucket_small_max }}" data-medium="{{ bucket_medium_max }}">
 {% endblock %}
 
 {% block content %}

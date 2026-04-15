@@ -197,23 +197,6 @@
     </div>
   </section>
 
-  <script>
-    (function () {
-      var defaults = { small: '1', medium: '2', large: '3' };
-      var minimums = { small: '1', medium: '2', large: '2' };
-      document.querySelectorAll('[data-layout-bucket]').forEach(function (sel) {
-        var bucket = sel.dataset.layoutBucket;
-        var val;
-        try { val = localStorage.getItem('layout_' + bucket); } catch (e) {}
-        if (val && parseInt(val) < parseInt(minimums[bucket])) { val = minimums[bucket]; }
-        sel.value = val || defaults[bucket];
-        sel.addEventListener('change', function () {
-          try { localStorage.setItem('layout_' + bucket, sel.value); } catch (e) {}
-          if (window._applyBucket) window._applyBucket();
-        });
-      });
-    })();
-  </script>
 
   <!-- Change password -->
   <section class="mt-10 pt-6 border-t border-gray-200">
