@@ -4,7 +4,7 @@
 
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %} {% if d == 'compact' %}px-4 py-1.5{% else %}px-4 py-2{% endif %}"
+     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1 pb-2{% endif %}"
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
@@ -15,12 +15,12 @@
 
   {% if d == "compact" %}
   <!-- Compact: star + title + feed + date all inline -->
-  <div class="flex items-center gap-1.5">
+  <div class="flex items-center gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
-            class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+            class="flex-shrink-0 leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none translate-y-px"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
         <span class="text-base {% if article.is_read %}text-gray-700{% else %}text-gray-900{% endif %}">★</span>
@@ -75,12 +75,12 @@
 
   {% else %}
   <!-- Comfortable / Summary: star + title, then feed + date row -->
-  <div class="flex items-baseline gap-1.5">
+  <div class="flex items-baseline gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
-            class="flex-shrink-0 w-5 text-center leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+            class="flex-shrink-0 w-5 text-center leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none translate-y-px"
             title="{% if article.is_starred %}Remove star{% else %}Star article{% endif %}">
       {% if article.is_starred %}
         <span class="text-lg {% if article.is_read %}text-gray-700{% else %}text-gray-900{% endif %}">★</span>

@@ -274,7 +274,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         if (!r.ok) console.warn('mark-as-read fallback failed: ' + r.status);
       }).catch(function () {});
     }
-  }, 700);
+  }, 500);
 
   evt.detail.target.addEventListener(
     'htmx:beforeRequest', function () { clearTimeout(timer); }, { once: true }
@@ -589,6 +589,8 @@ document.addEventListener('articleArchiveChanged', function (e) {
   document.body.addEventListener('htmx:beforeRequest', function (e) {
     if (document.documentElement.dataset.layout !== '2') return;
     if (!e.detail.target || e.detail.target.id !== 'article-detail') return;
+    // Skip action buttons (star, etc.) — hx-target="#article-detail" is inherited from parent row
+    if (e.detail.elt && e.detail.elt.closest('[data-stop-propagation]')) return;
 
     e.preventDefault();
 
