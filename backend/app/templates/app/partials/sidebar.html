@@ -118,7 +118,7 @@
       <button class="{{ mark_read_btn }}"
               title="Mark all as read"
               hx-post="/htmx/articles/mark-read"
-              hx-vals='js:{before: new Date().toISOString()}'
+              hx-vals='{}'
               hx-swap="none"
               data-action="mark-read">✓</button>
     </div>
@@ -132,7 +132,7 @@
       <button class="{{ mark_read_btn }}"
               title="Mark all as read"
               hx-post="/htmx/articles/mark-read"
-              hx-vals='js:{before: new Date().toISOString(), starred_only: "1"}'
+              hx-vals='{"starred_only": "1"}'
               hx-swap="none"
               data-action="mark-read">✓</button>
     </div>
@@ -146,7 +146,7 @@
       <button class="{{ mark_read_btn }}"
               title="Mark all as read"
               hx-post="/htmx/articles/mark-read"
-              hx-vals='js:{before: new Date().toISOString(), archived_only: "1"}'
+              hx-vals='{"archived_only": "1"}'
               hx-swap="none"
               data-action="mark-read">✓</button>
     </div>
@@ -168,7 +168,7 @@
       <button class="{{ mark_read_btn }}"
               title="Mark all as read"
               hx-post="/htmx/articles/mark-read"
-              hx-vals='js:{before: new Date().toISOString(), labeled_only: "1"}'
+              hx-vals='{"labeled_only": "1"}'
               hx-swap="none"
               data-action="mark-read">✓</button>
     </div>
@@ -186,7 +186,7 @@
         <button class="{{ mark_read_btn }}"
                 title="Mark all as read"
                 hx-post="/htmx/articles/mark-read"
-                hx-vals='js:{before: new Date().toISOString(), label_id: "{{ label.id }}"}'
+                hx-vals='{"label_id": "{{ label.id }}"}'
                 hx-swap="none"
                 data-action="mark-read">✓</button>
       </div>
@@ -216,7 +216,7 @@
             <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
                     title="Mark all as read"
                     hx-post="/htmx/folders/{{ uf.folder_id }}/mark-read"
-                    hx-vals='js:{before: new Date().toISOString()}'
+                    hx-vals='{}'
                     hx-swap="none"
                     data-action="mark-read">✓</button>
           </div>
@@ -236,7 +236,7 @@
             <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
                     title="Mark all as read"
                     hx-post="/htmx/folders/0/mark-read"
-                    hx-vals='js:{before: new Date().toISOString()}'
+                    hx-vals='{}'
                     hx-swap="none"
                     data-action="mark-read">✓</button>
           </div>
@@ -256,7 +256,7 @@
         <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
                 title="Mark all as read"
                 hx-post="/htmx/feeds/{{ uf.feed_id }}/mark-read"
-                hx-vals='js:{before: new Date().toISOString()}'
+                hx-vals='{}'
                 hx-swap="none"
                 data-action="mark-read">✓</button>
       </div>

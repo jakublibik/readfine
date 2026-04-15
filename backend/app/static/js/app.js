@@ -1,3 +1,16 @@
+// ── HTMX configRequest: inject dynamic params without eval ────────────────
+document.body.addEventListener('htmx:configRequest', function (e) {
+  var elt = e.detail.elt;
+  // Sidebar pinned state
+  if (elt.id === 'sidebar') {
+    e.detail.parameters['pinned'] = window._sidebarPinned ? 'true' : 'false';
+  }
+  // Mark-read before timestamp
+  if (elt.dataset && elt.dataset.action === 'mark-read') {
+    e.detail.parameters['before'] = new Date().toISOString();
+  }
+});
+
 // ── Layout bucket system ──────────────────────────────────────────────────
 (function () {
   var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
