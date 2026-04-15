@@ -45,7 +45,6 @@ Indexy: `email` (unique), `role`
 | `mark_read_on_scroll` | `BOOLEAN` | DEFAULT `TRUE` | Automark přečteno při scrollu |
 | `unread_filter` | `VARCHAR(20)` | DEFAULT `'adaptive'` | ⚠️ Nahrazuje `show_unread_only`: `adaptive`, `unread_only`, `show_all` |
 | `default_sort_order` | `VARCHAR(10)` | DEFAULT `'newest'` | `newest`, `oldest` |
-| `left_panel_pinned` | `BOOLEAN` | DEFAULT `TRUE` | Levý panel připnutý/overlay |
 | `articles_per_page` | `SMALLINT` | DEFAULT `40` | ⚠️ MVP: jedno pole místo desktop/mobile variant |
 | `timezone` | `VARCHAR(50)` | DEFAULT `'UTC'` | Časová zóna uživatele (záloha pro serverové formátování) |
 | `language` | `VARCHAR(10)` | DEFAULT `'en'` | Jazyk UI (`cs`, `en`) |
