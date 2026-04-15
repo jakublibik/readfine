@@ -1,5 +1,5 @@
-{% macro badge_unread(count) %}<span class="ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count }}</span>{% endmacro %}
-{% macro badge_total(count) %}<span class="ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count }}</span>{% endmacro %}
+{% macro badge_unread(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count }}</span>{% endmacro %}
+{% macro badge_total(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count }}</span>{% endmacro %}
 
 {% if not pinned %}
 <!-- ── Collapsed rail ──────────────────────────────────────────── -->
@@ -106,92 +106,185 @@
   </div>
 
   <!-- Nav -->
+  {% set mark_read_btn = "absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200" %}
   <nav class="px-2 py-3 space-y-1 border-b border-gray-200">
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
-       hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
-       hx-push-url="false">
-      <span class="flex-1">All articles</span>
-      {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_total) }}{% endif %}
-    </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
-       hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
-       hx-push-url="false">
-      <span class="flex-1">Starred</span>
-      {% if nav_unread_starred > 0 %}{{ badge_unread(nav_unread_starred) }}{% else %}{{ badge_total(nav_starred) }}{% endif %}
-    </a>
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
-       hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML"
-       hx-push-url="false">
-      <span class="flex-1">Archived</span>
-      {% if nav_unread_archived > 0 %}{{ badge_unread(nav_unread_archived) }}{% else %}{{ badge_total(nav_archived) }}{% endif %}
-    </a>
+    <div class="group relative mark-read-row">
+      <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="flex-1">All articles</span>
+        {% if nav_unread > 0 %}{{ badge_unread(nav_unread) }}{% else %}{{ badge_total(nav_total) }}{% endif %}
+      </a>
+      <button class="{{ mark_read_btn }}"
+              title="Mark all as read"
+              hx-post="/htmx/articles/mark-read"
+              hx-vals='js:{before: new Date().toISOString()}'
+              hx-swap="none"
+              data-action="mark-read">✓</button>
+    </div>
+    <div class="group relative mark-read-row">
+      <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?starred_only=true" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="flex-1">Starred</span>
+        {% if nav_unread_starred > 0 %}{{ badge_unread(nav_unread_starred) }}{% else %}{{ badge_total(nav_starred) }}{% endif %}
+      </a>
+      <button class="{{ mark_read_btn }}"
+              title="Mark all as read"
+              hx-post="/htmx/articles/mark-read"
+              hx-vals='js:{before: new Date().toISOString(), starred_only: "1"}'
+              hx-swap="none"
+              data-action="mark-read">✓</button>
+    </div>
+    <div class="group relative mark-read-row">
+      <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?archived_only=true" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="flex-1">Archived</span>
+        {% if nav_unread_archived > 0 %}{{ badge_unread(nav_unread_archived) }}{% else %}{{ badge_total(nav_archived) }}{% endif %}
+      </a>
+      <button class="{{ mark_read_btn }}"
+              title="Mark all as read"
+              hx-post="/htmx/articles/mark-read"
+              hx-vals='js:{before: new Date().toISOString(), archived_only: "1"}'
+              hx-swap="none"
+              data-action="mark-read">✓</button>
+    </div>
   </nav>
 
-  <!-- Labels -->
+  <!-- Labels + Feed list (scroll together) -->
+  <div class="flex-1 overflow-y-auto">
+
   {% if user_labels %}
   <div class="px-2 py-3 border-b border-gray-200">
-    <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
-       hx-get="/htmx/articles?labeled_only=true" hx-target="#article-list" hx-swap="innerHTML"
-       hx-push-url="false">
-      <span class="flex-1">Labels</span>
-      {% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}
-    </a>
-    {% for label in user_labels %}
-      <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
-         hx-get="/htmx/articles?label_id={{ label.id }}" hx-target="#article-list" hx-swap="innerHTML"
+    <div class="group relative mark-read-row">
+      <a class="nav-item flex items-center pl-px pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?labeled_only=true" hx-target="#article-list" hx-swap="innerHTML"
          hx-push-url="false">
-        <span class="w-2 h-2 rounded-full flex-shrink-0 mr-2" style="background-color: {{ label.color }}"></span>
-        <span class="flex-1 truncate">{{ label.name }}</span>
-        {% set lu = label_unread_counts.get(label.id, 0) %}
-        {% if lu > 0 %}{{ badge_unread(lu) }}{% else %}{{ badge_total(label_counts.get(label.id, 0)) }}{% endif %}
+        <span class="collapse-toggle flex-shrink-0 p-1 -ml-1 text-gray-400" data-collapse="labels"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg></span>
+        <span class="flex-1">Labels</span>
+        {% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}
       </a>
+      <button class="{{ mark_read_btn }}"
+              title="Mark all as read"
+              hx-post="/htmx/articles/mark-read"
+              hx-vals='js:{before: new Date().toISOString(), labeled_only: "1"}'
+              hx-swap="none"
+              data-action="mark-read">✓</button>
+    </div>
+    <div class="collapsible" id="collapse-labels">
+    {% for label in user_labels %}
+      <div class="group relative mark-read-row">
+        <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+           hx-get="/htmx/articles?label_id={{ label.id }}" hx-target="#article-list" hx-swap="innerHTML"
+           hx-push-url="false">
+          <span class="w-2 h-2 rounded-full flex-shrink-0 mr-2" style="background-color: {{ label.color }}"></span>
+          <span class="flex-1 truncate">{{ label.name }}</span>
+          {% set lu = label_unread_counts.get(label.id, 0) %}
+          {% if lu > 0 %}{{ badge_unread(lu) }}{% else %}{{ badge_total(label_counts.get(label.id, 0)) }}{% endif %}
+        </a>
+        <button class="{{ mark_read_btn }}"
+                title="Mark all as read"
+                hx-post="/htmx/articles/mark-read"
+                hx-vals='js:{before: new Date().toISOString(), label_id: "{{ label.id }}"}'
+                hx-swap="none"
+                data-action="mark-read">✓</button>
+      </div>
     {% endfor %}
+    </div>{# end collapse-labels #}
   </div>
   {% endif %}
 
   <!-- Feed list -->
-  <div class="flex-1 overflow-y-auto px-2 py-3">
-    {% set ns = namespace(current_folder="__unset__") %}
+  <div class="px-2 py-3">
+    {% set ns = namespace(current_folder="__unset__", folder_open=false) %}
     {% for uf in user_feeds %}
       {% if uf.folder_id != ns.current_folder %}
+        {% if ns.folder_open %}</div>{% set ns.folder_open = false %}{% endif %}
         {% set ns.current_folder = uf.folder_id %}
         {% if uf.folder %}
           {% set fc_unread = folder_unread_counts.get(uf.folder_id, 0) %}
           {% set fc_total = folder_total_counts.get(uf.folder_id, 0) %}
-          <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer mt-1"
-             hx-get="/htmx/articles?folder_id={{ uf.folder_id }}" hx-target="#article-list" hx-swap="innerHTML"
-             hx-push-url="false">
-            <span class="flex-1 truncate">{{ uf.folder.name }}</span>
-            {% if fc_unread > 0 %}{{ badge_unread(fc_unread) }}{% else %}{{ badge_total(fc_total) }}{% endif %}
-          </a>
+          <div class="group relative mark-read-row mt-1">
+            <a class="nav-item flex items-center pl-px pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+               hx-get="/htmx/articles?folder_id={{ uf.folder_id }}" hx-target="#article-list" hx-swap="innerHTML"
+               hx-push-url="false">
+              <span class="collapse-toggle flex-shrink-0 p-1 -ml-1 text-gray-400" data-collapse="folder-{{ uf.folder_id }}"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg></span>
+              <span class="flex-1 truncate">{{ uf.folder.name }}</span>
+              {% if fc_unread > 0 %}{{ badge_unread(fc_unread) }}{% else %}{{ badge_total(fc_total) }}{% endif %}
+            </a>
+            <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
+                    title="Mark all as read"
+                    hx-post="/htmx/folders/{{ uf.folder_id }}/mark-read"
+                    hx-vals='js:{before: new Date().toISOString()}'
+                    hx-swap="none"
+                    data-action="mark-read">✓</button>
+          </div>
+          <div class="collapsible" id="collapse-folder-{{ uf.folder_id }}">
+          {% set ns.folder_open = true %}
         {% else %}
           {% set nf_unread = folder_unread_counts.get(none, 0) %}
           {% set nf_total = folder_total_counts.get(none, 0) %}
-          <a class="nav-item flex items-center px-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer mt-1"
-             hx-get="/htmx/articles?folder_id=0" hx-target="#article-list" hx-swap="innerHTML"
-             hx-push-url="false">
-            <span class="flex-1">No folder</span>
-            {% if nf_unread > 0 %}{{ badge_unread(nf_unread) }}{% else %}{{ badge_total(nf_total) }}{% endif %}
-          </a>
+          <div class="group relative mark-read-row mt-1">
+            <a class="nav-item flex items-center pl-px pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+               hx-get="/htmx/articles?folder_id=0" hx-target="#article-list" hx-swap="innerHTML"
+               hx-push-url="false">
+              <span class="collapse-toggle flex-shrink-0 p-1 -ml-1 text-gray-400" data-collapse="folder-0"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg></span>
+              <span class="flex-1">No folder</span>
+              {% if nf_unread > 0 %}{{ badge_unread(nf_unread) }}{% else %}{{ badge_total(nf_total) }}{% endif %}
+            </a>
+            <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
+                    title="Mark all as read"
+                    hx-post="/htmx/folders/0/mark-read"
+                    hx-vals='js:{before: new Date().toISOString()}'
+                    hx-swap="none"
+                    data-action="mark-read">✓</button>
+          </div>
+          <div class="collapsible" id="collapse-folder-0">
+          {% set ns.folder_open = true %}
         {% endif %}
       {% endif %}
 
-      <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
-         hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
-         hx-push-url="false">
-        <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
-        {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}
-        {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
-      </a>
+      <div class="group relative mark-read-row">
+        <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+           hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
+           hx-push-url="false">
+          <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
+          {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}
+          {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
+        </a>
+        <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
+                title="Mark all as read"
+                hx-post="/htmx/feeds/{{ uf.feed_id }}/mark-read"
+                hx-vals='js:{before: new Date().toISOString()}'
+                hx-swap="none"
+                data-action="mark-read">✓</button>
+      </div>
     {% else %}
       <p class="px-3 py-2 text-sm text-gray-400">No feeds yet.</p>
     {% endfor %}
+    {% if ns.folder_open %}</div>{% endif %}{# close last collapsible #}
   </div>
 
+  </div>{# end scroll wrapper #}
 
 </div>
 {% endif %}
 
 <style>
   .nav-item.active { background-color: #eff6ff; color: #1d4ed8; }
+  .collapsible { overflow: hidden; max-height: 2000px; transition: max-height 200ms ease-out; }
+  .collapsible.collapsed { max-height: 0; transition: max-height 200ms ease-in; }
+  .collapse-toggle svg { transition: transform 200ms; }
+  .collapse-toggle.is-collapsed svg { transform: rotate(-90deg); }
+  .mark-read-row > a { padding-right: 0.25rem; }
+  .mark-read-row { touch-action: manipulation; }
+  .mark-read-row.touch-active [data-action="mark-read"] { opacity: 1; }
+  .mark-read-row.touch-active .mark-read-badge { transform: translateX(-1.5rem); }
+  @media (hover: hover) {
+    .mark-read-row [data-action="mark-read"] { transition: opacity 150ms 0ms; }
+    .mark-read-row:hover [data-action="mark-read"] { opacity: 1; transition: opacity 150ms 1200ms; }
+    .mark-read-row .mark-read-badge { transition: transform 150ms 0ms; }
+    .mark-read-row:hover .mark-read-badge { transform: translateX(-1.5rem); transition: transform 150ms 1200ms; }
+  }
 </style>

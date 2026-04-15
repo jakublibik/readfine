@@ -624,6 +624,96 @@ document.addEventListener('articleArchiveChanged', function (e) {
   });
 })();
 
+// ── Sidebar collapsible sections ──────────────────────────────────────────
+function restoreSidebarCollapse() {
+  document.querySelectorAll('.collapse-toggle[data-collapse]').forEach(function (btn) {
+    var key = btn.dataset.collapse;
+    try {
+      if (localStorage.getItem('sidebar_col_' + key) === '1') {
+        var content = document.getElementById('collapse-' + key);
+        if (content) content.classList.add('collapsed');
+        btn.classList.add('is-collapsed');
+      }
+    } catch (err) {}
+  });
+}
+
+document.body.addEventListener('click', function (e) {
+  var btn = e.target.closest('.collapse-toggle[data-collapse]');
+  if (!btn) return;
+  e.stopPropagation();
+  e.preventDefault();
+  var key = btn.dataset.collapse;
+  var content = document.getElementById('collapse-' + key);
+  if (!content) return;
+  var collapsed = content.classList.toggle('collapsed');
+  btn.classList.toggle('is-collapsed', collapsed);
+  try {
+    if (collapsed) localStorage.setItem('sidebar_col_' + key, '1');
+    else localStorage.removeItem('sidebar_col_' + key);
+  } catch (err) {}
+});
+
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse();
+});
+
+restoreSidebarCollapse();
+
+// ── Sidebar mark-all-as-read: refresh sidebar + article list after action ──
+document.body.addEventListener('htmx:afterRequest', function (e) {
+  if (!e.detail.elt || e.detail.elt.dataset.action !== 'mark-read') return;
+  var row = e.detail.elt.closest('.mark-read-row');
+  if (row) row.classList.remove('touch-active');
+  htmx.trigger(document.body, 'sidebarRefresh');
+  var active = document.querySelector('.nav-item.active[hx-get]');
+  var url = active ? active.getAttribute('hx-get') : '/htmx/articles';
+  htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
+});
+
+// ── Sidebar mark-read button: long-press on touch devices ─────────────────
+(function () {
+  var _lpTimer = null;
+  var _lpRow = null;
+  var _lpX = 0, _lpY = 0;
+
+  function clearLongPress() {
+    if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+    if (_lpRow) { _lpRow.classList.remove('touch-active'); _lpRow = null; }
+  }
+
+  document.body.addEventListener('pointerdown', function (e) {
+    if (e.pointerType !== 'touch') return;
+    if (_lpRow && !e.target.closest('.mark-read-row')) { clearLongPress(); return; }
+    var row = e.target.closest('.mark-read-row');
+    if (!row) return;
+    _lpRow = row;
+    _lpX = e.clientX;
+    _lpY = e.clientY;
+    _lpTimer = setTimeout(function () {
+      row.classList.add('touch-active');
+      _lpTimer = null;
+    }, 600);
+  });
+
+  document.body.addEventListener('pointerup', function (e) {
+    if (e.pointerType !== 'touch') return;
+    if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+  });
+
+  document.body.addEventListener('pointermove', function (e) {
+    if (e.pointerType !== 'touch' || !_lpTimer) return;
+    var dx = e.clientX - _lpX;
+    var dy = e.clientY - _lpY;
+    if (Math.sqrt(dx * dx + dy * dy) > 10) clearLongPress();
+  });
+
+  // Prevent browser context menu (Firefox long-press) on sidebar rows
+  document.body.addEventListener('contextmenu', function (e) {
+    if (e.target.closest('.mark-read-row')) e.preventDefault();
+  });
+})();
+
 // ── stopPropagation for action buttons inside article rows ─────────────────
 // Attached via htmx:afterSettle so each button gets its own listener —
 // bubbling phase only, so hx-post on the button fires first.
