@@ -19,6 +19,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **SMTP**: vlastní schránka na Webglobe (libik.cz)
 - **VPS**: řeší se při nasazení (po MVP)
 - **CSRF**: JWT v `Authorization` headeru → CSRF není potřeba
+- **Git workflow**: `dev` = vývoj (výchozí větev), `master` = produkce/release; merge do master jen při vydání verze
 
 ## Stav implementace
 - dokončena fáze 7, ladíme chyby
@@ -63,4 +64,4 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 ## Preference uživatele
 - Komunikace v češtině
 - Výchozí jazyk aplikace: **en** (angličtina)
-- Na konci session: `git push` + `/clear`
+- Na konci session: `git push` (do `dev`) + `/clear`
