@@ -1,4 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
+import logging
 import re
 from datetime import date, datetime, timezone
 
@@ -12,10 +13,46 @@ from app.models.label import ArticleLabel
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
 
+logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 _SNIPPET_LEN = 200
+
+
+async def _recalculate_unread_counts(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> None:
+    """Recalculate unread_count for all UserFeeds affected by the given article IDs.
+
+    Uses a correlated subquery so the update is a single SQL statement regardless
+    of how many feeds are affected.
+    """
+    if not article_ids:
+        return
+    unread_subq = (
+        select(func.count())
+        .select_from(Article)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == user_id),
+        )
+        .where(
+            Article.feed_id == UserFeed.feed_id,
+            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+        )
+        .correlate(UserFeed)
+        .scalar_subquery()
+    )
+    affected_feed_ids_subq = select(Article.feed_id.distinct()).where(
+        Article.id.in_(article_ids)
+    )
+    await db.execute(
+        update(UserFeed)
+        .where(UserFeed.user_id == user_id, UserFeed.feed_id.in_(affected_feed_ids_subq))
+        .values(unread_count=unread_subq)
+    )
 
 
 def _make_snippet(summary: str | None, content: str | None) -> str | None:
@@ -144,6 +181,12 @@ async def list_articles(
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
         tsquery = func.websearch_to_tsquery('simple', q)
+        try:
+            # Round-trip to PostgreSQL to catch malformed inputs before the full query
+            await db.execute(select(tsquery))
+        except Exception:
+            logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
+            tsquery = func.plainto_tsquery('simple', q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
         stmt = stmt.order_by(
             func.ts_rank(fts_vec, tsquery).desc(),
@@ -282,24 +325,28 @@ async def mark_scope_read(
 
     if starred_only or archived_only:
         # Articles in these views already have a state row by definition – plain UPDATE suffices.
-        subq = (
+        filter_cond = (
+            UserArticleState.is_starred == True
+            if starred_only
+            else UserArticleState.is_archived == True
+        )
+        article_ids = (await db.execute(
             select(UserArticleState.article_id)
             .join(Article, Article.id == UserArticleState.article_id)
-            .where(UserArticleState.user_id == user.id, Article.fetched_at <= before)
-        )
-        if starred_only:
-            subq = subq.where(UserArticleState.is_starred == True)
-        else:
-            subq = subq.where(UserArticleState.is_archived == True)
+            .where(UserArticleState.user_id == user.id, Article.fetched_at <= before, filter_cond)
+        )).scalars().all()
+        if not article_ids:
+            return
         await db.execute(
             update(UserArticleState)
             .where(
                 UserArticleState.user_id == user.id,
-                UserArticleState.article_id.in_(subq),
+                UserArticleState.article_id.in_(article_ids),
                 UserArticleState.is_read == False,
             )
             .values(is_read=True, read_at=now)
         )
+        await _recalculate_unread_counts(user.id, list(article_ids), db)
         await db.commit()
         return
 
@@ -352,6 +399,7 @@ async def mark_scope_read(
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
+    await _recalculate_unread_counts(user.id, list(article_ids), db)
     await db.commit()
 
 
@@ -402,6 +450,12 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
+        delta = -1 if new_value else 1
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
+            .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
+        )
 
     if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
         article.readable_status = "pending"
@@ -475,8 +529,16 @@ async def update_article_state(
         db.add(state)
 
     if payload.is_read is not None:
+        was_read = bool(state.is_read)
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
+        if was_read != payload.is_read:
+            delta = -1 if payload.is_read else 1
+            await db.execute(
+                update(UserFeed)
+                .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
+                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
+            )
 
     if payload.is_starred is not None:
         state.is_starred = payload.is_starred

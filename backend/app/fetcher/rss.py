@@ -10,7 +10,7 @@ from urllib.parse import urlparse, urlunparse
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
@@ -198,6 +198,15 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
         # A concurrent fetch may have inserted the same article between our SELECT and now;
         # the IntegrityError propagates to fetch_feed's except clause which handles it.
         await db.flush()
+
+        # Increment unread_count for every subscriber of this feed.
+        # Filters may decrement it afterwards for articles they mark as read.
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.feed_id == feed.id)
+            .values(unread_count=UserFeed.unread_count + len(new_articles))
+        )
+
         from app.services.filter_service import apply_filters_to_article
         for article in new_articles:
             await apply_filters_to_article(article, db)

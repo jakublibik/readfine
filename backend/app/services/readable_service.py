@@ -229,8 +229,10 @@ async def process_pending_readable(db: AsyncSession) -> int:
             try:
                 from app.utils.crypto import decrypt
                 decrypted_pass = decrypt(auth_pass_enc)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decrypt fetch_auth_pass for feed %d: %s", feed_id, exc
+                )
         feed_auth[feed_id] = (auth_user, decrypted_pass)
 
     import asyncio

@@ -17,6 +17,10 @@ from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
 
+# Feed IDs for which an initial fetch task is already running.
+# Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
+_initial_fetch_in_progress: set[int] = set()
+
 
 async def subscribe(
     user: User,
@@ -139,8 +143,8 @@ async def subscribe(
         raise ValueError("Already subscribed to this feed")
     await db.refresh(user_feed)
 
-    # Kick off initial fetch in the background
-    if trigger_initial_fetch:
+    # Kick off initial fetch in the background (skip if already running for this feed)
+    if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
         asyncio.create_task(_initial_fetch(feed.id))
 
     return user_feed
@@ -148,18 +152,22 @@ async def subscribe(
 
 async def _initial_fetch(feed_id: int) -> None:
     """Run an immediate fetch for a newly subscribed feed."""
-    import app.database as db_module
-    if db_module.async_session_factory is None:
-        return
-    async with db_module.async_session_factory() as session:
-        feed = await session.get(Feed, feed_id)
-        if not feed:
+    _initial_fetch_in_progress.add(feed_id)
+    try:
+        import app.database as db_module
+        if db_module.async_session_factory is None:
             return
-        settings_row = await session.execute(
-            select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
-        )
-        initial_limit = settings_row.scalar_one_or_none() or 500
-        await fetch_feed(feed, session, initial_limit=initial_limit)
+        async with db_module.async_session_factory() as session:
+            feed = await session.get(Feed, feed_id)
+            if not feed:
+                return
+            settings_row = await session.execute(
+                select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
+            )
+            initial_limit = settings_row.scalar_one_or_none() or 500
+            await fetch_feed(feed, session, initial_limit=initial_limit)
+    finally:
+        _initial_fetch_in_progress.discard(feed_id)
 
 
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
