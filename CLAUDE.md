@@ -61,6 +61,13 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 ## Testování
 - Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů
 
+## CSS/Tailwind Conventions
+- When fixing layout bugs, find the root cause (e.g. flex/truncate parent) rather than patching symptoms
+
+## Before Large Changes
+- For non-trivial fixes (e.g. error handling, new features), propose at least 2 possible approaches with tradeoffs. Wait for my approval before implementing.
+- Don't assume behavior is a bug — verify current behavior is actually wrong before 'fixing' it
+
 ## Preference uživatele
 - Komunikace v češtině
 - Výchozí jazyk aplikace: **en** (angličtina)
