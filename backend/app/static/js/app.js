@@ -642,13 +642,19 @@ document.addEventListener('articleArchiveChanged', function (e) {
 })();
 
 // ── Sidebar collapsible sections ──────────────────────────────────────────
-function restoreSidebarCollapse() {
+function restoreSidebarCollapse(animate) {
   document.querySelectorAll('.collapse-toggle[data-collapse]').forEach(function (btn) {
     var key = btn.dataset.collapse;
     try {
       if (localStorage.getItem('sidebar_col_' + key) === '1') {
         var content = document.getElementById('collapse-' + key);
-        if (content) content.classList.add('collapsed');
+        if (content) {
+          if (!animate) content.style.transition = 'none';
+          content.classList.add('collapsed');
+          if (!animate) requestAnimationFrame(function () {
+            requestAnimationFrame(function () { content.style.transition = ''; });
+          });
+        }
         btn.classList.add('is-collapsed');
       }
     } catch (err) {}
@@ -671,11 +677,12 @@ document.body.addEventListener('click', function (e) {
   } catch (err) {}
 });
 
-document.body.addEventListener('htmx:afterSettle', function (e) {
-  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse();
+// afterSwap fires before the browser paints — prevents collapsed-section flash on load.
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse(false);
 });
 
-restoreSidebarCollapse();
+restoreSidebarCollapse(false);
 
 // ── Sidebar mark-all-as-read: refresh sidebar + article list after action ──
 document.body.addEventListener('htmx:afterRequest', function (e) {
