@@ -158,17 +158,28 @@
   <!-- Layout per bucket (per-device, stored in localStorage) -->
   <section class="mt-8 pt-6 border-t border-gray-200">
     <h2 class="text-sm font-medium text-gray-700 mb-1">Layout per bucket</h2>
-    <p class="text-xs text-gray-500 mb-4">Saved for this device only. 2 = two panels, 3 = three panels.</p>
+    <p class="text-xs text-gray-500 mb-4">Saved for this device only.</p>
     <div class="space-y-4">
 
       <div class="flex items-center justify-between">
         <div>
-          <label class="text-sm font-medium text-gray-700">Small bucket</label>
+          <label class="text-sm font-medium text-gray-700">Small — sidebar</label>
           <p class="text-xs text-gray-500 mt-0.5">≤ {{ s.bucket_small_max }}px</p>
         </div>
-        <select data-layout-bucket="small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="1">1 panel</option>
-          <option value="2">2 panels</option>
+        <select id="sidebar-mode-small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="collapsible">Collapsible</option>
+          <option value="hideable">Hideable</option>
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Small — article detail</label>
+          <p class="text-xs text-gray-500 mt-0.5">How to open articles on small screens</p>
+        </div>
+        <select id="detail-mode-small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="inline">Expand in list</option>
+          <option value="fullscreen">Open full screen</option>
         </select>
       </div>
 
@@ -241,4 +252,24 @@
 
 
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var pairs = [
+    { id: 'sidebar-mode-small', key: 'sidebar_mode_small', def: 'collapsible' },
+    { id: 'detail-mode-small',  key: 'detail_mode_small',  def: 'inline' }
+  ];
+  pairs.forEach(function (p) {
+    var sel = document.getElementById(p.id);
+    if (!sel) return;
+    try { sel.value = localStorage.getItem(p.key) || p.def; } catch (e) {}
+    sel.addEventListener('change', function () {
+      try { localStorage.setItem(p.key, sel.value); } catch (e) {}
+      if (p.key === 'sidebar_mode_small' && window._applyBucket) window._applyBucket();
+    });
+  });
+})();
+</script>
 {% endblock %}

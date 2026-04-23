@@ -3,7 +3,19 @@ document.body.addEventListener('htmx:configRequest', function (e) {
   var elt = e.detail.elt;
   // Sidebar pinned state
   if (elt.id === 'sidebar') {
-    e.detail.parameters['pinned'] = window._sidebarPinned ? 'true' : 'false';
+    var bucket = document.documentElement.dataset.bucket;
+    if (bucket === 'small') {
+      var sidebarMode = document.documentElement.dataset.sidebarMode;
+      if (sidebarMode === 'collapsible') {
+        // Rail unless overlay is open
+        e.detail.parameters['pinned'] = document.documentElement.classList.contains('mobile-sidebar-open') ? 'true' : 'false';
+      } else {
+        // Hideable: always full sidebar
+        e.detail.parameters['pinned'] = 'true';
+      }
+    } else {
+      e.detail.parameters['pinned'] = window._sidebarPinned ? 'true' : 'false';
+    }
   }
   // Mark-read before timestamp
   if (elt.dataset && elt.dataset.action === 'mark-read') {
@@ -43,6 +55,13 @@ document.body.addEventListener('htmx:configRequest', function (e) {
     var html = document.documentElement;
     html.dataset.bucket = bucket;
     html.dataset.layout = layout;
+    if (bucket === 'small') {
+      var mode;
+      try { mode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
+      html.dataset.sidebarMode = mode || 'collapsible';
+    } else {
+      html.classList.remove('mobile-sidebar-open', 'mobile-detail-open');
+    }
   }
 
   window._getLayout = getLayout;
@@ -52,6 +71,15 @@ document.body.addEventListener('htmx:configRequest', function (e) {
   document.addEventListener('DOMContentLoaded', applyBucket);
   window.addEventListener('resize', applyBucket);
 })();
+
+// Returns true when article clicks should expand inline in the list
+function _shouldUseInline() {
+  var bucket = document.documentElement.dataset.bucket;
+  if (bucket === 'small') {
+    try { return (localStorage.getItem('detail_mode_small') || 'inline') === 'inline'; } catch (e) { return true; }
+  }
+  return document.documentElement.dataset.layout === '2';
+}
 
 // ── Open article content links in a new tab
 function openProseLinksInNewTab(root) {
@@ -565,7 +593,7 @@ document.addEventListener('articleArchiveChanged', function (e) {
     if (!a || !a.href) return;
     var row = a.closest('.article-row');
     if (!row) return;
-    var isExpanded = document.documentElement.dataset.layout === '2' && row.classList.contains('inline-expanded');
+    var isExpanded = _shouldUseInline() && row.classList.contains('inline-expanded');
     if (isExpanded) {
       if (row.dataset.density !== 'compact') {
         e.stopImmediatePropagation(); // comfortable: block HTMX, let <a> open new tab (row stays expanded)
@@ -585,9 +613,9 @@ document.addEventListener('articleArchiveChanged', function (e) {
 
   window._closeInlineDetail = closeInline;
 
-  // Intercept HTMX requests targeting #article-detail when in 2-panel mode
+  // Intercept HTMX requests targeting #article-detail for inline expand
   document.body.addEventListener('htmx:beforeRequest', function (e) {
-    if (document.documentElement.dataset.layout !== '2') return;
+    if (!_shouldUseInline()) return;
     if (!e.detail.target || e.detail.target.id !== 'article-detail') return;
     // Skip action buttons (star, etc.) — hx-target="#article-detail" is inherited from parent row
     if (e.detail.elt && e.detail.elt.closest('[data-stop-propagation]')) return;
@@ -778,4 +806,88 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     el.addEventListener('click', function (e) { e.stopPropagation(); });
   });
 });
+
+// ── Mobile navigation (small bucket) ──────────────────────────────────────
+(function () {
+  function isMobile() { return document.documentElement.dataset.bucket === 'small'; }
+  function isCollapsible() { return document.documentElement.dataset.sidebarMode === 'collapsible'; }
+
+  function openSidebarOverlay() {
+    document.documentElement.classList.add('mobile-sidebar-open');
+    history.pushState({ mobileSidebarOpen: true }, '');
+    // Collapsible: reload sidebar with full (pinned) template
+    if (isCollapsible()) htmx.trigger(document.body, 'sidebarRefresh');
+  }
+
+  function closeSidebarOverlay() {
+    document.documentElement.classList.remove('mobile-sidebar-open');
+    // Collapsible: reload sidebar back to rail template
+    if (isCollapsible()) htmx.trigger(document.body, 'sidebarRefresh');
+  }
+
+  // Intercept toggle-sidebar-pin on mobile: open/close overlay instead of pinning
+  document.addEventListener('click', function (e) {
+    if (!isMobile()) return;
+    if (!e.target.closest('[data-action="toggle-sidebar-pin"]')) return;
+    e.stopImmediatePropagation();
+    if (document.documentElement.classList.contains('mobile-sidebar-open')) {
+      closeSidebarOverlay();
+      history.back();
+    } else {
+      openSidebarOverlay();
+    }
+  }, true);
+
+  // Strip hamburger (minimizable) and title bar hamburger (hideable)
+  document.addEventListener('click', function (e) {
+    if (!isMobile()) return;
+    if (e.target.closest('#mobile-strip-open-btn') || e.target.closest('#mobile-titlebar-open-btn')) {
+      openSidebarOverlay();
+    }
+  });
+
+  // Backdrop: close overlay
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#mobile-sidebar-backdrop')) return;
+    closeSidebarOverlay();
+    history.back();
+  });
+
+  // Sidebar item click: close overlay + update title bar text
+  document.addEventListener('click', function (e) {
+    if (!isMobile()) return;
+    var item = e.target.closest('#sidebar [hx-target="#article-list"]');
+    if (!item) return;
+    var titleEl = item.querySelector('span.flex-1');
+    var title = (titleEl ? titleEl.textContent : (item.getAttribute('title') || '')).trim().slice(0, 40);
+    var titleText = document.getElementById('mobile-title-text');
+    if (titleText) titleText.textContent = title;
+    if (document.documentElement.classList.contains('mobile-sidebar-open')) {
+      closeSidebarOverlay();
+    }
+  });
+
+  // Detail back button: close fullscreen detail
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#mobile-detail-back-btn')) return;
+    document.documentElement.classList.remove('mobile-detail-open');
+    history.back();
+  });
+
+  // After article loads into #article-detail: open fullscreen if detail_mode_small=fullscreen
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    if (!isMobile() || e.detail.target.id !== 'article-detail') return;
+    try { if (localStorage.getItem('detail_mode_small') !== 'fullscreen') return; } catch (err) { return; }
+    document.documentElement.classList.add('mobile-detail-open');
+    history.pushState({ mobileDetailOpen: true }, '');
+  });
+
+  // Browser back: sync classes with history state
+  window.addEventListener('popstate', function (e) {
+    if (!isMobile()) return;
+    var state = e.state || {};
+    document.documentElement.classList.toggle('mobile-sidebar-open', !!state.mobileSidebarOpen);
+    document.documentElement.classList.toggle('mobile-detail-open', !!state.mobileDetailOpen);
+  });
+})();
 

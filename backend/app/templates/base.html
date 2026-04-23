@@ -25,6 +25,47 @@
       #inline-article-detail-content .article-detail-title-row { display: none; }
       #inline-article-detail-content .article-detail-meta { padding-left: 0 !important; }
       #inline-article-detail-content article { padding-top: 0.75rem; }
+
+      /* ── Mobile (small bucket) ── */
+      html[data-bucket="small"] #sidebar { display: none; }
+      html[data-bucket="small"] #article-list-resizer { display: none; }
+      html[data-bucket="small"] #article-detail { display: none; }
+      html[data-bucket="small"] #article-list { flex: 1 !important; width: auto !important; }
+
+      /* Collapsible: sidebar visible as rail — must be BEFORE overlay rule */
+      html[data-bucket="small"][data-sidebar-mode="collapsible"] #sidebar { display: block; width: 3rem !important; }
+      #mobile-sidebar-strip { display: none; }
+
+      /* Sidebar overlay — must be AFTER collapsible rule to win on equal specificity */
+      html[data-bucket="small"].mobile-sidebar-open #sidebar {
+        display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
+        width: 14rem !important; z-index: 30; overflow-y: auto;
+      }
+      #mobile-sidebar-backdrop { display: none; }
+      html[data-bucket="small"].mobile-sidebar-open #mobile-sidebar-backdrop {
+        display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0,0,0,0.4);
+      }
+
+      /* Hideable: title bar, list offset */
+      #mobile-title-bar { display: none; }
+      html[data-bucket="small"][data-sidebar-mode="hideable"] #mobile-title-bar {
+        display: flex; align-items: center; gap: 0.5rem;
+        position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+        height: 2.75rem; background: #fff; border-bottom: 1px solid #e5e7eb; padding: 0 0.75rem;
+      }
+      html[data-bucket="small"][data-sidebar-mode="hideable"] #article-list { padding-top: 2.75rem; }
+
+      /* Detail fullscreen overlay */
+      html[data-bucket="small"].mobile-detail-open #article-detail {
+        display: block !important; position: fixed; inset: 0; z-index: 40;
+        background: white; overflow-y: auto; padding-top: 2.75rem;
+      }
+      #mobile-detail-back-bar { display: none; }
+      html[data-bucket="small"].mobile-detail-open #mobile-detail-back-bar {
+        display: flex; align-items: center; gap: 0.375rem;
+        position: fixed; top: 0; left: 0; right: 0; z-index: 41;
+        height: 2.75rem; background: #fff; border-bottom: 1px solid #e5e7eb; padding: 0 0.75rem;
+      }
     </style>
     <script src="/static/js/init.js"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>

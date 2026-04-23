@@ -7,6 +7,28 @@
 {% endblock %}
 
 {% block content %}
+<!-- Mobile sidebar strip (minimizable mode, small bucket only) -->
+<div id="mobile-sidebar-strip">
+  <button id="mobile-strip-open-btn" class="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-200" aria-label="Open feeds">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+</div>
+
+<!-- Mobile title bar (hideable mode, small bucket only) -->
+<div id="mobile-title-bar">
+  <button id="mobile-titlebar-open-btn" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Open feeds">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+  <span id="mobile-title-text" class="flex-1 truncate text-sm font-medium text-gray-700"></span>
+</div>
+
+<!-- Mobile sidebar backdrop -->
+<div id="mobile-sidebar-backdrop"></div>
+
 <!-- Search modal overlay -->
 <div id="search-modal-overlay"
      class="hidden fixed inset-0 z-50 flex items-center justify-center">

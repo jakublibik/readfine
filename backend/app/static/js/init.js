@@ -10,5 +10,12 @@
   var bucket = w <= 640 ? 'small' : w <= 1100 ? 'medium' : 'large';
   var layout;
   try { layout = localStorage.getItem('layout_' + bucket); } catch (e) {}
+  document.documentElement.dataset.bucket = bucket;
   document.documentElement.dataset.layout = layout || LAYOUT_DEFAULTS[bucket];
+
+  if (bucket === 'small') {
+    var sidebarMode;
+    try { sidebarMode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
+    document.documentElement.dataset.sidebarMode = sidebarMode || 'collapsible';
+  }
 })();

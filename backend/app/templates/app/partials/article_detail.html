@@ -1,3 +1,13 @@
+<!-- Mobile back bar (small bucket fullscreen mode only) -->
+<div id="mobile-detail-back-bar">
+  <button id="mobile-detail-back-btn" class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900 p-1 -ml-1 rounded" aria-label="Back">
+    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+    </svg>
+    Back
+  </button>
+</div>
+
 <article class="max-w-3xl px-6 py-6"
          data-article-id="{{ article.id }}"
          data-is-read="{{ 'true' if article.is_read else 'false' }}"
