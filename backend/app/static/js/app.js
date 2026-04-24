@@ -223,6 +223,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (!list) return;
   var seen = new Set();
 
+  var topPanel = document.getElementById('mobile-title-bar');
+  var topOffset = (topPanel && getComputedStyle(topPanel).display !== 'none')
+    ? Math.round(topPanel.getBoundingClientRect().height) : 0;
+
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
       var el = entry.target;
@@ -240,7 +244,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
       }
     });
-  }, { root: list, threshold: 0.1 });
+  }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px 0px 0px' });
 
   list.querySelectorAll('.article-row').forEach(function (el) {
     observer.observe(el);
@@ -657,15 +661,29 @@ document.addEventListener('articleArchiveChanged', function (e) {
       swap: 'innerHTML'
     });
 
-    // Scroll row into view
+    // Scroll row into view, accounting for mobile top panel if visible
     setTimeout(function () {
-      row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      var topPanel = document.getElementById('mobile-title-bar');
+      var topOffset = (topPanel && getComputedStyle(topPanel).display !== 'none')
+        ? topPanel.getBoundingClientRect().height : 0;
+      if (topOffset > 0) {
+        var list = document.getElementById('article-list');
+        if (list) {
+          var scrollTarget = list.scrollTop + row.getBoundingClientRect().top
+            - list.getBoundingClientRect().top - topOffset;
+          list.scrollTo({ top: scrollTarget, behavior: 'smooth' });
+        }
+      } else {
+        row.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     }, 50);
   });
 
   // Close inline when article list reloads (nav change)
   document.body.addEventListener('htmx:beforeSwap', function (e) {
-    if (e.detail.target.id === 'article-list') closeInline();
+    if (e.detail.target.id !== 'article-list') return;
+    closeInline();
+    e.detail.target.scrollTop = 0;
   });
 })();
 
@@ -707,6 +725,12 @@ document.body.addEventListener('click', function (e) {
 
 // afterSwap fires before the browser paints — prevents collapsed-section flash on load.
 document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse(false);
+});
+
+// HTMX settle can re-apply server classes and drop client-added "collapsed".
+// Re-apply once more after settle to keep sections collapsed after sidebar refresh.
+document.body.addEventListener('htmx:afterSettle', function (e) {
   if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse(false);
 });
 
@@ -812,6 +836,15 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   function isMobile() { return document.documentElement.dataset.bucket === 'small'; }
   function isCollapsible() { return document.documentElement.dataset.sidebarMode === 'collapsible'; }
 
+  // Restore title bar text after page refresh
+  document.addEventListener('DOMContentLoaded', function () {
+    try {
+      var saved = localStorage.getItem('mobile_title_text');
+      var titleText = document.getElementById('mobile-title-text');
+      if (saved && titleText) titleText.textContent = saved;
+    } catch (err) {}
+  });
+
   function openSidebarOverlay() {
     document.documentElement.classList.add('mobile-sidebar-open');
     history.pushState({ mobileSidebarOpen: true }, '');
@@ -862,8 +895,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var title = (titleEl ? titleEl.textContent : (item.getAttribute('title') || '')).trim().slice(0, 40);
     var titleText = document.getElementById('mobile-title-text');
     if (titleText) titleText.textContent = title;
+    try { localStorage.setItem('mobile_title_text', title); } catch (err) {}
     if (document.documentElement.classList.contains('mobile-sidebar-open')) {
       closeSidebarOverlay();
+      history.back();
     }
   });
 
@@ -874,12 +909,136 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     history.back();
   });
 
-  // After article loads into #article-detail: open fullscreen if detail_mode_small=fullscreen
+  // Sync detail topbar star/archive indicators from article body buttons
+  function syncDetailTopbar() {
+    var starContainer = document.querySelector('#article-detail [id^="star-btn-"]');
+    var topStar = document.getElementById('detail-topbar-star');
+    if (starContainer && topStar) {
+      var isStarred = !!starContainer.querySelector('span.text-gray-900');
+      topStar.querySelector('svg').setAttribute('fill', isStarred ? 'currentColor' : 'none');
+      topStar.classList.toggle('text-gray-900', isStarred);
+      topStar.classList.toggle('text-gray-400', !isStarred);
+    }
+    var archiveContainer = document.querySelector('#article-detail [id^="archive-btn-"]');
+    var topArchive = document.getElementById('detail-topbar-archive');
+    if (archiveContainer && topArchive) {
+      var archiveBtn = archiveContainer.querySelector('button');
+      var isArchived = !!(archiveBtn && archiveBtn.classList.contains('bg-gray-100'));
+      topArchive.classList.toggle('text-gray-700', isArchived);
+      topArchive.classList.toggle('text-gray-400', !isArchived);
+    }
+  }
+
+  // After article loads into #article-detail: sync topbar + open fullscreen if needed
   document.body.addEventListener('htmx:afterSettle', function (e) {
     if (!isMobile() || e.detail.target.id !== 'article-detail') return;
+    syncDetailTopbar();
     try { if (localStorage.getItem('detail_mode_small') !== 'fullscreen') return; } catch (err) { return; }
-    document.documentElement.classList.add('mobile-detail-open');
-    history.pushState({ mobileDetailOpen: true }, '');
+    if (document.documentElement.classList.contains('mobile-detail-open')) {
+      history.replaceState({ mobileDetailOpen: true }, '');
+    } else {
+      document.documentElement.classList.add('mobile-detail-open');
+      history.pushState({ mobileDetailOpen: true }, '');
+    }
+  });
+
+  // After star/archive HTMX swap: re-sync topbar indicators
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    var id = e.detail.target.id || '';
+    if (id.startsWith('star-btn-') || id.startsWith('archive-btn-')) syncDetailTopbar();
+  });
+
+  // Topbar star: delegate to body star button
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#detail-topbar-star')) return;
+    var btn = document.querySelector('#article-detail [id^="star-btn-"] button');
+    if (btn) btn.click();
+  });
+
+  // Topbar archive: delegate to body archive button
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#detail-topbar-archive')) return;
+    var btn = document.querySelector('#article-detail [id^="archive-btn-"] button');
+    if (btn) btn.click();
+  });
+
+  // Topbar share: show picker
+  var _pendingShareTitle = null;
+
+  function doShare(title, url) {
+    if (navigator.share) {
+      navigator.share({ title: title, url: url }).catch(function () {});
+    } else {
+      try { navigator.clipboard.writeText(url); } catch (err) {}
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#detail-topbar-share')) return;
+    var picker = document.getElementById('detail-share-picker');
+    if (!picker) return;
+    var rect = e.target.closest('#detail-topbar-share').getBoundingClientRect();
+    picker.style.top = (rect.bottom + 4) + 'px';
+    picker.style.left = Math.max(4, rect.left - picker.offsetWidth + rect.width) + 'px';
+    picker.classList.toggle('hidden');
+    e.stopPropagation();
+  });
+
+  document.addEventListener('click', function (e) {
+    var picker = document.getElementById('detail-share-picker');
+    if (picker && !e.target.closest('#detail-share-picker') && !e.target.closest('#detail-topbar-share')) {
+      picker.classList.add('hidden');
+    }
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#detail-share-pick-original')) return;
+    document.getElementById('detail-share-picker').classList.add('hidden');
+    var articleEl = document.querySelector('#article-detail [data-article-id]');
+    if (!articleEl) return;
+    doShare(articleEl.dataset.title || '', articleEl.dataset.url || window.location.href);
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#detail-share-pick-readfine')) return;
+    document.getElementById('detail-share-picker').classList.add('hidden');
+    var articleEl = document.querySelector('#article-detail [data-article-id]');
+    if (!articleEl) return;
+    var id = articleEl.dataset.articleId;
+    var title = articleEl.dataset.title || '';
+    var shareInput = document.querySelector('#article-detail [id^="share-btn-"] input[type="text"]');
+    if (shareInput && shareInput.value) {
+      doShare(title, shareInput.value);
+    } else {
+      _pendingShareTitle = title;
+      htmx.ajax('POST', '/htmx/articles/' + id + '/share', { target: '#share-btn-' + id, swap: 'outerHTML' });
+    }
+  });
+
+  // After share token generated: complete pending share
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    if (_pendingShareTitle === null) return;
+    var targetId = (e.detail.target && e.detail.target.id) || '';
+    if (!targetId.startsWith('share-btn-')) return;
+    var input = document.getElementById(targetId) && document.getElementById(targetId).querySelector('input[type="text"]');
+    if (input) doShare(_pendingShareTitle, input.value);
+    _pendingShareTitle = null;
+  });
+
+  // Topbar next: mark current as read, load next article from list
+  document.addEventListener('click', function (e) {
+    if (!isMobile() || !e.target.closest('#detail-topbar-next')) return;
+    var detailArticle = document.querySelector('#article-detail [data-article-id]');
+    if (!detailArticle) return;
+    var currentId = detailArticle.dataset.articleId;
+    htmx.ajax('POST', '/htmx/articles/' + currentId + '/set-read?state=true', { swap: 'none' });
+    detailArticle.dataset.isRead = 'true';
+    var currentRow = document.querySelector('#article-list [data-article-id="' + currentId + '"]');
+    if (!currentRow) return;
+    var next = currentRow.nextElementSibling;
+    while (next && !next.dataset.articleId) next = next.nextElementSibling;
+    if (!next) return;
+    htmx.ajax('GET', '/htmx/articles/' + next.dataset.articleId, { target: '#article-detail', swap: 'innerHTML' });
   });
 
   // Browser back: sync classes with history state

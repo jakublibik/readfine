@@ -42,6 +42,22 @@
 <div id="label-picker"
      class="hidden fixed z-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[220px] max-h-64 overflow-y-auto"></div>
 
+<!-- Detail share picker (mobile) -->
+<div id="detail-share-picker" class="hidden fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+  <button id="detail-share-pick-original" class="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+    </svg>
+    Original article
+  </button>
+  <button id="detail-share-pick-readfine" class="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+    </svg>
+    Readfine link
+  </button>
+</div>
+
 <div class="flex h-screen overflow-hidden">
 
   <!-- Left panel: sidebar -->

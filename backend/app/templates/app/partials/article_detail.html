@@ -1,17 +1,37 @@
 <!-- Mobile back bar (small bucket fullscreen mode only) -->
 <div id="mobile-detail-back-bar">
-  <button id="mobile-detail-back-btn" class="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900 p-1 -ml-1 rounded" aria-label="Back">
-    <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+  <button id="mobile-detail-back-btn" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Back">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
     </svg>
-    Back
+  </button>
+  <button id="detail-topbar-star" class="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400" title="Star">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
+    </svg>
+  </button>
+  <button id="detail-topbar-archive" class="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400" title="Archive">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 6l1.5-3h13L20 6M4 6v12a1 1 0 001 1h14a1 1 0 001-1V6M12 10v5m-2-2.5l2 2.5 2-2.5"/>
+    </svg>
+  </button>
+  <button id="detail-topbar-share" class="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400" title="Share">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
+    </svg>
+  </button>
+  <button id="detail-topbar-next" class="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-200 text-gray-400" title="Next article">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+    </svg>
   </button>
 </div>
 
 <article class="max-w-3xl px-6 py-6"
          data-article-id="{{ article.id }}"
          data-is-read="{{ 'true' if article.is_read else 'false' }}"
-         data-title="{{ article.title or '' }}">
+         data-title="{{ article.title or '' }}"
+         data-url="{{ article.url or '' }}">
 
   <!-- Header -->
   <header class="mb-6">
@@ -45,7 +65,7 @@
       </div>
 
       <!-- ··· dropdown menu -->
-      <div class="relative flex-shrink-0">
+      <div class="relative flex-shrink-0 article-detail-menu">
         <button data-menu-toggle
                 class="px-2 py-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 select-none text-lg leading-none">···</button>
         <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
