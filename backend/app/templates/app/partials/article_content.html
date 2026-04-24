@@ -4,15 +4,7 @@
      hx-trigger="every 2s"
      hx-swap="outerHTML"
      {% endif %}>
-  {% if article.readable_status == 'pending' %}
-  <div class="flex items-center gap-2 text-xs text-gray-400 italic mb-4">
-    <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
-    </svg>
-    Extracting full content…
-  </div>
-  {% elif article.readable_status == 'failed' %}
+  {% if article.readable_status == 'failed' %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
       Full content could not be retrieved (access denied). The feed may require authentication, or this site does not allow automated access.
@@ -31,9 +23,51 @@
       <p class="text-gray-400 italic">No content available.</p>
     {% endif %}
   </div>
-  {% if article.readable_status == 'success' and article.readable_content %}
-    <p class="text-xs text-gray-400 text-right mt-3">readable content</p>
-  {% elif article.content %}
-    <p class="text-xs text-gray-400 text-right mt-3">feed content</p>
+  {% if article.readable_status == 'pending' %}
+  <div class="flex items-center gap-2 text-xs text-gray-400 italic mt-4">
+    <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+    </svg>
+    Extracting full content…
+  </div>
   {% endif %}
+  <div class="article-bottom-bar hidden flex items-center justify-between mt-3" data-article-id="{{ article.id }}">
+    <div class="flex items-center gap-1">
+      <button data-bottom-star
+              hx-post="/htmx/articles/{{ article.id }}/star"
+              hx-target="#star-btn-{{ article.id }}"
+              hx-swap="innerHTML"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+              title="{% if article.is_starred %}Remove star{% else %}Star{% endif %}">
+        {% if article.is_starred %}
+          <span class="text-base leading-none text-gray-900">★</span>
+        {% else %}
+          <span class="text-base leading-none text-gray-300">☆</span>
+        {% endif %}
+      </button>
+      <button data-bottom-archive
+              hx-post="/htmx/articles/{{ article.id }}/archive"
+              hx-target="#archive-btn-{{ article.id }}"
+              hx-swap="innerHTML"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 {% if article.is_archived %}text-gray-700{% else %}text-gray-400{% endif %}"
+              title="{% if article.is_archived %}Unarchive{% else %}Archive{% endif %}">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 6l1.5-3h13L20 6M4 6v12a1 1 0 001 1h14a1 1 0 001-1V6M12 10v5m-2-2.5l2 2.5 2-2.5"/>
+        </svg>
+      </button>
+      <button data-bottom-share
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Share">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
+        </svg>
+      </button>
+    </div>
+    {% if article.readable_status == 'success' and article.readable_content %}
+      <span class="text-xs text-gray-400">readable content</span>
+    {% elif article.content %}
+      <span class="text-xs text-gray-400">feed content</span>
+    {% endif %}
+  </div>
 </div>
