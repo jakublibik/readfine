@@ -254,22 +254,3 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script>
-(function () {
-  var pairs = [
-    { id: 'sidebar-mode-small', key: 'sidebar_mode_small', def: 'collapsible' },
-    { id: 'detail-mode-small',  key: 'detail_mode_small',  def: 'inline' }
-  ];
-  pairs.forEach(function (p) {
-    var sel = document.getElementById(p.id);
-    if (!sel) return;
-    try { sel.value = localStorage.getItem(p.key) || p.def; } catch (e) {}
-    sel.addEventListener('change', function () {
-      try { localStorage.setItem(p.key, sel.value); } catch (e) {}
-      if (p.key === 'sidebar_mode_small' && window._applyBucket) window._applyBucket();
-    });
-  });
-})();
-</script>
-{% endblock %}

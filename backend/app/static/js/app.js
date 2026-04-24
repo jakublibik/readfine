@@ -1048,5 +1048,20 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     document.documentElement.classList.toggle('mobile-sidebar-open', !!state.mobileSidebarOpen);
     document.documentElement.classList.toggle('mobile-detail-open', !!state.mobileDetailOpen);
   });
+
+  // Preferences page: sync small-bucket selects with localStorage
+  var prefPairs = [
+    { id: 'sidebar-mode-small', key: 'sidebar_mode_small', def: 'collapsible' },
+    { id: 'detail-mode-small',  key: 'detail_mode_small',  def: 'inline' }
+  ];
+  prefPairs.forEach(function (p) {
+    var sel = document.getElementById(p.id);
+    if (!sel) return;
+    try { sel.value = localStorage.getItem(p.key) || p.def; } catch (e) {}
+    sel.addEventListener('change', function () {
+      try { localStorage.setItem(p.key, sel.value); } catch (e) {}
+      if (p.key === 'sidebar_mode_small' && window._applyBucket) window._applyBucket();
+    });
+  });
 })();
 
