@@ -212,14 +212,19 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
 });
 
 // Restore last-selected nav on page load; fall back to All Articles
-document.addEventListener('DOMContentLoaded', function () {
+function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
   var saved;
   try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
   var url = saved || '/htmx/articles';
   _activeNavGet = url;
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
-});
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _autoLoadArticleList);
+} else {
+  _autoLoadArticleList();
+}
 
 // Article list: IntersectionObserver for mark-as-read on scroll
 document.body.addEventListener('htmx:afterSettle', function (evt) {
