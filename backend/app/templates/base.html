@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Readfine{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="/static/js/tailwind-config.js"></script>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <style>
@@ -14,8 +15,6 @@
       .article-row { transition: opacity 150ms ease; }
       html.sidebar-unpinned #sidebar { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
-      html[data-layout="2"] #article-list-resizer { display: none; }
-      html[data-layout="2"] #article-list { flex: 1 !important; width: auto !important; }
       .article-row .expand-indicator { visibility: hidden; }
       .article-row.inline-expanded .expand-indicator { visibility: visible; }
       .article-row.inline-expanded { box-shadow: inset 0 6px 8px -6px rgba(0,0,0,0.10); }
@@ -39,7 +38,7 @@
       /* Sidebar overlay — must be AFTER collapsible rule to win on equal specificity */
       html[data-bucket="small"].mobile-sidebar-open #sidebar {
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
-        width: 14rem !important; z-index: 30; overflow-y: auto;
+        width: 15rem !important; z-index: 30; overflow-y: auto;
       }
       #mobile-sidebar-backdrop { display: none; }
       html[data-bucket="small"].mobile-sidebar-open #mobile-sidebar-backdrop {

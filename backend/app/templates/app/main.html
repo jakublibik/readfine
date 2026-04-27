@@ -58,11 +58,11 @@
   </button>
 </div>
 
-<div class="flex h-screen overflow-hidden">
+<div class="flex h-screen overflow-hidden bg-[#fcfcfc]">
 
   <!-- Left panel: sidebar -->
   <aside id="sidebar"
-         class="w-56 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
+         class="w-60 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
          hx-get="/htmx/sidebar"
          hx-trigger="load, sidebarRefresh from:body, every 300s"
          hx-vals="{}"
@@ -73,10 +73,7 @@
   <!-- Middle panel: article list -->
   <section id="article-list"
            class="flex-shrink-0 border-gray-200 bg-white overflow-y-auto"
-           style="width:28rem"
-           hx-get="/htmx/articles"
-           hx-trigger="load"
-           hx-swap="innerHTML">
+           style="width:28rem">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
   </section>
 
