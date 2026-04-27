@@ -2,9 +2,13 @@ import re
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
+from fastapi.exceptions import HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, Response
 from starlette_csrf import CSRFMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -118,6 +122,14 @@ def create_app() -> FastAPI:
     app.include_router(api_articles_router, prefix="/api/v1")
     app.include_router(api_labels_router, prefix="/api/v1")
     app.include_router(api_filters_router, prefix="/api/v1")
+
+    @app.exception_handler(HTTPException)
+    async def auth_redirect_handler(request: Request, exc: HTTPException):
+        if exc.status_code == 401 and not request.url.path.startswith("/api/"):
+            if request.headers.get("HX-Request"):
+                return Response(status_code=200, headers={"HX-Redirect": "/login"})
+            return RedirectResponse("/login", status_code=302)
+        return await _default_http_exception_handler(request, exc)
 
     return app
 
