@@ -226,6 +226,22 @@ if (document.readyState === 'loading') {
   _autoLoadArticleList();
 }
 
+// On page load: restore fullscreen article from URL hash (small bucket + fullscreen mode only).
+// Converts the hash URL to a list URL first (replaceState), so Back returns to the list.
+function _restoreArticleFromHash() {
+  if (window._getCurrentBucket() !== 'small') return;
+  try { if (localStorage.getItem('detail_mode_small') !== 'fullscreen') return; } catch (e) { return; }
+  var match = window.location.hash.match(/^#article-(\d+)$/);
+  if (!match) return;
+  history.replaceState(null, '', window.location.pathname);
+  htmx.ajax('GET', '/htmx/articles/' + match[1], { target: '#article-detail', swap: 'innerHTML' });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _restoreArticleFromHash);
+} else {
+  _restoreArticleFromHash();
+}
+
 // Article list: IntersectionObserver for mark-as-read on scroll
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (evt.detail.target.id !== 'article-list') return;
@@ -327,6 +343,11 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   evt.detail.target.addEventListener(
     'htmx:beforeRequest', function () { clearTimeout(timer); }, { once: true }
   );
+});
+
+// Reset scroll to top when a new article loads into #article-detail
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
 
 // OPML import form: intercept submit to send CSRF header with multipart upload
@@ -1021,12 +1042,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!isMobile() || e.detail.target.id !== 'article-detail') return;
     syncDetailTopbar();
     try { if (localStorage.getItem('detail_mode_small') !== 'fullscreen') return; } catch (err) { return; }
+    var articleEl = e.detail.target.querySelector('[data-article-id]');
+    var articleId = articleEl ? articleEl.dataset.articleId : null;
+    var articleHash = articleId ? '#article-' + articleId : '';
     if (document.documentElement.classList.contains('mobile-detail-open')) {
-      history.replaceState({ mobileDetailOpen: true }, '');
+      history.replaceState({ mobileDetailOpen: true, articleId: articleId }, '', articleHash || window.location.pathname);
     } else {
       document.documentElement.classList.add('mobile-detail-open');
-      history.pushState({ mobileDetailOpen: true }, '');
+      history.pushState({ mobileDetailOpen: true, articleId: articleId }, '', articleHash || window.location.pathname);
     }
+    e.detail.target.scrollTop = 0;
   });
 
   // After star/archive HTMX swap: re-sync topbar indicators
@@ -1155,9 +1180,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     _pendingShareTitle = null;
   });
 
-  // Topbar next: mark current as read, load next article from list
+  // Topbar/bottom next: mark current as read, load next article from list
   document.addEventListener('click', function (e) {
-    if (!isMobile() || !e.target.closest('#detail-topbar-next')) return;
+    if (!isMobile() || (!e.target.closest('#detail-topbar-next') && !e.target.closest('[data-bottom-next]'))) return;
     var detailArticle = document.querySelector('#article-detail [data-article-id]');
     if (!detailArticle) return;
     var currentId = detailArticle.dataset.articleId;
@@ -1186,7 +1211,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var container = document.getElementById(containerId);
     if (!container) return;
     var bar = container.querySelector('.article-bottom-bar');
-    if (bar) bar.classList.remove('hidden');
+    if (!bar) return;
+    bar.classList.remove('hidden');
+    var nextBtn = bar.querySelector('[data-bottom-next]');
+    if (nextBtn) nextBtn.classList.toggle('hidden', !(isMobile() && !inInline));
   }
   document.body.addEventListener('htmx:afterSettle', function (e) {
     var id = e.detail.target.id;

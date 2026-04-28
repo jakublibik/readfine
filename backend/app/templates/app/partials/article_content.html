@@ -63,6 +63,13 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
         </svg>
       </button>
+      <button data-bottom-next
+              class="hidden w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Next article">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </button>
     </div>
     {% if article.readable_status == 'success' and article.readable_content %}
       <span class="text-xs text-gray-400">readable content</span>
