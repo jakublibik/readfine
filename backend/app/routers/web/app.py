@@ -2,8 +2,11 @@
 import asyncio
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
+
+import nh3
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -68,6 +71,10 @@ async def _extract_readable_bg(
             article.readable_content = content
             article.readable_status = "success"
             article.readable_error = None
+            plain = nh3.clean(content, tags=set())
+            words = len(re.findall(r"\w+", plain))
+            article.word_count = words
+            article.estimated_read_min = max(1, round(words / 200))
         else:
             article.readable_status = "failed"
             article.readable_error = error
@@ -458,7 +465,7 @@ async def htmx_readable_poll(
     article = await get_article(user, article_id, db)
     if not article:
         return HTMLResponse("", status_code=404)
-    return templates.TemplateResponse(request, "app/partials/article_content.html", {"article": article})
+    return _content_with_readtime_oob(request, article)
 
 
 async def _get_row_context(user, request: Request, db) -> dict:
@@ -469,6 +476,19 @@ async def _get_row_context(user, request: Request, db) -> dict:
     density = ((s.list_density_mobile if is_mobile else s.list_density_web) if s else "comfortable")
     label_display = s.label_display if s else "indicator"
     return {"density": density, "label_display": label_display}
+
+
+def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
+    """Return article_content.html + OOB span to update the reading-time metadata."""
+    content_html = templates.env.get_template("app/partials/article_content.html").render(
+        request=request, article=article
+    )
+    read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
+    oob = (
+        f'<span id="article-meta-readtime-{article.id}" class="shrink-0"'
+        f' hx-swap-oob="true">{read_time}</span>'
+    )
+    return HTMLResponse(content_html + oob)
 
 
 def _read_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
@@ -750,6 +770,10 @@ async def htmx_extract_readable(
         article.readable_content = content
         article.readable_status = "success"
         article.readable_error = None
+        plain = nh3.clean(content, tags=set())
+        words = len(re.findall(r"\w+", plain))
+        article.word_count = words
+        article.estimated_read_min = max(1, round(words / 200))
     else:
         article.readable_status = "failed"
         article.readable_error = error
@@ -758,7 +782,7 @@ async def htmx_extract_readable(
     await db.commit()
     await db.refresh(article)
 
-    return templates.TemplateResponse(request, "app/partials/article_content.html", {"article": article})
+    return _content_with_readtime_oob(request, article)
 
 
 @router.get("/share/{token}", response_class=HTMLResponse)

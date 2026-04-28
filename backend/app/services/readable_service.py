@@ -1,5 +1,6 @@
 """Readable extraction pipeline: trafilatura → readability-lxml fallback."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -269,6 +270,10 @@ async def process_pending_readable(db: AsyncSession) -> int:
             article.readable_content = content
             article.readable_status = "success"
             article.readable_error = None
+            plain = nh3.clean(content, tags=set())
+            words = len(re.findall(r"\w+", plain))
+            article.word_count = words
+            article.estimated_read_min = max(1, round(words / 200))
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
         else:
             article.readable_error = error

@@ -56,9 +56,9 @@
         {% if article.published_at %}
           <span class="shrink-0">· <time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y %H:%M") }}</time></span>
         {% endif %}
-        {% if article.estimated_read_min %}
-          <span class="shrink-0">· {{ article.estimated_read_min }} min read</span>
-        {% endif %}
+        <span id="article-meta-readtime-{{ article.id }}" class="shrink-0">
+          {%- if article.estimated_read_min %}· {{ article.estimated_read_min }} min read{%- endif %}
+        </span>
       </div>
 
       <!-- ··· dropdown menu -->
