@@ -254,7 +254,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       } else if (seen.has(id) && !isRead && entry.boundingClientRect.top < 0) {
         seen.delete(id);
         el.dataset.isRead = 'true';
-        el.classList.add('opacity-60');
+        el.classList.add('opacity-75');
         var dot = el.querySelector('.unread-dot');
         if (dot) dot.remove();
         htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
@@ -484,7 +484,7 @@ document.addEventListener('articleReadChanged', function (e) {
   var row = document.getElementById('article-row-' + detail.id);
   if (!row) return;
   var isRead = detail.isRead;
-  row.classList.toggle('opacity-60', isRead);
+  row.classList.toggle('opacity-75', isRead);
   row.dataset.isRead = isRead ? 'true' : 'false';
   var title = row.querySelector('p, [data-article-title]');
   if (title) {
