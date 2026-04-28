@@ -25,7 +25,17 @@
       #inline-article-detail-content .article-detail-meta { padding-left: 0 !important; }
       #inline-article-detail-content article { padding-top: 0.75rem; }
 
+      /* ── Reading typography ── */
+      html[data-font-size="sm"] .prose { font-size: 0.875rem; }
+      html[data-font-size="lg"] .prose { font-size: 1.125rem; }
+      html[data-font-family="serif"] .prose { font-family: Georgia, "Times New Roman", serif; }
+      .prose p, .prose li, .prose blockquote { line-height: 1.6; }
+      .prose p { margin-top: 0.75em; margin-bottom: 0.75em; }
+      .prose img { margin-top: 1em; margin-bottom: 1em; }
+
       /* ── Mobile (small bucket) ── */
+      html[data-bucket="small"] { font-size: 106.25%; }
+      html[data-bucket="small"] #article-detail article { padding-left: 1rem; padding-right: 1rem; }
       html[data-bucket="small"] #sidebar { display: none; }
       html[data-bucket="small"] #article-list-resizer { display: none; }
       html[data-bucket="small"] #article-detail { display: none; }

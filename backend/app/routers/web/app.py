@@ -90,10 +90,14 @@ async def main_app(
     settings = settings_result.scalar_one_or_none()
     bucket_small_max = settings.bucket_small_max if settings else 640
     bucket_medium_max = settings.bucket_medium_max if settings else 1100
+    reading_font_size = settings.reading_font_size if settings else "md"
+    reading_font_family = settings.reading_font_family if settings else "sans"
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
         "bucket_medium_max": bucket_medium_max,
+        "reading_font_size": reading_font_size,
+        "reading_font_family": reading_font_family,
     })
 
 

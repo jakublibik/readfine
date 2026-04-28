@@ -47,6 +47,8 @@ class UserSettings(Base):
     label_display: Mapped[str] = mapped_column(String(20), default="indicator")
     bucket_small_max: Mapped[int] = mapped_column(SmallInteger, default=640)
     bucket_medium_max: Mapped[int] = mapped_column(SmallInteger, default=1100)
+    reading_font_size: Mapped[str] = mapped_column(String(10), nullable=False, default="md")
+    reading_font_family: Mapped[str] = mapped_column(String(10), nullable=False, default="sans")
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")

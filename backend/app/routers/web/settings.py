@@ -717,6 +717,8 @@ async def settings_tokens_revoke(
 
 _DENSITY_VALUES = {"compact", "comfortable", "summary"}
 _SORT_VALUES = {"newest", "oldest"}
+_FONT_SIZE_VALUES = {"sm", "md", "lg"}
+_FONT_FAMILY_VALUES = {"sans", "serif"}
 
 
 async def _get_or_create_settings(user: User, db: AsyncSession) -> UserSettings:
@@ -786,6 +788,16 @@ async def settings_preferences_save(
         bucket_medium_max = max(bucket_small_max + 100, min(2000, bucket_medium_max))
         s.bucket_small_max = bucket_small_max
         s.bucket_medium_max = bucket_medium_max
+
+    font_size = form.get("reading_font_size", "md")
+    if font_size not in _FONT_SIZE_VALUES:
+        font_size = "md"
+    s.reading_font_size = font_size
+
+    font_family = form.get("reading_font_family", "sans")
+    if font_family not in _FONT_FAMILY_VALUES:
+        font_family = "sans"
+    s.reading_font_family = font_family
 
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {
