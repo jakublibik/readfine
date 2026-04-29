@@ -10,6 +10,7 @@
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      data-url="{{ article.url or '' }}"
      hx-get="/htmx/articles/{{ article.id }}"
+     hx-trigger="click[!event.target.closest('[data-stop-propagation]')]"
      hx-target="#article-detail"
      hx-swap="innerHTML">
 
@@ -17,6 +18,7 @@
   <!-- Compact: star + title + feed + date all inline -->
   <div class="flex items-center gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
+            hx-target="this"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
@@ -78,6 +80,7 @@
   <!-- Comfortable / Summary: star + title, then feed + date row -->
   <div class="flex items-baseline gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
+            hx-target="this"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
@@ -91,7 +94,7 @@
     </button>
     <a data-article-title
        {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
-       class="text-sm leading-snug line-clamp-2 text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
+       class="text-sm leading-snug text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
   </div>
 
   <div class="flex items-center justify-between mt-0.5">
