@@ -32,6 +32,15 @@
     Extracting full content…
   </div>
   {% endif %}
+  <div id="detail-labels-{{ article.id }}" class="detail-labels-area {% if article.labels %}flex flex-wrap items-center gap-x-3 gap-y-1 mt-4{% endif %}">
+    {% for label in article.labels %}
+      <span class="flex items-center gap-1 text-xs text-gray-500">
+        <span class="inline-block w-2 h-2 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+        {{ label.name }}
+      </span>
+    {% endfor %}
+  </div>
+
   <div class="article-bottom-bar hidden flex items-center justify-between mt-3" data-article-id="{{ article.id }}">
     <div class="flex items-center gap-1">
       <button data-bottom-star
@@ -63,6 +72,18 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
         </svg>
       </button>
+      <div id="detail-labels-btn-{{ article.id }}" class="detail-labels-btn flex">
+        <button class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+                data-stop-propagation
+                data-label-trigger
+                hx-get="/htmx/articles/{{ article.id }}/labels"
+                hx-target="#label-picker"
+                hx-swap="innerHTML"
+                title="Labels">
+          {% if article.labels %}<span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
+          {% else %}<span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>{% endif %}
+        </button>
+      </div>
       <button data-bottom-next
               class="hidden w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
               title="Next article">

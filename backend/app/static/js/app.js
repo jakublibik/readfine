@@ -598,19 +598,41 @@ document.addEventListener('articleArchiveChanged', function (e) {
     if (p) p.classList.add('hidden');
   }
 
-  // Position picker near trigger button before HTMX request fires
+  var _pickerTriggerRect = null;
+
+  function _vh() { return window.visualViewport ? window.visualViewport.height : window.innerHeight; }
+
+  // Position picker near trigger; open above if not enough space below
   document.body.addEventListener('htmx:beforeRequest', function (e) {
     if (!e.target.hasAttribute('data-label-trigger')) return;
-    var rect = e.target.getBoundingClientRect();
+    _pickerTriggerRect = e.target.getBoundingClientRect();
     var p = document.getElementById('label-picker');
     if (!p) return;
-    var top = rect.bottom + 2;
-    var left = rect.left;
-    // Clamp to viewport right edge
+    var left = _pickerTriggerRect.left;
     if (left + 220 > window.innerWidth) left = window.innerWidth - 224;
+    var spaceBelow = _vh() - _pickerTriggerRect.bottom;
+    var top = spaceBelow < 300
+      ? Math.max(4, _pickerTriggerRect.top - 300 - 2)
+      : _pickerTriggerRect.bottom + 2;
     p.style.top = top + 'px';
     p.style.left = left + 'px';
     p.classList.remove('hidden');
+  });
+
+  // After content loads, fine-tune with actual picker height
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    if (!_pickerTriggerRect) return;
+    var p = document.getElementById('label-picker');
+    if (!p || p.classList.contains('hidden')) return;
+    var rect = _pickerTriggerRect;
+    _pickerTriggerRect = null;
+    requestAnimationFrame(function () {
+      var h = p.offsetHeight;
+      var spaceBelow = _vh() - rect.bottom;
+      p.style.top = (spaceBelow < h + 8
+        ? Math.max(4, rect.top - h - 2)
+        : rect.bottom + 2) + 'px';
+    });
   });
 
   // Close on outside click

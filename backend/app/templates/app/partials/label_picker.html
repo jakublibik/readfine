@@ -27,6 +27,29 @@
 {% endif %}
 
 {% if show_oob %}
+<div id="detail-labels-btn-{{ article_id }}" hx-swap-oob="outerHTML" class="detail-labels-btn flex">
+  <button class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+          data-stop-propagation
+          data-label-trigger
+          hx-get="/htmx/articles/{{ article_id }}/labels"
+          hx-target="#label-picker"
+          hx-swap="innerHTML"
+          title="Labels">
+    {% if assigned_labels %}<span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
+    {% else %}<span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>{% endif %}
+  </button>
+</div>
+<div id="detail-labels-{{ article_id }}" hx-swap-oob="outerHTML"
+     class="detail-labels-area {% if assigned_labels %}flex flex-wrap items-center gap-x-3 gap-y-1 mt-4{% endif %}">
+  {% for label in assigned_labels %}
+    <span class="flex items-center gap-1 text-xs text-gray-500">
+      <span class="inline-block w-2 h-2 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+      {{ label.name }}
+    </span>
+  {% endfor %}
+</div>
+{% endif %}
+{% if show_oob %}
 {% set ld = label_display | default("indicator") %}
 <div id="article-labels-{{ article_id }}" hx-swap-oob="outerHTML" class="flex items-center">
   {% if ld != "none" %}

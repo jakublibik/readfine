@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.models.label import ArticleLabel
+from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
 
@@ -300,6 +300,18 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         is_archived=state.is_archived if state else False,
         read_at=state.read_at if state else None,
         share_token=state.share_token if state else None,
+        labels=[
+            {"id": r.id, "name": r.name, "color": r.color}
+            for r in (await db.execute(
+                select(Label.id, Label.name, Label.color)
+                .join(ArticleLabel, ArticleLabel.label_id == Label.id)
+                .where(
+                    ArticleLabel.article_id == article_id,
+                    ArticleLabel.user_id == user.id,
+                )
+                .order_by(Label.position, Label.name)
+            )).all()
+        ],
     )
 
 
