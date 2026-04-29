@@ -8,10 +8,10 @@
     <script src="/static/js/tailwind-config.js"></script>
     <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <style>
-      .prose h1 { font-size: 1.1em !important; }
-      .prose h2 { font-size: 1.0em !important; margin-top: 1.4em; margin-bottom: 0.5em; }
-      .prose h3 { font-size: 0.95em !important; margin-top: 1.2em; margin-bottom: 0.4em; }
-      .prose h4 { font-size: 0.9em !important; margin-top: 1.0em; margin-bottom: 0.4em; }
+      .prose h1 { font-size: 1.3em !important; }
+      .prose h2 { font-size: 1.15em !important; margin-top: 1.4em; margin-bottom: 0.5em; }
+      .prose h3 { font-size: 1.05em !important; margin-top: 1.2em; margin-bottom: 0.4em; }
+      .prose h4 { font-size: 1.0em !important; margin-top: 1.0em; margin-bottom: 0.4em; }
       .article-row { transition: opacity 150ms ease; }
       html.sidebar-unpinned #sidebar { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
@@ -36,8 +36,9 @@
       html[data-font-size="lg"] .prose { font-size: 1.125rem; }
       html[data-font-family="serif"] .prose { font-family: Georgia, "Times New Roman", serif; }
       .prose p, .prose li, .prose blockquote { line-height: 1.6; }
-      .prose p { margin-top: 0.75em; margin-bottom: 0.75em; }
+      .prose p { margin-top: 1em; margin-bottom: 1em; }
       .prose img { margin-top: 1em; margin-bottom: 1em; }
+      .prose a:has(> img) { display: inline-block; }
 
       /* ── Mobile (small bucket) ── */
       html[data-bucket="small"] { font-size: 106.25%; }

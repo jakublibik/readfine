@@ -40,11 +40,11 @@
     <div class="article-detail-title-row mb-1">
       {% if article.url %}
         <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
-           class="text-xl font-bold text-gray-900 leading-snug hover:underline">
+           class="text-2xl font-bold text-gray-900 leading-snug hover:underline">
           {{ article.title or "↗" }}
         </a>
       {% else %}
-        <h1 class="text-xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
+        <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
       {% endif %}
     </div>
 
