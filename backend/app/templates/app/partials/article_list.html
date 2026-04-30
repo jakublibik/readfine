@@ -16,6 +16,12 @@
   {% for article in articles %}
     {% include "app/partials/article_row.html" %}
   {% endfor %}
+  {% if has_more %}
+  <div id="load-more-sentinel"
+       hx-get="/htmx/articles/more?{{ filter_qs }}&offset={{ next_offset }}"
+       hx-trigger="intersect once"
+       hx-swap="outerHTML"></div>
+  {% endif %}
   <div aria-hidden="true" style="height:100vh"></div>
 {% else %}
   <div class="flex items-center justify-center h-48 text-gray-400 text-sm">

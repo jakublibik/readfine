@@ -258,10 +258,18 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var cfgEl = document.getElementById('article-list-cfg');
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent);
-  if (!cfg.markReadOnScroll) return;
 
   var list = document.getElementById('article-list');
   if (!list) return;
+
+  if (window._articleListMutationObserver) {
+    window._articleListMutationObserver.disconnect();
+    window._articleListMutationObserver = null;
+  }
+  window._articleReadObserver = null;
+
+  if (!cfg.markReadOnScroll) return;
+
   var seen = new Set();
 
   var topPanel = document.getElementById('mobile-title-bar');
@@ -280,16 +288,35 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         seen.delete(id);
         el.dataset.isRead = 'true';
         el.classList.add('opacity-75');
-        var dot = el.querySelector('.unread-dot');
-        if (dot) dot.remove();
+        var titleEl = el.querySelector('[data-article-title]');
+        if (titleEl) {
+          titleEl.classList.remove('font-bold', 'text-gray-900');
+          titleEl.classList.add('font-medium', 'text-gray-800');
+        }
         htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
       }
     });
   }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px 0px 0px' });
 
+  window._articleReadObserver = observer;
+
   list.querySelectorAll('.article-row').forEach(function (el) {
     observer.observe(el);
   });
+
+  // Watch for article rows appended by infinite scroll sentinel swaps
+  var mutObs = new MutationObserver(function (mutations) {
+    mutations.forEach(function (mutation) {
+      mutation.addedNodes.forEach(function (node) {
+        if (node.nodeType !== 1) return;
+        if (node.classList.contains('article-row')) {
+          window._articleReadObserver.observe(node);
+        }
+      });
+    });
+  });
+  mutObs.observe(list, { childList: true });
+  window._articleListMutationObserver = mutObs;
 });
 
 // Sidebar pin toggle — localStorage + CSS class, no server state

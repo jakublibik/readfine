@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlencode
 
 import nh3
 
@@ -391,6 +392,25 @@ async def htmx_article_list(
         offset=offset,
     )
 
+    has_more = len(articles) >= articles_per_page
+    filter_params: dict = {}
+    if feed_id is not None:
+        filter_params["feed_id"] = feed_id
+    if folder_id is not None:
+        filter_params["folder_id"] = folder_id
+    if label_id is not None:
+        filter_params["label_id"] = label_id
+    if effective_unread_only:
+        filter_params["unread_only"] = "true"
+    if starred_only:
+        filter_params["starred_only"] = "true"
+    if archived_only:
+        filter_params["archived_only"] = "true"
+    if labeled_only:
+        filter_params["labeled_only"] = "true"
+    if q and q.strip():
+        filter_params["q"] = q.strip()
+
     return templates.TemplateResponse(request, "app/partials/article_list.html", {
         "articles": articles,
         "feed_id": feed_id,
@@ -402,6 +422,81 @@ async def htmx_article_list(
         "mark_read_on_scroll": mark_read_on_scroll,
         "density": density,
         "label_display": label_display,
+        "has_more": has_more,
+        "filter_qs": urlencode(filter_params),
+        "next_offset": len(articles),
+    })
+
+
+@router.get("/htmx/articles/more", response_class=HTMLResponse)
+async def htmx_article_list_more(
+    request: Request,
+    feed_id: int | None = Query(None),
+    folder_id: int | None = Query(None),
+    label_id: int | None = Query(None),
+    unread_only: bool = Query(False),
+    starred_only: bool = Query(False),
+    archived_only: bool = Query(False),
+    labeled_only: bool = Query(False),
+    q: str | None = Query(None),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    settings = settings_result.scalar_one_or_none()
+
+    sort_order = settings.default_sort_order if settings else "newest"
+    articles_per_page = settings.articles_per_page if settings else 50
+    ua = request.headers.get("user-agent", "")
+    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
+    density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
+    label_display = settings.label_display if settings else "indicator"
+
+    articles = await list_articles(
+        user=user,
+        db=db,
+        feed_id=feed_id,
+        folder_id=folder_id,
+        label_id=label_id,
+        unread_only=unread_only,
+        starred_only=starred_only,
+        archived_only=archived_only,
+        labeled_only=labeled_only,
+        q=q or None,
+        sort_order=sort_order,
+        limit=articles_per_page,
+        offset=offset,
+    )
+
+    has_more = len(articles) >= articles_per_page
+    filter_params: dict = {}
+    if feed_id is not None:
+        filter_params["feed_id"] = feed_id
+    if folder_id is not None:
+        filter_params["folder_id"] = folder_id
+    if label_id is not None:
+        filter_params["label_id"] = label_id
+    if unread_only:
+        filter_params["unread_only"] = "true"
+    if starred_only:
+        filter_params["starred_only"] = "true"
+    if archived_only:
+        filter_params["archived_only"] = "true"
+    if labeled_only:
+        filter_params["labeled_only"] = "true"
+    if q and q.strip():
+        filter_params["q"] = q.strip()
+
+    return templates.TemplateResponse(request, "app/partials/article_list_append.html", {
+        "articles": articles,
+        "density": density,
+        "label_display": label_display,
+        "has_more": has_more,
+        "filter_qs": urlencode(filter_params),
+        "next_offset": offset + len(articles),
     })
 
 
