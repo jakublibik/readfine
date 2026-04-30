@@ -196,6 +196,7 @@ document.addEventListener('click', function (e) {
   navItem.classList.add('active');
   _activeNavGet = navItem.getAttribute('hx-get');
   try { if (_activeNavGet) localStorage.setItem('lastNavItem', _activeNavGet); } catch (err) {}
+  if (_activeNavGet) htmx.trigger(document.body, 'sidebarRefresh');
 });
 
 document.body.addEventListener('htmx:beforeSwap', function (evt) {
@@ -211,6 +212,13 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
   evt.detail.serverResponse = temp.innerHTML;
 });
 
+function _syncMobileQuicklink() {
+  var link = document.getElementById('mobile-title-quicklink');
+  if (!link) return;
+  var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
+  link.textContent = isLabels ? 'Starred →' : 'Labels →';
+}
+
 // Restore last-selected nav on page load; fall back to All Articles
 function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
@@ -218,6 +226,7 @@ function _autoLoadArticleList() {
   try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
   var url = saved || '/htmx/articles';
   _activeNavGet = url;
+  _syncMobileQuicklink();
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
 }
 if (document.readyState === 'loading') {
@@ -973,6 +982,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       var titleText = document.getElementById('mobile-title-text');
       if (saved && titleText) titleText.textContent = saved;
     } catch (err) {}
+    _syncMobileQuicklink();
   });
 
   function openSidebarOverlay() {
@@ -1026,10 +1036,28 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var titleText = document.getElementById('mobile-title-text');
     if (titleText) titleText.textContent = title;
     try { localStorage.setItem('mobile_title_text', title); } catch (err) {}
+    _syncMobileQuicklink();
     if (document.documentElement.classList.contains('mobile-sidebar-open')) {
       closeSidebarOverlay();
       history.back();
     }
+  });
+
+  // Quicklink click: navigate to Labels or Starred
+  document.addEventListener('click', function (e) {
+    if (!isMobile()) return;
+    if (!e.target.closest('#mobile-title-quicklink')) return;
+    var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
+    var targetUrl = isLabels ? '/htmx/articles?starred_only=true' : '/htmx/articles?labeled_only=true';
+    var targetTitle = isLabels ? 'Starred' : 'Labels';
+    _activeNavGet = targetUrl;
+    try { localStorage.setItem('lastNavItem', targetUrl); } catch (err) {}
+    var titleText = document.getElementById('mobile-title-text');
+    if (titleText) titleText.textContent = targetTitle;
+    try { localStorage.setItem('mobile_title_text', targetTitle); } catch (err) {}
+    _syncMobileQuicklink();
+    htmx.ajax('GET', targetUrl, { target: '#article-list', swap: 'innerHTML' });
+    htmx.trigger(document.body, 'sidebarRefresh');
   });
 
   // Detail back button: close fullscreen detail

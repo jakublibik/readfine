@@ -69,6 +69,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Don't assume behavior is a bug — verify current behavior is actually wrong before 'fixing' it
 
 ## Preference uživatele
+- odpovídej stručně a věcně
 - Komunikace v češtině
 - Výchozí jazyk aplikace: **en** (angličtina)
 - Na konci session: `git push` (do `dev`) + `/clear`
