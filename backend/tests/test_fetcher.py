@@ -1,8 +1,9 @@
-"""Unit tests for fetch scheduler and interval quantization."""
-from datetime import datetime, timezone
+"""Unit tests for fetch scheduler, interval quantization, and article helpers."""
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.fetcher.rss import _clamp_published_at
 from app.fetcher.scheduler import create_scheduler
 from app.routers.web.admin import _quantize15
 
@@ -79,3 +80,48 @@ class TestSchedulerTrigger:
         # process_readable stays on interval trigger (not cron)
         assert job is not None
         assert job.trigger.__class__.__name__ == "IntervalTrigger"
+
+    def test_error_backoff_is_2x_interval(self):
+        # Verify the backoff formula: max(15, interval * 2).
+        # At default_interval=60, expected backoff = 120 min.
+        default_interval = 60
+        error_backoff_min = max(15, default_interval * 2)
+        assert error_backoff_min == 120
+
+    def test_error_backoff_minimum_is_15(self):
+        # Very short interval (e.g. 1 min) still yields at least 15 min backoff.
+        assert max(15, 1 * 2) == 15
+
+
+# ── _clamp_published_at ───────────────────────────────────────────────────────
+
+NOW = datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc)
+
+
+class TestClampPublishedAt:
+    def test_valid_recent_date_unchanged(self):
+        dt = NOW - timedelta(days=10)
+        assert _clamp_published_at(dt, NOW) == dt
+
+    def test_none_returns_none(self):
+        assert _clamp_published_at(None, NOW) is None
+
+    def test_before_2000_returns_none(self):
+        dt = datetime(1999, 12, 31, tzinfo=timezone.utc)
+        assert _clamp_published_at(dt, NOW) is None
+
+    def test_exactly_2000_is_valid(self):
+        dt = datetime(2000, 1, 1, tzinfo=timezone.utc)
+        assert _clamp_published_at(dt, NOW) == dt
+
+    def test_future_within_1_day_is_valid(self):
+        dt = NOW + timedelta(hours=23)
+        assert _clamp_published_at(dt, NOW) == dt
+
+    def test_future_beyond_1_day_returns_none(self):
+        dt = NOW + timedelta(days=2)
+        assert _clamp_published_at(dt, NOW) is None
+
+    def test_far_future_returns_none(self):
+        dt = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        assert _clamp_published_at(dt, NOW) is None

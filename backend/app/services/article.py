@@ -190,11 +190,12 @@ async def list_articles(
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
         stmt = stmt.order_by(
             func.ts_rank(fts_vec, tsquery).desc(),
-            Article.published_at.desc().nulls_last(),
+            func.coalesce(Article.published_at, Article.fetched_at).desc(),
             Article.id.desc(),
         )
     else:
-        order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
+        coalesced = func.coalesce(Article.published_at, Article.fetched_at)
+        order = coalesced.asc() if sort_order == "oldest" else coalesced.desc()
         stmt = stmt.order_by(order)
     stmt = stmt.limit(limit).offset(offset)
 

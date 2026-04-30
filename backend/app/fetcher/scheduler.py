@@ -37,7 +37,7 @@ async def _fetch_due_feeds() -> None:
         published_cutoff = (now - timedelta(days=purge_after_days)) if purge_after_days else None
 
         # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
-        error_backoff_min = max(30, default_interval * 5)
+        error_backoff_min = max(15, default_interval * 2)
         one_minute = literal_column("interval '1 minute'")
         # per-feed interval clamped to global minimum
         effective_interval = func.greatest(

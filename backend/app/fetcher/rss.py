@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, urlunparse
 
 import feedparser
@@ -172,6 +172,7 @@ async def _save_articles(
         )
         existing_urls = set(url_result.scalars())
 
+    fetched_at = datetime.now(timezone.utc)
     new_articles: list[Article] = []
     for guid_hash, entry in candidates.items():
         if guid_hash in existing_hashes:
@@ -187,7 +188,7 @@ async def _save_articles(
 
         word_count, estimated_read_min = _reading_stats(content)
         pub = entry.get("published_parsed") or entry.get("updated_parsed")
-        published_at = _struct_to_dt(pub) if pub else None
+        published_at = _clamp_published_at(_struct_to_dt(pub) if pub else None, fetched_at)
 
         article = Article(
             feed_id=feed.id,
@@ -292,6 +293,18 @@ def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
 
 def _struct_to_dt(t) -> datetime:
     return datetime(*t[:6], tzinfo=timezone.utc)
+
+
+_PUBLISHED_MIN = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def _clamp_published_at(dt: datetime | None, fetched_at: datetime) -> datetime | None:
+    """Return None if dt is implausibly old or far in the future."""
+    if dt is None:
+        return None
+    if dt < _PUBLISHED_MIN or dt > fetched_at + timedelta(days=1):
+        return None
+    return dt
 
 
 def _latest_published(entries) -> datetime | None:
