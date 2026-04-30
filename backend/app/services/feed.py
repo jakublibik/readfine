@@ -161,6 +161,9 @@ async def _initial_fetch(feed_id: int) -> None:
             feed = await session.get(Feed, feed_id)
             if not feed:
                 return
+            # Scheduler may have already fetched this feed while we were queued
+            if feed.last_fetched_at is not None:
+                return
             settings_row = await session.execute(
                 select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
             )

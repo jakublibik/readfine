@@ -1,6 +1,6 @@
 """APScheduler integration: periodic RSS feed fetching and readable extraction."""
 import logging
-
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, func, literal_column, or_, select
@@ -21,14 +21,20 @@ async def _fetch_due_feeds() -> None:
         return
 
     async with db.async_session_factory() as session:
-        # Resolve default and minimum intervals from app_settings
+        # Resolve global settings
         result = await session.execute(
-            select(AppSettings.default_fetch_interval_min, AppSettings.min_fetch_interval_min)
-            .where(AppSettings.id == 1)
+            select(
+                AppSettings.default_fetch_interval_min,
+                AppSettings.min_fetch_interval_min,
+                AppSettings.default_purge_after_days,
+            ).where(AppSettings.id == 1)
         )
         row = result.one_or_none()
         default_interval = (row[0] if row else None) or 60
         min_interval = (row[1] if row else None) or 15
+        purge_after_days = (row[2] if row else None)
+        now = datetime.now(timezone.utc)
+        published_cutoff = (now - timedelta(days=purge_after_days)) if purge_after_days else None
 
         # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
         error_backoff_min = max(30, default_interval * 5)
@@ -63,12 +69,16 @@ async def _fetch_due_feeds() -> None:
         return
 
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
+    from app.services.feed import _initial_fetch_in_progress
+
     for feed in feeds:
+        if feed.id in _initial_fetch_in_progress:
+            logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed.id)
+            continue
         async with db.async_session_factory() as session:
-            # Re-attach the feed to the new session
             feed_in_session = await session.get(Feed, feed.id)
-            if feed_in_session:
-                await fetch_feed(feed_in_session, session)
+            if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
+                await fetch_feed(feed_in_session, session, published_cutoff=published_cutoff)
 
 
 async def _process_readable() -> None:

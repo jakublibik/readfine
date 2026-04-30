@@ -60,7 +60,7 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     return parsed
 
 
-async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None) -> int:
+async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None, published_cutoff: datetime | None = None) -> int:
     """Fetch a feed and store new articles. Returns number of new articles saved."""
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
@@ -78,7 +78,7 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
 
-        new_count = await _save_articles(feed, parsed, db, limit=initial_limit)
+        new_count = await _save_articles(feed, parsed, db, limit=initial_limit, published_cutoff=published_cutoff)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = datetime.now(timezone.utc)
@@ -116,7 +116,13 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         return 0
 
 
-async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession, limit: int | None = None) -> int:
+async def _save_articles(
+    feed: Feed,
+    parsed: feedparser.FeedParserDict,
+    db: AsyncSession,
+    limit: int | None = None,
+    published_cutoff: datetime | None = None,
+) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     entries = parsed.entries[:limit] if limit is not None else parsed.entries
 
@@ -126,6 +132,14 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
         raw_guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
         if not raw_guid:
             continue
+        # Skip entries older than the purge cutoff — prevents re-inserting purgeable articles
+        # after they've been purged from the DB and the feed XML still contains them.
+        if published_cutoff is not None:
+            pub = entry.get("published_parsed") or entry.get("updated_parsed")
+            if pub:
+                pub_dt = _struct_to_dt(pub)
+                if pub_dt is not None and pub_dt < published_cutoff:
+                    continue
         guid = _normalize_guid(raw_guid)
         guid_hash = hashlib.sha256(guid.encode()).hexdigest()
         candidates.setdefault(guid_hash, entry)
