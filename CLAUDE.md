@@ -46,6 +46,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 5. API endpointy /feeds/refresh a /feeds/detect
 6. Filter scope S2: scope_include/scope_except → JSONB
 7. trafilatura `favor_recall=True` — zvážit bez corpus dat
+8. Paralelní fetch feedů se semaforem (`asyncio.gather` + `Semaphore(10)` místo `for` smyčky v `_fetch_due_feeds`) — při 100+ feedech sekvenční průchod prodlužuje efektivní interval
 
 ## Post-MVP TODO
 - limit na počet článků při prvním stažení
