@@ -93,12 +93,12 @@ def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
     scheduler.add_job(
         _fetch_due_feeds,
-        trigger="interval",
-        minutes=1,
+        trigger="cron",
+        minute="0,15,30,45",
         id="fetch_due_feeds",
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=30,
+        misfire_grace_time=60,
     )
     scheduler.add_job(
         _process_readable,

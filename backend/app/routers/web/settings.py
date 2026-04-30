@@ -303,6 +303,12 @@ async def settings_feed_update(
     uf.folder_id = folder_id
     uf.extract_readable = form.get("extract_readable") == "true"
 
+    interval_raw = safe_int(form.get("fetch_interval_min"))
+    if interval_raw is not None:
+        uf.feed.fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15))
+    else:
+        uf.feed.fetch_interval_min = None
+
     if uf.feed.is_private:
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
         fetch_auth_pass = form.get("fetch_auth_pass", "") or None

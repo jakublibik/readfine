@@ -40,6 +40,12 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory="app/templates")
 
 
+def _quantize15(val: int | None, default: int) -> int:
+    """Round val to the nearest multiple of 15, clamped to [15, 1440]."""
+    v = val if val is not None else default
+    return max(15, min(1440, round(v / 15) * 15))
+
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 
 @router.get("", response_class=HTMLResponse)
@@ -114,8 +120,8 @@ async def admin_settings_save(
 
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
-        "default_fetch_interval_min": clamp(safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
-        "min_fetch_interval_min": clamp(safe_int(form.get("min_fetch_interval_min")), 1, 1440, 15),
+        "default_fetch_interval_min": _quantize15(safe_int(form.get("default_fetch_interval_min")), 60),
+        "min_fetch_interval_min": _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
         "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
         "default_purge_after_days": clamp(safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
         "default_purge_keep_count": clamp(safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,

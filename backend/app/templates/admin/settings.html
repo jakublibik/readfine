@@ -30,19 +30,29 @@
         </select>
       </div>
       <div class="flex items-center justify-between">
-        <label class="text-sm font-medium text-gray-700">Default fetch interval (minutes)</label>
-        <input type="number" name="default_fetch_interval_min" min="5" max="1440"
-               value="{{ s.default_fetch_interval_min }}"
-               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <label class="text-sm font-medium text-gray-700">Default fetch interval</label>
+        <select name="default_fetch_interval_min"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+            <option value="{{ m }}" {% if s.default_fetch_interval_min == m %}selected{% endif %}>
+              {{ m }} min
+            </option>
+          {% endfor %}
+        </select>
       </div>
       <div class="flex items-center justify-between">
         <div>
-          <label class="text-sm font-medium text-gray-700">Minimum fetch interval (minutes)</label>
+          <label class="text-sm font-medium text-gray-700">Minimum fetch interval</label>
           <p class="text-xs text-gray-400">No feed is fetched more often than this</p>
         </div>
-        <input type="number" name="min_fetch_interval_min" min="1" max="1440"
-               value="{{ s.min_fetch_interval_min }}"
-               class="w-24 border border-gray-300 rounded px-3 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <select name="min_fetch_interval_min"
+                class="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+            <option value="{{ m }}" {% if s.min_fetch_interval_min == m %}selected{% endif %}>
+              {{ m }} min
+            </option>
+          {% endfor %}
+        </select>
       </div>
       <div class="flex items-center justify-between">
         <label class="text-sm font-medium text-gray-700">Max feeds per user</label>
