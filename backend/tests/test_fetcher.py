@@ -3,7 +3,14 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.fetcher.rss import _clamp_published_at
+from app.fetcher.rss import (
+    _clamp_published_at,
+    _extract_content,
+    _latest_published,
+    _normalize_guid,
+    _safe_url,
+    _struct_to_dt,
+)
 from app.fetcher.scheduler import create_scheduler
 from app.routers.web.admin import _quantize15
 
@@ -125,3 +132,157 @@ class TestClampPublishedAt:
     def test_far_future_returns_none(self):
         dt = datetime(2099, 1, 1, tzinfo=timezone.utc)
         assert _clamp_published_at(dt, NOW) is None
+
+
+# ── _struct_to_dt ─────────────────────────────────────────────────────────────
+
+class TestStructToDt:
+    def test_basic_conversion(self):
+        t = (2026, 1, 15, 12, 30, 0, 0, 0, 0)
+        assert _struct_to_dt(t) == datetime(2026, 1, 15, 12, 30, 0, tzinfo=timezone.utc)
+
+    def test_always_utc(self):
+        t = (2024, 6, 1, 0, 0, 0, 0, 0, 0)
+        assert _struct_to_dt(t).tzinfo == timezone.utc
+
+    def test_extra_fields_ignored(self):
+        # feedparser struct_time has 9 fields; only first 6 are used
+        t = (2026, 3, 10, 8, 0, 0, 99, 99, 99)
+        assert _struct_to_dt(t) == datetime(2026, 3, 10, 8, 0, 0, tzinfo=timezone.utc)
+
+
+# ── _normalize_guid ───────────────────────────────────────────────────────────
+
+class TestNormalizeGuid:
+    def test_http_url_fragment_stripped(self):
+        assert _normalize_guid("http://example.com/article#0") == "http://example.com/article"
+
+    def test_https_url_fragment_stripped(self):
+        assert _normalize_guid("https://example.com/article#section") == "https://example.com/article"
+
+    def test_url_without_fragment_unchanged(self):
+        assert _normalize_guid("https://example.com/article") == "https://example.com/article"
+
+    def test_non_url_guid_unchanged(self):
+        assert _normalize_guid("urn:uuid:1234-5678") == "urn:uuid:1234-5678"
+
+    def test_opaque_string_unchanged(self):
+        assert _normalize_guid("some-opaque-id-123") == "some-opaque-id-123"
+
+    def test_empty_string_unchanged(self):
+        assert _normalize_guid("") == ""
+
+
+# ── _safe_url ─────────────────────────────────────────────────────────────────
+
+class TestSafeUrl:
+    def test_http_url_allowed(self):
+        assert _safe_url("http://example.com/feed") == "http://example.com/feed"
+
+    def test_https_url_allowed(self):
+        assert _safe_url("https://example.com/feed") == "https://example.com/feed"
+
+    def test_none_returns_none(self):
+        assert _safe_url(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert _safe_url("") is None
+
+    def test_javascript_scheme_blocked(self):
+        assert _safe_url("javascript:alert(1)") is None
+
+    def test_data_scheme_blocked(self):
+        assert _safe_url("data:text/html,<h1>x</h1>") is None
+
+    def test_ftp_scheme_blocked(self):
+        assert _safe_url("ftp://files.example.com/file") is None
+
+    def test_url_truncated_to_max_len(self):
+        long_url = "https://example.com/" + "a" * 2048
+        result = _safe_url(long_url)
+        assert result is not None
+        assert len(result) == 2048
+
+    def test_whitespace_stripped(self):
+        assert _safe_url("  https://example.com/  ") == "https://example.com/"
+
+
+# ── feedparser entry mock ─────────────────────────────────────────────────────
+
+class AttrDict(dict):
+    """dict that also exposes keys as attributes — mirrors feedparser FeedParserDict."""
+    def __getattr__(self, key):
+        try:
+            val = self[key]
+            # Recursively wrap nested dicts so attribute access works at all depths.
+            if isinstance(val, list):
+                return [AttrDict(v) if isinstance(v, dict) else v for v in val]
+            return AttrDict(val) if isinstance(val, dict) else val
+        except KeyError:
+            raise AttributeError(key)
+
+
+# ── _extract_content ──────────────────────────────────────────────────────────
+
+class TestExtractContent:
+    def test_content_field_preferred_over_summary(self):
+        entry = AttrDict({"content": [{"value": "full article"}], "summary": "short summary"})
+        content, source = _extract_content(entry)
+        assert content == "full article"
+        assert source == "feed_content"
+
+    def test_summary_used_when_no_content(self):
+        entry = AttrDict({"summary": "summary text"})
+        content, source = _extract_content(entry)
+        assert content == "summary text"
+        assert source == "feed_summary"
+
+    def test_empty_entry_returns_none(self):
+        content, source = _extract_content(AttrDict({}))
+        assert content is None
+        assert source is None
+
+    def test_content_first_nonempty_value_used(self):
+        entry = AttrDict({"content": [{"value": "first"}]})
+        content, source = _extract_content(entry)
+        assert content == "first"
+        assert source == "feed_content"
+
+    def test_content_skips_empty_value(self):
+        entry = AttrDict({"content": [{"value": ""}, {"value": "second"}]})
+        content, source = _extract_content(entry)
+        assert content == "second"
+        assert source == "feed_content"
+
+
+# ── _latest_published ─────────────────────────────────────────────────────────
+
+class TestLatestPublished:
+    def test_returns_maximum_date(self):
+        entries = [
+            {"published_parsed": (2026, 1, 10, 0, 0, 0, 0, 0, 0)},
+            {"published_parsed": (2026, 1, 20, 0, 0, 0, 0, 0, 0)},
+            {"published_parsed": (2026, 1, 5, 0, 0, 0, 0, 0, 0)},
+        ]
+        result = _latest_published(entries)
+        assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
+
+    def test_empty_entries_returns_none(self):
+        assert _latest_published([]) is None
+
+    def test_entries_without_date_ignored(self):
+        assert _latest_published([{"title": "no date"}]) is None
+
+    def test_falls_back_to_updated_parsed(self):
+        entries = [{"updated_parsed": (2026, 3, 1, 0, 0, 0, 0, 0, 0)}]
+        result = _latest_published(entries)
+        assert result == datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    def test_published_preferred_over_updated(self):
+        entries = [{
+            "published_parsed": (2026, 1, 20, 0, 0, 0, 0, 0, 0),
+            "updated_parsed":   (2026, 1, 25, 0, 0, 0, 0, 0, 0),
+        }]
+        # feedparser `or` picks published_parsed first
+        result = _latest_published(entries)
+        assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
