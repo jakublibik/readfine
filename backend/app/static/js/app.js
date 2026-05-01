@@ -58,7 +58,12 @@ document.body.addEventListener('htmx:configRequest', function (e) {
     if (bucket === 'small') {
       var mode;
       try { mode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
-      html.dataset.sidebarMode = mode || 'collapsible';
+      mode = mode || 'collapsible';
+      if (mode === 'hideable') {
+        mode = 'hideable-up';
+        try { localStorage.setItem('sidebar_mode_small', 'hideable-up'); } catch (e) {}
+      }
+      html.dataset.sidebarMode = mode;
     } else {
       html.classList.remove('mobile-sidebar-open', 'mobile-detail-open');
     }
@@ -251,6 +256,23 @@ if (document.readyState === 'loading') {
   _restoreArticleFromHash();
 }
 
+// ── Mobile title bar count badge ──────────────────────────────────────────
+function _setTitleBarCount(count, type) {
+  window._titleBarCountType = type || null;
+  var badge = document.getElementById('mobile-title-count');
+  if (!badge) return;
+  if (count == null || count <= 0 || !type) {
+    badge.className = 'hidden';
+    return;
+  }
+  badge.textContent = count;
+  if (type === 'starred') {
+    badge.className = 'flex-shrink-0 text-[13px] font-medium text-gray-400 relative -top-[0.5px]';
+  } else {
+    badge.className = 'flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full';
+  }
+}
+
 // Article list: IntersectionObserver for mark-as-read on scroll
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (evt.detail.target.id !== 'article-list') return;
@@ -258,6 +280,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var cfgEl = document.getElementById('article-list-cfg');
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent);
+  _setTitleBarCount(cfg.titleBarCount, cfg.titleBarCountType);
 
   var list = document.getElementById('article-list');
   if (!list) return;
@@ -273,8 +296,11 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var seen = new Set();
 
   var topPanel = document.getElementById('mobile-title-bar');
-  var topOffset = (topPanel && getComputedStyle(topPanel).display !== 'none')
-    ? Math.round(topPanel.getBoundingClientRect().height) : 0;
+  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
+  var barHeight = barVisible ? Math.round(topPanel.getBoundingClientRect().height) : 0;
+  var isBarDown = document.documentElement.dataset.sidebarMode === 'hideable-down';
+  var topOffset = (barVisible && !isBarDown) ? barHeight : 0;
+  var bottomOffset = (barVisible && isBarDown) ? barHeight : 0;
 
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
@@ -294,9 +320,15 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
           titleEl.classList.add('font-medium', 'text-gray-800');
         }
         htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
+        if (window._titleBarCountType === 'unread') {
+          var badge = document.getElementById('mobile-title-count');
+          if (badge && !badge.classList.contains('hidden')) {
+            _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
+          }
+        }
       }
     });
-  }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px 0px 0px' });
+  }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px -' + bottomOffset + 'px 0px' });
 
   window._articleReadObserver = observer;
 
@@ -830,8 +862,9 @@ document.addEventListener('articleArchiveChanged', function (e) {
     // Scroll row into view, accounting for mobile top panel if visible
     setTimeout(function () {
       var topPanel = document.getElementById('mobile-title-bar');
-      var topOffset = (topPanel && getComputedStyle(topPanel).display !== 'none')
-        ? topPanel.getBoundingClientRect().height : 0;
+      var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
+      var isBarDown = document.documentElement.dataset.sidebarMode === 'hideable-down';
+      var topOffset = (barVisible && !isBarDown) ? topPanel.getBoundingClientRect().height : 0;
       if (topOffset > 0) {
         var list = document.getElementById('article-list');
         if (list) {

@@ -393,6 +393,42 @@ async def htmx_article_list(
     )
 
     has_more = len(articles) >= articles_per_page
+
+    # Title bar count for mobile hideable mode
+    title_bar_count: int | None = None
+    title_bar_count_type: str | None = None
+    if label_id is not None:
+        title_bar_count = (await db.execute(
+            select(func.count(ArticleLabel.article_id))
+            .outerjoin(UserArticleState,
+                (UserArticleState.article_id == ArticleLabel.article_id) &
+                (UserArticleState.user_id == user.id))
+            .where(
+                ArticleLabel.user_id == user.id,
+                ArticleLabel.label_id == label_id,
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
+        )).scalar() or 0
+        title_bar_count_type = "unread"
+    elif labeled_only:
+        title_bar_count = (await db.execute(
+            select(func.count(Article.id.distinct()))
+            .select_from(Article)
+            .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
+            .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
+            .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+        )).scalar() or 0
+        title_bar_count_type = "unread"
+    elif starred_only:
+        title_bar_count = (await db.execute(
+            select(func.count(UserArticleState.article_id))
+            .where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.is_starred == True,
+            )
+        )).scalar() or 0
+        title_bar_count_type = "starred"
+
     filter_params: dict = {}
     if feed_id is not None:
         filter_params["feed_id"] = feed_id
@@ -425,6 +461,8 @@ async def htmx_article_list(
         "has_more": has_more,
         "filter_qs": urlencode(filter_params),
         "next_offset": len(articles),
+        "title_bar_count": title_bar_count,
+        "title_bar_count_type": title_bar_count_type,
     })
 
 

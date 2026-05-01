@@ -16,6 +16,8 @@
   if (bucket === 'small') {
     var sidebarMode;
     try { sidebarMode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
-    document.documentElement.dataset.sidebarMode = sidebarMode || 'collapsible';
+    var resolvedMode = sidebarMode || 'collapsible';
+    if (resolvedMode === 'hideable') resolvedMode = 'hideable-up';
+    document.documentElement.dataset.sidebarMode = resolvedMode;
   }
 })();
