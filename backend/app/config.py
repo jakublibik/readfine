@@ -1,10 +1,13 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import EmailStr
+
+_ROOT = Path(__file__).parent.parent.parent  # readfine/
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[str(_ROOT / ".env"), ".env"],
         env_file_encoding="utf-8",
         case_sensitive=False,
     )
