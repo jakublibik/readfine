@@ -1384,6 +1384,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
 
     document.addEventListener('DOMContentLoaded', attachScrollListener);
+    document.body.addEventListener('htmx:afterSettle', function (e) {
+      if (e.detail.target.id === 'article-list') attachScrollListener();
+    });
 
     // Reset bar when article list navigates to a new feed
     document.body.addEventListener('htmx:beforeSwap', function (e) {
