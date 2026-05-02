@@ -882,9 +882,7 @@ document.addEventListener('articleArchiveChanged', function (e) {
     if (!row) return;
     var isExpanded = _shouldUseInline() && row.classList.contains('inline-expanded');
     if (isExpanded) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      window.open(a.href, '_blank', 'noopener,noreferrer');
+      e.stopImmediatePropagation(); // block HTMX; let native <a target="_blank"> handle navigation
       if (row.dataset.density === 'compact') {
         closeInline(); // HTMX won't fire (propagation stopped), close manually
       }
