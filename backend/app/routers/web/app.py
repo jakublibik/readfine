@@ -638,7 +638,7 @@ def _read_response(request: Request, article, density: str, label_display: str) 
     return response
 
 
-def _star_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+def _star_response(request: Request, article) -> HTMLResponse:
     """Return star icon HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
     import json
     btn_html = templates.env.get_template("app/partials/star_icon.html").render(
@@ -652,7 +652,7 @@ def _star_response(request: Request, article, density: str, label_display: str) 
     return response
 
 
-def _archive_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+def _archive_response(request: Request, article) -> HTMLResponse:
     """Return archive button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
     import json
     btn_html = templates.env.get_template("app/partials/archive_button.html").render(
@@ -705,8 +705,7 @@ async def htmx_toggle_star(
     article = await toggle_article_state(user, article_id, "is_starred", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    ctx = await _get_row_context(user, request, db)
-    return _star_response(request, article, **ctx)
+    return _star_response(request, article)
 
 
 @router.post("/htmx/articles/{article_id}/archive", response_class=HTMLResponse)
@@ -719,8 +718,7 @@ async def htmx_toggle_archive(
     article = await toggle_article_state(user, article_id, "is_archived", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    ctx = await _get_row_context(user, request, db)
-    return _archive_response(request, article, **ctx)
+    return _archive_response(request, article)
 
 
 @router.get("/htmx/articles/{article_id}/labels", response_class=HTMLResponse)

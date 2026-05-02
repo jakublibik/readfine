@@ -686,6 +686,38 @@ document.addEventListener('articleStarChanged', function (e) {
   btn.title = isStarred ? 'Remove star' : 'Star article';
 });
 
+// Optimistic star toggle: fire articleStarChanged immediately on click, revert on error
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('[data-star-btn]');
+  if (!btn) return;
+  var row = btn.closest('.article-row');
+  if (!row || !row.dataset.articleId) return;
+  var span = btn.querySelector('span');
+  var wasStarred = span && span.textContent.trim() === '★';
+  btn._optimisticStarred = wasStarred;
+  document.dispatchEvent(new CustomEvent('articleStarChanged', {
+    detail: { id: parseInt(row.dataset.articleId, 10), isStarred: !wasStarred }
+  }));
+}, true);
+
+function _revertOptimisticStar(elt) {
+  var btn = elt && elt.closest ? elt.closest('[data-star-btn]') : null;
+  if (!btn || typeof btn._optimisticStarred === 'undefined') return;
+  var row = btn.closest('.article-row');
+  if (!row || !row.dataset.articleId) return;
+  document.dispatchEvent(new CustomEvent('articleStarChanged', {
+    detail: { id: parseInt(row.dataset.articleId, 10), isStarred: btn._optimisticStarred }
+  }));
+  delete btn._optimisticStarred;
+}
+
+document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisticStar(e.detail.elt); });
+document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticStar(e.detail.elt); });
+document.body.addEventListener('htmx:afterRequest', function (e) {
+  var btn = e.detail.elt && e.detail.elt.closest ? e.detail.elt.closest('[data-star-btn]') : null;
+  if (btn) delete btn._optimisticStarred;
+});
+
 document.addEventListener('articleArchiveChanged', function (e) {
   var detail = e.detail;
   var bottomBar = document.querySelector('.article-bottom-bar[data-article-id="' + detail.id + '"]');
