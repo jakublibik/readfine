@@ -78,6 +78,7 @@ async def _extract_readable_bg(
             article.estimated_read_min = max(1, round(words / 200))
         else:
             article.readable_status = "failed"
+            article.readable_failed_at = datetime.now(timezone.utc)
             article.readable_error = error
             article.readable_retries = (article.readable_retries or 0) + 1
         await db.commit()
@@ -907,6 +908,7 @@ async def htmx_extract_readable(
         article.estimated_read_min = max(1, round(words / 200))
     else:
         article.readable_status = "failed"
+        article.readable_failed_at = datetime.now(timezone.utc)
         article.readable_error = error
         article.readable_retries = (article.readable_retries or 0) + 1
 

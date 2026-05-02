@@ -67,8 +67,8 @@
 </div>
 {% endif %}
 
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent readable extraction failures <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.readable_failed_recent %}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent readable extraction failures</h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
@@ -77,6 +77,7 @@
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
@@ -88,15 +89,22 @@
         </td>
         <td class="px-4 py-2 text-red-500 truncate max-w-xs">{{ article.readable_error or "—" }}</td>
         <td class="px-4 py-2 text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+          {% if article.readable_failed_at %}
+            <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at.strftime("%b %d, %H:%M") }}</time>
+          {% else %}—{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
+{% else %}
+<p class="text-sm text-gray-400 mb-8">No readable extraction failures.</p>
 {% endif %}
 
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent fetch errors <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.recent_errors %}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent fetch errors</h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">

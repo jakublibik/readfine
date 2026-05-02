@@ -32,6 +32,7 @@ class Article(Base):
     readable_error: Mapped[str | None] = mapped_column(String(500))
     readable_retries: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     readable_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    readable_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     summary: Mapped[str | None] = mapped_column(Text)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

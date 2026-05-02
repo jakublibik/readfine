@@ -1,7 +1,7 @@
 """Admin service: user management, app settings, invitations, audit log."""
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -205,6 +205,7 @@ async def list_feeds_with_stats(db: AsyncSession) -> list[dict]:
 
 
 async def get_dashboard_stats(db: AsyncSession) -> dict:
+    since = datetime.now(timezone.utc) - timedelta(days=30)
     user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
     active_user_count = (await db.execute(
         select(func.count(User.id)).where(User.is_active == True)
@@ -217,6 +218,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     recent_errors = (await db.execute(
         select(FetchLog)
         .options(selectinload(FetchLog.feed))
+        .where(FetchLog.failed_at >= since)
         .order_by(FetchLog.failed_at.desc())
         .limit(5)
     )).scalars().all()
@@ -237,7 +239,8 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         select(Article)
         .options(selectinload(Article.feed))
         .where(Article.readable_status == "failed")
-        .order_by(Article.id.desc())
+        .where(Article.readable_failed_at >= since)
+        .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
     return {

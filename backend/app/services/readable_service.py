@@ -281,12 +281,14 @@ async def process_pending_readable(db: AsyncSession) -> int:
             is_403 = http_status == 403
             if is_4xx:
                 article.readable_status = "failed"
+                article.readable_failed_at = datetime.now(timezone.utc)
                 article.readable_next_retry_at = None
             else:
                 retries = (article.readable_retries or 0) + 1
                 article.readable_retries = retries
                 if retries >= _MAX_RETRIES:
                     article.readable_status = "failed"
+                    article.readable_failed_at = datetime.now(timezone.utc)
                     article.readable_next_retry_at = None
                 else:
                     delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
