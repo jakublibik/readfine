@@ -218,10 +218,12 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
 });
 
 function _syncMobileQuicklink() {
-  var link = document.getElementById('mobile-title-quicklink');
-  if (!link) return;
   var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
-  link.textContent = isLabels ? 'Starred →' : 'Labels →';
+  var text = isLabels ? 'Starred →' : 'Labels →';
+  var link = document.getElementById('mobile-title-quicklink');
+  if (link) link.textContent = text;
+  var bottomLink = document.getElementById('mobile-bottom-quicklink');
+  if (bottomLink) bottomLink.textContent = text;
 }
 
 // Restore last-selected nav on page load; fall back to All Articles
@@ -573,6 +575,14 @@ document.addEventListener('articleReadChanged', function (e) {
   var row = document.getElementById('article-row-' + detail.id);
   if (!row) return;
   var isRead = detail.isRead;
+  if (window._titleBarCountType === 'unread') {
+    var badge = document.getElementById('mobile-title-count');
+    if (badge && !badge.classList.contains('hidden')) {
+      var wasRead = row.dataset.isRead === 'true';
+      if (isRead && !wasRead) _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
+      else if (!isRead && wasRead) _setTitleBarCount(parseInt(badge.textContent, 10) + 1, 'unread');
+    }
+  }
   row.classList.toggle('opacity-75', isRead);
   row.dataset.isRead = isRead ? 'true' : 'false';
   var title = row.querySelector('p, [data-article-title]');
@@ -797,10 +807,13 @@ document.addEventListener('articleArchiveChanged', function (e) {
     if (!row) return;
     var isExpanded = _shouldUseInline() && row.classList.contains('inline-expanded');
     if (isExpanded) {
-      if (row.dataset.density !== 'compact') {
-        e.stopImmediatePropagation(); // comfortable: block HTMX, let <a> open new tab (row stays expanded)
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      window.open(a.href, '_blank', 'noopener,noreferrer');
+      if (row.dataset.density === 'compact') {
+        closeInline(); // HTMX won't fire (propagation stopped), close manually
       }
-      // compact: do nothing — <a> opens link naturally, HTMX bubbles up and closeInline fires
+      // comfortable: row stays expanded
     } else {
       e.preventDefault(); // block link navigation, let HTMX load detail
     }
@@ -1074,7 +1087,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // Strip hamburger (minimizable) and title bar hamburger (hideable)
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
-    if (e.target.closest('#mobile-strip-open-btn') || e.target.closest('#mobile-titlebar-open-btn')) {
+    if (e.target.closest('#mobile-strip-open-btn') || e.target.closest('#mobile-titlebar-open-btn') || e.target.closest('#mobile-bottombar-open-btn')) {
       openSidebarOverlay();
     }
   });
@@ -1103,10 +1116,17 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   });
 
+  // Bottom bar refresh button
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#mobile-bottom-refresh-btn')) return;
+    var url = _activeNavGet || '/htmx/articles';
+    htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
+  });
+
   // Quicklink click: navigate to Labels or Starred
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
-    if (!e.target.closest('#mobile-title-quicklink')) return;
+    if (!e.target.closest('#mobile-title-quicklink') && !e.target.closest('#mobile-bottom-quicklink')) return;
     var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
     var targetUrl = isLabels ? '/htmx/articles?starred_only=true' : '/htmx/articles?labeled_only=true';
     var targetTitle = isLabels ? 'Starred' : 'Labels';
@@ -1330,6 +1350,49 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var id = e.detail.target.id;
     if (id === 'article-detail' || id === 'inline-article-detail-content' || (id && id.startsWith('article-content-'))) _syncBottomBar();
   });
+
+  // Bottom bar: show on scroll-up, hide on scroll-down / at top
+  (function () {
+    var lastScrollTop = 0;
+    var ticking = false;
+
+    function updateBottomBar(scrollTop) {
+      var bar = document.getElementById('mobile-bottom-bar');
+      if (!bar) return;
+      if (scrollTop < 5) {
+        bar.classList.remove('bottom-bar-visible');
+      } else if (scrollTop < lastScrollTop) {
+        bar.classList.add('bottom-bar-visible');
+      } else if (scrollTop > lastScrollTop) {
+        bar.classList.remove('bottom-bar-visible');
+      }
+      lastScrollTop = scrollTop;
+    }
+
+    function attachScrollListener() {
+      var list = document.getElementById('article-list');
+      if (!list || list._bottomBarBound) return;
+      list._bottomBarBound = true;
+      list.addEventListener('scroll', function () {
+        if (ticking) return;
+        ticking = true;
+        requestAnimationFrame(function () {
+          updateBottomBar(list.scrollTop);
+          ticking = false;
+        });
+      }, { passive: true });
+    }
+
+    document.addEventListener('DOMContentLoaded', attachScrollListener);
+
+    // Reset bar when article list navigates to a new feed
+    document.body.addEventListener('htmx:beforeSwap', function (e) {
+      if (e.detail.target.id !== 'article-list') return;
+      lastScrollTop = 0;
+      var bar = document.getElementById('mobile-bottom-bar');
+      if (bar) bar.classList.remove('bottom-bar-visible');
+    });
+  })();
 
   // Preferences page: sync small-bucket selects with localStorage
   var prefPairs = [

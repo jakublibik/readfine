@@ -80,6 +80,18 @@
       }
       html[data-bucket="small"][data-sidebar-mode="hideable-down"] #article-list { padding-bottom: 2.75rem; }
 
+      /* Hideable-up: scrollable bottom bar */
+      #mobile-bottom-bar { display: none; }
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] #mobile-bottom-bar {
+        display: flex; align-items: center; gap: 0.5rem;
+        position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
+        height: 2.75rem; background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 0 0.75rem;
+        transform: translateY(100%); transition: transform 200ms ease;
+      }
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] #mobile-bottom-bar.bottom-bar-visible {
+        transform: translateY(0);
+      }
+
       /* Detail fullscreen overlay */
       html[data-bucket="small"].mobile-detail-open #article-detail {
         display: block !important; position: fixed; inset: 0; z-index: 40;
