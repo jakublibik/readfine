@@ -268,6 +268,7 @@ async def settings_feed_edit(
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
+        "is_sole_subscriber": uf.feed.subscriber_count == 1,
     })
 
 
@@ -309,12 +310,14 @@ async def settings_feed_update(
     else:
         uf.feed.fetch_interval_min = None
 
-    if uf.feed.is_private:
+    if uf.feed.is_private or uf.feed.subscriber_count == 1:
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
         fetch_auth_pass = form.get("fetch_auth_pass", "") or None
         uf.feed.fetch_auth_user = fetch_auth_user
         if fetch_auth_pass:
             uf.feed.fetch_auth_pass_encrypted = encrypt(fetch_auth_pass)
+        if (fetch_auth_user or fetch_auth_pass) and not uf.feed.is_private:
+            uf.feed.is_private = True
 
     if uf.feed.status == "disabled":
         uf.feed.status = "active"

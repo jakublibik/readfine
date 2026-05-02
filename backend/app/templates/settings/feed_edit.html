@@ -31,9 +31,12 @@
       </select>
     </div>
 
-    {% if uf.feed.is_private %}
+    {% if uf.feed.is_private or is_sole_subscriber %}
     <div class="space-y-3 pt-1">
       <h3 class="text-sm font-medium text-gray-700">HTTP Basic Auth</h3>
+      {% if not uf.feed.is_private %}
+      <p class="text-xs text-gray-400">Setting credentials will make this feed private (visible only to you).</p>
+      {% endif %}
       <div class="flex gap-3">
         <div class="flex-1">
           <label class="block text-xs text-gray-500 mb-1">Username</label>
@@ -43,7 +46,7 @@
                  class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
         </div>
         <div class="flex-1">
-          <label class="block text-xs text-gray-500 mb-1">New password <span class="text-gray-400">(leave blank to keep current)</span></label>
+          <label class="block text-xs text-gray-500 mb-1">Password {% if uf.feed.is_private %}<span class="text-gray-400">(leave blank to keep current)</span>{% endif %}</label>
           <input type="password" name="fetch_auth_pass" placeholder="••••••••"
                  autocomplete="new-password"
                  class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
