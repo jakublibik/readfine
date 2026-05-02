@@ -344,9 +344,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var topPanel = document.getElementById('mobile-title-bar');
   var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
   var barHeight = barVisible ? Math.round(topPanel.getBoundingClientRect().height) : 0;
-  var isBarDown = document.documentElement.dataset.sidebarMode === 'hideable-down';
-  var topOffset = (barVisible && !isBarDown) ? barHeight : 0;
-  var bottomOffset = (barVisible && isBarDown) ? barHeight : 0;
+  var topOffset = barVisible ? barHeight : 0;
+  var bottomOffset = 0;
 
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
@@ -952,8 +951,7 @@ document.addEventListener('articleArchiveChanged', function (e) {
     setTimeout(function () {
       var topPanel = document.getElementById('mobile-title-bar');
       var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-      var isBarDown = document.documentElement.dataset.sidebarMode === 'hideable-down';
-      var topOffset = (barVisible && !isBarDown) ? topPanel.getBoundingClientRect().height : 0;
+      var topOffset = barVisible ? topPanel.getBoundingClientRect().height : 0;
       if (topOffset > 0) {
         var list = document.getElementById('article-list');
         if (list) {
@@ -1434,12 +1432,13 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var lastScrollTop = 0;
     var ticking = false;
 
-    function updateBottomBar(scrollTop) {
+    function updateBottomBar(scrollTop, list) {
       var bar = document.getElementById('mobile-bottom-bar');
       if (!bar) return;
+      var atBottom = list && (scrollTop + list.clientHeight >= list.scrollHeight - 10);
       if (scrollTop < 5) {
         bar.classList.remove('bottom-bar-visible');
-      } else if (scrollTop < lastScrollTop) {
+      } else if (atBottom || scrollTop < lastScrollTop) {
         bar.classList.add('bottom-bar-visible');
       } else if (scrollTop > lastScrollTop) {
         bar.classList.remove('bottom-bar-visible');
@@ -1455,7 +1454,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         if (ticking) return;
         ticking = true;
         requestAnimationFrame(function () {
-          updateBottomBar(list.scrollTop);
+          updateBottomBar(list.scrollTop, list);
           ticking = false;
         });
       }, { passive: true });
@@ -1477,7 +1476,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   // Preferences page: sync small-bucket selects with localStorage
   var prefPairs = [
-    { id: 'sidebar-mode-small', key: 'sidebar_mode_small', def: 'collapsible' },
+    { id: 'sidebar-mode-small', key: 'sidebar_mode_small', def: 'hideable-up' },
     { id: 'detail-mode-small',  key: 'detail_mode_small',  def: 'inline' }
   ];
   prefPairs.forEach(function (p) {

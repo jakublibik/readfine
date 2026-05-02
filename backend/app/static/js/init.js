@@ -16,7 +16,7 @@
   if (bucket === 'small') {
     var sidebarMode;
     try { sidebarMode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
-    var resolvedMode = sidebarMode || 'collapsible';
+    var resolvedMode = sidebarMode || 'hideable-up';
     if (resolvedMode === 'hideable') resolvedMode = 'hideable-up';
     document.documentElement.dataset.sidebarMode = resolvedMode;
   }
