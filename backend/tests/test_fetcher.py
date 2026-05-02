@@ -8,6 +8,7 @@ from app.fetcher.rss import (
     _extract_content,
     _latest_published,
     _normalize_guid,
+    _normalize_url,
     _safe_url,
     _struct_to_dt,
 )
@@ -171,6 +172,54 @@ class TestNormalizeGuid:
 
     def test_empty_string_unchanged(self):
         assert _normalize_guid("") == ""
+
+
+# ── _normalize_url ───────────────────────────────────────────────────────────
+
+class TestNormalizeUrl:
+    def test_none_returns_none(self):
+        assert _normalize_url(None) is None
+
+    def test_trailing_slash_stripped(self):
+        assert _normalize_url("https://example.com/article/") == "https://example.com/article"
+
+    def test_scheme_lowercased(self):
+        assert _normalize_url("HTTPS://example.com/path") == "https://example.com/path"
+
+    def test_host_lowercased(self):
+        assert _normalize_url("https://EXAMPLE.COM/path") == "https://example.com/path"
+
+    def test_utm_params_stripped(self):
+        url = "https://example.com/a?utm_source=rss&utm_medium=feed&id=42"
+        assert _normalize_url(url) == "https://example.com/a?id=42"
+
+    def test_all_utm_variants_stripped(self):
+        url = "https://example.com/a?utm_source=x&utm_medium=y&utm_campaign=z&utm_term=t&utm_content=c&utm_id=1"
+        assert _normalize_url(url) == "https://example.com/a"
+
+    def test_fbclid_stripped(self):
+        assert _normalize_url("https://example.com/a?fbclid=XYZ") == "https://example.com/a"
+
+    def test_gclid_stripped(self):
+        assert _normalize_url("https://example.com/a?gclid=ABC") == "https://example.com/a"
+
+    def test_non_tracking_params_kept(self):
+        assert _normalize_url("https://example.com/a?id=42&page=2") == "https://example.com/a?id=42&page=2"
+
+    def test_fragment_stripped(self):
+        assert _normalize_url("https://example.com/a#section") == "https://example.com/a"
+
+    def test_ftp_scheme_returns_none(self):
+        assert _normalize_url("ftp://files.example.com/file") is None
+
+    def test_empty_path_normalized_to_slash(self):
+        result = _normalize_url("https://example.com")
+        assert result == "https://example.com/"
+
+    def test_same_url_different_utm_produces_same_result(self):
+        a = _normalize_url("https://example.com/a?utm_source=twitter")
+        b = _normalize_url("https://example.com/a?utm_source=facebook")
+        assert a == b
 
 
 # ── _safe_url ─────────────────────────────────────────────────────────────────

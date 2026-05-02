@@ -22,6 +22,7 @@ class Article(Base):
     guid: Mapped[str] = mapped_column(String(2048), nullable=False)
     guid_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     url: Mapped[str | None] = mapped_column(String(2048))
+    url_normalized: Mapped[str | None] = mapped_column(String(2048), index=True)
     title: Mapped[str] = mapped_column(String(1000), nullable=False)
     author: Mapped[str | None] = mapped_column(String(255))
     content: Mapped[str | None] = mapped_column(Text)

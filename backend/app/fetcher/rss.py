@@ -5,15 +5,17 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import select, update
+from sqlalchemy import func, literal, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models.article import Article
+from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
@@ -27,6 +29,25 @@ _HEADERS = {
 }
 _TIMEOUT = 30  # seconds
 _MAX_REDIRECTS = 5
+
+_STRIP_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "fbclid", "gclid", "msclkid",
+})
+
+
+def _normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return None
+        path = p.path.rstrip("/") or "/"
+        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
+        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
+    except Exception:
+        return None
 
 
 def _fetch_url_with_ssrf_check(url: str, auth=None) -> str:
@@ -194,7 +215,8 @@ async def _save_articles(
             feed_id=feed.id,
             guid=guid[:2048],
             guid_hash=guid_hash,
-            url=_safe_url(entry.get("link")),
+            url=article_url,
+            url_normalized=_normalize_url(article_url),
             title=(entry.get("title") or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,
@@ -226,11 +248,81 @@ async def _save_articles(
         for article in new_articles:
             await apply_filters_to_article(article, db)
 
+        await _dedup_cross_feed(feed.id, new_articles, db)
+
         # Auto-detect full-content feed and disable readable extraction if warranted
         from app.services.readable_service import maybe_disable_readable_for_feed
         await maybe_disable_readable_for_feed(feed.id, db)
 
     return len(new_articles)
+
+
+async def _dedup_cross_feed(
+    feed_id: int, new_articles: list[Article], db: AsyncSession
+) -> None:
+    """For users subscribed to this feed who already have the same URL from another feed,
+    mark the new duplicate article as read and adjust unread_count."""
+    articles_with_url = [a for a in new_articles if a.url_normalized]
+    if not articles_with_url:
+        return
+
+    ArticleB = aliased(Article)
+    UserFeedB = aliased(UserFeed)
+
+    dup_exists = (
+        select(literal(1))
+        .select_from(ArticleB)
+        .join(UserFeedB, UserFeedB.feed_id == ArticleB.feed_id)
+        .where(
+            UserFeedB.user_id == UserFeed.user_id,
+            ArticleB.url_normalized == Article.url_normalized,
+            ArticleB.id != Article.id,
+        )
+        .correlate(UserFeed, Article)
+        .exists()
+    )
+
+    rows = (await db.execute(
+        select(UserFeed.user_id, Article.id.label("article_id"))
+        .select_from(Article)
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .where(
+            Article.id.in_([a.id for a in articles_with_url]),
+            Article.url_normalized.is_not(None),
+            dup_exists,
+        )
+    )).all()
+
+    if not rows:
+        return
+
+    await db.execute(
+        pg_insert(UserArticleState)
+        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .on_conflict_do_nothing()
+    )
+
+    affected_user_ids = list({r.user_id for r in rows})
+    unread_subq = (
+        select(func.count())
+        .select_from(Article)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == UserFeed.user_id),
+        )
+        .where(
+            Article.feed_id == feed_id,
+            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+        )
+        .correlate(UserFeed)
+        .scalar_subquery()
+    )
+    await db.execute(
+        update(UserFeed)
+        .where(UserFeed.user_id.in_(affected_user_ids), UserFeed.feed_id == feed_id)
+        .values(unread_count=unread_subq)
+    )
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
