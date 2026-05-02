@@ -1,4 +1,6 @@
+import asyncio
 import re
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,6 +23,7 @@ import app.database as db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=20))
     db.engine = db.create_engine(settings.database_url)
     db.async_session_factory = db.create_session_factory(db.engine)
 

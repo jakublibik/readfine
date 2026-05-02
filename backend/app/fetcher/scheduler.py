@@ -1,4 +1,5 @@
 """APScheduler integration: periodic RSS feed fetching and readable extraction."""
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -45,6 +46,7 @@ async def _fetch_due_feeds() -> None:
             min_interval,
         ) * one_minute
         backoff_interval = error_backoff_min * one_minute
+        grace = literal_column("interval '2 minutes'")
         due_feeds = await session.execute(
             select(Feed).where(
                 Feed.subscriber_count > 0,
@@ -53,12 +55,12 @@ async def _fetch_due_feeds() -> None:
                         Feed.status == "active",
                         or_(
                             Feed.last_fetched_at.is_(None),
-                            Feed.last_fetched_at + effective_interval < func.now(),
+                            Feed.last_fetched_at + effective_interval < func.now() + grace,
                         ),
                     ),
                     and_(
                         Feed.status == "error",
-                        Feed.last_fetched_at + backoff_interval < func.now(),
+                        Feed.last_fetched_at + backoff_interval < func.now() + grace,
                     ),
                 ),
             )
@@ -71,14 +73,19 @@ async def _fetch_due_feeds() -> None:
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
     from app.services.feed import _initial_fetch_in_progress
 
-    for feed in feeds:
-        if feed.id in _initial_fetch_in_progress:
-            logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed.id)
-            continue
-        async with db.async_session_factory() as session:
-            feed_in_session = await session.get(Feed, feed.id)
-            if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
-                await fetch_feed(feed_in_session, session, published_cutoff=published_cutoff)
+    semaphore = asyncio.Semaphore(10)
+
+    async def _fetch_one(feed_id: int) -> None:
+        async with semaphore:
+            if feed_id in _initial_fetch_in_progress:
+                logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
+                return
+            async with db.async_session_factory() as session:
+                feed_in_session = await session.get(Feed, feed_id)
+                if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
+                    await fetch_feed(feed_in_session, session, published_cutoff=published_cutoff)
+
+    await asyncio.gather(*[_fetch_one(feed.id) for feed in feeds], return_exceptions=True)
 
 
 async def _process_readable() -> None:
