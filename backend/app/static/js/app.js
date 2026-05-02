@@ -193,6 +193,50 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
 
 // Nav active state — persists across sidebarRefresh swaps
 var _activeNavGet = null;
+var _navSnapshot = null;
+
+function _saveNavSnapshot() {
+  var titleEl = document.getElementById('mobile-title-text');
+  _navSnapshot = {
+    url: _activeNavGet,
+    title: titleEl ? titleEl.textContent : null,
+  };
+}
+
+function _revertNavSnapshot() {
+  if (!_navSnapshot) return;
+  var snap = _navSnapshot;
+  _navSnapshot = null;
+  _activeNavGet = snap.url;
+  try { if (snap.url) localStorage.setItem('lastNavItem', snap.url); } catch (e) {}
+  var titleEl = document.getElementById('mobile-title-text');
+  if (titleEl && snap.title !== null) {
+    titleEl.textContent = snap.title;
+    try { localStorage.setItem('mobile_title_text', snap.title); } catch (e) {}
+  }
+  _syncMobileQuicklink();
+  if (snap.url) htmx.ajax('GET', snap.url, { target: '#article-list', swap: 'innerHTML' });
+}
+
+function _showNavErrorToast() {
+  var existing = document.getElementById('nav-error-toast');
+  if (existing) return;
+  var toast = document.createElement('div');
+  toast.id = 'nav-error-toast';
+  toast.textContent = 'Connection error — restoring previous view';
+  toast.style.cssText = 'position:fixed;bottom:4rem;left:50%;transform:translateX(-50%);' +
+    'background:#374151;color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
+    'font-size:0.8rem;z-index:9999;white-space:nowrap;pointer-events:none;';
+  document.body.appendChild(toast);
+  setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3000);
+}
+
+document.body.addEventListener('htmx:sendError', function (e) {
+  if (!e.detail.target || e.detail.target.id !== 'article-list') return;
+  if (!_navSnapshot) return;
+  _showNavErrorToast();
+  _revertNavSnapshot();
+});
 
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');
@@ -1104,6 +1148,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!isMobile()) return;
     var item = e.target.closest('#sidebar [hx-target="#article-list"]');
     if (!item) return;
+    _saveNavSnapshot();
     var titleEl = item.querySelector('span.flex-1');
     var title = (titleEl ? titleEl.textContent : (item.getAttribute('title') || '')).trim().slice(0, 40);
     var titleText = document.getElementById('mobile-title-text');
@@ -1127,6 +1172,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
     if (!e.target.closest('#mobile-title-quicklink') && !e.target.closest('#mobile-bottom-quicklink')) return;
+    _saveNavSnapshot();
     var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
     var targetUrl = isLabels ? '/htmx/articles?starred_only=true' : '/htmx/articles?labeled_only=true';
     var targetTitle = isLabels ? 'Starred' : 'Labels';
