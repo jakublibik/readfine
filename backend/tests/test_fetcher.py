@@ -1,9 +1,12 @@
 """Unit tests for fetch scheduler, interval quantization, and article helpers."""
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from app.fetcher.rss import (
+    FETCH_ERROR_DISABLE_THRESHOLD,
     _clamp_published_at,
     _extract_content,
     _latest_published,
@@ -11,8 +14,10 @@ from app.fetcher.rss import (
     _normalize_url,
     _safe_url,
     _struct_to_dt,
+    fetch_feed,
 )
 from app.fetcher.scheduler import create_scheduler
+from app.models.fetch_log import FetchLog
 from app.routers.web.admin import _quantize15
 
 
@@ -335,3 +340,187 @@ class TestLatestPublished:
         # feedparser `or` picks published_parsed first
         result = _latest_published(entries)
         assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
+
+
+# ── Error circuit breaker — threshold constants ───────────────────────────────
+
+class TestErrorCircuitBreakerThreshold:
+    """Tests for the consecutive-error disable threshold and backoff tier logic."""
+
+    def test_threshold_is_five(self):
+        assert FETCH_ERROR_DISABLE_THRESHOLD == 5
+
+    def test_below_threshold_status_is_error(self):
+        # counts 0..threshold-1 should all remain in 'error'
+        for count in range(FETCH_ERROR_DISABLE_THRESHOLD):
+            status = "disabled" if count >= FETCH_ERROR_DISABLE_THRESHOLD else "error"
+            assert status == "error", f"count={count} should give 'error', got 'disabled'"
+
+    def test_at_threshold_status_is_disabled(self):
+        count = FETCH_ERROR_DISABLE_THRESHOLD
+        status = "disabled" if count >= FETCH_ERROR_DISABLE_THRESHOLD else "error"
+        assert status == "disabled"
+
+    def test_above_threshold_status_is_disabled(self):
+        count = FETCH_ERROR_DISABLE_THRESHOLD + 3
+        status = "disabled" if count >= FETCH_ERROR_DISABLE_THRESHOLD else "error"
+        assert status == "disabled"
+
+    def test_backoff_below_threshold_uses_2x_interval(self):
+        default_interval = 60
+        for count in range(FETCH_ERROR_DISABLE_THRESHOLD):
+            backoff = 24 * 60 if count >= FETCH_ERROR_DISABLE_THRESHOLD else max(15, default_interval * 2)
+            assert backoff == 120, f"count={count} should use 2× backoff (120 min)"
+
+    def test_backoff_at_threshold_uses_24h(self):
+        default_interval = 60
+        count = FETCH_ERROR_DISABLE_THRESHOLD
+        backoff = 24 * 60 if count >= FETCH_ERROR_DISABLE_THRESHOLD else max(15, default_interval * 2)
+        assert backoff == 24 * 60
+
+    def test_backoff_above_threshold_uses_24h(self):
+        default_interval = 60
+        count = FETCH_ERROR_DISABLE_THRESHOLD + 2
+        backoff = 24 * 60 if count >= FETCH_ERROR_DISABLE_THRESHOLD else max(15, default_interval * 2)
+        assert backoff == 24 * 60
+
+    def test_backoff_short_interval_still_uses_24h_at_threshold(self):
+        # Even if default_interval is tiny, tier-2 is always 24 h
+        default_interval = 1
+        count = FETCH_ERROR_DISABLE_THRESHOLD
+        backoff = 24 * 60 if count >= FETCH_ERROR_DISABLE_THRESHOLD else max(15, default_interval * 2)
+        assert backoff == 24 * 60
+
+
+# ── Error circuit breaker — fetch_feed integration (mocked DB) ────────────────
+
+def _make_feed(**kwargs) -> SimpleNamespace:
+    defaults = {
+        "id": 1,
+        "feed_url": "https://example.com/feed.xml",
+        "fetch_auth_user": None,
+        "fetch_auth_pass_encrypted": None,
+        "fetch_error_count": 0,
+        "status": "active",
+        "last_fetched_at": None,
+        "last_fetch_duration_ms": None,
+        "last_error": None,
+        "last_published_at": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def _make_session() -> AsyncMock:
+    session = AsyncMock()
+    session.add = MagicMock()
+    return session
+
+
+class TestFetchFeedErrorHandling:
+    """fetch_feed: error path adds FetchLog, commits error state."""
+
+    async def test_fetch_error_returns_zero(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
+            result = await fetch_feed(feed, session)
+        assert result == 0
+
+    async def test_fetch_error_adds_fetchlog(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
+            await fetch_feed(feed, session)
+        assert session.add.called
+        added = session.add.call_args[0][0]
+        assert isinstance(added, FetchLog)
+        assert added.feed_id == 1
+        assert "parse error" in added.error_message
+
+    async def test_fetch_error_records_http_status(self):
+        import httpx
+        feed = _make_feed()
+        session = _make_session()
+        request = httpx.Request("GET", "https://example.com/feed.xml")
+        response = httpx.Response(404, request=request)
+        exc = httpx.HTTPStatusError("404", request=request, response=response)
+        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=exc):
+            await fetch_feed(feed, session)
+        added = session.add.call_args[0][0]
+        assert added.http_status == 404
+
+    async def test_fetch_error_rolls_back_then_commits(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("x")):
+            await fetch_feed(feed, session)
+        session.rollback.assert_called_once()
+        session.commit.assert_called_once()
+
+    async def test_fetch_error_truncates_long_message(self):
+        feed = _make_feed()
+        session = _make_session()
+        long_msg = "e" * 600
+        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError(long_msg)):
+            await fetch_feed(feed, session)
+        added = session.add.call_args[0][0]
+        assert len(added.error_message) <= 500
+
+
+class TestFetchFeedSuccessReset:
+    """fetch_feed: success path resets error counter and status."""
+
+    async def test_success_resets_error_count(self):
+        feed = _make_feed(fetch_error_count=3, status="error")
+        session = _make_session()
+
+        import feedparser
+        parsed = feedparser.FeedParserDict({
+            "bozo": False,
+            "entries": [],
+            "feed": feedparser.FeedParserDict({}),
+        })
+        with (
+            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+        ):
+            await fetch_feed(feed, session)
+
+        assert feed.fetch_error_count == 0
+
+    async def test_success_sets_status_active(self):
+        feed = _make_feed(fetch_error_count=3, status="error")
+        session = _make_session()
+
+        import feedparser
+        parsed = feedparser.FeedParserDict({
+            "bozo": False,
+            "entries": [],
+            "feed": feedparser.FeedParserDict({}),
+        })
+        with (
+            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+        ):
+            await fetch_feed(feed, session)
+
+        assert feed.status == "active"
+
+    async def test_success_clears_last_error(self):
+        feed = _make_feed(last_error="previous error", status="error")
+        session = _make_session()
+
+        import feedparser
+        parsed = feedparser.FeedParserDict({
+            "bozo": False,
+            "entries": [],
+            "feed": feedparser.FeedParserDict({}),
+        })
+        with (
+            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+        ):
+            await fetch_feed(feed, session)
+
+        assert feed.last_error is None

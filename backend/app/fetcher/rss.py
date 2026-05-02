@@ -23,6 +23,8 @@ from app.utils.url_validator import validate_feed_url
 
 logger = logging.getLogger(__name__)
 
+FETCH_ERROR_DISABLE_THRESHOLD = 5  # consecutive failures before feed is disabled
+
 _HEADERS = {
     "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
@@ -106,6 +108,7 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         feed.last_fetch_duration_ms = duration_ms
         feed.status = "active"
         feed.last_error = None
+        feed.fetch_error_count = 0
 
         latest_pub = _latest_published(parsed.entries)
         if latest_pub:
@@ -125,10 +128,14 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        from sqlalchemy import update as sa_update
+        from sqlalchemy import case as sa_case, literal, update as sa_update
         await db.execute(
             sa_update(Feed).where(Feed.id == feed_id).values(
-                status="error",
+                status=sa_case(
+                    (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
+                    else_=literal("error"),
+                ),
+                fetch_error_count=Feed.fetch_error_count + 1,
                 last_error=str(exc)[:500],
                 last_fetched_at=datetime.now(timezone.utc),
             )

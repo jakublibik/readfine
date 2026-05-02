@@ -110,6 +110,9 @@ async def update_feed(
     auth_fields = {"fetch_auth_user", "fetch_auth_pass"} & payload.model_fields_set
     if auth_fields:
         feed = user_feed.feed
+        if feed.status == "disabled":
+            feed.status = "active"
+        feed.fetch_error_count = 0
         if not feed.is_private:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

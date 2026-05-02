@@ -4,10 +4,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import and_, func, literal_column, or_, select
+from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
-from app.fetcher.rss import fetch_feed
+from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, fetch_feed
 from app.models.feed import Feed
 from app.models.settings import AppSettings
 
@@ -37,7 +37,7 @@ async def _fetch_due_feeds() -> None:
         now = datetime.now(timezone.utc)
         published_cutoff = (now - timedelta(days=purge_after_days)) if purge_after_days else None
 
-        # active: fetch when due; error: retry after 5× interval (min 30 min); paused: skip
+        # active: fetch when due; error: tiered backoff; paused/disabled: skip
         error_backoff_min = max(15, default_interval * 2)
         one_minute = literal_column("interval '1 minute'")
         # per-feed interval clamped to global minimum
@@ -45,7 +45,11 @@ async def _fetch_due_feeds() -> None:
             func.coalesce(Feed.fetch_interval_min, default_interval),
             min_interval,
         ) * one_minute
-        backoff_interval = error_backoff_min * one_minute
+        # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
+        error_backoff = case(
+            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
+            else_=literal_column(f"interval '{error_backoff_min} minutes'"),
+        )
         grace = literal_column("interval '2 minutes'")
         due_feeds = await session.execute(
             select(Feed).where(
@@ -60,7 +64,7 @@ async def _fetch_due_feeds() -> None:
                     ),
                     and_(
                         Feed.status == "error",
-                        Feed.last_fetched_at + backoff_interval < func.now() + grace,
+                        Feed.last_fetched_at + error_backoff < func.now() + grace,
                     ),
                 ),
             )

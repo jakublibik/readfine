@@ -9,7 +9,7 @@ from app.database import Base
 class Feed(Base):
     __tablename__ = "feeds"
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'error', 'paused')", name="ck_feeds_status"),
+        CheckConstraint("status IN ('active', 'error', 'paused', 'disabled')", name="ck_feeds_status"),
         CheckConstraint("feed_type IN ('rss', 'youtube', 'scrape', 'twitter', 'podcast')", name="ck_feeds_feed_type"),
     )
 
@@ -23,6 +23,7 @@ class Feed(Base):
     favicon_url: Mapped[str | None] = mapped_column(String(2048))
     favicon_data: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_fetch_duration_ms: Mapped[int | None] = mapped_column(Integer)
