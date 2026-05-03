@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import func, literal, select, update
+from sqlalchemy import case, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -128,10 +128,9 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        from sqlalchemy import case as sa_case, literal, update as sa_update
         await db.execute(
-            sa_update(Feed).where(Feed.id == feed_id).values(
-                status=sa_case(
+            update(Feed).where(Feed.id == feed_id).values(
+                status=case(
                     (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
                     else_=literal("error"),
                 ),
