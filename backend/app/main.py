@@ -93,7 +93,7 @@ def create_app() -> FastAPI:
             # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; "  # hash of inline <script> in share.html
+                "script-src 'self' 'unsafe-eval' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; "  # unsafe-eval required by htmx.js (Function()); hash covers inline <script> in share.html
                 "img-src * data:; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self';"
