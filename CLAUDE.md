@@ -50,6 +50,8 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Readable extraction – cookie injection**: Per-feed session cookies pro weby s cookie-based auth (seekingalpha.com apod.). Šifrovat stejně jako fetch_auth_pass, uživatel obnovuje po expiraci.
 - **Zobrazení labelů na článcích**: barevné badgy v seznamu článků i v detailu. Vyžaduje: přidat labels do ArticleResponse (schema + JOIN/array_agg), šablony article_row.html + article_detail.html. Zvážit toggle v user_settings.
 - **HTTP auth při editaci feedu pro jediného odběratele**: pokud je user jediný subscriber daného feedu, umožnit mu nastavit/změnit HTTP Basic Auth přímo v feed_edit (fetch_auth_user + fetch_auth_pass). Aktuálně je to možné jen při přidávání feedu.
+- **Relativní URL obrázků v článcích**: článek může obsahovat relativní `<img src="/...">` URL, které prohlížeč doplní jako `readfine.app/...` místo původní domény. Fix: při ukládání/zobrazování obsahu přepsat relativní URL na absolutní pomocí base URL článku.
+- **Dark mode**: přidat volbu tmavého tématu do nastavení uživatele. Vyžaduje `darkMode: 'class'` v tailwind.config.js + `dark_mode` pole v user_settings + dark: varianty ve všech šablonách (~1-2 dny práce).
 
 ## Post-MVP nápady
 - **Plošné testové pokrytí**: Po MVP zvážit rozšíření testů nad rámec kritických částí.
