@@ -81,6 +81,56 @@ docker compose down
 docker compose down -v
 ```
 
+## Development
+
+### Requirements
+
+- Node.js 18+ (for building Tailwind CSS)
+- Python 3.12 + uv
+
+### Setup
+
+```bash
+npm install
+```
+
+### CSS build
+
+Tailwind CSS is compiled from templates into a static file — `backend/app/static/css/tailwind.css`. This file is committed to the repository.
+
+**Rebuild after changing Tailwind classes in any template:**
+
+```bash
+npm run build
+```
+
+**Watch mode (auto-rebuild on every template save):**
+
+```bash
+npm run dev
+```
+
+Run this in a second terminal alongside `uvicorn` during development.
+
+### Updating HTMX
+
+HTMX is self-hosted at `backend/app/static/js/htmx.min.js` (currently v2.0.4). To upgrade:
+
+```bash
+curl -o backend/app/static/js/htmx.min.js https://unpkg.com/htmx.org@<version>/dist/htmx.min.js
+```
+
+### Git hook (optional but recommended)
+
+Automatically rebuilds CSS before every commit:
+
+```bash
+cp hooks/pre-commit .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+---
+
 ## Stack
 
 - **Backend:** Python 3.12 + FastAPI

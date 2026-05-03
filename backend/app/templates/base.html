@@ -5,8 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Readfine{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script src="/static/js/tailwind-config.js"></script>
-    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <link rel="stylesheet" href="/static/css/tailwind.css">
     <style>
       .prose h1 { font-size: 1.3em !important; }
       .prose h2 { font-size: 1.15em !important; margin-top: 1.4em; margin-bottom: 0.5em; }
@@ -110,7 +109,7 @@
       }
     </style>
     <script src="/static/js/init.js"></script>
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script src="/static/js/htmx.min.js"></script>
     <script src="/static/js/csrf.js"></script>
     <script src="/static/js/app.js" defer></script>
 </head>

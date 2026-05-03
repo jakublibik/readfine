@@ -93,10 +93,10 @@ def create_app() -> FastAPI:
             # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-eval' https://cdn.tailwindcss.com https://unpkg.com 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; "
+                "script-src 'self' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU='; "  # hash of inline <script> in share.html
                 "img-src * data:; "
-                "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
-                "connect-src 'self' https://cdn.tailwindcss.com;"
+                "style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self';"
             )
         return response
 
