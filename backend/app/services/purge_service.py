@@ -93,8 +93,9 @@ async def purge_old_articles(db: AsyncSession) -> int:
     feed_days_result = await db.execute(
         select(
             UserFeed.feed_id,
-            func.coalesce(UserFeed.purge_after_days, global_days).label("effective_days"),
+            func.max(func.coalesce(UserFeed.purge_after_days, global_days)).label("effective_days"),
         )
+        .group_by(UserFeed.feed_id)
     )
     age_deleted = 0
     for r in feed_days_result:
@@ -133,8 +134,9 @@ async def purge_old_articles(db: AsyncSession) -> int:
     feed_counts_result = await db.execute(
         select(
             UserFeed.feed_id,
-            func.coalesce(UserFeed.purge_keep_count, global_count).label("effective_count"),
+            func.max(func.coalesce(UserFeed.purge_keep_count, global_count)).label("effective_count"),
         )
+        .group_by(UserFeed.feed_id)
     )
     feed_counts: dict[int, int] = {
         r.feed_id: r.effective_count

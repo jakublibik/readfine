@@ -1,4 +1,5 @@
 """URL validation with SSRF protection."""
+import asyncio
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -41,3 +42,9 @@ def validate_feed_url(url: str) -> None:
                 f"URL resolves to a disallowed address ({ip}): "
                 "localhost, private, and link-local addresses are not permitted"
             )
+
+
+async def async_validate_feed_url(url: str) -> None:
+    """Async wrapper around validate_feed_url — offloads blocking DNS lookup to executor."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, validate_feed_url, url)

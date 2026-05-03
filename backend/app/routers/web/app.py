@@ -53,7 +53,7 @@ async def _extract_readable_bg(
         except Exception:
             logger.warning("readable bg: decrypt failed for article %d", article_id)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         content, error, _http_status = await loop.run_in_executor(
             None, extract_readable, url, auth_user, auth_pass
@@ -129,22 +129,19 @@ async def htmx_sidebar(
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user.id)
     )).scalar() or 0
-    nav_starred = (await db.execute(
-        select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)
-    )).scalar() or 0
-    nav_unread_starred = (await db.execute(
-        select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True, UserArticleState.is_read == False)
-    )).scalar() or 0
-    nav_archived = (await db.execute(
-        select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
-    )).scalar() or 0
-    nav_unread_archived = (await db.execute(
-        select(func.count()).select_from(UserArticleState)
-        .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True, UserArticleState.is_read == False)
-    )).scalar() or 0
+    uas_row = (await db.execute(
+        select(
+            func.count().filter(UserArticleState.is_starred == True).label("starred"),
+            func.count().filter((UserArticleState.is_starred == True) & (UserArticleState.is_read == False)).label("unread_starred"),
+            func.count().filter(UserArticleState.is_archived == True).label("archived"),
+            func.count().filter((UserArticleState.is_archived == True) & (UserArticleState.is_read == False)).label("unread_archived"),
+        )
+        .where(UserArticleState.user_id == user.id)
+    )).one()
+    nav_starred = uas_row.starred or 0
+    nav_unread_starred = uas_row.unread_starred or 0
+    nav_archived = uas_row.archived or 0
+    nav_unread_archived = uas_row.unread_archived or 0
     nav_labeled = (await db.execute(
         select(func.count()).select_from(
             select(ArticleLabel.article_id).where(ArticleLabel.user_id == user.id).distinct().subquery()

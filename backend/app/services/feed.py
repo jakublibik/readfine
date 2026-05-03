@@ -13,7 +13,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.utils.crypto import encrypt
-from app.utils.url_validator import validate_feed_url
+from app.utils.url_validator import async_validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ async def subscribe(
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
-    validate_feed_url(url)
+    await async_validate_feed_url(url)
 
     # Validate folder ownership
     if folder_id is not None:

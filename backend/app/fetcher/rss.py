@@ -19,7 +19,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
-from app.utils.url_validator import validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,8 @@ def _fetch_url_with_ssrf_check(url: str, auth=None) -> str:
 
 async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
-    validate_feed_url(url)
-    loop = asyncio.get_event_loop()
+    await async_validate_feed_url(url)
+    loop = asyncio.get_running_loop()
     content = await loop.run_in_executor(None, _fetch_url_with_ssrf_check, url, None)
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
@@ -90,11 +90,11 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
     feed_url = feed.feed_url
 
     try:
-        validate_feed_url(feed_url)
+        await async_validate_feed_url(feed_url)
         auth = None
         if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
             auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         content = await loop.run_in_executor(None, _fetch_url_with_ssrf_check, feed_url, auth)
         parsed = await loop.run_in_executor(None, feedparser.parse, content)
 

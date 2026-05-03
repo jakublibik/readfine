@@ -20,7 +20,7 @@ from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
 from app.utils.parsing import safe_int
-from app.utils.url_validator import validate_feed_url
+from app.utils.url_validator import async_validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,7 @@ async def settings_feeds_test(
     auth_pass = fetch_auth_pass or None
 
     try:
-        validate_feed_url(url)
+        await async_validate_feed_url(url)
     except ValueError as e:
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": str(e)})
@@ -849,7 +849,7 @@ async def settings_password_change(
         })
 
     user.password_hash = hash_password(new_pw)
-    user.password_reset_token = None
+    user.password_reset_token_hash = None
     user.password_reset_expires_at = None
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {

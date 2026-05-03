@@ -58,6 +58,7 @@ class Folder(Base):
 
 class UserFeed(Base):
     __tablename__ = "user_feeds"
+    __table_args__ = (UniqueConstraint("user_id", "feed_id", name="uq_user_feeds_user_feed"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
