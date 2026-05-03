@@ -122,18 +122,23 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, feed_url, exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        is_4xx = http_status is not None and 400 <= http_status < 500
         db.add(FetchLog(
             feed_id=feed_id,
             failed_at=datetime.now(timezone.utc),
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
+        if is_4xx:
+            new_status = literal("disabled")
+        else:
+            new_status = case(
+                (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
+                else_=literal("error"),
+            )
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
-                status=case(
-                    (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
-                    else_=literal("error"),
-                ),
+                status=new_status,
                 fetch_error_count=Feed.fetch_error_count + 1,
                 last_error=str(exc)[:500],
                 last_fetched_at=datetime.now(timezone.utc),

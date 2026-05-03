@@ -84,7 +84,8 @@ def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
     import re
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
-                                 include_links=True, include_images=True)
+                                 include_links=True, include_images=True,
+                                 favor_recall=True)
     if not result:
         return None
     # trafilatura outputs <graphic src="..." alt="..."/> instead of <img>

@@ -39,14 +39,9 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 
 
 ## Odložené nálezy (post-MVP nebo ve volném prostoru)
-1. subscriber_count race condition
-2. JWT lifetime 15 min + refresh token
-3. Fetch error 4xx vs 5xx rozlišení
-4. content_source hodnoty sjednotit s architekturou
-5. API endpointy /feeds/refresh a /feeds/detect
-6. Filter scope S2: scope_include/scope_except → JSONB
-7. trafilatura `favor_recall=True` — zvážit bez corpus dat
-8. Paralelní fetch feedů se semaforem (`asyncio.gather` + `Semaphore(10)` místo `for` smyčky v `_fetch_due_feeds`) — při 100+ feedech sekvenční průchod prodlužuje efektivní interval
+1. JWT lifetime 15 min + refresh token
+2. Filter scope S2: scope_include/scope_except → JSONB
+3. /feeds/detect endpoint (auto-detekce feed URL ze stránky)
 
 ## Post-MVP TODO
 - limit na počet článků při prvním stažení

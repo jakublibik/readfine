@@ -299,6 +299,31 @@ async def htmx_mark_folder_read(
     return HTMLResponse("", status_code=200)
 
 
+@router.post("/htmx/feeds/{feed_id}/refresh", response_class=HTMLResponse)
+async def htmx_refresh_feed(
+    feed_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed_id)
+    )
+    if not result.scalar_one_or_none():
+        return HTMLResponse("", status_code=403)
+
+    async def _do_refresh(fid: int) -> None:
+        from app.database import async_session_factory
+        from app.fetcher.rss import fetch_feed as _fetch_feed
+        async with async_session_factory() as session:
+            feed_obj = await session.get(Feed, fid)
+            if feed_obj:
+                await _fetch_feed(feed_obj, session)
+
+    asyncio.create_task(_do_refresh(feed_id))
+    return HTMLResponse("", status_code=200)
+
+
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
 async def htmx_search_modal(
     request: Request,
