@@ -36,6 +36,7 @@
 {% if stats.readable_pending_recent %}
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Pending readable extraction</h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
@@ -64,12 +65,14 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endif %}
 
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Recent readable extraction failures <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.readable_failed_recent %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
@@ -98,6 +101,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <p class="text-sm text-gray-400 mb-8">No readable extraction failures.</p>
@@ -106,6 +110,7 @@
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Recent fetch errors <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.recent_errors %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
@@ -126,6 +131,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <p class="text-sm text-gray-400">No recent fetch errors.</p>

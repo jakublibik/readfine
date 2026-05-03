@@ -1,116 +1,117 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "feeds" %}
 {% block title %}Edit feed – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-xl mx-auto px-4 py-8">
-  <h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
-  <p class="text-sm text-gray-500 mb-6">{{ uf.feed.feed_url }}</p>
 
-  <form method="POST"
-        action="/settings/feeds/{{ uf.id }}/edit"
-        hx-boost="true"
-        class="space-y-4">
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
+<p class="text-sm text-gray-500 mb-6">{{ uf.feed.feed_url }}</p>
 
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">Custom title</label>
-      <input type="text" name="custom_title"
-             value="{{ uf.custom_title or '' }}"
-             placeholder="{{ uf.feed.title }}"
-             class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <p class="text-xs text-gray-400 mt-1">Leave blank to use the feed's original title.</p>
-    </div>
+<form method="POST"
+      action="/settings/feeds/{{ uf.id }}/edit"
+      hx-boost="true"
+      class="space-y-4">
 
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">Folder</label>
-      <select name="folder_id" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="">No folder</option>
-        {% for folder in folders %}
-          <option value="{{ folder.id }}" {% if uf.folder_id == folder.id %}selected{% endif %}>
-            {{ folder.name }}
-          </option>
-        {% endfor %}
-      </select>
-    </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Custom title</label>
+    <input type="text" name="custom_title"
+           value="{{ uf.custom_title or '' }}"
+           placeholder="{{ uf.feed.title }}"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <p class="text-xs text-gray-400 mt-1">Leave blank to use the feed's original title.</p>
+  </div>
 
-    {% if uf.feed.is_private or is_sole_subscriber %}
-    <div class="space-y-3 pt-1">
-      <h3 class="text-sm font-medium text-gray-700">HTTP Basic Auth</h3>
-      {% if not uf.feed.is_private %}
-      <p class="text-xs text-gray-400">Setting credentials will make this feed private (visible only to you).</p>
-      {% endif %}
-      <div class="flex gap-3">
-        <div class="flex-1">
-          <label class="block text-xs text-gray-500 mb-1">Username</label>
-          <input type="text" name="fetch_auth_user"
-                 value="{{ uf.feed.fetch_auth_user or '' }}"
-                 autocomplete="off"
-                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        </div>
-        <div class="flex-1">
-          <label class="block text-xs text-gray-500 mb-1">Password {% if uf.feed.is_private %}<span class="text-gray-400">(leave blank to keep current)</span>{% endif %}</label>
-          <input type="password" name="fetch_auth_pass" placeholder="••••••••"
-                 autocomplete="new-password"
-                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        </div>
-      </div>
-    </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Folder</label>
+    <select name="folder_id" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">No folder</option>
+      {% for folder in folders %}
+        <option value="{{ folder.id }}" {% if uf.folder_id == folder.id %}selected{% endif %}>
+          {{ folder.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </div>
+
+  {% if uf.feed.is_private or is_sole_subscriber %}
+  <div class="space-y-3 pt-1">
+    <h3 class="text-sm font-medium text-gray-700">HTTP Basic Auth</h3>
+    {% if not uf.feed.is_private %}
+    <p class="text-xs text-gray-400">Setting credentials will make this feed private (visible only to you).</p>
     {% endif %}
-
-    <div class="text-xs text-gray-400 pt-1 space-y-0.5">
-      <div>Feed URL: <span class="font-mono">{{ uf.feed.feed_url }}</span></div>
-      <div>
-        Status: {{ uf.feed.status }}
-        {% if uf.feed.last_error %}
-          — <span class="text-red-500">{{ uf.feed.last_error }}</span>
-        {% endif %}
+    <div class="flex gap-3">
+      <div class="flex-1">
+        <label class="block text-xs text-gray-500 mb-1">Username</label>
+        <input type="text" name="fetch_auth_user"
+               value="{{ uf.feed.fetch_auth_user or '' }}"
+               autocomplete="off"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
-      <div class="flex items-center gap-1.5 pt-0.5">
-        {% if uf.feed.is_private %}
-          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
-          <span class="text-gray-400">This feed is isolated to your account and not shared with other users.</span>
-        {% else %}
-          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
-          <span class="text-gray-400">Articles are cached and shared across all subscribers on this server.</span>
-        {% endif %}
+      <div class="flex-1">
+        <label class="block text-xs text-gray-500 mb-1">Password {% if uf.feed.is_private %}<span class="text-gray-400">(leave blank to keep current)</span>{% endif %}</label>
+        <input type="password" name="fetch_auth_pass" placeholder="••••••••"
+               autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
     </div>
+  </div>
+  {% endif %}
 
+  <div class="text-xs text-gray-400 pt-1 space-y-0.5">
+    <div>Feed URL: <span class="font-mono">{{ uf.feed.feed_url }}</span></div>
     <div>
-      <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
-        <input type="hidden" name="extract_readable" value="false">
-        <input type="checkbox" name="extract_readable" value="true"
-               {% if uf.extract_readable %}checked{% endif %}
-               class="mt-0.5 rounded">
-        <span>
-          Extract full content
-          <span class="block text-xs text-gray-400 font-normal">
-            Download and extract the full article text from the source URL.
-            Disable if the feed already includes full articles.
-          </span>
+      Status: {{ uf.feed.status }}
+      {% if uf.feed.last_error %}
+        — <span class="text-red-500">{{ uf.feed.last_error }}</span>
+      {% endif %}
+    </div>
+    <div class="flex items-center gap-1.5 pt-0.5">
+      {% if uf.feed.is_private %}
+        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
+        <span class="text-gray-400">This feed is isolated to your account and not shared with other users.</span>
+      {% else %}
+        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
+        <span class="text-gray-400">Articles are cached and shared across all subscribers on this server.</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
+      <input type="hidden" name="extract_readable" value="false">
+      <input type="checkbox" name="extract_readable" value="true"
+             {% if uf.extract_readable %}checked{% endif %}
+             class="mt-0.5 rounded">
+      <span>
+        Extract full content
+        <span class="block text-xs text-gray-400 font-normal">
+          Download and extract the full article text from the source URL.
+          Disable if the feed already includes full articles.
         </span>
-      </label>
-    </div>
+      </span>
+    </label>
+  </div>
 
-    <div>
-      <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
-      <select name="fetch_interval_min"
-              class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <option value="">Default</option>
-        {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
-          <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
-            {{ m }} min
-          </option>
-        {% endfor %}
-      </select>
-      <p class="text-xs text-gray-400 mt-1">How often this feed is checked for new articles. "Default" uses the server setting.</p>
-    </div>
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
+    <select name="fetch_interval_min"
+            class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <option value="">Default</option>
+      {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+        <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
+          {{ m }} min
+        </option>
+      {% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">How often this feed is checked for new articles. "Default" uses the server setting.</p>
+  </div>
 
-    <div class="flex items-center gap-3 pt-2">
-      <button type="submit"
-              class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-        Save changes
-      </button>
-      <a href="/settings/feeds" class="text-sm text-gray-500 hover:underline">Cancel</a>
-    </div>
-  </form>
-</div>
+  <div class="flex items-center gap-3 pt-2">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Save changes
+    </button>
+    <a href="/settings/feeds" class="text-sm text-gray-500 hover:underline">Cancel</a>
+  </div>
+</form>
+
 {% endblock %}

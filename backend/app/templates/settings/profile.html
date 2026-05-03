@@ -1,0 +1,110 @@
+{% extends "settings/base.html" %}
+{% set active = "profile" %}
+{% block title %}Profile – Readfine{% endblock %}
+
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Profile</h1>
+
+<div class="space-y-8">
+
+  <!-- Display name -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Display name</h2>
+    {% if name_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Display name updated.
+    </div>
+    {% endif %}
+    {% if name_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ name_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/name" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Name</label>
+        <input type="text" name="display_name" value="{{ user.display_name }}" required
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          Save name
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Email -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Email address</h2>
+    {% if email_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Email address updated.
+    </div>
+    {% endif %}
+    {% if email_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ email_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/email" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">New email</label>
+        <input type="email" name="email" value="{{ user.email }}" required autocomplete="email"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password (to confirm)</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          Update email
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Change password -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Change password</h2>
+    {% if pw_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Password changed successfully.
+    </div>
+    {% endif %}
+    {% if pw_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ pw_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/password" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">New password</label>
+        <input type="password" name="new_password" required minlength="8" autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Confirm new password</label>
+        <input type="password" name="confirm_password" required autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          Change password
+        </button>
+      </div>
+    </form>
+  </section>
+
+</div>
+{% endblock %}

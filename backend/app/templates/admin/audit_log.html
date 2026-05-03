@@ -7,6 +7,7 @@
 
 {% if logs %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
@@ -33,6 +34,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <p class="text-sm text-gray-400">No audit log entries yet.</p>

@@ -9,17 +9,19 @@
 
   document.getElementById('add-condition').addEventListener('click', function () {
     var row = document.createElement('div');
-    row.className = 'flex items-center gap-2 condition-row';
+    row.className = 'flex flex-wrap items-center gap-2 condition-row';
     row.innerHTML =
-      '<select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">' +
-        FIELDS.map(function (f) { return '<option value="' + f + '">' + f.replace(/_/g, ' ') + '</option>'; }).join('') +
-      '</select>' +
-      '<select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">' +
-        OPERATORS.map(function (o) { return '<option value="' + o + '">' + o + '</option>'; }).join('') +
-      '</select>' +
-      '<input type="text" name="cond_value" required class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm" placeholder="value">' +
-      '<input type="hidden" name="cond_position" value="0">' +
-      '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>';
+      '<div class="flex items-center gap-2 shrink-0">' +
+        '<select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm">' +
+          FIELDS.map(function (f) { return '<option value="' + f + '">' + f.replace(/_/g, ' ') + '</option>'; }).join('') +
+        '</select>' +
+        '<select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">' +
+          OPERATORS.map(function (o) { return '<option value="' + o + '">' + o + '</option>'; }).join('') +
+        '</select>' +
+        '<input type="hidden" name="cond_position" value="0">' +
+      '</div>' +
+      '<input type="text" name="cond_value" required class="flex-1 min-w-32 border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="value">' +
+      '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row shrink-0">✕</button>';
     row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); });
     document.getElementById('conditions').appendChild(row);
   });
@@ -27,12 +29,12 @@
   document.getElementById('add-action').addEventListener('click', function () {
     var labelOptions = LABELS.map(function (l) { return '<option value="' + l.id + '">' + l.name + '</option>'; }).join('');
     var row = document.createElement('div');
-    row.className = 'flex items-center gap-2 action-row';
+    row.className = 'flex flex-wrap items-center gap-2 action-row';
     row.innerHTML =
-      '<select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select">' +
+      '<select name="action_type" class="border border-gray-300 rounded px-2 py-1.5 text-sm action-type-select">' +
         ACTION_TYPES.map(function (t) { return '<option value="' + t + '">' + t + '</option>'; }).join('') +
       '</select>' +
-      '<select name="action_value" class="border border-gray-300 rounded px-2 py-1 text-sm hidden label-select">' +
+      '<select name="action_value" class="border border-gray-300 rounded px-2 py-1.5 text-sm hidden label-select">' +
         '<option value="">-- select label --</option>' + labelOptions +
       '</select>' +
       '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>';
@@ -103,6 +105,12 @@
         }
       });
     });
+  }
+
+  // ── scroll to test result if present ────────────────────────────────────
+  var testResult = document.getElementById('test-result');
+  if (testResult && testResult.children.length > 0) {
+    testResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   // ── scope_except toggle ───────────────────────────────────────────────────

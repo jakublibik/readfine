@@ -15,16 +15,22 @@
                 <div class="relative flex-shrink-0 ml-1">
                   <button data-menu-toggle
                           class="px-1.5 py-0.5 text-gray-400 hover:text-gray-600 text-sm leading-none rounded hover:bg-gray-100">···</button>
-                  <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-28">
+                  <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
                     <button hx-get="/settings/folders/{{ uf.folder.id }}/rename-form"
                             hx-target="#folder-header-{{ uf.folder.id }}"
                             hx-swap="outerHTML"
                             class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Rename</button>
-                    <button hx-delete="/settings/folders/{{ uf.folder.id }}"
-                            hx-target="#feeds-list"
-                            hx-swap="outerHTML"
-                            hx-confirm="Delete folder '{{ uf.folder.name }}'? Feeds inside will be moved to no folder."
-                            class="block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
+                    <div class="inline-confirm w-full">
+                      <button type="button" class="inline-confirm-trigger block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
+                      <div class="inline-confirm-ask hidden flex items-center gap-1.5 px-3 py-1.5">
+                        <span class="text-xs text-gray-500">Delete?</span>
+                        <button hx-delete="/settings/folders/{{ uf.folder.id }}"
+                                hx-target="#feeds-list"
+                                hx-swap="outerHTML"
+                                class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
+                        <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               {% endif %}
@@ -46,11 +52,17 @@
           <span class="text-xs text-gray-400">{{ uf.unread_count }} unread</span>
           <a href="/settings/feeds/{{ uf.id }}/edit"
              class="text-xs text-blue-500 hover:underline">Edit</a>
-          <button hx-delete="/settings/feeds/{{ uf.id }}"
-                  hx-target="#feeds-list"
-                  hx-swap="outerHTML"
-                  hx-confirm="Unsubscribe from '{{ uf.custom_title or uf.feed.title }}'?"
-                  class="text-xs text-red-400 hover:text-red-600">Remove</button>
+          <span class="inline-confirm">
+            <button type="button" class="inline-confirm-trigger text-xs text-red-400 hover:text-red-600">Remove</button>
+            <span class="inline-confirm-ask hidden inline-flex items-center gap-1.5">
+              <span class="text-xs text-gray-500">Remove?</span>
+              <button hx-delete="/settings/feeds/{{ uf.id }}"
+                      hx-target="#feeds-list"
+                      hx-swap="outerHTML"
+                      class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
+              <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+            </span>
+          </span>
         </li>
       {% endfor %}
     </ul>
@@ -73,16 +85,22 @@
               <div class="relative flex-shrink-0">
                 <button data-menu-toggle
                         class="px-1 text-gray-400 hover:text-gray-600 text-sm leading-none rounded hover:bg-gray-100">···</button>
-                <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-28">
+                <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
                   <button hx-get="/settings/folders/{{ folder.id }}/rename-form"
                           hx-target="#folder-header-{{ folder.id }}"
                           hx-swap="outerHTML"
                           class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Rename</button>
-                  <button hx-delete="/settings/folders/{{ folder.id }}"
-                          hx-target="#feeds-list"
-                          hx-swap="outerHTML"
-                          hx-confirm="Delete folder '{{ folder.name }}'?"
-                          class="block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
+                  <div class="inline-confirm w-full">
+                    <button type="button" class="inline-confirm-trigger block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
+                    <div class="inline-confirm-ask hidden flex items-center gap-1.5 px-3 py-1.5">
+                      <span class="text-xs text-gray-500">Delete?</span>
+                      <button hx-delete="/settings/folders/{{ folder.id }}"
+                              hx-target="#feeds-list"
+                              hx-swap="outerHTML"
+                              class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
+                      <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </li>

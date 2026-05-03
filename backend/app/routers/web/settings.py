@@ -28,6 +28,7 @@ from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.auth import ApiToken
 from app.models.feed import Folder, UserFeed
+from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
@@ -73,9 +74,20 @@ async def settings_labels_create(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    name = name.strip()
+    existing = await db.scalar(select(Label).where(Label.user_id == user.id, Label.name == name))
+    if existing:
+        labels = await list_labels(user, db)
+        return templates.TemplateResponse(request, "settings/partials/labels_list.html", {
+            "labels": labels,
+            "error": f'A label named "{name}" already exists.',
+        })
     await create_label(user, LabelCreate(name=name, color=color), db)
     labels = await list_labels(user, db)
-    return templates.TemplateResponse(request, "settings/partials/labels_list.html", {"labels": labels})
+    return templates.TemplateResponse(request, "settings/partials/labels_list.html", {
+        "labels": labels,
+        "success": f'Label "{name}" added.',
+    })
 
 
 @router.post("/labels/{label_id}", response_class=HTMLResponse)
@@ -87,6 +99,16 @@ async def settings_label_update(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    name = name.strip()
+    conflict = await db.scalar(
+        select(Label).where(Label.user_id == user.id, Label.name == name, Label.id != label_id)
+    )
+    if conflict:
+        labels = await list_labels(user, db)
+        return templates.TemplateResponse(request, "settings/partials/labels_list.html", {
+            "labels": labels,
+            "error": f'A label named "{name}" already exists.',
+        })
     await update_label(user, label_id, LabelUpdate(name=name, color=color), db)
     labels = await list_labels(user, db)
     return templates.TemplateResponse(request, "settings/partials/labels_list.html", {"labels": labels})
@@ -726,6 +748,109 @@ async def settings_tokens_revoke(
     return templates.TemplateResponse(request, "settings/partials/tokens_list.html", {"tokens": tokens})
 
 
+# ── Profile ───────────────────────────────────────────────────────────────────
+
+@router.get("/profile", response_class=HTMLResponse)
+async def settings_profile(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    return templates.TemplateResponse(request, "settings/profile.html", {"user": user})
+
+
+@router.post("/profile/name", response_class=HTMLResponse)
+async def settings_profile_name(
+    request: Request,
+    display_name: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    display_name = display_name.strip()
+    if not display_name:
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "name_error": "Display name cannot be empty.",
+        })
+    user.display_name = display_name
+    await db.commit()
+    return templates.TemplateResponse(request, "settings/profile.html", {
+        "user": user,
+        "name_saved": True,
+    })
+
+
+@router.post("/profile/email", response_class=HTMLResponse)
+async def settings_profile_email(
+    request: Request,
+    email: str = Form(...),
+    current_password: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    email = email.strip().lower()
+    if not email:
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_error": "Email cannot be empty.",
+        })
+    if not verify_password(current_password, user.password_hash):
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_error": "Current password is incorrect.",
+        })
+    existing = await db.execute(
+        select(User).where(User.email == email, User.id != user.id)
+    )
+    if existing.scalar_one_or_none():
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_error": "This email is already in use.",
+        })
+    user.email = email
+    await db.commit()
+    return templates.TemplateResponse(request, "settings/profile.html", {
+        "user": user,
+        "email_saved": True,
+    })
+
+
+@router.post("/profile/password", response_class=HTMLResponse)
+async def settings_profile_password(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    current = form.get("current_password", "")
+    new_pw = form.get("new_password", "")
+    confirm = form.get("confirm_password", "")
+
+    if not verify_password(current, user.password_hash):
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "pw_error": "Current password is incorrect.",
+        })
+    if len(new_pw) < 8:
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "pw_error": "New password must be at least 8 characters.",
+        })
+    if new_pw != confirm:
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "pw_error": "Passwords do not match.",
+        })
+
+    user.password_hash = hash_password(new_pw)
+    user.password_reset_token_hash = None
+    user.password_reset_expires_at = None
+    await db.commit()
+    return templates.TemplateResponse(request, "settings/profile.html", {
+        "user": user,
+        "pw_saved": True,
+    })
+
+
 # ── Preferences ───────────────────────────────────────────────────────────────
 
 _DENSITY_VALUES = {"compact", "comfortable", "summary"}
@@ -816,45 +941,6 @@ async def settings_preferences_save(
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
         "saved": True,
-    })
-
-
-@router.post("/password", response_class=HTMLResponse)
-async def settings_password_change(
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    form = await request.form()
-    current = form.get("current_password", "")
-    new_pw = form.get("new_password", "")
-    confirm = form.get("confirm_password", "")
-
-    s = await _get_or_create_settings(user, db)
-
-    if not verify_password(current, user.password_hash):
-        return templates.TemplateResponse(request, "settings/preferences.html", {
-            "s": s,
-            "pw_error": "Current password is incorrect.",
-        })
-    if len(new_pw) < 8:
-        return templates.TemplateResponse(request, "settings/preferences.html", {
-            "s": s,
-            "pw_error": "New password must be at least 8 characters.",
-        })
-    if new_pw != confirm:
-        return templates.TemplateResponse(request, "settings/preferences.html", {
-            "s": s,
-            "pw_error": "Passwords do not match.",
-        })
-
-    user.password_hash = hash_password(new_pw)
-    user.password_reset_token_hash = None
-    user.password_reset_expires_at = None
-    await db.commit()
-    return templates.TemplateResponse(request, "settings/preferences.html", {
-        "s": s,
-        "pw_saved": True,
     })
 
 

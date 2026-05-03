@@ -1,26 +1,18 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "filters" %}
 {% block title %}Filters – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-3xl mx-auto px-4 py-8">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-      <h1 class="text-xl font-semibold text-gray-900">Filters</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
-      <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
-      <a href="/settings/filters/new"
-         class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-        New filter
-      </a>
-    </div>
-  </div>
 
-  <div id="filters-list">
-    {% include "settings/partials/filters_list.html" %}
-  </div>
-
-
+{% block settings_content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-xl font-semibold text-gray-900">Filters</h1>
+  <a href="/settings/filters/new"
+     class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+    New filter
+  </a>
 </div>
+
+<div id="filters-list">
+  {% include "settings/partials/filters_list.html" %}
+</div>
+
 {% endblock %}

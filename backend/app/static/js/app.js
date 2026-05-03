@@ -1088,6 +1088,105 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
   });
 })();
 
+// ── Settings mobile nav: preserve horizontal scroll across navigation ─────
+document.addEventListener('click', function (e) {
+  var link = e.target.closest('a[href]');
+  if (!link) return;
+  var href = link.getAttribute('href') || '';
+  if (!href.startsWith('/settings') && !href.startsWith('/admin')) return;
+  var nav = document.querySelector('.sm\\:hidden .overflow-x-auto');
+  if (nav) {
+    try { sessionStorage.setItem('_snav_scroll', nav.scrollLeft); } catch (e) {}
+  }
+});
+
+function _restoreSettingsNavScroll() {
+  var nav = document.querySelector('.sm\\:hidden .overflow-x-auto');
+  if (!nav) return;
+  try {
+    var saved = sessionStorage.getItem('_snav_scroll');
+    if (saved !== null) nav.scrollLeft = parseInt(saved, 10);
+  } catch (e) {}
+}
+document.addEventListener('DOMContentLoaded', _restoreSettingsNavScroll);
+document.body.addEventListener('htmx:afterSettle', _restoreSettingsNavScroll);
+
+// ── Label edit panel expand/collapse ──────────────────────────────────────
+document.addEventListener('click', function (e) {
+  var toggle = e.target.closest('.label-edit-toggle');
+  if (toggle) {
+    var li = toggle.closest('li');
+    var panel = li.querySelector('.label-edit-panel');
+    var isHidden = panel.classList.toggle('hidden');
+    toggle.textContent = isHidden ? 'Edit' : 'Close';
+    return;
+  }
+  var cancel = e.target.closest('.label-edit-cancel');
+  if (cancel) {
+    var li = cancel.closest('li');
+    li.querySelector('.label-edit-panel').classList.add('hidden');
+    li.querySelector('.label-edit-toggle').textContent = 'Edit';
+  }
+});
+
+// ── Inline confirm (replaces native confirm() dialogs) ────────────────────
+document.addEventListener('click', function (e) {
+  var trigger = e.target.closest('.inline-confirm-trigger');
+  if (trigger) {
+    var wrap = trigger.closest('.inline-confirm');
+    trigger.classList.add('hidden');
+    wrap.querySelector('.inline-confirm-ask').classList.remove('hidden');
+    return;
+  }
+  var cancel = e.target.closest('.inline-confirm-cancel');
+  if (cancel) {
+    var wrap = cancel.closest('.inline-confirm');
+    wrap.querySelector('.inline-confirm-ask').classList.add('hidden');
+    wrap.querySelector('.inline-confirm-trigger').classList.remove('hidden');
+  }
+});
+
+// ── Color swatches (label color picker) ───────────────────────────────────
+document.addEventListener('click', function (e) {
+  var swatch = e.target.closest('.color-swatch');
+  if (!swatch) return;
+  e.preventDefault();
+  var group = swatch.closest('.color-swatch-group');
+  group.querySelectorAll('.color-swatch').forEach(function (s) {
+    s.classList.remove('ring-2', 'ring-gray-700', 'ring-offset-1');
+  });
+  swatch.classList.add('ring-2', 'ring-gray-700', 'ring-offset-1');
+  var form = swatch.closest('form');
+  if (!form) return;
+  var input = form.querySelector('input[type="hidden"][name="color"]');
+  if (input) input.value = swatch.dataset.color;
+  var customInput = form.querySelector('.color-custom-input');
+  if (customInput) customInput.value = '';
+  var preview = form.querySelector('.color-custom-preview');
+  if (preview) preview.style.backgroundColor = '';
+});
+
+document.addEventListener('input', function (e) {
+  var customInput = e.target.closest('.color-custom-input');
+  if (!customInput) return;
+  var form = customInput.closest('form');
+  if (!form) return;
+  var val = customInput.value.trim();
+  if (val && !val.startsWith('#')) val = '#' + val;
+  var isValid = /^#[0-9a-fA-F]{6}$/.test(val);
+  var preview = form.querySelector('.color-custom-preview');
+  var hiddenInput = form.querySelector('input[type="hidden"][name="color"]');
+  if (isValid) {
+    form.querySelectorAll('.color-swatch').forEach(function (s) {
+      s.classList.remove('ring-2', 'ring-gray-700', 'ring-offset-1');
+    });
+    if (preview) preview.style.backgroundColor = val;
+    if (hiddenInput) hiddenInput.value = val;
+  } else {
+    if (preview) preview.style.backgroundColor = '';
+  }
+});
+
 // ── Preferences: layout bucket selects ────────────────────────────────────
 (function () {
   var defaults = { small: '1', medium: '2', large: '3' };
