@@ -3,7 +3,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -176,6 +176,7 @@ async def clear_feed_error(db: AsyncSession, feed_id: int) -> Feed | None:
         return None
     feed.status = "active"
     feed.last_error = None
+    feed.fetch_error_count = 0
     await db.commit()
     await db.refresh(feed)
     return feed
@@ -185,6 +186,7 @@ async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     feed = await db.get(Feed, feed_id)
     if not feed or feed.subscriber_count > 0:
         return False
+    await db.execute(delete(Article).where(Article.feed_id == feed_id))
     await db.delete(feed)
     await db.commit()
     return True

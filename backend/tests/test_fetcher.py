@@ -283,7 +283,7 @@ class TestExtractContent:
         entry = AttrDict({"content": [{"value": "full article"}], "summary": "short summary"})
         content, source = _extract_content(entry)
         assert content == "full article"
-        assert source == "feed_content"
+        assert source == "feed_full"
 
     def test_summary_used_when_no_content(self):
         entry = AttrDict({"summary": "summary text"})
@@ -300,13 +300,13 @@ class TestExtractContent:
         entry = AttrDict({"content": [{"value": "first"}]})
         content, source = _extract_content(entry)
         assert content == "first"
-        assert source == "feed_content"
+        assert source == "feed_full"
 
     def test_content_skips_empty_value(self):
         entry = AttrDict({"content": [{"value": ""}, {"value": "second"}]})
         content, source = _extract_content(entry)
         assert content == "second"
-        assert source == "feed_content"
+        assert source == "feed_full"
 
 
 # ── _latest_published ─────────────────────────────────────────────────────────

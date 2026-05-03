@@ -2,12 +2,9 @@
 import asyncio
 import json
 import logging
-import re
 import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
-
-import nh3
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -30,6 +27,7 @@ from app.schemas.article import ArticleStateUpdate
 from app.services.article import get_article, list_articles, mark_scope_read, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
+from app.services.readable_service import apply_readable_result
 
 router = APIRouter(tags=["web-app"])
 templates = Jinja2Templates(directory="app/templates")
@@ -55,11 +53,11 @@ async def _extract_readable_bg(
 
     loop = asyncio.get_running_loop()
     try:
-        content, error, _http_status = await loop.run_in_executor(
+        content, error, http_status = await loop.run_in_executor(
             None, extract_readable, url, auth_user, auth_pass
         )
     except Exception as exc:
-        content, error = None, str(exc)[:200]
+        content, error, http_status = None, str(exc)[:200], None
         logger.warning("readable bg: extraction error for article %d: %s", article_id, exc)
 
     async with async_session_factory() as db:
@@ -68,19 +66,7 @@ async def _extract_readable_bg(
         )).scalar_one_or_none()
         if not article:
             return
-        if content:
-            article.readable_content = content
-            article.readable_status = "success"
-            article.readable_error = None
-            plain = nh3.clean(content, tags=set())
-            words = len(re.findall(r"\w+", plain))
-            article.word_count = words
-            article.estimated_read_min = max(1, round(words / 200))
-        else:
-            article.readable_status = "failed"
-            article.readable_failed_at = datetime.now(timezone.utc)
-            article.readable_error = error
-            article.readable_retries = (article.readable_retries or 0) + 1
+        apply_readable_result(article, content, error, http_status)
         await db.commit()
         logger.info("readable bg: article %d → %s", article_id, article.readable_status)
 
@@ -916,24 +902,11 @@ async def htmx_extract_readable(
             pass
 
     loop = asyncio.get_running_loop()
-    content, error, _http_status = await loop.run_in_executor(
+    content, error, http_status = await loop.run_in_executor(
         None, extract_readable, article.url, auth_user, auth_pass
     )
 
-    if content:
-        article.readable_content = content
-        article.readable_status = "success"
-        article.readable_error = None
-        plain = nh3.clean(content, tags=set())
-        words = len(re.findall(r"\w+", plain))
-        article.word_count = words
-        article.estimated_read_min = max(1, round(words / 200))
-    else:
-        article.readable_status = "failed"
-        article.readable_failed_at = datetime.now(timezone.utc)
-        article.readable_error = error
-        article.readable_retries = (article.readable_retries or 0) + 1
-
+    apply_readable_result(article, content, error, http_status)
     await db.commit()
     await db.refresh(article)
 

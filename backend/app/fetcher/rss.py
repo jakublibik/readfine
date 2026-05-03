@@ -19,7 +19,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
-from app.utils.url_validator import async_validate_feed_url, validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -52,29 +52,14 @@ def _normalize_url(url: str | None) -> str | None:
         return None
 
 
-def _fetch_url_with_ssrf_check(url: str, auth=None) -> str:
-    """Synchronous HTTP fetch with SSRF-safe redirect validation on every hop."""
-    current_url = url
-    with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=_HEADERS) as client:
-        for _ in range(_MAX_REDIRECTS + 1):
-            response = client.get(current_url)
-            if not response.is_redirect:
-                response.raise_for_status()
-                return response.text
-            redirect_url = response.headers.get("location", "")
-            if redirect_url and not redirect_url.startswith(("http://", "https://")):
-                from urllib.parse import urljoin
-                redirect_url = urljoin(current_url, redirect_url)
-            validate_feed_url(redirect_url)
-            current_url = redirect_url
-    raise httpx.TooManyRedirects(f"Too many redirects (max {_MAX_REDIRECTS})", request=response.request)
-
 
 async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
-    content = await loop.run_in_executor(None, _fetch_url_with_ssrf_check, url, None)
+    content = await loop.run_in_executor(
+        None, fetch_url_with_ssrf_check, url, None, _TIMEOUT, _HEADERS
+    )
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
     if parsed.bozo and not parsed.entries and not parsed.feed:
@@ -95,7 +80,9 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
             auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
         loop = asyncio.get_running_loop()
-        content = await loop.run_in_executor(None, _fetch_url_with_ssrf_check, feed_url, auth)
+        content = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
+        )
         parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
         if parsed.bozo and not parsed.entries:
@@ -342,7 +329,7 @@ def _extract_content(entry) -> tuple[str | None, str | None]:
     if entry.get("content"):
         for c in entry.content:
             if c.get("value"):
-                return c.value, "feed_content"
+                return c.value, "feed_full"
     if entry.get("summary"):
         return entry.summary, "feed_summary"
     return None, None

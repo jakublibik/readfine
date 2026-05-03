@@ -169,6 +169,43 @@ def _sanitize(html: str) -> str:
                      link_rel="noopener noreferrer")
 
 
+def apply_readable_result(
+    article: Article,
+    content: Optional[str],
+    error: Optional[str],
+    http_status: Optional[int],
+) -> bool:
+    """Apply extraction result to article fields. Returns True if HTTP 403."""
+    if content:
+        article.readable_content = content
+        article.readable_status = "success"
+        article.readable_error = None
+        plain = nh3.clean(content, tags=set())
+        words = len(re.findall(r"\w+", plain))
+        article.word_count = words
+        article.estimated_read_min = max(1, round(words / 200))
+        return False
+
+    article.readable_error = error
+    is_4xx = http_status is not None and 400 <= http_status < 500
+    is_403 = http_status == 403
+    if is_4xx:
+        article.readable_status = "failed"
+        article.readable_failed_at = datetime.now(timezone.utc)
+        article.readable_next_retry_at = None
+    else:
+        retries = (article.readable_retries or 0) + 1
+        article.readable_retries = retries
+        if retries >= _MAX_RETRIES:
+            article.readable_status = "failed"
+            article.readable_failed_at = datetime.now(timezone.utc)
+            article.readable_next_retry_at = None
+        else:
+            delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
+    return is_403
+
+
 def extract_readable(url: str, auth_user: Optional[str] = None,
                      auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int]]:
     """
@@ -267,40 +304,15 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
+        is_403 = apply_readable_result(article, content, error, http_status)
         if content:
-            article.readable_content = content
-            article.readable_status = "success"
-            article.readable_error = None
-            plain = nh3.clean(content, tags=set())
-            words = len(re.findall(r"\w+", plain))
-            article.word_count = words
-            article.estimated_read_min = max(1, round(words / 200))
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
-        else:
-            article.readable_error = error
-            is_4xx = http_status is not None and 400 <= http_status < 500
-            is_403 = http_status == 403
-            if is_4xx:
-                article.readable_status = "failed"
-                article.readable_failed_at = datetime.now(timezone.utc)
-                article.readable_next_retry_at = None
-            else:
-                retries = (article.readable_retries or 0) + 1
-                article.readable_retries = retries
-                if retries >= _MAX_RETRIES:
-                    article.readable_status = "failed"
-                    article.readable_failed_at = datetime.now(timezone.utc)
-                    article.readable_next_retry_at = None
-                else:
-                    delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-                    article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
-
-            if is_403:
-                streak = feed_403_streak.get(article.feed_id, 0) + 1
-                feed_403_streak[article.feed_id] = streak
-                feeds_with_403.add(article.feed_id)
-                if streak >= _CONSECUTIVE_403_THRESHOLD:
-                    feeds_to_disable.add(article.feed_id)
+        elif is_403:
+            streak = feed_403_streak.get(article.feed_id, 0) + 1
+            feed_403_streak[article.feed_id] = streak
+            feeds_with_403.add(article.feed_id)
+            if streak >= _CONSECUTIVE_403_THRESHOLD:
+                feeds_to_disable.add(article.feed_id)
 
         processed += 1
 

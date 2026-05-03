@@ -20,7 +20,7 @@ from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
 from app.utils.parsing import safe_int
-from app.utils.url_validator import async_validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 logger = logging.getLogger(__name__)
 
@@ -178,17 +178,20 @@ async def settings_feeds_test(
     }
     has_auth = bool(auth_user and auth_pass)
     auth = (auth_user, auth_pass) if has_auth else None
+    loop = asyncio.get_running_loop()
 
     async def _fetch(with_auth) -> tuple[str | None, str | None]:
-        """Returns (content, error_string)."""
+        """Returns (content, error_string). Uses SSRF-safe redirect loop."""
+        fetch_auth = auth if with_auth else None
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, max_redirects=5) as client:
-                response = await client.get(url, headers=_headers, auth=auth if with_auth else None)
-                response.raise_for_status()
-                return response.text, None
+            content = await loop.run_in_executor(
+                None,
+                lambda: fetch_url_with_ssrf_check(url, auth=fetch_auth, timeout=15, headers=_headers),
+            )
+            return content, None
         except httpx.HTTPStatusError as e:
             return None, f"HTTP {e.response.status_code}: {e.response.reason_phrase}"
-        except httpx.RequestError as e:
+        except (httpx.RequestError, ValueError) as e:
             return None, f"Connection error: {e}"
 
     # Always fetch with the configured auth (or no auth if none provided)
@@ -214,7 +217,6 @@ async def settings_feeds_test(
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": f"{error} — credentials rejected"})
 
-    loop = asyncio.get_running_loop()
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
     if parsed.bozo and not parsed.entries and not parsed.feed:

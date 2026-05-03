@@ -2,8 +2,9 @@
 import asyncio
 import ipaddress
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
+import httpx
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 5
@@ -48,3 +49,28 @@ async def async_validate_feed_url(url: str) -> None:
     """Async wrapper around validate_feed_url — offloads blocking DNS lookup to executor."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, validate_feed_url, url)
+
+
+def fetch_url_with_ssrf_check(
+    url: str,
+    auth=None,
+    timeout: int = 30,
+    headers: dict | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> str:
+    """Synchronous HTTP fetch with SSRF-safe redirect validation on every hop."""
+    current_url = url
+    with httpx.Client(timeout=timeout, follow_redirects=False, auth=auth, headers=headers) as client:
+        for _ in range(max_redirects + 1):
+            response = client.get(current_url)
+            if not response.is_redirect:
+                response.raise_for_status()
+                return response.text
+            redirect_url = response.headers.get("location", "")
+            if redirect_url and not redirect_url.startswith(("http://", "https://")):
+                redirect_url = urljoin(current_url, redirect_url)
+            validate_feed_url(redirect_url)
+            current_url = redirect_url
+    raise httpx.TooManyRedirects(
+        f"Too many redirects (max {max_redirects})", request=response.request
+    )

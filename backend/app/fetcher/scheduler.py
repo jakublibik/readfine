@@ -8,7 +8,7 @@ from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, fetch_feed
-from app.models.feed import Feed
+from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -33,9 +33,8 @@ async def _fetch_due_feeds() -> None:
         row = result.one_or_none()
         default_interval = (row[0] if row else None) or 60
         min_interval = (row[1] if row else None) or 15
-        purge_after_days = (row[2] if row else None)
+        global_purge_days = (row[2] if row else None)
         now = datetime.now(timezone.utc)
-        published_cutoff = (now - timedelta(days=purge_after_days)) if purge_after_days else None
 
         # active: fetch when due; error: tiered backoff; paused/disabled: skip
         error_backoff_min = max(15, default_interval * 2)
@@ -71,6 +70,23 @@ async def _fetch_due_feeds() -> None:
         )
         feeds = due_feeds.scalars().all()
 
+        # Per-feed published_cutoff: MAX(COALESCE(user_feed.purge_after_days, global))
+        # Matches the purge service logic so fetcher and purge stay consistent.
+        cutoff_by_feed: dict[int, datetime | None] = {}
+        if feeds:
+            days_rows = await session.execute(
+                select(
+                    UserFeed.feed_id,
+                    func.max(func.coalesce(UserFeed.purge_after_days, global_purge_days)).label("effective_days"),
+                )
+                .where(UserFeed.feed_id.in_([f.id for f in feeds]))
+                .group_by(UserFeed.feed_id)
+            )
+            for r in days_rows:
+                cutoff_by_feed[r.feed_id] = (
+                    now - timedelta(days=r.effective_days) if r.effective_days is not None else None
+                )
+
     if not feeds:
         return
 
@@ -87,7 +103,10 @@ async def _fetch_due_feeds() -> None:
             async with db.async_session_factory() as session:
                 feed_in_session = await session.get(Feed, feed_id)
                 if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
-                    await fetch_feed(feed_in_session, session, published_cutoff=published_cutoff)
+                    await fetch_feed(
+                        feed_in_session, session,
+                        published_cutoff=cutoff_by_feed.get(feed_id),
+                    )
 
     await asyncio.gather(*[_fetch_one(feed.id) for feed in feeds], return_exceptions=True)
 
