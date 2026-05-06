@@ -1,3 +1,16 @@
+// ── Dark mode: system preference live listener ────────────────────────────
+(function () {
+  var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+  if (!mq) return;
+  mq.addEventListener('change', function () {
+    var cs;
+    try { cs = localStorage.getItem('colorScheme'); } catch(e) {}
+    if ((cs || 'system') === 'system') {
+      document.documentElement.classList.toggle('dark', mq.matches);
+    }
+  });
+})();
+
 // ── HTMX configRequest: inject dynamic params without eval ────────────────
 document.body.addEventListener('htmx:configRequest', function (e) {
   var elt = e.detail.elt;

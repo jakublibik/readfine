@@ -20,4 +20,12 @@
     if (resolvedMode === 'hideable') resolvedMode = 'hideable-up';
     document.documentElement.dataset.sidebarMode = resolvedMode;
   }
+
+  // Dark mode: apply before first paint
+  var _cs;
+  try { _cs = localStorage.getItem('colorScheme'); } catch (e) {}
+  _cs = _cs || 'system';
+  if (_cs === 'dark' || (_cs === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.documentElement.classList.add('dark');
+  }
 })();

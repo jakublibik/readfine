@@ -172,11 +172,29 @@
     </div>
   </section>
 
-<!-- Layout per bucket (per-device, stored in localStorage) -->
+<!-- Device-specific settings (stored in localStorage) -->
 <section class="mt-8 pt-6 border-t border-gray-200">
-  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Layout per bucket</h2>
-  <p class="text-xs text-gray-500 mb-4">Saved for this device only.</p>
+  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">This device</h2>
+  <p class="text-xs text-gray-500 mb-4">Saved in this browser only.</p>
   <div class="space-y-4">
+
+    <div class="flex items-center justify-between">
+      <label class="text-sm font-medium text-gray-700">Color scheme</label>
+      <div class="flex rounded border border-gray-300 overflow-hidden text-sm">
+        {% for val, lbl in [("light", "Light"), ("system", "System"), ("dark", "Dark")] %}
+        <label class="relative">
+          <input type="radio" name="color_scheme_device" value="{{ val }}"
+                 class="sr-only peer"
+                 onchange="applyColorScheme('{{ val }}')">
+          <span class="block px-3 py-1.5 cursor-pointer select-none
+                       peer-checked:bg-blue-600 peer-checked:text-white
+                       hover:bg-gray-50 text-gray-700 border-l border-gray-300 first:border-l-0">
+            {{ lbl }}
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
 
     <div class="flex items-center justify-between">
       <div>
@@ -234,4 +252,28 @@
 
 </form>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var cs;
+  try { cs = localStorage.getItem('colorScheme'); } catch(e) {}
+  cs = cs || 'system';
+  var radio = document.querySelector('input[name="color_scheme_device"][value="' + cs + '"]');
+  if (radio) radio.checked = true;
+})();
+
+function applyColorScheme(scheme) {
+  try { localStorage.setItem('colorScheme', scheme); } catch(e) {}
+  if (scheme === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else if (scheme === 'light') {
+    document.documentElement.classList.remove('dark');
+  } else {
+    document.documentElement.classList.toggle('dark',
+      !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
+  }
+}
+</script>
 {% endblock %}
