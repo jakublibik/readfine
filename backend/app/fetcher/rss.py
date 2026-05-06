@@ -205,6 +205,9 @@ async def _save_articles(
         content, content_source = _extract_content(entry)
         if content:
             content = nh3.clean(content)
+            if article_url:
+                from app.utils.parsing import rewrite_relative_urls
+                content = rewrite_relative_urls(content, article_url)
 
         word_count, estimated_read_min = _reading_stats(content)
         pub = entry.get("published_parsed") or entry.get("updated_parsed")

@@ -423,14 +423,14 @@ class TestFetchFeedErrorHandling:
     async def test_fetch_error_returns_zero(self):
         feed = _make_feed()
         session = _make_session()
-        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
             result = await fetch_feed(feed, session)
         assert result == 0
 
     async def test_fetch_error_adds_fetchlog(self):
         feed = _make_feed()
         session = _make_session()
-        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=ValueError("parse error")):
             await fetch_feed(feed, session)
         assert session.add.called
         added = session.add.call_args[0][0]
@@ -445,7 +445,7 @@ class TestFetchFeedErrorHandling:
         request = httpx.Request("GET", "https://example.com/feed.xml")
         response = httpx.Response(404, request=request)
         exc = httpx.HTTPStatusError("404", request=request, response=response)
-        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=exc):
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=exc):
             await fetch_feed(feed, session)
         added = session.add.call_args[0][0]
         assert added.http_status == 404
@@ -453,7 +453,7 @@ class TestFetchFeedErrorHandling:
     async def test_fetch_error_rolls_back_then_commits(self):
         feed = _make_feed()
         session = _make_session()
-        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError("x")):
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=ValueError("x")):
             await fetch_feed(feed, session)
         session.rollback.assert_called_once()
         session.commit.assert_called_once()
@@ -462,7 +462,7 @@ class TestFetchFeedErrorHandling:
         feed = _make_feed()
         session = _make_session()
         long_msg = "e" * 600
-        with patch("app.fetcher.rss._fetch_url_with_ssrf_check", side_effect=ValueError(long_msg)):
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=ValueError(long_msg)):
             await fetch_feed(feed, session)
         added = session.add.call_args[0][0]
         assert len(added.error_message) <= 500
@@ -482,7 +482,7 @@ class TestFetchFeedSuccessReset:
             "feed": feedparser.FeedParserDict({}),
         })
         with (
-            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
             patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
         ):
             await fetch_feed(feed, session)
@@ -500,7 +500,7 @@ class TestFetchFeedSuccessReset:
             "feed": feedparser.FeedParserDict({}),
         })
         with (
-            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
             patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
         ):
             await fetch_feed(feed, session)
@@ -518,7 +518,7 @@ class TestFetchFeedSuccessReset:
             "feed": feedparser.FeedParserDict({}),
         })
         with (
-            patch("app.fetcher.rss._fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
             patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
         ):
             await fetch_feed(feed, session)

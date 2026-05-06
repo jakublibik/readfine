@@ -227,7 +227,8 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    return _sanitize(content), None, None
+    from app.utils.parsing import rewrite_relative_urls
+    return rewrite_relative_urls(_sanitize(content), url), None, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
