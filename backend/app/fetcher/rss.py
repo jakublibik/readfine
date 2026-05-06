@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -253,6 +254,79 @@ async def _save_articles(
         await maybe_disable_readable_for_feed(feed.id, db)
 
     return len(new_articles)
+
+
+async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
+    """Post-gather dedup: marks cross-feed duplicate articles as read.
+
+    Catches race conditions where _dedup_cross_feed (per-feed, pre-commit) couldn't see
+    the other feed's uncommitted articles. Scoped to articles fetched since `since`.
+    Returns number of (user, article) pairs marked as read.
+    """
+    ArticleB = aliased(Article)
+    UserFeedB = aliased(UserFeed)
+
+    dup_exists = (
+        select(literal(1))
+        .select_from(ArticleB)
+        .join(UserFeedB, UserFeedB.feed_id == ArticleB.feed_id)
+        .where(
+            UserFeedB.user_id == UserFeed.user_id,
+            ArticleB.url_normalized == Article.url_normalized,
+            ArticleB.id != Article.id,
+        )
+        .correlate(UserFeed, Article)
+        .exists()
+    )
+
+    rows = (await db.execute(
+        select(UserFeed.user_id, Article.id.label("article_id"), Article.feed_id)
+        .select_from(Article)
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .where(
+            Article.url_normalized.is_not(None),
+            Article.fetched_at >= since,
+            dup_exists,
+        )
+    )).all()
+
+    if not rows:
+        return 0
+
+    await db.execute(
+        pg_insert(UserArticleState)
+        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .on_conflict_do_nothing()
+    )
+
+    by_feed: dict[int, list[int]] = defaultdict(list)
+    for r in rows:
+        by_feed[r.feed_id].append(r.user_id)
+
+    for feed_id, user_ids in by_feed.items():
+        unread_subq = (
+            select(func.count())
+            .select_from(Article)
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == UserFeed.user_id),
+            )
+            .where(
+                Article.feed_id == feed_id,
+                (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+            )
+            .correlate(UserFeed)
+            .scalar_subquery()
+        )
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.user_id.in_(user_ids), UserFeed.feed_id == feed_id)
+            .values(unread_count=unread_subq)
+        )
+
+    await db.commit()
+    return len(rows)
 
 
 async def _dedup_cross_feed(

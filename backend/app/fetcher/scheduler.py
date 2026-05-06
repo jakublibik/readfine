@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
-from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, fetch_feed
+from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
 
@@ -108,7 +108,15 @@ async def _fetch_due_feeds() -> None:
                         published_cutoff=cutoff_by_feed.get(feed_id),
                     )
 
+    fetch_start = datetime.now(timezone.utc)
     await asyncio.gather(*[_fetch_one(feed.id) for feed in feeds], return_exceptions=True)
+
+    # Post-gather dedup: catches race conditions where two concurrent sessions couldn't
+    # see each other's uncommitted articles during per-feed _dedup_cross_feed.
+    async with db.async_session_factory() as session:
+        n = await dedup_cross_feed_global(fetch_start, session)
+        if n:
+            logger.info("Post-gather dedup: marked %d (user, article) pairs as read", n)
 
 
 async def _process_readable() -> None:

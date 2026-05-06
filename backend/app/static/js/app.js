@@ -364,7 +364,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
           titleEl.classList.remove('font-bold', 'text-gray-900');
           titleEl.classList.add('font-medium', 'text-gray-800');
         }
-        htmx.ajax('POST', '/htmx/articles/' + id + '/read', { swap: 'none' });
+        htmx.ajax('POST', '/htmx/articles/' + id + '/set-read?state=true', { swap: 'none' });
         if (window._titleBarCountType === 'unread') {
           var badge = document.getElementById('mobile-title-count');
           if (badge && !badge.classList.contains('hidden')) {
