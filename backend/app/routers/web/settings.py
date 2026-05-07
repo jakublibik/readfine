@@ -21,6 +21,7 @@ from app.rate_limit import limiter
 from app.utils.crypto import encrypt
 from app.utils.parsing import safe_int
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.feed_detect import detect_feeds
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,7 @@ async def settings_feeds(
         "folders": folders,
         "error": None,
         "subscribe_url": "",
+        "detected_feeds": [],
     })
 
 
@@ -249,6 +251,7 @@ async def settings_feeds_subscribe(
 
     user_feeds, folders = await _get_feeds_context(user, db)
     error = None
+    detected_feeds = []
     try:
         await subscribe(user=user, url=url, folder_id=folder_id,
                         custom_title=custom_title, fetch_auth_user=fetch_auth_user,
@@ -256,6 +259,12 @@ async def settings_feeds_subscribe(
         return RedirectResponse("/settings/feeds", status_code=303)
     except ValueError as e:
         error = str(e)
+        # Try to detect RSS feeds linked from the page (only for parse/fetch failures)
+        if "valid RSS" in error or "valid feed" in error or "Not a valid" in error or "parse" in error.lower():
+            try:
+                detected_feeds = await detect_feeds(url)
+            except Exception:
+                pass
     except Exception as e:
         logger.error("Unexpected error during feed subscribe (url=%s): %s", url, e)
         error = "Could not subscribe to feed. Please check the URL and try again."
@@ -265,8 +274,9 @@ async def settings_feeds_subscribe(
     return templates.TemplateResponse(request, "settings/feeds.html", {
         "user_feeds": user_feeds,
         "folders": folders,
-        "error": error,
+        "error": error if not detected_feeds else None,
         "subscribe_url": url,
+        "detected_feeds": detected_feeds,
     })
 
 

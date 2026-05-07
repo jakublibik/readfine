@@ -8,8 +8,32 @@
 <!-- Subscribe form -->
 <div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded">
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Subscribe to a feed</h2>
-  {% if error %}
-  <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+  {% if detected_feeds %}
+  <div class="mb-3 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-sm">
+    <p class="text-amber-800 font-medium mb-2">No RSS feed found at this URL. Found {{ detected_feeds | length }} feed{{ 's' if detected_feeds | length > 1 }} on the page:</p>
+    <ul class="space-y-1.5">
+      {% for feed in detected_feeds %}
+      <li>
+        <button type="button"
+                onclick="document.getElementById('feed-url-input').value = {{ feed.url | tojson }}; document.getElementById('feed-url-input').focus();"
+                class="text-left text-blue-700 hover:underline text-xs font-mono break-all">
+          {{ feed.title or feed.url }}
+        </button>
+        {% if feed.title %}
+        <div class="text-gray-400 text-xs font-mono">{{ feed.url }}</div>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="text-xs text-gray-400 mt-2">Click a feed to select it, then click Subscribe.</p>
+  </div>
+  {% elif error %}
+  <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+    {{ error }}
+    {% if "Not a valid" in error or "valid RSS" in error %}
+    <div class="mt-1 text-gray-400">Web page scraping is not yet supported.</div>
+    {% endif %}
+  </div>
   {% endif %}
   <form id="feed-subscribe-form" method="POST" action="/settings/feeds" hx-boost="true" class="space-y-3">
     <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
