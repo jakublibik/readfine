@@ -184,8 +184,7 @@
         {% for val, lbl in [("light", "Light"), ("system", "System"), ("dark", "Dark")] %}
         <label class="relative">
           <input type="radio" name="color_scheme_device" value="{{ val }}"
-                 class="sr-only peer"
-                 onchange="applyColorScheme('{{ val }}')">
+                 class="sr-only peer">
           <span class="block px-3 py-1.5 cursor-pointer select-none
                        peer-checked:bg-blue-600 peer-checked:text-white
                        hover:bg-gray-50 text-gray-700 border-l border-gray-300 first:border-l-0">
@@ -275,5 +274,8 @@ function applyColorScheme(scheme) {
       !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
   }
 }
+document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(el) {
+  el.addEventListener('change', function() { applyColorScheme(this.value); });
+});
 </script>
 {% endblock %}
