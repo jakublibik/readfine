@@ -1249,20 +1249,23 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     _syncMobileQuicklink();
   });
 
-  function _collapsibleSidebarFadeOut() {
-    var sb = document.getElementById('sidebar');
-    if (sb) { sb.style.transition = 'opacity 100ms ease'; sb.style.opacity = '0'; }
-  }
-
   function openSidebarOverlay() {
+    if (isCollapsible()) {
+      var sb = document.getElementById('sidebar');
+      if (sb) { sb.style.transition = 'none'; sb.style.opacity = '0'; }
+    }
     document.documentElement.classList.add('mobile-sidebar-open');
     history.pushState({ mobileSidebarOpen: true }, '');
-    if (isCollapsible()) { _collapsibleSidebarFadeOut(); htmx.trigger(document.body, 'sidebarRefresh'); }
+    if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   function closeSidebarOverlay() {
+    if (isCollapsible()) {
+      var sb = document.getElementById('sidebar');
+      if (sb) { sb.style.transition = 'none'; sb.style.opacity = '0'; }
+    }
     document.documentElement.classList.remove('mobile-sidebar-open');
-    if (isCollapsible()) { _collapsibleSidebarFadeOut(); htmx.trigger(document.body, 'sidebarRefresh'); }
+    if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   // Intercept toggle-sidebar-pin on mobile: open/close overlay instead of pinning

@@ -36,19 +36,15 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Fáze 7 – různé: content source label, folder UniqueConstraint, fetch_auth_pass SecretStr
 - Post-MVP: dark mode, layout přepínač (2/3-panel), zobrazení labelů na článcích, HTTP auth při editaci feedu
 
-## Odložené nálezy (post-MVP nebo ve volném prostoru)
-1. JWT lifetime 15 min + refresh token
-2. Filter scope S2: scope_include/scope_except → JSONB
-3. /feeds/detect endpoint (auto-detekce feed URL ze stránky)
-
-## Post-MVP TODO
+## TODO
 - limit na počet článků při prvním stažení
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
 - **/feeds/detect**: auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
-
-## Post-MVP nápady
-- **Plošné testové pokrytí**: Po MVP zvážit rozšíření testů nad rámec kritických částí.
+- Filter scope S2: scope_include/scope_except → JSONB
+- Plošné testové pokrytí: rozšíření testů nad rámec kritických částí
+- **Web scraping**: fáze — sledování libovolných webových stránek bez RSS
+- **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
 
 ## Testování
 - Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů

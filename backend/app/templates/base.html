@@ -55,11 +55,9 @@
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
         width: 15rem; z-index: 30; overflow-y: auto;
         transform: translateX(-100%); visibility: hidden; pointer-events: none;
-        transition: transform 250ms ease, visibility 0s linear 250ms;
       }
       html[data-bucket="small"]:not([data-sidebar-mode="collapsible"]).mobile-sidebar-open #sidebar {
         transform: translateX(0); visibility: visible; pointer-events: auto;
-        transition: transform 250ms ease, visibility 0s linear 0s;
       }
 
       /* Collapsible: sidebar visible as rail */
