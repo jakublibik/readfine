@@ -71,7 +71,7 @@ document.body.addEventListener('htmx:configRequest', function (e) {
     if (bucket === 'small') {
       var mode;
       try { mode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
-      mode = mode || 'collapsible';
+      mode = mode || 'hideable-up';
       if (mode === 'hideable') {
         mode = 'hideable-up';
         try { localStorage.setItem('sidebar_mode_small', 'hideable-up'); } catch (e) {}
