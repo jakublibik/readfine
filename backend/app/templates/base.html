@@ -46,20 +46,32 @@
       html[data-bucket="small"] #article-list .text-xs { font-size: 0.8125rem; }
       html[data-bucket="small"] #article-detail article { padding-left: 0.75rem; padding-right: 0.75rem; }
       html[data-bucket="small"] #inline-article-detail-content article { padding-left: 0.75rem; padding-right: 0.75rem; }
-      html[data-bucket="small"] #sidebar { display: none; }
       html[data-bucket="small"] #article-list-resizer { display: none; }
       html[data-bucket="small"] #article-detail { display: none; }
       html[data-bucket="small"] #article-list { flex: 1 !important; width: auto !important; }
 
-      /* Collapsible: sidebar visible as rail — must be BEFORE overlay rule */
+      /* Hideable modes: sidebar lives off-screen and slides in — no display:none flash */
+      html[data-bucket="small"]:not([data-sidebar-mode="collapsible"]) #sidebar {
+        display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
+        width: 15rem; z-index: 30; overflow-y: auto;
+        transform: translateX(-100%); visibility: hidden; pointer-events: none;
+        transition: transform 250ms ease, visibility 0s linear 250ms;
+      }
+      html[data-bucket="small"]:not([data-sidebar-mode="collapsible"]).mobile-sidebar-open #sidebar {
+        transform: translateX(0); visibility: visible; pointer-events: auto;
+        transition: transform 250ms ease, visibility 0s linear 0s;
+      }
+
+      /* Collapsible: sidebar visible as rail */
       html[data-bucket="small"][data-sidebar-mode="collapsible"] #sidebar { display: block; width: 3rem !important; }
       #mobile-sidebar-strip { display: none; }
 
-      /* Sidebar overlay — must be AFTER collapsible rule to win on equal specificity */
-      html[data-bucket="small"].mobile-sidebar-open #sidebar {
+      /* Collapsible: overlay on open */
+      html[data-bucket="small"][data-sidebar-mode="collapsible"].mobile-sidebar-open #sidebar {
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
         width: 15rem !important; z-index: 30; overflow-y: auto;
       }
+
       #mobile-sidebar-backdrop { display: none; }
       html[data-bucket="small"].mobile-sidebar-open #mobile-sidebar-backdrop {
         display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0,0,0,0.4);

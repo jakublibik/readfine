@@ -1028,7 +1028,14 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
 // HTMX settle can re-apply server classes and drop client-added "collapsed".
 // Re-apply once more after settle to keep sections collapsed after sidebar refresh.
 document.body.addEventListener('htmx:afterSettle', function (e) {
-  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse(false);
+  if (!(e.detail.target && e.detail.target.id === 'sidebar')) return;
+  restoreSidebarCollapse(false);
+  var sb = e.detail.target;
+  if (sb.style.opacity === '0') {
+    sb.style.transition = 'opacity 150ms ease';
+    sb.style.opacity = '1';
+    setTimeout(function () { sb.style.transition = ''; sb.style.opacity = ''; }, 160);
+  }
 });
 
 restoreSidebarCollapse(false);
@@ -1242,17 +1249,20 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     _syncMobileQuicklink();
   });
 
+  function _collapsibleSidebarFadeOut() {
+    var sb = document.getElementById('sidebar');
+    if (sb) { sb.style.transition = 'opacity 100ms ease'; sb.style.opacity = '0'; }
+  }
+
   function openSidebarOverlay() {
     document.documentElement.classList.add('mobile-sidebar-open');
     history.pushState({ mobileSidebarOpen: true }, '');
-    // Collapsible: reload sidebar with full (pinned) template
-    if (isCollapsible()) htmx.trigger(document.body, 'sidebarRefresh');
+    if (isCollapsible()) { _collapsibleSidebarFadeOut(); htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   function closeSidebarOverlay() {
     document.documentElement.classList.remove('mobile-sidebar-open');
-    // Collapsible: reload sidebar back to rail template
-    if (isCollapsible()) htmx.trigger(document.body, 'sidebarRefresh');
+    if (isCollapsible()) { _collapsibleSidebarFadeOut(); htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   // Intercept toggle-sidebar-pin on mobile: open/close overlay instead of pinning
