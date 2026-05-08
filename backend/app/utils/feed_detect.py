@@ -15,7 +15,6 @@ _FEED_MIME_TYPES = {
     "application/xml",
 }
 _COMMON_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/feed.xml", "/feeds/posts/default"]
-_FEED_MARKERS = ("<rss", "<feed", "<atom:feed", "<?xml")
 _FETCH_HEADERS = {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"}
 
 _YT_CHANNEL_RE = re.compile(r"youtube\.com/channel/(UC[\w-]+)")
@@ -28,6 +27,22 @@ def _youtube_feed_url(url: str) -> str | None:
     if m := _YT_USER_RE.search(url):
         return f"https://www.youtube.com/feeds/videos.xml?user={m.group(1)}"
     return None
+
+
+async def _validate_feed_url(url: str) -> bool:
+    """Fetch a candidate feed URL and verify feedparser can parse it."""
+    import feedparser
+    try:
+        await async_validate_feed_url(url)
+        loop = asyncio.get_running_loop()
+        body = await loop.run_in_executor(
+            None,
+            lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=10),
+        )
+        parsed = feedparser.parse(body)
+        return bool(parsed.entries)
+    except Exception:
+        return False
 
 
 async def detect_feeds(url: str) -> list[dict]:
@@ -68,24 +83,20 @@ async def detect_feeds(url: str) -> list[dict]:
         pass
 
     if results:
-        return _dedup(results)
+        # Validate candidates in parallel — only keep reachable feeds
+        validations = await asyncio.gather(*[_validate_feed_url(r["url"]) for r in results])
+        validated = [r for r, ok in zip(results, validations) if ok]
+        if validated:
+            return _dedup(validated)
+        results = []  # all candidates failed — don't carry them into the fallback
 
     # Fallback: try common paths in parallel
     origin = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
 
     async def _try_path(path: str) -> dict | None:
         candidate = origin + path
-        try:
-            await async_validate_feed_url(candidate)
-            _loop = asyncio.get_running_loop()
-            body = await _loop.run_in_executor(
-                None,
-                lambda: fetch_url_with_ssrf_check(candidate, headers=_FETCH_HEADERS, timeout=10),
-            )
-            if any(marker in body[:500] for marker in _FEED_MARKERS):
-                return {"url": candidate, "title": None}
-        except Exception:
-            pass
+        if await _validate_feed_url(candidate):
+            return {"url": candidate, "title": None}
         return None
 
     found = await asyncio.gather(*[_try_path(p) for p in _COMMON_PATHS])

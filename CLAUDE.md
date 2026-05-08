@@ -44,6 +44,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Filter scope S2: scope_include/scope_except → JSONB
 - Plošné testové pokrytí: rozšíření testů nad rámec kritických částí
 - **Web scraping**: fáze — sledování libovolných webových stránek bez RSS
+- **OPML export scrape feedů**: OPML standard CSS selektory nepodporuje — zvážit vlastní rozšíření formátu pro round-trip export/import scrape feedů
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
 
 ## Testování

@@ -46,10 +46,81 @@ def _normalize_url(url: str | None) -> str | None:
         return None
 
 
-def extract_article_links(html: str, selector: str, feed_url: str) -> list[tuple[str, str]]:
-    """Apply CSS selector, return (url, title) pairs. Handles both <a> and container elements."""
+def _extract_title(elem, a_tag, fallback_url: str) -> str:
+    # 1. Heading inside container
+    heading = elem.find(["h1", "h2", "h3", "h4"])
+    if heading:
+        text = heading.get_text(strip=True)
+        if text:
+            return text[:500]
+    # 2. Text of the <a> tag itself
+    a_text = a_tag.get_text(strip=True)
+    if a_text:
+        return a_text[:500]
+    # 3. title / aria-label attributes
+    for attr in ("title", "aria-label"):
+        val = (a_tag.get(attr) or elem.get(attr) or "").strip()
+        if val:
+            return val[:500]
+    # 4. alt text of first image inside the link
+    img = a_tag.find("img")
+    if img:
+        alt = (img.get("alt") or "").strip()
+        if alt:
+            return alt[:500]
+    return fallback_url
+
+
+def _extract_published_at(elem) -> datetime | None:
+    time_tag = elem.find("time", attrs={"datetime": True})
+    if not time_tag:
+        return None
+    raw = (time_tag.get("datetime") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def _extract_excerpt(elem, title_text: str) -> str | None:
+    for p in elem.find_all("p"):
+        text = p.get_text(strip=True)
+        if len(text) < 30:
+            continue
+        if title_text and text.lower() == title_text.lower():
+            continue
+        if text.count("|") >= 2:
+            continue
+        return text[:500]
+    return None
+
+
+_CONTAINER_TAGS = {"article", "li", "div", "section"}
+
+
+def _metadata_context(elem):
+    """Return the element to use for metadata extraction.
+    When the selector matched an <a> directly, walk up to the nearest
+    container so that <time> and <p> siblings are reachable."""
+    if elem.name != "a":
+        return elem
+    for parent in elem.parents:
+        if getattr(parent, "name", None) in _CONTAINER_TAGS:
+            return parent
+    return elem
+
+
+def extract_article_links(
+    html: str, selector: str, feed_url: str
+) -> list[tuple[str, str, datetime | None, str | None]]:
+    """Apply CSS selector, return (url, title, published_at, excerpt) tuples."""
     soup = BeautifulSoup(html, "lxml")
-    results: list[tuple[str, str]] = []
+    results: list[tuple[str, str, datetime | None, str | None]] = []
     seen_urls: set[str] = set()
     for elem in soup.select(selector)[:100]:
         a = elem if elem.name == "a" else elem.find("a")
@@ -64,13 +135,20 @@ def extract_article_links(html: str, selector: str, feed_url: str) -> list[tuple
         if url in seen_urls:
             continue
         seen_urls.add(url)
-        title = elem.get_text(strip=True)[:1000] or url
-        results.append((url, title))
+        ctx = _metadata_context(elem)
+        title = _extract_title(ctx, a, url)
+        published_at = _extract_published_at(ctx)
+        excerpt = _extract_excerpt(ctx, title)
+        results.append((url, title, published_at, excerpt))
     return results
 
 
 async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
-    """Fetch a scrape-type feed via CSS selector. Returns number of new articles."""
+    """Fetch a scrape-type feed via CSS selector. Returns number of new articles.
+
+    Note: HTTP auth credentials are intentionally not supported for scrape feeds.
+    Sites requiring auth typically use session cookies or JS challenges, not HTTP Basic Auth.
+    """
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
@@ -86,7 +164,12 @@ async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
 
-        new_count = await _save_scrape_articles(feed, links, fetched_at, db)
+        extract_readable_result = await db.execute(
+            select(UserFeed.extract_readable).where(UserFeed.feed_id == feed_id).limit(1)
+        )
+        extract_readable = extract_readable_result.scalar() or False
+
+        new_count = await _save_scrape_articles(feed, links, fetched_at, db, extract_readable)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = fetched_at
@@ -127,11 +210,12 @@ async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
 
 async def _save_scrape_articles(
     feed: Feed,
-    links: list[tuple[str, str]],
+    links: list[tuple[str, str, datetime | None, str | None]],
     fetched_at: datetime,
     db: AsyncSession,
+    extract_readable: bool = True,
 ) -> int:
-    urls = [url for url, _ in links]
+    urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
     norm_map = {url: _normalize_url(url) for url in urls}
 
@@ -157,7 +241,7 @@ async def _save_scrape_articles(
         )
 
     new_articles: list[Article] = []
-    for url, title in links:
+    for url, title, pub_at, excerpt in links:
         gh = guid_hash_map[url]
         if gh in existing_hashes:
             continue
@@ -168,6 +252,7 @@ async def _save_scrape_articles(
         if nu:
             existing_normalized.add(nu)
 
+        content_html = f"<p>{excerpt}</p>" if excerpt else None
         new_articles.append(Article(
             feed_id=feed.id,
             guid=url[:2048],
@@ -175,10 +260,10 @@ async def _save_scrape_articles(
             url=url[:2048],
             url_normalized=nu,
             title=title[:1000],
-            content=None,
-            content_source="skipped",
-            readable_status="pending",
-            published_at=fetched_at,
+            content=content_html,
+            content_source="feed" if content_html else "skipped",
+            readable_status="pending" if extract_readable else "skipped",
+            published_at=pub_at or fetched_at,
             fetched_at=fetched_at,
         ))
 

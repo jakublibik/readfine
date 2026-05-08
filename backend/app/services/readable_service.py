@@ -418,6 +418,7 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
     pending = pending_result.scalars().all()
     for article in pending:
         article.readable_status = "skipped"
+        article.readable_error = "HTTP 403 Forbidden"
 
     await db.commit()
     logger.warning(

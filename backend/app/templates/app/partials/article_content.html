@@ -4,7 +4,7 @@
      hx-trigger="every 2s"
      hx-swap="outerHTML"
      {% endif %}>
-  {% if article.readable_status == 'failed' %}
+  {% if article.readable_status in ['failed', 'skipped'] and article.readable_error %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
       Full content could not be retrieved (access denied). The feed may require authentication, or this site does not allow automated access.

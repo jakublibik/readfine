@@ -12,8 +12,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-import asyncio
-
 import feedparser
 from bs4 import BeautifulSoup
 from sqlalchemy import select
@@ -146,6 +144,7 @@ async def _get_feeds_context(user, db):
 @router.get("/feeds", response_class=HTMLResponse)
 async def settings_feeds(
     request: Request,
+    added: str = "",
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -156,6 +155,7 @@ async def settings_feeds(
         "error": None,
         "subscribe_url": "",
         "detected_feeds": [],
+        "added": added,
     })
 
 
@@ -163,13 +163,16 @@ async def settings_feeds(
 @limiter.limit("10/minute")
 async def settings_feeds_test(
     request: Request,
-    url: str = Form(...),
+    url: str = Form(""),
     fetch_auth_user: str = Form(""),
     fetch_auth_pass: str = Form(""),
     user: User = Depends(get_current_user),
 ):
     """Test a feed URL without saving. Returns title + entry count or error."""
     url = url.strip()
+    if not url:
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
+                                          {"error": "Please enter a URL."})
     auth_user = fetch_auth_user.strip() or None
     auth_pass = fetch_auth_pass or None
 
@@ -271,10 +274,11 @@ async def settings_feeds_subscribe(
     error = None
     detected_feeds = []
     try:
-        await subscribe(user=user, url=url, folder_id=folder_id,
-                        custom_title=custom_title, fetch_auth_user=fetch_auth_user,
-                        fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db)
-        return RedirectResponse("/settings/feeds", status_code=303)
+        uf = await subscribe(user=user, url=url, folder_id=folder_id,
+                             custom_title=custom_title, fetch_auth_user=fetch_auth_user,
+                             fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db)
+        from urllib.parse import quote
+        return RedirectResponse(f"/settings/feeds?added={quote(uf.feed.title)}", status_code=303)
     except ValueError as e:
         error = str(e)
         # Try to detect RSS feeds linked from the page (only for parse/fetch failures)
@@ -283,13 +287,27 @@ async def settings_feeds_subscribe(
                 detected_feeds = await detect_feeds(url)
             except Exception:
                 pass
+    except httpx.HTTPStatusError as e:
+        status = e.response.status_code
+        if status == 404:
+            error = "Feed not found (404). The URL may no longer exist."
+        elif status == 403:
+            error = "Access denied (403). The site does not allow automated access."
+        elif status == 401:
+            error = "Authentication required (401). Try adding HTTP credentials."
+        else:
+            error = f"HTTP error {status} when fetching the feed."
+        try:
+            detected_feeds = await detect_feeds(url)
+        except Exception:
+            pass
     except Exception as e:
         logger.error("Unexpected error during feed subscribe (url=%s): %s", url, e)
         error = "Could not subscribe to feed. Please check the URL and try again."
 
     # Re-fetch after failed subscribe (no commit happened)
     user_feeds, folders = await _get_feeds_context(user, db)
-    is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse"))
+    is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse", "404", "403", "HTTP error"))
     show_scrape_option = (
         is_rss_error
         and not detected_feeds
@@ -306,6 +324,7 @@ async def settings_feeds_subscribe(
 
 
 @router.get("/feeds/scrape-setup", response_class=HTMLResponse)
+@limiter.limit("20/minute")
 async def settings_scrape_setup(
     request: Request,
     url: str = "",
@@ -344,6 +363,7 @@ async def settings_scrape_setup(
 
 
 @router.post("/feeds/scrape-preview", response_class=HTMLResponse)
+@limiter.limit("10/minute")
 async def settings_scrape_preview(
     request: Request,
     user: User = Depends(get_current_user),
@@ -370,7 +390,7 @@ async def settings_scrape_preview(
         })
 
     return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
-        "links": links[:10],
+        "links": [(u, t) for u, t, *_ in links[:10]],
         "total": len(links),
         "selector": selector,
     })
@@ -392,7 +412,8 @@ async def settings_scrape_subscribe(
     try:
         await subscribe_scrape(user=user, url=url, selector=selector, title=title,
                                folder_id=folder_id, db=db)
-        return RedirectResponse("/settings/feeds", status_code=303)
+        from urllib.parse import quote
+        return RedirectResponse(f"/settings/feeds?added={quote(title)}", status_code=303)
     except ValueError as e:
         loop = asyncio.get_running_loop()
         try:

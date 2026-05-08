@@ -5,6 +5,12 @@
 {% block settings_content %}
 <h1 class="text-xl font-semibold text-gray-900 mb-6">Feeds</h1>
 
+{% if added %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+  Feed <strong>{{ added }}</strong> added successfully.
+</div>
+{% endif %}
+
 <!-- Subscribe form -->
 <div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded">
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Subscribe to a feed</h2>
@@ -26,6 +32,12 @@
       {% endfor %}
     </ul>
     <p class="text-xs text-gray-400 mt-2">Click <em>Select RSS</em> to use a feed, or the URL to preview it.</p>
+    {% if subscribe_url %}
+    <p class="text-xs text-gray-500 mt-2">
+      Or <a href="/settings/feeds/scrape-setup?url={{ subscribe_url | urlencode }}"
+             class="underline hover:text-blue-700">try web scraping</a> instead.
+    </p>
+    {% endif %}
   </div>
   {% elif error %}
   <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">

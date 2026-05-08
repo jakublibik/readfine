@@ -130,25 +130,28 @@ document.body.addEventListener('htmx:afterSettle', hideDuplicateH1);
 function _formatLocalTime(isoStr, format) {
   var dt = new Date(isoStr);
   if (isNaN(dt.getTime())) return null;
+  var timeOpts = { hour: '2-digit', minute: '2-digit', hour12: false };
   if (format === 'long') {
-    var time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    var time = dt.toLocaleTimeString(undefined, timeOpts);
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) + ' ' + time;
   }
   if (format === 'date') {
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   }
-  // short: today → HH:MM, this year → "Mon DD HH:MM", older → "Mon DD, YYYY HH:MM"
+  // short: today → HH:MM, this year → "DD.MM. HH:MM", older → "DD.MM.YYYY HH:MM"
   var now = new Date();
   var isToday = dt.toDateString() === now.toDateString();
   if (isToday) {
-    return dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    return dt.toLocaleTimeString(undefined, timeOpts);
   }
-  var isThisYear = dt.getFullYear() === now.getFullYear();
-  var time = dt.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  if (isThisYear) {
-    return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' ' + time;
+  var pad = function(n) { return String(n).padStart(2, '0'); };
+  var day = pad(dt.getDate());
+  var month = pad(dt.getMonth() + 1);
+  var time = dt.toLocaleTimeString(undefined, timeOpts);
+  if (dt.getFullYear() === now.getFullYear()) {
+    return day + '.' + month + '. ' + time;
   }
-  return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) + ' ' + time;
+  return day + '.' + month + '.' + dt.getFullYear() + ' ' + time;
 }
 
 function localizeAllTimes() {

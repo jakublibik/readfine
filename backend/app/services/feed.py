@@ -142,6 +142,7 @@ async def subscribe(
         await db.rollback()
         raise ValueError("Already subscribed to this feed")
     await db.refresh(user_feed)
+    user_feed.feed = feed
 
     # Kick off initial fetch in the background (skip if already running for this feed)
     if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
@@ -204,6 +205,8 @@ async def subscribe_scrape(
     selector = selector.strip()
     if not selector:
         raise ValueError("CSS selector is required")
+    if len(selector) > 500:
+        raise ValueError("CSS selector is too long (max 500 characters)")
 
     # Share public scrape feeds with matching URL + selector
     existing = await db.execute(
@@ -222,7 +225,7 @@ async def subscribe_scrape(
             select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
         )
         if already.scalar_one_or_none():
-            raise ValueError("Already subscribed to this feed")
+            raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
     else:
         feed = Feed(
             feed_url=url[:2048],
@@ -251,7 +254,7 @@ async def subscribe_scrape(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ValueError("Already subscribed to this feed")
+        raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
     await db.refresh(user_feed)
 
     if is_new_feed and feed.id not in _initial_fetch_in_progress:

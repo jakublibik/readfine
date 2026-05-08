@@ -1,9 +1,41 @@
 """Unit tests for feed_detect: auto-detection of RSS/Atom feeds from HTML pages."""
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
+import feedparser
 import pytest
 
-from app.utils.feed_detect import _dedup, _youtube_feed_url, detect_feeds
+from app.utils.feed_detect import _dedup, _validate_feed_url, _youtube_feed_url, detect_feeds
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _mock_validate():
+    return AsyncMock(return_value=None)
+
+
+def _html_with_link(href, mime="application/rss+xml", title=None):
+    title_attr = f' title="{title}"' if title else ""
+    return f"""<!DOCTYPE html>
+<html><head>
+<link rel="alternate" type="{mime}" href="{href}"{title_attr}>
+</head><body></body></html>"""
+
+
+def _rss_with_entries(n=1):
+    items = "\n".join(
+        f"<item><title>Article {i}</title><link>https://example.com/{i}</link></item>"
+        for i in range(n)
+    )
+    return (
+        f'<?xml version="1.0"?><rss version="2.0"><channel>'
+        f"<title>Test Feed</title><link>https://example.com</link>"
+        f"{items}</channel></rss>"
+    )
+
+
+def _always_valid():
+    """Patch _validate_feed_url to always return True (used when testing detection logic, not validation)."""
+    return patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=True))
+
 
 # ── _youtube_feed_url ─────────────────────────────────────────────────────────
 
@@ -22,7 +54,6 @@ class TestYoutubeFeedUrl:
         assert _youtube_feed_url("https://example.com/channel/UCxxx") is None
 
     def test_youtube_handle_returns_none(self):
-        # @handle needs channel ID from the page — not resolved statically
         assert _youtube_feed_url("https://www.youtube.com/@somehandle") is None
 
     def test_non_url_string_returns_none(self):
@@ -46,7 +77,7 @@ class TestDedup:
         ]
         result = _dedup(feeds)
         assert len(result) == 1
-        assert result[0]["title"] == "First"  # first occurrence kept
+        assert result[0]["title"] == "First"
 
     def test_empty_list(self):
         assert _dedup([]) == []
@@ -65,19 +96,58 @@ class TestDedup:
         ]
 
 
-# ── detect_feeds — helpers ────────────────────────────────────────────────────
+# ── _validate_feed_url ────────────────────────────────────────────────────────
 
-def _mock_validate():
-    """AsyncMock for async_validate_feed_url that does not raise."""
-    return AsyncMock(return_value=None)
+class TestValidateFeedUrl:
+    async def test_valid_feed_with_entries_returns_true(self):
+        rss = _rss_with_entries(3)
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=rss):
+            assert await _validate_feed_url("https://example.com/feed.xml") is True
 
+    async def test_html_page_with_title_but_no_entries_returns_false(self):
+        html = "<html><head><title>My Site</title></head><body></body></html>"
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+            assert await _validate_feed_url("https://example.com/") is False
 
-def _html_with_link(href, mime="application/rss+xml", title=None):
-    title_attr = f' title="{title}"' if title else ""
-    return f"""<!DOCTYPE html>
-<html><head>
-<link rel="alternate" type="{mime}" href="{href}"{title_attr}>
-</head><body></body></html>"""
+    async def test_empty_rss_channel_no_entries_returns_false(self):
+        empty_rss = '<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title></channel></rss>'
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=empty_rss):
+            assert await _validate_feed_url("https://example.com/feed") is False
+
+    async def test_http_404_returns_false(self):
+        import httpx
+        exc = httpx.HTTPStatusError(
+            "404", request=httpx.Request("GET", "https://example.com/feed/"),
+            response=httpx.Response(404),
+        )
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
+            assert await _validate_feed_url("https://example.com/feed/") is False
+
+    async def test_http_403_returns_false(self):
+        import httpx
+        exc = httpx.HTTPStatusError(
+            "403", request=httpx.Request("GET", "https://example.com/feed/"),
+            response=httpx.Response(403),
+        )
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
+            assert await _validate_feed_url("https://example.com/feed/") is False
+
+    async def test_connection_error_returns_false(self):
+        import httpx
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check",
+                   side_effect=httpx.ConnectError("refused")):
+            assert await _validate_feed_url("https://example.com/feed") is False
+
+    async def test_ssrf_blocked_url_returns_false(self):
+        with patch("app.utils.feed_detect.async_validate_feed_url",
+                   AsyncMock(side_effect=ValueError("private IP"))):
+            assert await _validate_feed_url("http://192.168.1.1/feed") is False
 
 
 # ── detect_feeds — YouTube shortcut ──────────────────────────────────────────
@@ -88,7 +158,6 @@ class TestDetectFeedsYoutube:
         with patch("app.utils.feed_detect.async_validate_feed_url") as mock_val, \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check") as mock_fetch:
             result = await detect_feeds(url)
-        # YouTube shortcut fires before any network call
         mock_val.assert_not_called()
         mock_fetch.assert_not_called()
         assert len(result) == 1
@@ -109,7 +178,8 @@ class TestDetectFeedsAlternateLinks:
     async def test_rss_link_returned(self):
         html = _html_with_link("/rss.xml", "application/rss+xml")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert len(result) == 1
         assert result[0]["url"] == "https://example.com/rss.xml"
@@ -117,7 +187,8 @@ class TestDetectFeedsAlternateLinks:
     async def test_atom_link_returned(self):
         html = _html_with_link("/atom.xml", "application/atom+xml")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert len(result) == 1
         assert result[0]["url"] == "https://example.com/atom.xml"
@@ -125,28 +196,32 @@ class TestDetectFeedsAlternateLinks:
     async def test_title_attribute_included(self):
         html = _html_with_link("/feed.xml", "application/rss+xml", title="Main feed")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert result[0]["title"] == "Main feed"
 
     async def test_no_title_attribute_is_none(self):
         html = _html_with_link("/feed.xml", "application/rss+xml")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert result[0]["title"] is None
 
     async def test_relative_href_resolved_to_absolute(self):
         html = _html_with_link("feed.xml", "application/rss+xml")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com/blog/")
         assert result[0]["url"] == "https://example.com/blog/feed.xml"
 
     async def test_absolute_href_kept_as_is(self):
         html = _html_with_link("https://feeds.example.com/rss", "application/rss+xml")
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert result[0]["url"] == "https://feeds.example.com/rss"
 
@@ -156,7 +231,8 @@ class TestDetectFeedsAlternateLinks:
             <link rel="alternate" type="application/atom+xml" href="/atom.xml">
         </head></html>"""
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         urls = [f["url"] for f in result]
         assert "https://example.com/rss.xml" in urls
@@ -168,7 +244,8 @@ class TestDetectFeedsAlternateLinks:
             <link rel="alternate" type="application/rss+xml" href="/feed.xml">
         </head></html>"""
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert len(result) == 1
         assert result[0]["url"] == "https://example.com/feed.xml"
@@ -179,9 +256,37 @@ class TestDetectFeedsAlternateLinks:
             <link rel="alternate" type="application/rss+xml" href="/feed.xml">
         </head></html>"""
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
         assert len(result) == 1
+
+    async def test_invalid_candidates_not_offered(self):
+        """Links declared in HTML but returning 404/empty are filtered out."""
+        html = """<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/dead-feed/">
+        </head></html>"""
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=False)):
+            result = await detect_feeds("https://example.com")
+        assert result == []
+
+    async def test_all_invalid_candidates_falls_through_to_common_paths(self):
+        """When all <link> candidates fail validation, common paths are tried."""
+        html = _html_with_link("/dead/", "application/rss+xml")
+        rss = _rss_with_entries(1)
+
+        async def fake_validate(url):
+            return url == "https://example.com/feed"
+
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             patch("app.utils.feed_detect._validate_feed_url", side_effect=fake_validate):
+            result = await detect_feeds("https://example.com")
+
+        assert len(result) == 1
+        assert result[0]["url"] == "https://example.com/feed"
 
 
 # ── detect_feeds — common path fallback ──────────────────────────────────────
@@ -189,12 +294,13 @@ class TestDetectFeedsAlternateLinks:
 class TestDetectFeedsCommonPaths:
     async def test_fallback_triggered_when_no_alternate_links(self):
         plain_html = "<html><head><title>No feeds here</title></head></html>"
+        rss = _rss_with_entries(2)
 
         def fake_fetch(url, **kwargs):
             if url == "https://example.com":
                 return plain_html
             if url == "https://example.com/feed":
-                return "<?xml version='1.0'?><rss version='2.0'/>"
+                return rss
             raise ValueError("not found")
 
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
@@ -203,14 +309,11 @@ class TestDetectFeedsCommonPaths:
 
         assert any(f["url"] == "https://example.com/feed" for f in result)
 
-    async def test_common_path_without_feed_marker_excluded(self):
+    async def test_common_path_without_entries_excluded(self):
         plain_html = "<html><body>no feeds</body></html>"
 
-        def fake_fetch(url, **kwargs):
-            return plain_html  # all paths return HTML without feed markers
-
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=plain_html):
             result = await detect_feeds("https://example.com")
 
         assert result == []
@@ -229,8 +332,8 @@ class TestDetectFeedsCommonPaths:
 
         assert result == []
 
-    async def test_alternate_links_skip_fallback(self):
-        """If <link rel="alternate"> found, common paths are NOT tried."""
+    async def test_alternate_links_skip_fallback_when_valid(self):
+        """Valid <link rel=alternate> found — common paths not tried."""
         html = _html_with_link("/rss.xml", "application/rss+xml")
         fetch_calls = []
 
@@ -239,10 +342,10 @@ class TestDetectFeedsCommonPaths:
             return html
 
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch), \
+             _always_valid():
             result = await detect_feeds("https://example.com")
 
-        # Only the main page was fetched, no common paths
         assert fetch_calls == ["https://example.com"]
         assert len(result) == 1
 

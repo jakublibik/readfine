@@ -2,13 +2,23 @@
 from bs4 import BeautifulSoup
 
 _ARTICLE_TAGS = {"article", "li", "div", "section"}
-_SKIP_CONTAINERS = {"nav", "header", "footer", "aside"}
+_SKIP_PARENT_TAGS = {"nav", "header", "footer", "aside", "form", "script", "style"}
+_SKIP_OWN_CLASS_KEYWORDS = {
+    "modal", "popup", "overlay", "payment", "subscribe", "cookie",
+    "newsletter", "promo", "advertisement", "banner",
+}
 _HEADING_TAGS = {"h1", "h2", "h3", "h4"}
+_MAX_BLOCK_LEN = 10_000  # large wrappers (full page, header, etc.) are not article cards
+
+
+def _has_skip_class(tag) -> bool:
+    combined = " ".join(tag.get("class") or []).lower() + " " + (tag.get("id") or "").lower()
+    return any(kw in combined for kw in _SKIP_OWN_CLASS_KEYWORDS)
 
 
 def _is_in_skip_container(tag) -> bool:
     for parent in tag.parents:
-        if getattr(parent, "name", None) in _SKIP_CONTAINERS:
+        if getattr(parent, "name", None) in _SKIP_PARENT_TAGS:
             return True
     return False
 
@@ -16,7 +26,13 @@ def _is_in_skip_container(tag) -> bool:
 def _looks_like_article_block(tag) -> bool:
     if tag.name not in _ARTICLE_TAGS:
         return False
+    if tag.get("aria-hidden") == "true":
+        return False
+    if _has_skip_class(tag):
+        return False
     if _is_in_skip_container(tag):
+        return False
+    if len(str(tag)) > _MAX_BLOCK_LEN:
         return False
     has_heading = bool(tag.find(_HEADING_TAGS))
     has_link = bool(tag.find("a", href=True))

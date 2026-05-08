@@ -4,7 +4,9 @@
 
 {% block settings_content %}
 <h1 class="text-xl font-semibold text-gray-900 mb-1">Add web scraping feed</h1>
-<p class="text-sm text-gray-500 mb-6 font-mono break-all">{{ url }}</p>
+<p class="text-sm text-gray-500 mb-6 font-mono break-all">
+  <a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 underline">{{ url }}</a>
+</p>
 
 {% if fetch_error %}
 <div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
@@ -18,7 +20,7 @@
 </div>
 {% endif %}
 
-<form method="POST" action="/settings/feeds/scrape" class="space-y-5">
+<form method="POST" action="/settings/feeds/scrape" hx-boost="true" class="space-y-5">
   <input type="hidden" name="url" value="{{ url }}">
 
   <div>
