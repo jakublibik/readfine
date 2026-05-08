@@ -2,6 +2,36 @@
 <p class="text-sm text-red-600">
   <span class="font-medium">Error:</span> {{ error }}
 </p>
+
+{% elif detected_feeds is defined %}
+  {% if detected_feeds %}
+  <div class="text-sm">
+    <p class="text-amber-700 font-medium mb-1.5">No RSS at this URL. Found {{ detected_feeds | length }} feed{{ 's' if detected_feeds | length > 1 }}:</p>
+    <ul class="space-y-1">
+      {% for feed in detected_feeds %}
+      <li class="flex items-center gap-2">
+        <button type="button"
+                data-url="{{ feed.url }}"
+                onclick="document.getElementById('feed-url-input').value = this.dataset.url; document.getElementById('feed-url-input').focus();"
+                class="shrink-0 px-2 py-0.5 text-xs font-medium bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 rounded whitespace-nowrap">
+          Select RSS
+        </button>
+        <a href="{{ feed.url }}" target="_blank" rel="noopener noreferrer"
+           class="text-xs font-mono text-gray-500 hover:text-blue-600 truncate min-w-0">{{ feed.url }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% elif scrape_available %}
+  <p class="text-sm text-amber-700">
+    No RSS feed found.
+    <a href="/settings/feeds/scrape-setup?url={{ test_url | urlencode }}"
+       class="font-medium underline hover:text-amber-900">Try web scraping</a>
+  </p>
+  {% else %}
+  <p class="text-sm text-red-600">Not a valid RSS/Atom feed.</p>
+  {% endif %}
+
 {% else %}
 <div class="text-sm text-green-700 space-y-0.5">
   <p>

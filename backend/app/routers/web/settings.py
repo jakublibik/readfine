@@ -12,7 +12,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import asyncio
+
 import feedparser
+from bs4 import BeautifulSoup
 from sqlalchemy import select
 
 from app.auth.security import hash_password, verify_password, hash_token
@@ -22,6 +25,8 @@ from app.utils.crypto import encrypt
 from app.utils.parsing import safe_int
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 from app.utils.feed_detect import detect_feeds
+from app.utils.scrape_ai import generate_selector_prompt
+from app.fetcher.scrape import extract_article_links
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +38,7 @@ from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
-from app.services.feed import list_user_feeds, subscribe, unsubscribe
+from app.services.feed import list_user_feeds, subscribe, subscribe_scrape, unsubscribe
 from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
@@ -221,9 +226,22 @@ async def settings_feeds_test(
 
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
-    if parsed.bozo and not parsed.entries and not parsed.feed:
-        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
-                                          {"error": f"Not a valid feed: {parsed.bozo_exception}"})
+    import xml.sax._exceptions as _sax
+    is_xml_error = parsed.bozo and isinstance(parsed.bozo_exception, _sax.SAXParseException)
+    is_empty_feed = parsed.bozo and not parsed.entries and not parsed.feed
+
+    if is_xml_error or is_empty_feed:
+        # Not RSS — try to detect RSS feeds linked from the page
+        detected_feeds = []
+        try:
+            detected_feeds = await detect_feeds(url)
+        except Exception:
+            pass
+        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
+            "detected_feeds": detected_feeds,
+            "scrape_available": url.startswith(("http://", "https://")),
+            "test_url": url,
+        })
 
     feed_title = parsed.feed.get("title") or url
     entry_count = len(parsed.entries)
@@ -271,13 +289,134 @@ async def settings_feeds_subscribe(
 
     # Re-fetch after failed subscribe (no commit happened)
     user_feeds, folders = await _get_feeds_context(user, db)
+    is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse"))
+    show_scrape_option = (
+        is_rss_error
+        and not detected_feeds
+        and url.startswith(("http://", "https://"))
+    )
     return templates.TemplateResponse(request, "settings/feeds.html", {
         "user_feeds": user_feeds,
         "folders": folders,
         "error": error if not detected_feeds else None,
         "subscribe_url": url,
         "detected_feeds": detected_feeds,
+        "show_scrape_option": show_scrape_option,
     })
+
+
+@router.get("/feeds/scrape-setup", response_class=HTMLResponse)
+async def settings_scrape_setup(
+    request: Request,
+    url: str = "",
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not url.startswith(("http://", "https://")):
+        return RedirectResponse("/settings/feeds", status_code=303)
+
+    _, folders = await _get_feeds_context(user, db)
+    loop = asyncio.get_running_loop()
+    html = ""
+    page_title = ""
+    prompt = ""
+    fetch_error = None
+
+    try:
+        html = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, url, None, 30,
+            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
+        )
+        soup = BeautifulSoup(html, "lxml")
+        title_tag = soup.find("title")
+        page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
+        prompt = generate_selector_prompt(url, html)
+    except Exception as e:
+        fetch_error = str(e)
+
+    return templates.TemplateResponse(request, "settings/scrape_setup.html", {
+        "url": url,
+        "page_title": page_title,
+        "prompt": prompt,
+        "fetch_error": fetch_error,
+        "folders": folders,
+    })
+
+
+@router.post("/feeds/scrape-preview", response_class=HTMLResponse)
+async def settings_scrape_preview(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    form = await request.form()
+    url = form.get("url", "").strip()
+    selector = form.get("selector", "").strip()
+
+    if not url or not selector:
+        return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
+            "error": "URL and selector are required.",
+        })
+
+    loop = asyncio.get_running_loop()
+    try:
+        html = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, url, None, 30,
+            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
+        )
+        links = extract_article_links(html, selector, url)
+    except Exception as e:
+        return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
+            "error": f"Failed to fetch page: {e}",
+        })
+
+    return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
+        "links": links[:10],
+        "total": len(links),
+        "selector": selector,
+    })
+
+
+@router.post("/feeds/scrape", response_class=HTMLResponse)
+async def settings_scrape_subscribe(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    url = form.get("url", "").strip()
+    selector = form.get("selector", "").strip()
+    title = form.get("title", "").strip() or url
+    folder_id = safe_int(form.get("folder_id"))
+
+    _, folders = await _get_feeds_context(user, db)
+    try:
+        await subscribe_scrape(user=user, url=url, selector=selector, title=title,
+                               folder_id=folder_id, db=db)
+        return RedirectResponse("/settings/feeds", status_code=303)
+    except ValueError as e:
+        loop = asyncio.get_running_loop()
+        try:
+            html = await loop.run_in_executor(
+                None, fetch_url_with_ssrf_check, url, None, 30,
+                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
+            )
+            soup = BeautifulSoup(html, "lxml")
+            title_tag = soup.find("title")
+            page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
+            prompt = generate_selector_prompt(url, html)
+        except Exception:
+            page_title = title
+            prompt = ""
+        return templates.TemplateResponse(request, "settings/scrape_setup.html", {
+            "url": url,
+            "page_title": page_title,
+            "prompt": prompt,
+            "selector": selector,
+            "title": title,
+            "folder_id": folder_id,
+            "folders": folders,
+            "error": str(e),
+        })
 
 
 @router.get("/feeds/{user_feed_id}/edit", response_class=HTMLResponse)
@@ -352,6 +491,11 @@ async def settings_feed_update(
             uf.feed.fetch_auth_pass_encrypted = encrypt(fetch_auth_pass)
         if (fetch_auth_user or fetch_auth_pass) and not uf.feed.is_private:
             uf.feed.is_private = True
+
+    if uf.feed.feed_type == "scrape" and (uf.feed.is_private or uf.feed.subscriber_count == 1):
+        new_selector = form.get("article_links_selector", "").strip()
+        if new_selector:
+            uf.feed.type_config = {**(uf.feed.type_config or {}), "article_links_selector": new_selector}
 
     if uf.feed.status == "disabled":
         uf.feed.status = "active"

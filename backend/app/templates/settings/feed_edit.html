@@ -32,6 +32,17 @@
     </select>
   </div>
 
+  {% if uf.feed.feed_type == 'scrape' and is_sole_subscriber %}
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>
+    <input type="text" name="article_links_selector"
+           value="{{ uf.feed.type_config.article_links_selector if uf.feed.type_config else '' }}"
+           placeholder="e.g. article.b-item h3 a"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <p class="text-xs text-gray-400 mt-1">Update if the site redesigned and the selector no longer works.</p>
+  </div>
+  {% endif %}
+
   {% if uf.feed.is_private or is_sole_subscriber %}
   <div class="space-y-3 pt-1">
     <h3 class="text-sm font-medium text-gray-700">HTTP Basic Auth</h3>

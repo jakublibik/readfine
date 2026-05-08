@@ -63,8 +63,13 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     )
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
-    if parsed.bozo and not parsed.entries and not parsed.feed:
-        raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+    if parsed.bozo:
+        import xml.sax._exceptions as _sax
+        if isinstance(parsed.bozo_exception, _sax.SAXParseException):
+            # XML parse error means the response is HTML, not RSS
+            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+        if not parsed.entries and not parsed.feed:
+            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
     return parsed
 

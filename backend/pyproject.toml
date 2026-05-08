@@ -28,6 +28,8 @@ dependencies = [
     # Readable extraction
     "trafilatura>=1.12.0",
     "readability-lxml>=0.8.1",
+    # Web scraping
+    "beautifulsoup4>=4.12.0",
     # HTML sanitization
     "nh3>=0.2.17",
     # Safe XML parsing

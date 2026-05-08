@@ -1,6 +1,6 @@
 # Readfine
 
-Self-hosted RSS reader. Supports folders, labels, filters, readable extraction, and AI summaries.
+Self-hosted RSS reader. Supports folders, labels, filters, readable extraction, web scraping, and AI summaries.
 
 ## Requirements
 

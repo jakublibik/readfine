@@ -1,0 +1,198 @@
+"""Web scrape fetcher: CSS selector → article URLs → readable extraction pipeline."""
+import asyncio
+import hashlib
+import logging
+import time
+from datetime import datetime, timezone
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+
+import httpx
+from bs4 import BeautifulSoup
+from sqlalchemy import case, literal, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.article import Article
+from app.models.feed import Feed, UserFeed
+from app.models.fetch_log import FetchLog
+from app.utils.url_validator import fetch_url_with_ssrf_check
+
+logger = logging.getLogger(__name__)
+
+FETCH_ERROR_DISABLE_THRESHOLD = 5
+
+_HEADERS = {
+    "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
+    "Accept": "text/html,application/xhtml+xml,*/*",
+}
+_TIMEOUT = 30
+
+_STRIP_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "fbclid", "gclid", "msclkid",
+})
+
+
+def _normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return None
+        path = p.path.rstrip("/") or "/"
+        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
+        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
+    except Exception:
+        return None
+
+
+def extract_article_links(html: str, selector: str, feed_url: str) -> list[tuple[str, str]]:
+    """Apply CSS selector, return (url, title) pairs. Handles both <a> and container elements."""
+    soup = BeautifulSoup(html, "lxml")
+    results: list[tuple[str, str]] = []
+    seen_urls: set[str] = set()
+    for elem in soup.select(selector)[:100]:
+        a = elem if elem.name == "a" else elem.find("a")
+        if not a or not a.get("href"):
+            continue
+        href = str(a.get("href", "")).strip()
+        if not href or href.startswith(("javascript:", "mailto:", "#")):
+            continue
+        url = urljoin(feed_url, href)
+        if not url.startswith(("http://", "https://")):
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        title = elem.get_text(strip=True)[:1000] or url
+        results.append((url, title))
+    return results
+
+
+async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
+    """Fetch a scrape-type feed via CSS selector. Returns number of new articles."""
+    start_ms = int(time.monotonic() * 1000)
+    feed_id = feed.id
+    feed_url = feed.feed_url
+    selector = (feed.type_config or {}).get("article_links_selector", "")
+    fetched_at = datetime.now(timezone.utc)
+
+    try:
+        loop = asyncio.get_running_loop()
+        html = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, feed_url, None, _TIMEOUT, _HEADERS
+        )
+        links = extract_article_links(html, selector, feed_url)
+        if not links:
+            raise ValueError(f"CSS selector '{selector}' matched no article links")
+
+        new_count = await _save_scrape_articles(feed, links, fetched_at, db)
+        duration_ms = int(time.monotonic() * 1000) - start_ms
+
+        feed.last_fetched_at = fetched_at
+        feed.last_fetch_duration_ms = duration_ms
+        feed.status = "active"
+        feed.last_error = None
+        feed.fetch_error_count = 0
+        await db.commit()
+        logger.info("Scrape feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
+        return new_count
+
+    except Exception as exc:
+        await db.rollback()
+        logger.error("Error scraping feed %d (%s): %s", feed_id, feed_url, exc)
+        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        is_4xx = http_status is not None and 400 <= http_status < 500
+        db.add(FetchLog(
+            feed_id=feed_id,
+            failed_at=datetime.now(timezone.utc),
+            http_status=http_status,
+            error_message=str(exc)[:500],
+        ))
+        new_status = literal("disabled") if is_4xx else case(
+            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
+            else_=literal("error"),
+        )
+        await db.execute(
+            update(Feed).where(Feed.id == feed_id).values(
+                status=new_status,
+                fetch_error_count=Feed.fetch_error_count + 1,
+                last_error=str(exc)[:500],
+                last_fetched_at=datetime.now(timezone.utc),
+            )
+        )
+        await db.commit()
+        return 0
+
+
+async def _save_scrape_articles(
+    feed: Feed,
+    links: list[tuple[str, str]],
+    fetched_at: datetime,
+    db: AsyncSession,
+) -> int:
+    urls = [url for url, _ in links]
+    guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
+    norm_map = {url: _normalize_url(url) for url in urls}
+
+    existing_hashes: set[str] = set(
+        (await db.execute(
+            select(Article.guid_hash).where(
+                Article.feed_id == feed.id,
+                Article.guid_hash.in_(guid_hash_map.values()),
+            )
+        )).scalars()
+    )
+
+    norm_urls = [n for n in norm_map.values() if n]
+    existing_normalized: set[str] = set()
+    if norm_urls:
+        existing_normalized = set(
+            (await db.execute(
+                select(Article.url_normalized).where(
+                    Article.feed_id == feed.id,
+                    Article.url_normalized.in_(norm_urls),
+                )
+            )).scalars()
+        )
+
+    new_articles: list[Article] = []
+    for url, title in links:
+        gh = guid_hash_map[url]
+        if gh in existing_hashes:
+            continue
+        nu = norm_map[url]
+        if nu and nu in existing_normalized:
+            continue
+        existing_hashes.add(gh)
+        if nu:
+            existing_normalized.add(nu)
+
+        new_articles.append(Article(
+            feed_id=feed.id,
+            guid=url[:2048],
+            guid_hash=gh,
+            url=url[:2048],
+            url_normalized=nu,
+            title=title[:1000],
+            content=None,
+            content_source="skipped",
+            readable_status="pending",
+            published_at=fetched_at,
+            fetched_at=fetched_at,
+        ))
+
+    if new_articles:
+        for a in new_articles:
+            db.add(a)
+        await db.flush()
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.feed_id == feed.id)
+            .values(unread_count=UserFeed.unread_count + len(new_articles))
+        )
+        from app.services.filter_service import apply_filters_to_article
+        for article in new_articles:
+            await apply_filters_to_article(article, db)
+
+    return len(new_articles)

@@ -103,10 +103,14 @@ async def _fetch_due_feeds() -> None:
             async with db.async_session_factory() as session:
                 feed_in_session = await session.get(Feed, feed_id)
                 if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
-                    await fetch_feed(
-                        feed_in_session, session,
-                        published_cutoff=cutoff_by_feed.get(feed_id),
-                    )
+                    if feed_in_session.feed_type == "scrape":
+                        from app.fetcher.scrape import fetch_scrape_feed
+                        await fetch_scrape_feed(feed_in_session, session)
+                    else:
+                        await fetch_feed(
+                            feed_in_session, session,
+                            published_cutoff=cutoff_by_feed.get(feed_id),
+                        )
 
     fetch_start = datetime.now(timezone.utc)
     await asyncio.gather(*[_fetch_one(feed.id) for feed in feeds], return_exceptions=True)

@@ -1,0 +1,92 @@
+{% extends "settings/base.html" %}
+{% set active = "feeds" %}
+{% block title %}Add web scraping feed – Readfine{% endblock %}
+
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-1">Add web scraping feed</h1>
+<p class="text-sm text-gray-500 mb-6 font-mono break-all">{{ url }}</p>
+
+{% if fetch_error %}
+<div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+  Could not fetch the page: {{ fetch_error }}
+</div>
+{% endif %}
+
+{% if error %}
+<div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+  {{ error }}
+</div>
+{% endif %}
+
+<form method="POST" action="/settings/feeds/scrape" class="space-y-5">
+  <input type="hidden" name="url" value="{{ url }}">
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Feed title</label>
+    <input type="text" name="title" required
+           value="{{ title or page_title }}"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Folder</label>
+    <select name="folder_id" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+      <option value="">No folder</option>
+      {% for folder in folders %}
+        <option value="{{ folder.id }}" {% if folder_id == folder.id %}selected{% endif %}>{{ folder.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>
+    <div class="flex gap-2">
+      <input type="text" name="selector" id="selector-input" required
+             value="{{ selector or '' }}"
+             placeholder="e.g. article.b-item h3 a"
+             class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <button type="button"
+              hx-post="/settings/feeds/scrape-preview"
+              hx-include="[name='url'],[name='selector']"
+              hx-target="#scrape-preview"
+              hx-indicator="#preview-spinner"
+              class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
+        <svg id="preview-spinner" class="htmx-indicator animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
+        Preview
+      </button>
+    </div>
+    <p class="text-xs text-gray-400 mt-1">
+      Paste the selector from the AI prompt below, or write one manually. Click Preview to test it.
+    </p>
+  </div>
+
+  <div id="scrape-preview"></div>
+
+  {% if prompt %}
+  <div class="pt-2 border-t border-gray-200">
+    <div class="flex items-center justify-between mb-1">
+      <label class="text-sm font-medium text-gray-700">AI prompt</label>
+      <button type="button" id="copy-prompt-btn"
+              onclick="navigator.clipboard.writeText(document.getElementById('ai-prompt').value).then(() => { this.textContent = 'Copied!'; setTimeout(() => this.textContent = 'Copy', 2000); })"
+              class="text-xs text-blue-600 hover:underline">Copy</button>
+    </div>
+    <textarea id="ai-prompt" readonly rows="6"
+              class="w-full border border-gray-200 rounded px-3 py-2 text-xs font-mono bg-gray-50 text-gray-600 resize-none focus:outline-none">{{ prompt }}</textarea>
+    <p class="text-xs text-gray-400 mt-1">
+      Copy this prompt, paste it into any AI (ChatGPT, Claude, Gemini…), then paste the returned CSS selector into the field above.
+    </p>
+  </div>
+  {% endif %}
+
+  <div class="flex items-center gap-3 pt-2">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Add feed
+    </button>
+    <a href="/settings/feeds" class="text-sm text-gray-500 hover:underline">Cancel</a>
+  </div>
+</form>
+{% endblock %}

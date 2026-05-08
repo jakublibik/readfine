@@ -173,6 +173,110 @@ async def _initial_fetch(feed_id: int) -> None:
         _initial_fetch_in_progress.discard(feed_id)
 
 
+async def subscribe_scrape(
+    user: User,
+    url: str,
+    selector: str,
+    title: str,
+    folder_id: int | None,
+    db: AsyncSession,
+) -> UserFeed:
+    """Subscribe a user to a scrape-type feed (URL + CSS selector pair)."""
+    await async_validate_feed_url(url)
+
+    if folder_id is not None:
+        folder_result = await db.execute(
+            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
+        )
+        if not folder_result.scalar_one_or_none():
+            raise ValueError("Folder not found")
+
+    app_settings_result = await db.execute(
+        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+    )
+    max_feeds = app_settings_result.scalar_one_or_none() or 200
+    count_result = await db.execute(
+        select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+    )
+    if (count_result.scalar() or 0) >= max_feeds:
+        raise ValueError(f"Feed limit reached ({max_feeds})")
+
+    selector = selector.strip()
+    if not selector:
+        raise ValueError("CSS selector is required")
+
+    # Share public scrape feeds with matching URL + selector
+    existing = await db.execute(
+        select(Feed).where(
+            Feed.feed_url == url,
+            Feed.feed_type == "scrape",
+            Feed.is_private == False,
+            Feed.type_config["article_links_selector"].astext == selector,
+        )
+    )
+    feed = existing.scalar_one_or_none()
+    is_new_feed = feed is None
+
+    if feed:
+        already = await db.execute(
+            select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
+        )
+        if already.scalar_one_or_none():
+            raise ValueError("Already subscribed to this feed")
+    else:
+        feed = Feed(
+            feed_url=url[:2048],
+            feed_type="scrape",
+            is_private=False,
+            title=title[:255],
+            site_url=url[:2048],
+            type_config={"article_links_selector": selector},
+            subscriber_count=0,
+        )
+        db.add(feed)
+        await db.flush()
+
+    await db.execute(
+        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
+    )
+
+    user_feed = UserFeed(
+        user_id=user.id,
+        feed_id=feed.id,
+        folder_id=folder_id,
+        extract_readable=True,
+    )
+    db.add(user_feed)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise ValueError("Already subscribed to this feed")
+    await db.refresh(user_feed)
+
+    if is_new_feed and feed.id not in _initial_fetch_in_progress:
+        asyncio.create_task(_initial_fetch_scrape(feed.id))
+
+    return user_feed
+
+
+async def _initial_fetch_scrape(feed_id: int) -> None:
+    """Run an immediate scrape for a newly subscribed scrape feed."""
+    _initial_fetch_in_progress.add(feed_id)
+    try:
+        import app.database as db_module
+        from app.fetcher.scrape import fetch_scrape_feed
+        if db_module.async_session_factory is None:
+            return
+        async with db_module.async_session_factory() as session:
+            feed = await session.get(Feed, feed_id)
+            if not feed or feed.last_fetched_at is not None:
+                return
+            await fetch_scrape_feed(feed, session)
+    finally:
+        _initial_fetch_in_progress.discard(feed_id)
+
+
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
     """Remove a user's subscription with full lifecycle cleanup.
 

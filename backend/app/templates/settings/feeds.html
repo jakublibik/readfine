@@ -13,34 +13,41 @@
     <p class="text-amber-800 font-medium mb-2">No RSS feed found at this URL. Found {{ detected_feeds | length }} feed{{ 's' if detected_feeds | length > 1 }} on the page:</p>
     <ul class="space-y-1.5">
       {% for feed in detected_feeds %}
-      <li>
+      <li class="flex items-center gap-3">
         <button type="button"
-                onclick="document.getElementById('feed-url-input').value = {{ feed.url | tojson }}; document.getElementById('feed-url-input').focus();"
-                class="text-left text-blue-700 hover:underline text-xs font-mono break-all">
-          {{ feed.title or feed.url }}
+                data-url="{{ feed.url }}"
+                onclick="document.getElementById('feed-url-input').value = this.dataset.url; document.getElementById('feed-url-input').focus();"
+                class="shrink-0 px-2 py-0.5 text-xs font-medium bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 rounded whitespace-nowrap">
+          Select RSS
         </button>
-        {% if feed.title %}
-        <div class="text-gray-400 text-xs font-mono">{{ feed.url }}</div>
-        {% endif %}
+        <a href="{{ feed.url }}" target="_blank" rel="noopener noreferrer"
+           class="text-xs font-mono text-gray-500 hover:text-blue-600 truncate min-w-0">{{ feed.url }}</a>
       </li>
       {% endfor %}
     </ul>
-    <p class="text-xs text-gray-400 mt-2">Click a feed to select it, then click Subscribe.</p>
+    <p class="text-xs text-gray-400 mt-2">Click <em>Select RSS</em> to use a feed, or the URL to preview it.</p>
   </div>
   {% elif error %}
   <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
     {{ error }}
-    {% if "Not a valid" in error or "valid RSS" in error %}
-    <div class="mt-1 text-gray-400">Web page scraping is not yet supported.</div>
-    {% endif %}
+  </div>
+  {% if show_scrape_option %}
+  <div class="mb-3 px-4 py-3 bg-blue-50 border border-blue-200 rounded text-sm">
+    <p class="text-blue-800">
+      No RSS feed found.
+      <a href="/settings/feeds/scrape-setup?url={{ subscribe_url | urlencode }}"
+         class="font-medium underline hover:text-blue-900">Try adding as web scraping feed</a>
+      — extracts article links using a CSS selector.
+    </p>
   </div>
   {% endif %}
-  <form id="feed-subscribe-form" method="POST" action="/settings/feeds" hx-boost="true" class="space-y-3">
-    <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
+  {% endif %}
+  <form id="feed-subscribe-form" method="POST" action="/settings/feeds" hx-boost="true" class="space-y-2">
+    <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
       <input id="feed-url-input" type="url" name="url" placeholder="https://example.com/feed.xml" required
              value="{{ subscribe_url or '' }}"
-             class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <div class="flex gap-2 sm:contents">
+             class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <div class="flex gap-2">
         <button type="button"
                 hx-post="/settings/feeds/test"
                 hx-include="#feed-subscribe-form"
@@ -58,12 +65,10 @@
           Subscribe
         </button>
       </div>
-    </div>
-    <div id="feed-test-result" class="min-h-0"></div>
-    <div class="flex flex-col sm:flex-row gap-2 sm:gap-3">
+      <div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
       <input type="text" name="custom_title" placeholder="Custom title (optional)"
-             class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <select name="folder_id" class="w-full sm:w-auto border border-gray-300 rounded px-2 py-1.5 text-sm">
+             class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <select name="folder_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
         <option value="">No folder</option>
         {% for folder in folders %}
           <option value="{{ folder.id }}">{{ folder.name }}</option>
