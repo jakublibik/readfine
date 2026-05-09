@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -47,22 +48,29 @@ def _normalize_url(url: str | None) -> str | None:
 
 
 def _extract_title(elem, a_tag, fallback_url: str) -> str:
-    # 1. Heading inside container
-    heading = elem.find(["h1", "h2", "h3", "h4"])
+    # 1. Heading inside the <a> tag itself (avoids picking up sibling/parent section labels)
+    heading = a_tag.find(["h1", "h2", "h3", "h4"])
     if heading:
         text = heading.get_text(strip=True)
         if text:
             return text[:500]
-    # 2. Text of the <a> tag itself
+    # 2. Heading inside the broader container (when <a> contains no heading)
+    if elem is not a_tag:
+        heading = elem.find(["h1", "h2", "h3", "h4"])
+        if heading:
+            text = heading.get_text(strip=True)
+            if text:
+                return text[:500]
+    # 3. Text of the <a> tag itself
     a_text = a_tag.get_text(strip=True)
     if a_text:
         return a_text[:500]
-    # 3. title / aria-label attributes
+    # 4. title / aria-label attributes
     for attr in ("title", "aria-label"):
         val = (a_tag.get(attr) or elem.get(attr) or "").strip()
         if val:
             return val[:500]
-    # 4. alt text of first image inside the link
+    # 5. alt text of first image inside the link
     img = a_tag.find("img")
     if img:
         alt = (img.get("alt") or "").strip()
@@ -71,17 +79,32 @@ def _extract_title(elem, a_tag, fallback_url: str) -> str:
     return fallback_url
 
 
-def _extract_published_at(elem) -> datetime | None:
-    time_tag = elem.find("time", attrs={"datetime": True})
-    if not time_tag:
+_URL_DATE_RE = re.compile(r"_(\d{10})_")
+
+
+def _published_at_from_url(url: str) -> datetime | None:
+    """Extract date from URLs with embedded timestamp like _YYMMDDHHMM_ (iRozhlas, ČT24…)."""
+    m = _URL_DATE_RE.search(url)
+    if not m:
         return None
-    raw = (time_tag.get("datetime") or "").strip()
+    try:
+        return datetime.strptime(m.group(1), "%y%m%d%H%M").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _extract_published_at(elem) -> datetime | None:
+    # Accept datetime attribute on any tag (<time>, <span>, <div>, …)
+    tag = elem.find(attrs={"datetime": True})
+    if not tag:
+        return None
+    raw = (tag.get("datetime") or "").strip()
     if not raw:
         return None
     try:
         dt = datetime.fromisoformat(raw)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            return None  # naive datetime — unknown timezone, don't guess
         return dt
     except ValueError:
         return None
@@ -137,7 +160,7 @@ def extract_article_links(
         seen_urls.add(url)
         ctx = _metadata_context(elem)
         title = _extract_title(ctx, a, url)
-        published_at = _extract_published_at(ctx)
+        published_at = _extract_published_at(ctx) or _published_at_from_url(url)
         excerpt = _extract_excerpt(ctx, title)
         results.append((url, title, published_at, excerpt))
     return results

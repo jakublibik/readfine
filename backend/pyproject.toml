@@ -40,6 +40,7 @@ dependencies = [
     "aiosmtplib>=3.0.0",
     # Encryption
     "cryptography>=42.0.0",
+    "htmldate>=1.9.4",
 ]
 
 [project.optional-dependencies]

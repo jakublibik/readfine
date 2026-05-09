@@ -10,6 +10,7 @@ from app.fetcher.scrape import (
     _extract_excerpt,
     _extract_published_at,
     _metadata_context,
+    _published_at_from_url,
     extract_article_links,
     fetch_scrape_feed,
 )
@@ -98,11 +99,29 @@ class TestExtractPublishedAt:
         elem = self._elem('<article><time datetime="not-a-date">text</time></article>')
         assert _extract_published_at(elem) is None
 
-    def test_naive_datetime_gets_utc(self):
+    def test_naive_datetime_returns_none(self):
         elem = self._elem('<article><time datetime="2024-03-15T10:00:00">text</time></article>')
-        result = _extract_published_at(elem)
-        assert result is not None
-        assert result.tzinfo == timezone.utc
+        assert _extract_published_at(elem) is None
+
+
+# ── _published_at_from_url ────────────────────────────────────────────────────
+
+class TestPublishedAtFromUrl:
+    def test_irozhlas_pattern(self):
+        url = "https://www.irozhlas.cz/zpravy-svet/nato_2605091200_ula"
+        result = _published_at_from_url(url)
+        assert result == datetime(2026, 5, 9, 12, 0, tzinfo=timezone.utc)
+
+    def test_older_date(self):
+        url = "https://www.irozhlas.cz/zpravy-svet/tema_2604301644_jos"
+        result = _published_at_from_url(url)
+        assert result == datetime(2026, 4, 30, 16, 44, tzinfo=timezone.utc)
+
+    def test_no_pattern_returns_none(self):
+        assert _published_at_from_url("https://www.irozhlas.cz/zpravy-svet") is None
+
+    def test_wrong_length_returns_none(self):
+        assert _published_at_from_url("https://example.com/article_260509_slug") is None
 
 
 # ── _extract_excerpt ──────────────────────────────────────────────────────────

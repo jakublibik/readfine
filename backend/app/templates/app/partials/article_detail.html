@@ -54,7 +54,7 @@
         {% if article.feed_title %}<span class="detail-meta-feed truncate">{{ article.feed_title }}</span>{% endif %}
         {% if article.author %}<span class="detail-meta-author-sep shrink-0">·</span><span class="detail-meta-author shrink-0">{{ article.author }}</span>{% endif %}
         {% if article.published_at %}
-          <span class="detail-meta-date-sep shrink-0">·</span><span class="detail-meta-date shrink-0"><time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%B %d, %Y %H:%M") }}</time></span>
+          <span class="detail-meta-date-sep shrink-0">·</span><span class="detail-meta-date shrink-0"><time datetime="{{ article.published_at.isoformat() }}" data-format="long">{{ article.published_at.strftime("%-d. %-m. %Y %H:%M") }}</time></span>
         {% endif %}
         <span id="article-meta-readtime-{{ article.id }}" class="shrink-0">
           {%- if article.estimated_read_min %}<span class="detail-meta-readtime-sep">·</span> {{ article.estimated_read_min }} min read{%- endif %}

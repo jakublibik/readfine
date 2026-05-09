@@ -249,14 +249,21 @@
         <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
            hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
            hx-push-url="false">
+          {% if uf.feed.status in ('error', 'disabled') %}
+            <span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ uf.feed.last_error or 'Feed error' }}"></span>
+          {% endif %}
           <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
-          {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}
-          {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
+          <span id="feed-badge-{{ uf.feed_id }}">
+            {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}
+            {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
+          </span>
         </a>
         <button class="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-gray-500 bg-white hover:bg-gray-50 rounded cursor-pointer border border-gray-200"
                 title="Refresh feed"
                 hx-post="/htmx/feeds/{{ uf.feed_id }}/refresh"
-                hx-swap="none"
+                hx-target="#feed-badge-{{ uf.feed_id }}"
+                hx-swap="innerHTML"
+                hx-on::after-request="this.closest('.feed-nav-row').classList.remove('touch-active'); this.blur()"
                 data-action="feed-refresh">↻</button>
         <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
                 title="Mark all as read"
@@ -295,7 +302,9 @@
     .mark-read-row .mark-read-badge { transition: transform 150ms 0ms; }
     .mark-read-row:hover .mark-read-badge,
     .mark-read-row:focus-within .mark-read-badge { transform: translateX(-1.5rem); transition: transform 150ms 1200ms; }
-    .feed-nav-row [data-action="feed-refresh"] { transition: opacity 150ms 0ms; }
+    [data-action="feed-refresh"].htmx-request { animation: spin-refresh 0.8s linear infinite; opacity: 1 !important; }
+  @keyframes spin-refresh { to { transform: translateY(-50%) rotate(360deg); } }
+  .feed-nav-row [data-action="feed-refresh"] { transition: opacity 150ms 0ms; }
     .feed-nav-row:hover [data-action="feed-refresh"],
     .feed-nav-row:focus-within [data-action="feed-refresh"] { opacity: 1; transition: opacity 150ms 1200ms; }
     .feed-nav-row:hover .mark-read-badge,

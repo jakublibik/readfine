@@ -285,29 +285,58 @@ async def htmx_mark_folder_read(
     return HTMLResponse("", status_code=200)
 
 
+_BADGE_UNREAD = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{}</span>'
+_BADGE_TOTAL  = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{}</span>'
+
+
 @router.post("/htmx/feeds/{feed_id}/refresh", response_class=HTMLResponse)
 async def htmx_refresh_feed(
     feed_id: int,
-    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
+    if not (await db.execute(
         select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed_id)
-    )
-    if not result.scalar_one_or_none():
+    )).scalar_one_or_none():
         return HTMLResponse("", status_code=403)
 
-    async def _do_refresh(fid: int) -> None:
-        from app.database import async_session_factory
-        from app.fetcher.rss import fetch_feed as _fetch_feed
-        async with async_session_factory() as session:
-            feed_obj = await session.get(Feed, fid)
-            if feed_obj:
-                await _fetch_feed(feed_obj, session)
+    feed = await db.get(Feed, feed_id)
+    if not feed:
+        return HTMLResponse("", status_code=404)
 
-    asyncio.create_task(_do_refresh(feed_id))
-    return HTMLResponse("", status_code=200)
+    from app.database import async_session_factory
+    async with async_session_factory() as fetch_session:
+        feed_obj = await fetch_session.get(Feed, feed_id)
+        if feed_obj:
+            if feed_obj.feed_type == "scrape":
+                from app.fetcher.scrape import fetch_scrape_feed
+                try:
+                    await fetch_scrape_feed(feed_obj, fetch_session)
+                except Exception as e:
+                    feed_obj.last_error = str(e)[:500]
+            else:
+                from app.fetcher.rss import fetch_feed
+                await fetch_feed(feed_obj, fetch_session)
+
+    await db.refresh(feed)
+    error_msg = feed.last_error or None
+
+    unread = await db.scalar(
+        select(func.count(Article.id))
+        .outerjoin(UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
+        .where(Article.feed_id == feed_id,
+               (UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+    ) or 0
+    total = await db.scalar(
+        select(func.count(Article.id)).where(Article.feed_id == feed_id)
+    ) or 0
+
+    badge = _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
+    toast_msg = error_msg[:150] if error_msg else "Feed refreshed"
+    toast_type = "error" if error_msg else "ok"
+    headers = {"HX-Trigger": json.dumps({"showToast": {"msg": toast_msg, "type": toast_type}})}
+    return HTMLResponse(badge, headers=headers)
 
 
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
@@ -456,6 +485,14 @@ async def htmx_article_list(
     if q and q.strip():
         filter_params["q"] = q.strip()
 
+    extra_headers: dict[str, str] = {}
+    if feed_id is not None:
+        feed_obj = await db.get(Feed, feed_id)
+        if feed_obj and feed_obj.status in ("error", "disabled") and feed_obj.last_error:
+            extra_headers["HX-Trigger"] = json.dumps(
+                {"showToast": {"msg": feed_obj.last_error[:150], "type": "warning"}}
+            )
+
     return templates.TemplateResponse(request, "app/partials/article_list.html", {
         "articles": articles,
         "feed_id": feed_id,
@@ -472,7 +509,7 @@ async def htmx_article_list(
         "next_offset": len(articles),
         "title_bar_count": title_bar_count,
         "title_bar_count_type": title_bar_count_type,
-    })
+    }, headers=extra_headers)
 
 
 @router.get("/htmx/articles/more", response_class=HTMLResponse)

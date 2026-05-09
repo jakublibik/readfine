@@ -326,10 +326,14 @@ async def admin_force_fetch(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.fetcher.rss import fetch_feed
     feed = await get_feed(db, feed_id)
     if feed:
-        await fetch_feed(feed, db)
+        if feed.feed_type == "scrape":
+            from app.fetcher.scrape import fetch_scrape_feed
+            await fetch_scrape_feed(feed, db)
+        else:
+            from app.fetcher.rss import fetch_feed
+            await fetch_feed(feed, db)
         await log_audit(db, user.id, "feed_force_fetch", target_type="feed", target_id=feed_id)
     return await _feeds_response(request, db, user)
 

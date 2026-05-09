@@ -132,8 +132,9 @@ function _formatLocalTime(isoStr, format) {
   if (isNaN(dt.getTime())) return null;
   var timeOpts = { hour: '2-digit', minute: '2-digit', hour12: false };
   if (format === 'long') {
+    var pad = function(n) { return String(n).padStart(2, '0'); };
     var time = dt.toLocaleTimeString(undefined, timeOpts);
-    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) + ' ' + time;
+    return dt.getDate() + '. ' + (dt.getMonth() + 1) + '. ' + dt.getFullYear() + ' ' + time;
   }
   if (format === 'date') {
     return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
@@ -234,18 +235,26 @@ function _revertNavSnapshot() {
   if (snap.url) htmx.ajax('GET', snap.url, { target: '#article-list', swap: 'innerHTML' });
 }
 
-function _showNavErrorToast() {
-  var existing = document.getElementById('nav-error-toast');
-  if (existing) return;
+function showToast(msg, type) {
+  var bg = type === 'error' ? '#b91c1c' : type === 'ok' ? '#15803d' : type === 'warning' ? '#b45309' : '#374151';
+  var id = 'app-toast-' + Date.now();
   var toast = document.createElement('div');
-  toast.id = 'nav-error-toast';
-  toast.textContent = 'Connection error — restoring previous view';
+  toast.id = id;
+  toast.textContent = msg;
   toast.style.cssText = 'position:fixed;bottom:4rem;left:50%;transform:translateX(-50%);' +
-    'background:#374151;color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
-    'font-size:0.8rem;z-index:9999;white-space:nowrap;pointer-events:none;';
+    'background:' + bg + ';color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
+    'font-size:0.8rem;z-index:9999;max-width:90vw;word-break:break-word;pointer-events:none;';
   document.body.appendChild(toast);
-  setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 3000);
+  setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4000);
 }
+
+function _showNavErrorToast() {
+  showToast('Connection error — restoring previous view', 'info');
+}
+
+document.body.addEventListener('showToast', function (e) {
+  showToast(e.detail.msg, e.detail.type);
+});
 
 document.body.addEventListener('htmx:sendError', function (e) {
   if (!e.detail.target || e.detail.target.id !== 'article-list') return;
