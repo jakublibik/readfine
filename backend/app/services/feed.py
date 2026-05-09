@@ -13,7 +13,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.utils.crypto import encrypt
-from app.utils.url_validator import async_validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +181,7 @@ async def subscribe_scrape(
     title: str,
     folder_id: int | None,
     db: AsyncSession,
+    fetch_interval_min: int | None = None,
 ) -> UserFeed:
     """Subscribe a user to a scrape-type feed (URL + CSS selector pair)."""
     await async_validate_feed_url(url)
@@ -207,6 +208,23 @@ async def subscribe_scrape(
         raise ValueError("CSS selector is required")
     if len(selector) > 500:
         raise ValueError("CSS selector is too long (max 500 characters)")
+
+    # Validate selector against the live page before saving
+    from app.fetcher.scrape import extract_article_links
+    loop = asyncio.get_running_loop()
+    try:
+        html = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, url, None, 30,
+            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
+        )
+    except Exception as exc:
+        raise ValueError(f"Could not fetch the page: {exc}") from exc
+    links = extract_article_links(html, selector, url)
+    if not links:
+        raise ValueError(
+            f"CSS selector '{selector}' matched no article links on the page. "
+            "Use the Preview button to test your selector before saving."
+        )
 
     # Share public scrape feeds with matching URL + selector
     existing = await db.execute(
@@ -235,6 +253,7 @@ async def subscribe_scrape(
             site_url=url[:2048],
             type_config={"article_links_selector": selector},
             subscriber_count=0,
+            fetch_interval_min=fetch_interval_min,
         )
         db.add(feed)
         await db.flush()

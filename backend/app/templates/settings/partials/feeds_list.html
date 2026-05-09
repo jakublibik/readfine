@@ -1,71 +1,104 @@
 <div id="feeds-list">
   {% if user_feeds %}
     {% set ns = namespace(current_folder=none) %}
-    <ul class="space-y-1">
-      {% for uf in user_feeds %}
-        {% set folder_name = uf.folder.name if uf.folder else None %}
-        {% if folder_name != ns.current_folder %}
-          {% set ns.current_folder = folder_name %}
-          <li class="pt-3 pb-1">
-            <div class="flex items-center" id="folder-header-{{ uf.folder.id if uf.folder else 'none' }}">
-              <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
-                {{ folder_name or "No folder" }}
-              </span>
-              {% if uf.folder %}
-                <div class="relative flex-shrink-0 ml-1">
-                  <button data-menu-toggle
-                          class="px-1.5 py-0.5 text-gray-400 hover:text-gray-600 text-sm leading-none rounded hover:bg-gray-100">···</button>
-                  <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
-                    <button hx-get="/settings/folders/{{ uf.folder.id }}/rename-form"
-                            hx-target="#folder-header-{{ uf.folder.id }}"
-                            hx-swap="outerHTML"
-                            class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Rename</button>
-                    <div class="inline-confirm w-full">
-                      <button type="button" class="inline-confirm-trigger block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
-                      <div class="inline-confirm-ask hidden flex items-center gap-1.5 px-3 py-1.5">
-                        <span class="text-xs text-gray-500">Delete?</span>
-                        <button hx-delete="/settings/folders/{{ uf.folder.id }}"
-                                hx-target="#feeds-list"
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50 border-b border-gray-200">
+        <tr>
+          <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+          <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Type</th>
+          <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Status</th>
+          <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Unread</th>
+          <th class="px-4 py-2"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for uf in user_feeds %}
+          {% set folder_name = uf.folder.name if uf.folder else None %}
+          {% if folder_name != ns.current_folder %}
+            {% set ns.current_folder = folder_name %}
+            <tr class="bg-gray-50">
+              <td colspan="5" class="px-4 pt-4 pb-1">
+                <div class="flex items-center" id="folder-header-{{ uf.folder.id if uf.folder else 'none' }}">
+                  <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    {{ folder_name or "No folder" }}
+                  </span>
+                  {% if uf.folder %}
+                    <div class="relative flex-shrink-0 ml-1">
+                      <button data-menu-toggle
+                              class="px-1.5 py-0.5 text-gray-400 hover:text-gray-600 text-sm leading-none rounded hover:bg-gray-100">···</button>
+                      <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36">
+                        <button hx-get="/settings/folders/{{ uf.folder.id }}/rename-form"
+                                hx-target="#folder-header-{{ uf.folder.id }}"
                                 hx-swap="outerHTML"
-                                class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
-                        <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+                                class="block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">Rename</button>
+                        <div class="inline-confirm w-full">
+                          <button type="button" class="inline-confirm-trigger block w-full text-left px-3 py-1.5 text-sm text-red-600 hover:bg-gray-50">Delete</button>
+                          <div class="inline-confirm-ask hidden flex items-center gap-1.5 px-3 py-1.5">
+                            <span class="text-xs text-gray-500">Delete?</span>
+                            <button hx-delete="/settings/folders/{{ uf.folder.id }}"
+                                    hx-target="#feeds-list"
+                                    hx-swap="outerHTML"
+                                    class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
+                            <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  {% endif %}
                 </div>
-              {% endif %}
-            </div>
-          </li>
-        {% endif %}
-        <li class="flex items-center gap-3 px-3 py-2 bg-white border border-gray-200 rounded">
-          {% if uf.feed.favicon_url %}
-            <img src="{{ uf.feed.favicon_url }}" alt="" class="w-4 h-4 flex-shrink-0">
-          {% else %}
-            <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
+              </td>
+            </tr>
           {% endif %}
-          <span class="flex-1 text-sm text-gray-800 truncate">
-            {{ uf.custom_title or uf.feed.title }}
-            {% if uf.feed.status == 'error' %}
-              <span class="ml-1 text-xs text-red-500" title="{{ uf.feed.last_error }}">error</span>
-            {% endif %}
-          </span>
-          <span class="text-xs text-gray-400">{{ uf.unread_count }} unread</span>
-          <a href="/settings/feeds/{{ uf.id }}/edit"
-             class="text-xs text-blue-500 hover:underline">Edit</a>
-          <span class="inline-confirm">
-            <button type="button" class="inline-confirm-trigger text-xs text-red-400 hover:text-red-600">Remove</button>
-            <span class="inline-confirm-ask hidden inline-flex items-center gap-1.5">
-              <span class="text-xs text-gray-500">Remove?</span>
-              <button hx-delete="/settings/feeds/{{ uf.id }}"
-                      hx-target="#feeds-list"
-                      hx-swap="outerHTML"
-                      class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
-              <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
-            </span>
-          </span>
-        </li>
-      {% endfor %}
-    </ul>
+          <tr class="{% if uf.feed.status == 'error' %}bg-red-50{% elif uf.feed.status == 'disabled' %}bg-gray-50{% endif %}">
+            <td class="px-4 py-2 max-w-xs">
+              <div class="flex items-center gap-2">
+                {% if uf.feed.favicon_url %}
+                  <img src="{{ uf.feed.favicon_url }}" alt="" class="w-4 h-4 flex-shrink-0">
+                {% else %}
+                  <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
+                {% endif %}
+                <span class="font-medium text-gray-900 truncate">{{ uf.custom_title or uf.feed.title }}</span>
+              </div>
+              {% if uf.feed.status == 'error' and uf.feed.last_error %}
+                <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2">
+              <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ uf.feed.feed_type }}</span>
+            </td>
+            <td class="px-4 py-2">
+              {% if uf.feed.status == 'active' %}
+                <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+              {% elif uf.feed.status == 'error' %}
+                <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700" title="{{ uf.feed.last_error }}">error</span>
+              {% else %}
+                <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ uf.feed.status }}</span>
+              {% endif %}
+            </td>
+            <td class="px-4 py-2 text-right text-gray-600">{{ uf.unread_count }}</td>
+            <td class="px-4 py-2 text-right">
+              <div class="flex items-center justify-end gap-3">
+                <a href="/settings/feeds/{{ uf.id }}/edit"
+                   class="text-xs text-blue-500 hover:underline">Edit</a>
+                <span class="inline-confirm">
+                  <button type="button" class="inline-confirm-trigger text-xs text-red-400 hover:text-red-600">Remove</button>
+                  <span class="inline-confirm-ask hidden inline-flex items-center gap-1.5">
+                    <span class="text-xs text-gray-500">Remove?</span>
+                    <button hx-delete="/settings/feeds/{{ uf.id }}"
+                            hx-target="#feeds-list"
+                            hx-swap="outerHTML"
+                            class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
+                    <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
+                  </span>
+                </span>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
   {% else %}
     <p class="text-sm text-gray-400">No feeds yet. Subscribe to one above.</p>
   {% endif %}

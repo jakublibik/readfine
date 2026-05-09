@@ -407,11 +407,13 @@ async def settings_scrape_subscribe(
     selector = form.get("selector", "").strip()
     title = form.get("title", "").strip() or url
     folder_id = safe_int(form.get("folder_id"))
+    interval_raw = safe_int(form.get("fetch_interval_min"))
+    fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15)) if interval_raw else None
 
     _, folders = await _get_feeds_context(user, db)
     try:
         await subscribe_scrape(user=user, url=url, selector=selector, title=title,
-                               folder_id=folder_id, db=db)
+                               folder_id=folder_id, fetch_interval_min=fetch_interval_min, db=db)
         from urllib.parse import quote
         return RedirectResponse(f"/settings/feeds?added={quote(title)}", status_code=303)
     except ValueError as e:
@@ -435,6 +437,7 @@ async def settings_scrape_subscribe(
             "selector": selector,
             "title": title,
             "folder_id": folder_id,
+            "fetch_interval_min": fetch_interval_min,
             "folders": folders,
             "error": str(e),
         })
