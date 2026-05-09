@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
+from app.utils.http_client import READFINE_UA
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
 
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
-        headers = {"User-Agent": "Readfine/1.0 (+https://github.com/readfine)"}
+        headers = {"User-Agent": READFINE_UA}
         current_url = url
         with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers) as client:
             for _ in range(_MAX_REDIRECTS + 1):

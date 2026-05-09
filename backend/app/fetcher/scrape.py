@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
+from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import fetch_url_with_ssrf_check
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 FETCH_ERROR_DISABLE_THRESHOLD = 5
 
 _HEADERS = {
-    "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
+    "User-Agent": READFINE_UA,
     "Accept": "text/html,application/xhtml+xml,*/*",
 }
 _TIMEOUT = 30

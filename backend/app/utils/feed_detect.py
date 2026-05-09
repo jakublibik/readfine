@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import html
 
+from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 _FEED_MIME_TYPES = {
@@ -15,7 +16,7 @@ _FEED_MIME_TYPES = {
     "application/xml",
 }
 _COMMON_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/feed.xml", "/feeds/posts/default"]
-_FETCH_HEADERS = {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"}
+_FETCH_HEADERS = {"User-Agent": READFINE_UA, "Accept": "text/html,*/*"}
 
 _YT_CHANNEL_RE = re.compile(r"youtube\.com/channel/(UC[\w-]+)")
 _YT_USER_RE = re.compile(r"youtube\.com/user/([\w-]+)")

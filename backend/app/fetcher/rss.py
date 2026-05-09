@@ -20,6 +20,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
+from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, validate_feed_url
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 FETCH_ERROR_DISABLE_THRESHOLD = 5  # consecutive failures before feed is disabled
 
 _HEADERS = {
-    "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
+    "User-Agent": READFINE_UA,
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
 }
 _TIMEOUT = 30  # seconds
