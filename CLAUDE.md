@@ -40,6 +40,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Post-MVP: /feeds/detect — auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
 
 ## TODO
+- **Readable před filtrováním (scrape feedy)**: readable extraction synchronně při fetchi → filtry mají k dispozici plný text; kompromis: zpomalí fetch
 - limit na počet článků při prvním stažení
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)

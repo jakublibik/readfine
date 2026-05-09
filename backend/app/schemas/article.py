@@ -50,6 +50,7 @@ class ArticleResponse(BaseModel):
     content_source: str | None
     readable_content: str | None
     readable_status: str
+    readable_error: str | None = None
     published_at: datetime | None
     estimated_read_min: int | None
     word_count: int | None

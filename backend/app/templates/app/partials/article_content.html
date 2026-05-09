@@ -7,7 +7,7 @@
   {% if article.readable_status in ['failed', 'skipped'] and article.readable_error %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
-      Full content could not be retrieved (access denied). The feed may require authentication, or this site does not allow automated access.
+      Full content could not be retrieved (403 Access denied). The site is likely blocking requests from this server (geo-block or datacenter IP block).
     {%- else -%}
       Readable content extraction failed{% if article.readable_error %}: {{ article.readable_error }}{% endif %}.
     {%- endif %}
