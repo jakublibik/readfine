@@ -37,12 +37,12 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Post-MVP: dark mode, layout přepínač (2/3-panel), zobrazení labelů na článcích, HTTP auth při editaci feedu
 - Post-MVP: web scraping feed type — CSS selector, AI prompt, scrape setup UI, feed detection validation, published_at z URL (`_YYMMDDHHMM_`), excerpt z listingu
 - Post-MVP: sidebar UX — synchronní feed refresh se spinnerem, badge update, toast (ok/warning/error); červený pruh u chybných feedů; warning toast při kliknutí na chybný feed
+- Post-MVP: /feeds/detect — auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
 
 ## TODO
 - limit na počet článků při prvním stažení
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
-- **/feeds/detect**: auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
 - Filter scope S2: scope_include/scope_except → JSONB
 - **OPML export scrape feedů**: OPML standard CSS selektory nepodporuje — zvážit vlastní rozšíření formátu pro round-trip export/import scrape feedů
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
