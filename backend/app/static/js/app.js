@@ -353,11 +353,15 @@ function _flushMarkRead() {
   if (_pendingMarkRead.size === 0) return;
   var ids = Array.from(_pendingMarkRead);
   _pendingMarkRead.clear();
+  var csrfToken = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
+  csrfToken = csrfToken ? csrfToken.split('=')[1] : '';
   fetch('/htmx/articles/set-read-batch', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-csrftoken': csrfToken },
     body: JSON.stringify({ ids: ids }),
     credentials: 'same-origin',
+  }).then(function (r) {
+    if (r.ok) htmx.trigger(document.body, 'sidebarRefresh');
   }).catch(function (e) { console.warn('mark-read-batch failed:', e); });
 }
 
@@ -370,6 +374,7 @@ function _queueMarkRead(id) {
 document.addEventListener('visibilitychange', function () {
   if (document.visibilityState === 'hidden') _flushMarkRead();
 });
+window.addEventListener('beforeunload', function () { _flushMarkRead(); });
 
 // Article list: IntersectionObserver for mark-as-read on scroll
 document.body.addEventListener('htmx:afterSettle', function (evt) {
@@ -407,7 +412,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
       if (entry.isIntersecting) {
         seen.add(id);
-      } else if (seen.has(id) && !isRead && entry.boundingClientRect.top < 0) {
+      } else if (!isRead && entry.boundingClientRect.top < 0) {
         seen.delete(id);
         el.dataset.isRead = 'true';
         el.classList.add('opacity-75');
