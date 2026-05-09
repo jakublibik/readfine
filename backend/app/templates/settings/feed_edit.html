@@ -3,13 +3,27 @@
 {% block title %}Edit feed – Readfine{% endblock %}
 
 {% block settings_content %}
-<h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
-<p class="text-sm text-gray-500 mb-6">
-  <span class="font-mono text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{{ uf.feed.feed_type }}</span>
-  <span class="mx-1.5 text-gray-300">·</span>
+<div class="mb-6">
+  <h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
+  <p class="text-sm text-gray-700 mb-2">{{ uf.feed.title }}</p>
+  <div class="flex flex-wrap items-center gap-2 mb-2">
+    <span class="font-mono text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{{ uf.feed.feed_type }}</span>
+    {% if uf.feed.is_private %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
+    {% else %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
+    {% endif %}
+    {% if uf.feed.status == 'active' %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700 border border-green-200">Active</span>
+    {% elif uf.feed.status == 'error' %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-200">Error</span>
+    {% else %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">{{ uf.feed.status }}</span>
+    {% endif %}
+  </div>
   <a href="{{ uf.feed.feed_url }}" target="_blank" rel="noopener noreferrer"
-     class="hover:text-blue-600 underline break-all">{{ uf.feed.feed_url }}</a>
-</p>
+     class="text-xs font-mono text-gray-400 hover:text-blue-600 break-all underline">{{ uf.feed.feed_url }}</a>
+</div>
 
 <form method="POST"
       action="/settings/feeds/{{ uf.id }}/edit"
@@ -35,6 +49,42 @@
         </option>
       {% endfor %}
     </select>
+  </div>
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
+    <select name="fetch_interval_min"
+            class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <option value="">Default</option>
+      {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+        <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
+          {{ m }} min
+        </option>
+      {% endfor %}
+    </select>
+    <p class="text-xs text-gray-400 mt-1">How often this feed is checked for new articles. "Default" uses the server setting.</p>
+  </div>
+
+  <div>
+    <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
+      <input type="hidden" name="extract_readable" value="false">
+      <input type="checkbox" name="extract_readable" value="true"
+             {% if uf.extract_readable %}checked{% endif %}
+             class="mt-0.5 rounded">
+      <span>
+        Extract full content
+        <span class="block text-xs text-gray-400 font-normal">
+          Download and extract the full article text from the source URL.
+          Disable if the feed already includes full articles.
+        </span>
+      </span>
+    </label>
+    {% if uf.readable_auto_disabled %}
+    <div class="mt-2 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+      <span class="flex-shrink-0">⚠</span>
+      <span>Automatically disabled — the site blocked content extraction. You can re-enable it above, but it may be disabled again.</span>
+    </div>
+    {% endif %}
   </div>
 
   {% if uf.feed.feed_type == 'scrape' and is_sole_subscriber %}
@@ -72,54 +122,11 @@
   </div>
   {% endif %}
 
-  <div class="text-xs text-gray-400 pt-1 space-y-0.5">
-    <div>Feed URL: <span class="font-mono">{{ uf.feed.feed_url }}</span></div>
-    <div>
-      Status: {{ uf.feed.status }}
-      {% if uf.feed.last_error %}
-        — <span class="text-red-500">{{ uf.feed.last_error }}</span>
-      {% endif %}
-    </div>
-    <div class="flex items-center gap-1.5 pt-0.5">
-      {% if uf.feed.is_private %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
-        <span class="text-gray-400">This feed is isolated to your account and not shared with other users.</span>
-      {% else %}
-        <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
-        <span class="text-gray-400">Articles are cached and shared across all subscribers on this server.</span>
-      {% endif %}
-    </div>
+  {% if uf.feed.last_error %}
+  <div class="px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+    <span class="font-medium">Last error:</span> {{ uf.feed.last_error }}
   </div>
-
-  <div>
-    <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
-      <input type="hidden" name="extract_readable" value="false">
-      <input type="checkbox" name="extract_readable" value="true"
-             {% if uf.extract_readable %}checked{% endif %}
-             class="mt-0.5 rounded">
-      <span>
-        Extract full content
-        <span class="block text-xs text-gray-400 font-normal">
-          Download and extract the full article text from the source URL.
-          Disable if the feed already includes full articles.
-        </span>
-      </span>
-    </label>
-  </div>
-
-  <div>
-    <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
-    <select name="fetch_interval_min"
-            class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <option value="">Default</option>
-      {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
-        <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
-          {{ m }} min
-        </option>
-      {% endfor %}
-    </select>
-    <p class="text-xs text-gray-400 mt-1">How often this feed is checked for new articles. "Default" uses the server setting.</p>
-  </div>
+  {% endif %}
 
   <div class="flex items-center gap-3 pt-2">
     <button type="submit"

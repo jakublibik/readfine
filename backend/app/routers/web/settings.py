@@ -500,6 +500,7 @@ async def settings_feed_update(
     uf.custom_title = custom_title
     uf.folder_id = folder_id
     uf.extract_readable = form.get("extract_readable") == "true"
+    uf.readable_auto_disabled = False
 
     interval_raw = safe_int(form.get("fetch_interval_min"))
     if interval_raw is not None:

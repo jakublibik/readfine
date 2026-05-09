@@ -59,6 +59,9 @@
                   <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
                 {% endif %}
                 <span class="font-medium text-gray-900 truncate">{{ uf.custom_title or uf.feed.title }}</span>
+                {% if uf.readable_auto_disabled %}
+                  <span title="Full content extraction was automatically disabled — the site blocked it." class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
+                {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
                 <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>

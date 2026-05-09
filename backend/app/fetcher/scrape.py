@@ -187,12 +187,7 @@ async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
 
-        extract_readable_result = await db.execute(
-            select(UserFeed.extract_readable).where(UserFeed.feed_id == feed_id).limit(1)
-        )
-        extract_readable = extract_readable_result.scalar() or False
-
-        new_count = await _save_scrape_articles(feed, links, fetched_at, db, extract_readable)
+        new_count = await _save_scrape_articles(feed, links, fetched_at, db)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = fetched_at
@@ -236,7 +231,6 @@ async def _save_scrape_articles(
     links: list[tuple[str, str, datetime | None, str | None]],
     fetched_at: datetime,
     db: AsyncSession,
-    extract_readable: bool = True,
 ) -> int:
     urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
@@ -285,7 +279,7 @@ async def _save_scrape_articles(
             title=title[:1000],
             content=content_html,
             content_source="feed" if content_html else "skipped",
-            readable_status="pending" if extract_readable else "skipped",
+            readable_status="skipped",
             published_at=pub_at or fetched_at,
             fetched_at=fetched_at,
         ))

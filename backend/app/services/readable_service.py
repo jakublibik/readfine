@@ -369,6 +369,7 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 
     for uf in user_feeds:
         uf.extract_readable = False
+        uf.readable_auto_disabled = True
     await db.commit()
 
     # Mark pending articles for this feed as skipped (no need to extract)
@@ -408,6 +409,7 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
 
     for uf in user_feeds:
         uf.extract_readable = False
+        uf.readable_auto_disabled = True
 
     pending_result = await db.execute(
         select(Article).where(
