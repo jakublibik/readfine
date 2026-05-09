@@ -416,6 +416,25 @@ async def mark_scope_read(
     await db.commit()
 
 
+async def mark_articles_read_batch(user: User, article_ids: list[int], db: AsyncSession) -> None:
+    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read."""
+    if not article_ids:
+        return
+    now = datetime.now(timezone.utc)
+    stmt = pg_insert(UserArticleState).values([
+        {"user_id": user.id, "article_id": aid, "is_read": True,
+         "is_starred": False, "is_archived": False, "is_hidden": False, "read_at": now}
+        for aid in article_ids
+    ]).on_conflict_do_update(
+        index_elements=["user_id", "article_id"],
+        set_={"is_read": True, "read_at": now},
+        where=(UserArticleState.__table__.c.is_read.is_not(True)),
+    )
+    await db.execute(stmt)
+    await _recalculate_unread_counts(user.id, article_ids, db)
+    await db.commit()
+
+
 async def toggle_article_state(
     user: User,
     article_id: int,

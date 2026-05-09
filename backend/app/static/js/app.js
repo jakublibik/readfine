@@ -344,6 +344,33 @@ function _setTitleBarCount(count, type) {
   }
 }
 
+// Batched mark-as-read — collects IDs and sends one request per debounce window
+var _pendingMarkRead = new Set();
+var _markReadTimer = null;
+
+function _flushMarkRead() {
+  _markReadTimer = null;
+  if (_pendingMarkRead.size === 0) return;
+  var ids = Array.from(_pendingMarkRead);
+  _pendingMarkRead.clear();
+  fetch('/htmx/articles/set-read-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids: ids }),
+    credentials: 'same-origin',
+  }).catch(function (e) { console.warn('mark-read-batch failed:', e); });
+}
+
+function _queueMarkRead(id) {
+  _pendingMarkRead.add(id);
+  clearTimeout(_markReadTimer);
+  _markReadTimer = setTimeout(_flushMarkRead, 500);
+}
+
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') _flushMarkRead();
+});
+
 // Article list: IntersectionObserver for mark-as-read on scroll
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (evt.detail.target.id !== 'article-list') return;
@@ -389,7 +416,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
           titleEl.classList.remove('font-bold', 'text-gray-900');
           titleEl.classList.add('font-medium', 'text-gray-800');
         }
-        htmx.ajax('POST', '/htmx/articles/' + id + '/set-read?state=true', { swap: 'none' });
+        _queueMarkRead(id);
         if (window._titleBarCountType === 'unread') {
           var badge = document.getElementById('mobile-title-count');
           if (badge && !badge.classList.contains('hidden')) {

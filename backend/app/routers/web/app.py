@@ -24,7 +24,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
-from app.services.article import get_article, list_articles, mark_scope_read, toggle_article_state, update_article_state
+from app.services.article import get_article, list_articles, mark_articles_read_batch, mark_scope_read, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
@@ -229,6 +229,18 @@ async def htmx_sidebar_pin(
 ):
     # Pin state is now managed client-side via localStorage; endpoint kept for compatibility.
     return HTMLResponse("", status_code=204)
+
+
+@router.post("/htmx/articles/set-read-batch")
+async def htmx_set_read_batch(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    data = await request.json()
+    ids = [int(i) for i in (data.get("ids") or [])[:500] if str(i).isdigit()]
+    await mark_articles_read_batch(user, ids, db)
+    return HTMLResponse("", status_code=200)
 
 
 @router.post("/htmx/articles/mark-read", response_class=HTMLResponse)
