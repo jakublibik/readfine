@@ -35,6 +35,8 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Fáze 7 – purge jobs: age- a count-based retention
 - Fáze 7 – různé: content source label, folder UniqueConstraint, fetch_auth_pass SecretStr
 - Post-MVP: dark mode, layout přepínač (2/3-panel), zobrazení labelů na článcích, HTTP auth při editaci feedu
+- Post-MVP: web scraping feed type — CSS selector, AI prompt, scrape setup UI, feed detection validation, published_at z URL (`_YYMMDDHHMM_`), excerpt z listingu
+- Post-MVP: sidebar UX — synchronní feed refresh se spinnerem, badge update, toast (ok/warning/error); červený pruh u chybných feedů; warning toast při kliknutí na chybný feed
 
 ## TODO
 - limit na počet článků při prvním stažení
@@ -42,8 +44,6 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
 - **/feeds/detect**: auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
 - Filter scope S2: scope_include/scope_except → JSONB
-- Plošné testové pokrytí: rozšíření testů nad rámec kritických částí
-- **Web scraping**: fáze — sledování libovolných webových stránek bez RSS
 - **OPML export scrape feedů**: OPML standard CSS selektory nepodporuje — zvážit vlastní rozšíření formátu pro round-trip export/import scrape feedů
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
 - **htmldate pro published_at**: integrovat `htmldate.find_date()` do `readable_service.py` — po úspěšné readable extraction spustit na stránce článku a aktualizovat `published_at`, pokud dosud nebylo nastaveno z listingu. Pomůže webům bez `<time datetime>` v kartičkách (Aktuálně, Respekt, Deník…). Nevyřeší weby se zakázaným readable. Závislost htmldate je tranzitivní přes trafilatura (uv add htmldate).
