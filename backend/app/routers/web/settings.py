@@ -53,6 +53,17 @@ from app.services.label_service import (
     update_label,
 )
 from app.services.opml import MAX_UPLOAD_BYTES, ImportResult, export_opml, import_opml
+from app.services.ai_service import (
+    PROVIDER_DOCS_URLS,
+    SUPPORTED_PROVIDERS,
+    delete_api_key,
+    estimate_monthly_cost,
+    generate_preference_text,
+    get_ai_client,
+    list_api_keys,
+    save_api_key,
+    verify_ai_slot,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 templates = Jinja2Templates(directory="app/templates")
@@ -1187,3 +1198,131 @@ async def settings_opml_import(
     return templates.TemplateResponse(request, "settings/opml.html", {
         "import_result": result,
     })
+
+
+# ── AI settings ───────────────────────────────────────────────────────────────
+
+async def _ai_page_context(user: User, db: AsyncSession) -> dict:
+    s = await _get_or_create_settings(user, db)
+    keys = await list_api_keys(user.id, db)
+    cost = await estimate_monthly_cost(user.id, db)
+    return {
+        "s": s,
+        "keys": keys,
+        "cost": cost,
+        "providers": SUPPORTED_PROVIDERS,
+        "provider_docs": PROVIDER_DOCS_URLS,
+    }
+
+
+@router.get("/ai", response_class=HTMLResponse)
+async def settings_ai(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    ctx = await _ai_page_context(user, db)
+    return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+
+@router.post("/ai/keys", response_class=HTMLResponse)
+async def settings_ai_keys_save(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    provider = (form.get("provider") or "").strip()
+    api_key = (form.get("api_key") or "").strip()
+
+    if provider not in SUPPORTED_PROVIDERS:
+        ctx = await _ai_page_context(user, db)
+        ctx["keys_error"] = "Unknown provider."
+        return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+    if api_key:
+        await save_api_key(user.id, provider, api_key, db)
+        ctx = await _ai_page_context(user, db)
+        ctx["keys_saved"] = provider
+    else:
+        await delete_api_key(user.id, provider, db)
+        ctx = await _ai_page_context(user, db)
+        ctx["keys_deleted"] = provider
+
+    return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+
+@router.post("/ai/preferences", response_class=HTMLResponse)
+async def settings_ai_preferences_save(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    s = await _get_or_create_settings(user, db)
+
+    s.ai_fast_provider = (form.get("ai_fast_provider") or "").strip() or None
+    s.ai_fast_model = (form.get("ai_fast_model") or "").strip() or None
+    s.ai_quality_provider = (form.get("ai_quality_provider") or "").strip() or None
+    s.ai_quality_model = (form.get("ai_quality_model") or "").strip() or None
+    s.ai_preference_text = (form.get("ai_preference_text") or "").strip() or None
+    s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
+    s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
+
+    await db.commit()
+    ctx = await _ai_page_context(user, db)
+    ctx["prefs_saved"] = True
+    return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+
+@router.post("/ai/verify/{slot}", response_class=HTMLResponse)
+async def settings_ai_verify(
+    slot: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if slot not in ("fast", "quality"):
+        return HTMLResponse("Invalid slot", status_code=400)
+
+    form = await request.form()
+    provider_override = (form.get(f"ai_{slot}_provider") or "").strip() or None
+    model_override = (form.get(f"ai_{slot}_model") or "").strip() or None
+    result = await verify_ai_slot(user.id, slot, db, provider_override, model_override)
+    if result["ok"]:
+        html = (
+            f'<span class="text-green-600 text-sm">✓ Connected — {result["model"]}</span>'
+        )
+    else:
+        html = (
+            f'<span class="text-red-600 text-sm">✗ {result["error"]}</span>'
+        )
+    return HTMLResponse(html)
+
+
+@router.post("/ai/generate-preference", response_class=HTMLResponse)
+async def settings_ai_generate_preference(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    client, provider, model = await get_ai_client(user.id, "fast", db)
+    if client is None:
+        return HTMLResponse(
+            '<span class="text-red-600 text-sm">Fast model not configured.</span>'
+        )
+    try:
+        text_result = await generate_preference_text(user.id, db, client, provider, model)
+    except Exception as exc:
+        logger.warning("generate_preference_text failed for user=%s: %s", user.id, exc)
+        return HTMLResponse(
+            f'<span class="text-red-600 text-sm">Error: {str(exc)[:150]}</span>'
+        )
+
+    escaped = text_result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    return HTMLResponse(
+        f'<span class="text-green-600 text-sm">Generated — review and save below.</span>'
+        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="4"'
+        f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
+        f' hx-swap-oob="true">{escaped}</textarea>'
+    )

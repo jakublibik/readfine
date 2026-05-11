@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, ForeignKey, func
+from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -49,6 +49,17 @@ class UserSettings(Base):
     bucket_medium_max: Mapped[int] = mapped_column(SmallInteger, default=1100)
     reading_font_size: Mapped[str] = mapped_column(String(10), nullable=False, default="md")
     reading_font_family: Mapped[str] = mapped_column(String(10), nullable=False, default="sans")
+
+    # AI settings
+    ai_fast_provider: Mapped[str | None] = mapped_column(String(30))
+    ai_fast_model: Mapped[str | None] = mapped_column(String(100))
+    ai_quality_provider: Mapped[str | None] = mapped_column(String(30))
+    ai_quality_model: Mapped[str | None] = mapped_column(String(100))
+    ai_preference_text: Mapped[str | None] = mapped_column(Text)
+    ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_ai_error: Mapped[str | None] = mapped_column(Text)
+    last_ai_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")

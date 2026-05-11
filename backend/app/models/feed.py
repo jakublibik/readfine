@@ -68,6 +68,8 @@ class UserFeed(Base):
     description: Mapped[str | None] = mapped_column(Text)
     extract_readable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     readable_auto_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ai_scoring_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    ai_summary_enabled: Mapped[bool | None] = mapped_column(Boolean)
     unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     purge_after_days: Mapped[int | None] = mapped_column(SmallInteger)
     purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger)

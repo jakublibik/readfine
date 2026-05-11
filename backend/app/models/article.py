@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, Integer, SmallInteger,
-    String, Text, ForeignKey, func, CheckConstraint, ARRAY
+    String, Text, ForeignKey, func, CheckConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,11 +39,6 @@ class Article(Base):
     estimated_read_min: Mapped[int | None] = mapped_column(SmallInteger)
     word_count: Mapped[int | None] = mapped_column(Integer)
     image_url: Mapped[str | None] = mapped_column(String(2048))
-    # Phase 2 AI columns
-    ai_summary: Mapped[str | None] = mapped_column(Text)
-    ai_score: Mapped[float | None] = mapped_column()
-    ai_tags_suggested: Mapped[list[str] | None] = mapped_column(ARRAY(String))
-    ai_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
