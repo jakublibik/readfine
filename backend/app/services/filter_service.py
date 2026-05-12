@@ -445,17 +445,25 @@ async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
         filters = filters_result.scalars().all()
 
         got_star_or_label = False
+        got_label = False
         for f in filters:
             if evaluate_filter(f, article, uf):
                 action_types = {a.action_type for a in f.actions}
                 if action_types & {"star", "label"}:
                     got_star_or_label = True
+                if "label" in action_types:
+                    got_label = True
                 await _execute_actions(f, article, uf.user_id, uf, db)
                 if f.stop_on_match:
                     break
 
         if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
             article.readable_status = "pending"
+
+        # Enqueue scoring for labeled articles on non-readable feeds (or feeds with readable already done)
+        if got_label and (not uf.extract_readable or article.readable_status == "success"):
+            from app.services.ai_scoring_service import enqueue_scoring_job
+            await enqueue_scoring_job(article, uf.user_id, db)
 
 
 # ── Test / retroactive apply ──────────────────────────────────────────────────

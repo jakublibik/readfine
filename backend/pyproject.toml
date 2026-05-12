@@ -41,6 +41,10 @@ dependencies = [
     # Encryption
     "cryptography>=42.0.0",
     "htmldate>=1.9.4",
+    # AI providers
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "google-genai>=1.0.0",
 ]
 
 [project.optional-dependencies]

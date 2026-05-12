@@ -9,6 +9,7 @@ from app.auth.security import decode_access_token, hash_token
 from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
+from app.models.settings import AppSettings
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -97,3 +98,9 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
+
+
+async def require_ai_enabled(db: AsyncSession = Depends(get_db)) -> None:
+    row = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    if row is None or not row.ai_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="AI features are disabled by the administrator")

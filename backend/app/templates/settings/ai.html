@@ -116,6 +116,19 @@
         </label>
       </div>
       <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+      {% if s.ai_scoring_enabled_default and not s.ai_preference_text %}
+      <p class="text-xs text-amber-600 mt-1 ml-6">Scoring is enabled but no interest profile is set — articles will not be scored until you fill in the profile below.</p>
+      {% endif %}
+    </div>
+    <div class="ml-6">
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
+               {% if s.ai_score_show_in_list %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        <label for="ai_score_show_in_list" class="text-sm text-gray-700">
+          Show score in article list
+        </label>
+      </div>
     </div>
     <div>
       <div class="flex items-center gap-2">
@@ -141,7 +154,7 @@
             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ s.ai_preference_text or '' }}</textarea>
 
-  <p class="text-xs text-gray-400 mt-2 mb-1">Uses your feed names and titles of currently starred articles.</p>
+  <p class="text-xs text-gray-400 mt-2 mb-1">Generated from articles you recently starred and read. Falls back to feed names when there's not enough reading history yet.</p>
   <div class="flex items-center gap-3">
     <button type="button" id="btn-generate-preference"
             hx-post="/settings/ai/generate-preference"

@@ -5,7 +5,6 @@ import secrets
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,8 +21,9 @@ from app.models.settings import AppSettings
 
 logger = logging.getLogger(__name__)
 
+from app.templating import templates
+
 router = APIRouter(tags=["web-auth"])
-templates = Jinja2Templates(directory="app/templates")
 
 
 async def _get_app_settings(db: AsyncSession) -> AppSettings | None:

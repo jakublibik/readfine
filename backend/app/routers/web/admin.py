@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
@@ -36,8 +35,9 @@ from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
 
+from app.templating import templates, set_ai_enabled
+
 router = APIRouter(prefix="/admin", tags=["admin"])
-templates = Jinja2Templates(directory="app/templates")
 
 
 def _quantize15(val: int | None, default: int) -> int:
@@ -131,7 +131,6 @@ async def admin_settings_save(
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
-        "ai_require_user_keys": form.get("ai_require_user_keys") == "true",
     }
     # Only update SMTP password if a new value was provided
     if smtp_password_plain:
@@ -139,6 +138,7 @@ async def admin_settings_save(
 
     try:
         s = await update_app_settings(db, data)
+        set_ai_enabled(s.ai_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
         return templates.TemplateResponse(request, "admin/settings.html", {
             "s": s,

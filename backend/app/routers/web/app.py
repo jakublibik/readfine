@@ -8,7 +8,6 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import select, func, update as sa_update
@@ -29,8 +28,9 @@ from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 
+from app.templating import templates
+
 router = APIRouter(tags=["web-app"])
-templates = Jinja2Templates(directory="app/templates")
 
 
 async def _extract_readable_bg(
@@ -516,6 +516,7 @@ async def htmx_article_list(
         "mark_read_on_scroll": mark_read_on_scroll,
         "density": density,
         "label_display": label_display,
+        "show_ai_score": settings.ai_score_show_in_list if settings else False,
         "has_more": has_more,
         "filter_qs": urlencode(filter_params),
         "next_offset": len(articles),
@@ -590,6 +591,7 @@ async def htmx_article_list_more(
         "articles": articles,
         "density": density,
         "label_display": label_display,
+        "show_ai_score": settings.ai_score_show_in_list if settings else False,
         "has_more": has_more,
         "filter_qs": urlencode(filter_params),
         "next_offset": offset + len(articles),
@@ -666,7 +668,8 @@ async def _get_row_context(user, request: Request, db) -> dict:
     is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
     density = ((s.list_density_mobile if is_mobile else s.list_density_web) if s else "comfortable")
     label_display = s.label_display if s else "indicator"
-    return {"density": density, "label_display": label_display}
+    show_ai_score = s.ai_score_show_in_list if s else False
+    return {"density": density, "label_display": label_display, "show_ai_score": show_ai_score}
 
 
 def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
@@ -682,7 +685,7 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     return HTMLResponse(content_html + oob)
 
 
-def _read_response(request: Request, article, density: str, label_display: str) -> HTMLResponse:
+def _read_response(request: Request, article, density: str, label_display: str, **_) -> HTMLResponse:
     """Return read button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
     import json
     btn_html = templates.env.get_template("app/partials/read_button.html").render(
@@ -751,6 +754,27 @@ async def htmx_set_read(
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     ctx = await _get_row_context(user, request, db)
     return _read_response(request, article, **ctx)
+
+
+@router.post("/htmx/articles/{article_id}/dwell")
+async def htmx_article_dwell(
+    article_id: int,
+    seconds: int = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if seconds <= 3:
+        return HTMLResponse("", status_code=204)
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.article_id == article_id,
+            UserArticleState.user_id == user.id,
+        )
+    )
+    if state is not None:
+        state.dwell_seconds = state.dwell_seconds + seconds
+        await db.commit()
+    return HTMLResponse("", status_code=204)
 
 
 @router.post("/htmx/articles/{article_id}/star", response_class=HTMLResponse)

@@ -86,7 +86,7 @@ def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
                                  include_links=True, include_images=True,
-                                 favor_recall=True)
+                                 favor_precision=True)
     if not result:
         return None
     # trafilatura outputs <graphic src="..." alt="..."/> instead of <img>
@@ -309,6 +309,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
         is_403 = apply_readable_result(article, content, error, http_status)
         if content:
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
+            from app.services.ai_scoring_service import enqueue_scoring_after_readable
+            await enqueue_scoring_after_readable(article, db)
         elif is_403:
             streak = feed_403_streak.get(article.feed_id, 0) + 1
             feed_403_streak[article.feed_id] = streak

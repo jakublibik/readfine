@@ -15,6 +15,8 @@ from starlette_csrf import CSRFMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
+from sqlalchemy import select
+
 from app.config import settings
 from app.rate_limit import limiter
 import app.database as db
@@ -31,6 +33,13 @@ async def lifespan(app: FastAPI):
         from app.services.user import seed_first_admin
         async with db.async_session_factory() as session:
             await seed_first_admin(session, settings.first_admin_email, settings.first_admin_password)
+
+    from app.models.settings import AppSettings
+    from app.templating import set_ai_enabled
+    async with db.async_session_factory() as session:
+        row = await session.scalar(select(AppSettings).where(AppSettings.id == 1))
+        if row:
+            set_ai_enabled(row.ai_enabled)
 
     from app.fetcher.scheduler import create_scheduler
     sched = create_scheduler()

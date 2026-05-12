@@ -1,16 +1,22 @@
 {% extends "base.html" %}
 {% block content %}
 {% from "partials/side_nav.html" import side_nav %}
-{% set settings_nav_items = [
+{% set _nav_before_ai = [
   {"label": "Profile",     "url": "/settings/profile",      "active": active == "profile"},
   {"label": "Preferences", "url": "/settings/preferences",  "active": active == "preferences"},
   {"label": "Feeds",       "url": "/settings/feeds",        "active": active == "feeds"},
   {"label": "Labels",      "url": "/settings/labels",       "active": active == "labels"},
   {"label": "Filters",     "url": "/settings/filters",      "active": active == "filters"},
-  {"label": "AI",          "url": "/settings/ai",           "active": active == "ai"},
+] %}
+{% set _nav_after_ai = [
   {"label": "Tokens",      "url": "/settings/tokens",       "active": active == "tokens"},
   {"label": "OPML",        "url": "/settings/opml",         "active": active == "opml"},
 ] %}
+{% if app_ai_enabled() %}
+  {% set settings_nav_items = _nav_before_ai + [{"label": "AI", "url": "/settings/ai", "active": active == "ai"}] + _nav_after_ai %}
+{% else %}
+  {% set settings_nav_items = _nav_before_ai + _nav_after_ai %}
+{% endif %}
 <div class="min-h-screen bg-gray-50 flex flex-col sm:flex-row">
   {{ side_nav(settings_nav_items, title="Settings", back_url="/app", back_label="Back to reader") }}
   <main class="flex-1 px-4 sm:px-8 pt-3 pb-6 max-w-3xl">

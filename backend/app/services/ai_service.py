@@ -233,12 +233,10 @@ async def verify_ai_slot(
 async def score_article(content: str, preference_text: str, client, provider: str, model: str) -> float:
     """Score article relevance 0.0–1.0 based on user preference text."""
     prompt = (
-        f"Rate the relevance of this article to the reader's interests on a scale from 0.0 to 1.0.\n"
-        f"Use the following profile as a guide:\n"
-        f"- High relevance topics → score near 1.0\n"
-        f"- Low relevance topics → score around 0.3–0.5\n"
-        f"- No relevance topics → score near 0.0\n\n"
-        f"Reader's interest profile:\n{preference_text}\n\n"
+        f"Rate how relevant this article is to the reader based on their interest profile.\n"
+        f"Score from 0.0 (no interest / actively avoid) to 1.0 (exactly what they want to read).\n\n"
+        f"Reader profile:\n{preference_text}\n\n"
+        f"---\n"
         f"Article:\n{content[:3000]}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
@@ -247,6 +245,7 @@ async def score_article(content: str, preference_text: str, client, provider: st
         score = float(raw.strip())
         return max(0.0, min(1.0, score))
     except ValueError:
+        logger.warning("score_article: unexpected AI response %r, defaulting to 0.5", raw)
         return 0.5
 
 
@@ -254,7 +253,7 @@ async def summarize_article(content: str, client, provider: str, model: str) -> 
     """Generate a concise article summary."""
     prompt = (
         f"Summarize the following article in 2–4 sentences. Be concise and factual.\n\n"
-        f"{content[:8000]}"
+        f"Article:\n{content[:8000]}"  # 8000 chars for full context needed in summary
     )
     return await _complete(prompt, client, provider, model, max_tokens=300)
 
@@ -264,7 +263,7 @@ async def get_article_context(content: str, client, provider: str, model: str) -
     prompt = (
         f"Explain the broader context and significance of the following article in 2–4 sentences. "
         f"What should the reader know to understand why this matters?\n\n"
-        f"{content[:8000]}"
+        f"Article:\n{content[:8000]}"
     )
     return await _complete(prompt, client, provider, model, max_tokens=300)
 
@@ -289,49 +288,85 @@ async def generate_css_selector(url: str, html: str, client, provider: str, mode
 
 
 async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
-    """Generate preference text from user's feed titles and starred articles."""
+    """Generate preference text from user's reading behaviour signals."""
     from sqlalchemy import text
-    # Get feed titles
-    feeds_result = await db.execute(
-        text("""
+    cutoff_6m = "NOW() - INTERVAL '6 months'"
+    cutoff_3m = "NOW() - INTERVAL '3 months'"
+    cutoff_2m = "NOW() - INTERVAL '2 months'"
+
+    # Group 1: starred + read thoroughly (strongest signal)
+    g1 = await db.execute(text(f"""
+        SELECT a.title FROM articles a
+        JOIN user_article_states uas ON uas.article_id = a.id
+        WHERE uas.user_id = :uid
+          AND uas.user_starred = true AND uas.dwell_seconds >= 60
+          AND uas.created_at >= {cutoff_6m}
+        ORDER BY uas.created_at DESC LIMIT 30
+    """), {"uid": user_id})
+    g1_titles = [r[0] for r in g1]
+
+    # Group 2: read thoroughly, not starred
+    g2 = await db.execute(text(f"""
+        SELECT a.title FROM articles a
+        JOIN user_article_states uas ON uas.article_id = a.id
+        WHERE uas.user_id = :uid
+          AND uas.user_starred = false AND uas.dwell_seconds >= 60
+          AND uas.created_at >= {cutoff_3m}
+        ORDER BY uas.created_at DESC LIMIT 50
+    """), {"uid": user_id})
+    g2_titles = [r[0] for r in g2]
+
+    # Group 3: starred only (impulsive, weaker signal)
+    g3 = await db.execute(text(f"""
+        SELECT a.title FROM articles a
+        JOIN user_article_states uas ON uas.article_id = a.id
+        WHERE uas.user_id = :uid
+          AND uas.user_starred = true AND uas.dwell_seconds < 60
+          AND uas.created_at >= {cutoff_2m}
+        ORDER BY uas.created_at DESC LIMIT 20
+    """), {"uid": user_id})
+    g3_titles = [r[0] for r in g3]
+
+    strong_count = len(g1_titles) + len(g2_titles)
+
+    # Cold start fallback: include feed titles when behavioural data is sparse
+    feeds_str = ""
+    if strong_count < 20:
+        feeds = await db.execute(text("""
             SELECT f.title FROM feeds f
             JOIN user_feeds uf ON uf.feed_id = f.id
-            WHERE uf.user_id = :uid
-            LIMIT 30
-        """),
-        {"uid": user_id},
-    )
-    feed_titles = [r[0] for r in feeds_result]
+            WHERE uf.user_id = :uid LIMIT 25
+        """), {"uid": user_id})
+        feed_titles = [r[0] for r in feeds]
+        if feed_titles:
+            feeds_str = "Subscribed feeds (general context):\n" + "\n".join(f"- {t}" for t in feed_titles) + "\n\n"
 
-    # Get titles of recent starred articles
-    starred_result = await db.execute(
-        text("""
-            SELECT a.title FROM articles a
-            JOIN user_article_states uas ON uas.article_id = a.id
-            WHERE uas.user_id = :uid AND uas.is_starred = true
-            ORDER BY uas.created_at DESC
-            LIMIT 30
-        """),
-        {"uid": user_id},
-    )
-    starred_titles = [r[0] for r in starred_result]
+    def _fmt(titles: list[str], label: str) -> str:
+        if not titles:
+            return ""
+        lines = "\n".join(f"- {t}" for t in titles)
+        return f"{label}:\n{lines}\n\n"
 
-    feeds_str = "\n".join(f"- {t}" for t in feed_titles)
-    starred_str = "\n".join(f"- {t}" for t in starred_titles) if starred_titles else "(none yet)"
+    data = (
+        feeds_str
+        + _fmt(g1_titles, "Articles starred and read thoroughly (strongest signal)")
+        + _fmt(g2_titles, "Articles read thoroughly without starring")
+        + _fmt(g3_titles, "Articles starred (title looked interesting, may not have been read fully)")
+    ).strip() or "(no reading history yet)"
 
     prompt = (
-        f"Based on the reader's subscribed feeds and starred articles, generate a concise interest profile "
+        f"Based on the reader's reading history below, generate a concise interest profile "
         f"for use in article relevance scoring.\n\n"
-        f"Format the output as three lines:\n"
-        f"High relevance: [topics the reader cares most about — score near 1.0]\n"
-        f"Low relevance: [topics of marginal interest — score around 0.3–0.5]\n"
-        f"No relevance: [topics or content types the reader has no interest in — score near 0.0]\n\n"
+        f"Format the output as exactly three lines:\n"
+        f"High relevance: [topics the reader is most interested in]\n"
+        f"Moderate relevance: [topics of occasional interest]\n"
+        f"Avoid: [topics or content types the reader has no interest in]\n\n"
         f"Be specific — use concrete topics, not vague categories. "
         f"Output only the three lines, no explanation.\n\n"
-        f"Subscribed feeds:\n{feeds_str}\n\n"
-        f"Recently starred articles:\n{starred_str}"
+        f"---\n"
+        f"{data}"
     )
-    return await _complete(prompt, client, provider, model, max_tokens=200)
+    return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
@@ -363,17 +398,21 @@ async def _complete(prompt: str, client, provider: str, model: str, max_tokens: 
 
 # ── cost estimation ───────────────────────────────────────────────────────────
 
+_MIN_JOBS_FOR_ACTUAL_AVG = 5
+
+
 async def estimate_monthly_cost(user_id: int, db: AsyncSession) -> dict:
     """
-    Estimate monthly AI cost based on last 30 days of labeled/starred article counts.
-    Returns dict with scoring/summary token and cost estimates.
+    Estimate monthly AI cost.
+    Uses actual avg tokens from article_ai_jobs (last 30 days) when enough data exists,
+    otherwise falls back to fixed constants.
     """
     from sqlalchemy import text
     from datetime import timedelta
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
 
-    # Labeled articles (for scoring)
+    # Labeled articles in last 30 days (scoring volume)
     labeled_result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT a.id) FROM articles a
@@ -383,9 +422,9 @@ async def estimate_monthly_cost(user_id: int, db: AsyncSession) -> dict:
         """),
         {"uid": user_id, "cutoff": cutoff},
     )
-    labeled_count = labeled_result.scalar() or 0
+    labeled_count = int(labeled_result.scalar() or 0)
 
-    # Starred articles (for summary)
+    # Starred articles in last 30 days (summary volume)
     starred_result = await db.execute(
         text("""
             SELECT COUNT(*) FROM user_article_states
@@ -393,27 +432,48 @@ async def estimate_monthly_cost(user_id: int, db: AsyncSession) -> dict:
         """),
         {"uid": user_id, "cutoff": cutoff},
     )
-    starred_count = starred_result.scalar() or 0
+    starred_count = int(starred_result.scalar() or 0)
+
+    # Actual avg tokens from completed scoring jobs
+    scoring_jobs_result = await db.execute(
+        text("""
+            SELECT COUNT(*), AVG(input_tokens + COALESCE(output_tokens, 0))
+            FROM article_ai_jobs
+            WHERE user_id = :uid AND operation = 'scoring' AND status = 'success'
+              AND processed_at >= :cutoff AND input_tokens IS NOT NULL
+        """),
+        {"uid": user_id, "cutoff": cutoff},
+    )
+    sj_row = scoring_jobs_result.one()
+    scoring_job_count = int(sj_row[0] or 0)
+    scoring_avg_tokens = float(sj_row[1] or 0)
 
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
-
-    scoring_tokens = int(labeled_count) * _SCORING_TOKENS_PER_ARTICLE
-    summary_tokens = int(starred_count) * _SUMMARY_TOKENS_PER_ARTICLE
-
     fast_model = s.ai_fast_model if s else None
     quality_model = s.ai_quality_model if s else None
 
+    if scoring_job_count >= _MIN_JOBS_FOR_ACTUAL_AVG:
+        scoring_tokens = int(scoring_avg_tokens * labeled_count)
+        scoring_data_note = f"Based on {scoring_job_count} jobs in last 30 days"
+    else:
+        scoring_tokens = labeled_count * _SCORING_TOKENS_PER_ARTICLE
+        scoring_data_note = "Estimated (not enough data yet)" if scoring_job_count > 0 else "Estimated"
+
+    summary_tokens = starred_count * _SUMMARY_TOKENS_PER_ARTICLE
+
     return {
         "scoring": {
-            "articles": int(labeled_count),
+            "articles": labeled_count,
             "tokens": scoring_tokens,
             "cost": estimate_cost_usd(fast_model, scoring_tokens) if fast_model else None,
             "model": fast_model,
+            "data_note": scoring_data_note,
         },
         "summary": {
-            "articles": int(starred_count),
+            "articles": starred_count,
             "tokens": summary_tokens,
             "cost": estimate_cost_usd(quality_model, summary_tokens) if quality_model else None,
             "model": quality_model,
+            "data_note": "Estimated",
         },
     }

@@ -233,6 +233,7 @@ async def list_articles(
             is_read=state.is_read if state else False,
             is_starred=state.is_starred if state else False,
             is_archived=state.is_archived if state else False,
+            ai_score=state.ai_score if state else None,
             labels=labels_by_article.get(article.id, []),
         ))
     return items
@@ -489,6 +490,12 @@ async def toggle_article_state(
             .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
             .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
         )
+
+    if field == "is_starred":
+        if new_value:
+            state.user_starred = True
+        else:
+            state.unstar_dwell_seconds = state.dwell_seconds
 
     if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
         article.readable_status = "pending"

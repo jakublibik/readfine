@@ -58,6 +58,7 @@ class UserSettings(Base):
     ai_preference_text: Mapped[str | None] = mapped_column(Text)
     ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ai_score_show_in_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     last_ai_error: Mapped[str | None] = mapped_column(Text)
     last_ai_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

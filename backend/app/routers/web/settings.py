@@ -8,7 +8,6 @@ import httpx
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -28,7 +27,7 @@ from app.fetcher.scrape import extract_article_links
 
 logger = logging.getLogger(__name__)
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, require_ai_enabled
 from app.database import get_db
 from app.models.auth import ApiToken
 from app.models.feed import Folder, UserFeed
@@ -65,8 +64,9 @@ from app.services.ai_service import (
     verify_ai_slot,
 )
 
+from app.templating import templates
+
 router = APIRouter(prefix="/settings", tags=["settings"])
-templates = Jinja2Templates(directory="app/templates")
 
 
 # ── Labels ────────────────────────────────────────────────────────────────────
@@ -1220,16 +1220,19 @@ async def settings_ai(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
 ):
     ctx = await _ai_page_context(user, db)
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
+@limiter.limit("10/minute")
 @router.post("/ai/keys", response_class=HTMLResponse)
 async def settings_ai_keys_save(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
 ):
     form = await request.form()
     provider = (form.get("provider") or "").strip()
@@ -1257,6 +1260,7 @@ async def settings_ai_preferences_save(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
 ):
     form = await request.form()
     s = await _get_or_create_settings(user, db)
@@ -1268,6 +1272,7 @@ async def settings_ai_preferences_save(
     s.ai_preference_text = (form.get("ai_preference_text") or "").strip() or None
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
+    s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
 
     await db.commit()
     ctx = await _ai_page_context(user, db)
@@ -1275,12 +1280,14 @@ async def settings_ai_preferences_save(
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
+@limiter.limit("5/minute")
 @router.post("/ai/verify/{slot}", response_class=HTMLResponse)
 async def settings_ai_verify(
     slot: str,
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
 ):
     if slot not in ("fast", "quality"):
         return HTMLResponse("Invalid slot", status_code=400)
@@ -1300,11 +1307,13 @@ async def settings_ai_verify(
     return HTMLResponse(html)
 
 
+@limiter.limit("5/minute")
 @router.post("/ai/generate-preference", response_class=HTMLResponse)
 async def settings_ai_generate_preference(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
 ):
     client, provider, model = await get_ai_client(user.id, "fast", db)
     if client is None:

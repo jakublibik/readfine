@@ -34,6 +34,7 @@ class ArticleListItem(BaseModel):
     is_read: bool
     is_starred: bool
     is_archived: bool
+    ai_score: float | None = None
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
 
     model_config = {"from_attributes": False}

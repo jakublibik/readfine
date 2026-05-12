@@ -110,17 +110,6 @@
           <option value="false" {% if not s.ai_enabled %}selected{% endif %}>Disabled</option>
         </select>
       </div>
-      <div class="flex items-center justify-between">
-        <div>
-          <label class="text-sm font-medium text-gray-700">Require user API keys</label>
-          <p class="text-xs text-gray-400">Users must provide their own API keys</p>
-        </div>
-        <select name="ai_require_user_keys"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <option value="true" {% if s.ai_require_user_keys %}selected{% endif %}>Yes</option>
-          <option value="false" {% if not s.ai_require_user_keys %}selected{% endif %}>No</option>
-        </select>
-      </div>
     </div>
   </section>
 

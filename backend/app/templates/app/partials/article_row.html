@@ -1,6 +1,13 @@
 {% set d = density | default("comfortable") %}
 {% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
 {% set ld = label_display | default("indicator") %}
+{% set show_score = show_ai_score | default(false) %}
+{% if show_score and article.ai_score is not none %}
+  {% set score_int = (article.ai_score * 100) | round | int %}
+  {% if article.ai_score >= 0.7 %}{% set score_class = "ai-score-high" %}
+  {% elif article.ai_score >= 0.4 %}{% set score_class = "ai-score-mid" %}
+  {% else %}{% set score_class = "ai-score-low" %}{% endif %}
+{% endif %}
 
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
@@ -36,6 +43,9 @@
          class="text-sm leading-snug whitespace-nowrap text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
     </div>
     <div class="flex items-center gap-1 flex-shrink-0">
+      {% if show_score and article.ai_score is not none %}
+      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
+      {% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -104,6 +114,9 @@
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
+      {% if show_score and article.ai_score is not none %}
+      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
+      {% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button

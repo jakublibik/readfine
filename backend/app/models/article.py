@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Integer, SmallInteger,
+    BigInteger, Boolean, DateTime, Float, Integer, SmallInteger,
     String, Text, ForeignKey, func, CheckConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -56,13 +56,41 @@ class UserArticleState(Base):
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    dwell_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unstar_dwell_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
+    ai_score: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="article_states")
     article: Mapped["Article"] = relationship(back_populates="user_states")
+
+
+class ArticleAiJob(Base):
+    __tablename__ = "article_ai_jobs"
+    __table_args__ = (
+        CheckConstraint("operation IN ('scoring', 'summary', 'context')", name="ck_article_ai_jobs_operation"),
+        CheckConstraint("status IN ('pending', 'success', 'failed', 'skipped')", name="ck_article_ai_jobs_status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    article_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    operation: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")
+    retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    article: Mapped["Article"] = relationship()
+    user: Mapped["User"] = relationship()
 
 
 from app.models.feed import Feed  # noqa: E402

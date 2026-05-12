@@ -23,7 +23,6 @@ class AppSettings(Base):
     smtp_from_email: Mapped[str | None] = mapped_column(String(255))
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    ai_require_user_keys: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

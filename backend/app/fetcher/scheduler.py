@@ -132,6 +132,15 @@ async def _process_readable() -> None:
         await process_pending_readable(session)
 
 
+async def _process_ai_scoring() -> None:
+    """Job: process pending AI scoring jobs."""
+    if db.async_session_factory is None:
+        return
+    from app.services.ai_scoring_service import process_pending_scoring
+    async with db.async_session_factory() as session:
+        await process_pending_scoring(session)
+
+
 async def _purge_old_articles() -> None:
     """Job: delete articles exceeding retention limits."""
     if db.async_session_factory is None:
@@ -160,6 +169,15 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        _process_ai_scoring,
+        trigger="interval",
+        minutes=2,
+        id="process_ai_scoring",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
     )
     scheduler.add_job(
         _purge_old_articles,
