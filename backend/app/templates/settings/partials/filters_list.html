@@ -1,12 +1,33 @@
 <div id="filters-list">
   {% if filters %}
+    {%- set ai_fields = ['ai_score'] -%}
+    {%- set regular_filters = [] -%}
+    {%- set ai_filters = [] -%}
+    {%- for f in filters -%}
+      {%- if f.conditions | selectattr('field', 'in', ai_fields) | list -%}
+        {%- set _ = ai_filters.append(f) -%}
+      {%- else -%}
+        {%- set _ = regular_filters.append(f) -%}
+      {%- endif -%}
+    {%- endfor -%}
     <ul class="space-y-3">
-      {% for f in filters %}
+      {% for f in regular_filters + ai_filters %}
+      {%- set is_ai = f.conditions | selectattr('field', 'in', ai_fields) | list | length > 0 -%}
+      {% if is_ai and loop.index0 == regular_filters | length and regular_filters %}
+        <li class="flex items-center gap-2 py-1">
+          <div class="flex-1 border-t border-dashed border-gray-200"></div>
+          <span class="text-xs text-gray-400 shrink-0">↓ Score filters — run after scoring</span>
+          <div class="flex-1 border-t border-dashed border-gray-200"></div>
+        </li>
+      {% endif %}
       <li class="p-4 bg-white border border-gray-200 rounded">
         <div class="flex items-start justify-between gap-3">
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
               <span class="font-medium text-sm text-gray-900">{{ f.name }}</span>
+              {% if is_ai %}
+                <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score</span>
+              {% endif %}
               {% if not f.is_active %}
                 <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
               {% endif %}

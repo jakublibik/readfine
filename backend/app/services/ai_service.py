@@ -1,6 +1,6 @@
 """AI provider abstraction: client factory, verification, and core AI calls."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -237,7 +237,7 @@ async def score_article(content: str, preference_text: str, client, provider: st
         f"Score from 0.0 (no interest / actively avoid) to 1.0 (exactly what they want to read).\n\n"
         f"Reader profile:\n{preference_text}\n\n"
         f"---\n"
-        f"Article:\n{content[:3000]}\n\n"
+        f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
     raw = await _complete(prompt, client, provider, model, max_tokens=10)
@@ -290,41 +290,42 @@ async def generate_css_selector(url: str, html: str, client, provider: str, mode
 async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
     """Generate preference text from user's reading behaviour signals."""
     from sqlalchemy import text
-    cutoff_6m = "NOW() - INTERVAL '6 months'"
-    cutoff_3m = "NOW() - INTERVAL '3 months'"
-    cutoff_2m = "NOW() - INTERVAL '2 months'"
+    now = datetime.now(timezone.utc)
+    cutoff_6m = now - timedelta(days=180)
+    cutoff_3m = now - timedelta(days=90)
+    cutoff_2m = now - timedelta(days=60)
 
     # Group 1: starred + read thoroughly (strongest signal)
-    g1 = await db.execute(text(f"""
+    g1 = await db.execute(text("""
         SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = true AND uas.dwell_seconds >= 60
-          AND uas.created_at >= {cutoff_6m}
+          AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 30
-    """), {"uid": user_id})
+    """), {"uid": user_id, "cutoff": cutoff_6m})
     g1_titles = [r[0] for r in g1]
 
     # Group 2: read thoroughly, not starred
-    g2 = await db.execute(text(f"""
+    g2 = await db.execute(text("""
         SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = false AND uas.dwell_seconds >= 60
-          AND uas.created_at >= {cutoff_3m}
+          AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 50
-    """), {"uid": user_id})
+    """), {"uid": user_id, "cutoff": cutoff_3m})
     g2_titles = [r[0] for r in g2]
 
     # Group 3: starred only (impulsive, weaker signal)
-    g3 = await db.execute(text(f"""
+    g3 = await db.execute(text("""
         SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = true AND uas.dwell_seconds < 60
-          AND uas.created_at >= {cutoff_2m}
+          AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 20
-    """), {"uid": user_id})
+    """), {"uid": user_id, "cutoff": cutoff_2m})
     g3_titles = [r[0] for r in g3]
 
     strong_count = len(g1_titles) + len(g2_titles)

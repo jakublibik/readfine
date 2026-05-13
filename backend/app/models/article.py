@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, Float, Integer, SmallInteger,
-    String, Text, ForeignKey, func, CheckConstraint,
+    String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -62,6 +62,7 @@ class UserArticleState(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
+    ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships
@@ -74,6 +75,7 @@ class ArticleAiJob(Base):
     __table_args__ = (
         CheckConstraint("operation IN ('scoring', 'summary', 'context')", name="ck_article_ai_jobs_operation"),
         CheckConstraint("status IN ('pending', 'success', 'failed', 'skipped')", name="ck_article_ai_jobs_status"),
+        UniqueConstraint("article_id", "user_id", "operation", name="uq_article_ai_jobs_article_user_op"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

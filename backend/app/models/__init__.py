@@ -6,7 +6,7 @@ from app.models.article import Article, UserArticleState
 from app.models.fetch_log import FetchLog
 from app.models.label import Label, ArticleLabel
 from app.models.filter import Filter, FilterCondition, FilterAction
-from app.models.ai import AiProfile, UserAiKey
+from app.models.ai import UserAiKey
 
 __all__ = [
     "User", "UserSettings",
@@ -16,5 +16,5 @@ __all__ = [
     "Article", "UserArticleState", "FetchLog",
     "Label", "ArticleLabel",
     "Filter", "FilterCondition", "FilterAction",
-    "AiProfile", "UserAiKey",
+    "UserAiKey",
 ]

@@ -32,6 +32,7 @@ from app.database import get_db
 from app.models.auth import ApiToken
 from app.models.feed import Folder, UserFeed
 from app.models.label import Label
+from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
@@ -683,18 +684,9 @@ async def settings_filter_new(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    labels = await list_labels(user, db)
-    user_feeds = await list_user_feeds(user, db)
-    folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
-    )
-    folders = folders_result.scalars().all()
-    return templates.TemplateResponse(request, "settings/filter_edit.html", {
-        "filter": None,
-        "labels": labels,
-        "user_feeds": user_feeds,
-        "folders": folders,
-    })
+    ctx = await _filter_form_context(user, db)
+    ctx["filter"] = None
+    return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
 
 
 @router.get("/filters/{filter_id}/edit", response_class=HTMLResponse)
@@ -707,18 +699,9 @@ async def settings_filter_edit(
     f = await get_filter(user.id, filter_id, db)
     if not f:
         return HTMLResponse("<p class='text-red-500 p-4'>Filter not found.</p>", status_code=404)
-    labels = await list_labels(user, db)
-    user_feeds = await list_user_feeds(user, db)
-    folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
-    )
-    folders = folders_result.scalars().all()
-    return templates.TemplateResponse(request, "settings/filter_edit.html", {
-        "filter": f,
-        "labels": labels,
-        "user_feeds": user_feeds,
-        "folders": folders,
-    })
+    ctx = await _filter_form_context(user, db)
+    ctx["filter"] = f
+    return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
 
 
 async def _filter_form_context(user, db):
@@ -727,7 +710,17 @@ async def _filter_form_context(user, db):
     folders_result = await db.execute(
         select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
     )
-    return {"labels": labels, "user_feeds": user_feeds, "folders": folders_result.scalars().all()}
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    ai_score_available = bool(
+        app_s and app_s.ai_enabled and user_s and user_s.ai_scoring_enabled_default
+    )
+    return {
+        "labels": labels,
+        "user_feeds": user_feeds,
+        "folders": folders_result.scalars().all(),
+        "ai_score_available": ai_score_available,
+    }
 
 
 @router.post("/filters", response_class=HTMLResponse)
@@ -743,8 +736,8 @@ async def settings_filter_create(
         f = await create_filter(user.id, payload, db)
     except ValueError as e:
         ctx = await _filter_form_context(user, db)
-        ctx.update({"filter": None, "error": str(e)})
-        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
+        ctx.update({"filter": None, "form_values": payload, "error": str(e)})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     if save_and_test:
         test_result = await test_filter(user.id, f.id, db)
         ctx = await _filter_form_context(user, db)
@@ -768,8 +761,8 @@ async def settings_filter_update(
     except ValueError as e:
         existing = await get_filter(user.id, filter_id, db)
         ctx = await _filter_form_context(user, db)
-        ctx.update({"filter": existing, "error": str(e)})
-        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx, status_code=422)
+        ctx.update({"filter": existing, "form_values": payload, "error": str(e)})
+        return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     if save_and_test:
         updated = await get_filter(user.id, filter_id, db)
         test_result = await test_filter(user.id, filter_id, db)
@@ -1265,11 +1258,24 @@ async def settings_ai_preferences_save(
     form = await request.form()
     s = await _get_or_create_settings(user, db)
 
-    s.ai_fast_provider = (form.get("ai_fast_provider") or "").strip() or None
+    fast_provider = (form.get("ai_fast_provider") or "").strip() or None
+    quality_provider = (form.get("ai_quality_provider") or "").strip() or None
+    for provider_val in (fast_provider, quality_provider):
+        if provider_val is not None and provider_val not in SUPPORTED_PROVIDERS:
+            ctx = await _ai_page_context(user, db)
+            ctx["prefs_error"] = f"Unknown provider '{provider_val}'. Supported: {', '.join(SUPPORTED_PROVIDERS)}."
+            return templates.TemplateResponse(request, "settings/ai.html", ctx)
+    s.ai_fast_provider = fast_provider
     s.ai_fast_model = (form.get("ai_fast_model") or "").strip() or None
-    s.ai_quality_provider = (form.get("ai_quality_provider") or "").strip() or None
+    s.ai_quality_provider = quality_provider
     s.ai_quality_model = (form.get("ai_quality_model") or "").strip() or None
-    s.ai_preference_text = (form.get("ai_preference_text") or "").strip() or None
+    pref_text = (form.get("ai_preference_text") or "").strip() or None
+    if pref_text and len(pref_text) > 5000:
+        ctx = await _ai_page_context(user, db)
+        ctx["prefs_error"] = f"Interest profile is too long ({len(pref_text)} characters). Maximum is 5 000 characters."
+        ctx["pref_text_submitted"] = pref_text
+        return templates.TemplateResponse(request, "settings/ai.html", ctx)
+    s.ai_preference_text = pref_text
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"

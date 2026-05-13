@@ -21,6 +21,8 @@
 <div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ keys_error }}</div>
 {% elif prefs_saved %}
 <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">AI settings saved.</div>
+{% elif prefs_error %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ prefs_error }}</div>
 {% endif %}
 
 {# ── API Keys ──────────────────────────────────────────────────────────────── #}
@@ -152,9 +154,11 @@
   <textarea name="ai_preference_text" id="ai_preference_text" rows="4"
             placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Low relevance: sports, lifestyle&#10;No relevance: celebrity news, entertainment gossip"
             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ s.ai_preference_text or '' }}</textarea>
+            oninput="(function(t){var n=t.value.length,c=document.getElementById('pref-char-count');c.textContent=n;c.parentElement.classList.toggle('text-red-500',n>5000);c.parentElement.classList.toggle('text-gray-400',n<=5000);})(this)"
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
+  <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
 
-  <p class="text-xs text-gray-400 mt-2 mb-1">Generated from articles you recently starred and read. Falls back to feed names when there's not enough reading history yet.</p>
+  <p class="text-xs text-gray-400 mt-1 mb-1">Generated from articles you recently starred and read. Falls back to feed names when there's not enough reading history yet.</p>
   <div class="flex items-center gap-3">
     <button type="button" id="btn-generate-preference"
             hx-post="/settings/ai/generate-preference"

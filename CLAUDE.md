@@ -49,6 +49,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
 - **htmldate pro published_at**: integrovat `htmldate.find_date()` do `readable_service.py` — po úspěšné readable extraction spustit na stránce článku a aktualizovat `published_at`, pokud dosud nebylo nastaveno z listingu. Pomůže webům bez `<time datetime>` v kartičkách (Aktuálně, Respekt, Deník…). Nevyřeší weby se zakázaným readable. Závislost htmldate je tranzitivní přes trafilatura (uv add htmldate).
 - **robots.txt pro scrape feedy**: před scrapingem zkontrolovat robots.txt cílového webu (urllib.robotparser). Zvážit: snížení úspěšnosti vs. férovost vůči serverům. Readable extraction je jako browser reader mode — robots.txt typicky neřeší.
+- **Filter akce `archive`**: přidat jako akci filtru (vedle label, mark_read, star) — nastaví `is_archived = true` na `user_article_states`. Schéma, service i šablona filter_edit.
 
 ## Testování
 - Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů

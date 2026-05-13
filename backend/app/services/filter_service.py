@@ -2,7 +2,7 @@
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +16,42 @@ from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, F
 
 logger = logging.getLogger(__name__)
 
+_AI_CONDITION_FIELDS = frozenset({"ai_score"})
+_AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 
 _REGEX_MAX_LEN = 200
 # Patterns that commonly cause catastrophic backtracking
 _REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w\+\)\{)")
+
+
+def is_ai_filter(f: "Filter") -> bool:
+    return any(c.field in _AI_CONDITION_FIELDS for c in f.conditions)
+
+
+def _validate_ai_conditions(conditions) -> None:
+    for c in conditions:
+        if c.field != "ai_score":
+            continue
+        if c.operator not in _AI_SCORE_ALLOWED_OPERATORS:
+            raise ValueError(
+                f"Operator '{c.operator}' is not allowed for ai_score — use equals, gt, or lt."
+            )
+        try:
+            val = float(c.value)
+        except (ValueError, TypeError):
+            raise ValueError("ai_score value must be a number.")
+        if not (0 <= val <= 100):
+            raise ValueError("ai_score value must be between 0 and 100.")
+
+
+def _validate_published_at_conditions(conditions) -> None:
+    for c in conditions:
+        if c.field != "published_at":
+            continue
+        try:
+            date.fromisoformat(c.value.strip())
+        except ValueError:
+            raise ValueError("published_at value must be a valid date in YYYY-MM-DD format.")
 
 
 def _validate_regex_conditions(conditions) -> None:
@@ -121,6 +153,8 @@ async def _validate_label_actions(user_id: int, actions, db: AsyncSession) -> No
 
 async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -> FilterResponse:
     _validate_regex_conditions(payload.conditions)
+    _validate_ai_conditions(payload.conditions)
+    _validate_published_at_conditions(payload.conditions)
     await _validate_scope_list(user_id, payload.scope_include, db)
     await _validate_scope_list(user_id, payload.scope_except, db)
     await _validate_label_actions(user_id, payload.actions, db)
@@ -174,6 +208,8 @@ async def update_filter(
 
     if payload.conditions is not None:
         _validate_regex_conditions(payload.conditions)
+        _validate_ai_conditions(payload.conditions)
+        _validate_published_at_conditions(payload.conditions)
 
     if payload.scope_include is not None:
         await _validate_scope_list(user_id, payload.scope_include, db)
@@ -230,7 +266,7 @@ async def delete_filter(user_id: int, filter_id: int, db: AsyncSession) -> bool:
 
 # ── Condition evaluation ──────────────────────────────────────────────────────
 
-def _get_field_value(article: Article, user_feed: UserFeed | None, field: str):
+def _get_field_value(article: Article, user_feed: UserFeed | None, field: str, state=None):
     if field == "title":
         return article.title or ""
     if field == "content":
@@ -241,6 +277,10 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str):
         return article.url or ""
     if field == "published_at":
         return article.published_at
+    if field == "ai_score":
+        if state is None or state.ai_score is None:
+            return None
+        return state.ai_score * 100  # stored 0.0–1.0, UI uses 0–100
     return None
 
 
@@ -253,6 +293,11 @@ def _eval_op(op: str, val: str, field_value) -> bool:
     if op == "not_contains":
         return val.lower() not in str(field_value).lower()
     if op == "equals":
+        if isinstance(field_value, datetime):
+            try:
+                return field_value.date() == datetime.fromisoformat(val).date()
+            except ValueError:
+                return False
         return str(field_value) == val
     if op == "regex":
         try:
@@ -262,10 +307,8 @@ def _eval_op(op: str, val: str, field_value) -> bool:
     if op in ("gt", "lt"):
         if isinstance(field_value, datetime):
             try:
-                cmp_dt = datetime.fromisoformat(val)
-                if cmp_dt.tzinfo is None:
-                    cmp_dt = cmp_dt.replace(tzinfo=timezone.utc)
-                return field_value > cmp_dt if op == "gt" else field_value < cmp_dt
+                cmp_date = date.fromisoformat(val.strip())
+                return field_value.date() > cmp_date if op == "gt" else field_value.date() < cmp_date
             except ValueError:
                 return False
         try:
@@ -277,7 +320,7 @@ def _eval_op(op: str, val: str, field_value) -> bool:
     return False
 
 
-def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None) -> bool:
+def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None, state=None) -> bool:
     op = condition.operator
     val = condition.value.strip()
     if not val:
@@ -292,7 +335,7 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
             return title_match and content_match
         return title_match or content_match
 
-    return _eval_op(op, val, _get_field_value(article, user_feed, condition.field))
+    return _eval_op(op, val, _get_field_value(article, user_feed, condition.field, state))
 
 
 def _parse_scope_list(value: str | None) -> list[str] | None:
@@ -345,13 +388,13 @@ def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> b
     return True
 
 
-def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None) -> bool:
+def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None, state=None) -> bool:
     """Return True if the article is in scope and all/any conditions match."""
     if not _scope_matches(f, article, user_feed):
         return False
     if not f.conditions:
         return False
-    results = [_matches_condition(c, article, user_feed) for c in f.conditions]
+    results = [_matches_condition(c, article, user_feed, state) for c in f.conditions]
     return all(results) if f.match_operator == "AND" else any(results)
 
 
@@ -447,6 +490,8 @@ async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
         got_star_or_label = False
         got_label = False
         for f in filters:
+            if is_ai_filter(f):
+                continue
             if evaluate_filter(f, article, uf):
                 action_types = {a.action_type for a in f.actions}
                 if action_types & {"star", "label"}:
@@ -464,6 +509,77 @@ async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
         if got_label and (not uf.extract_readable or article.readable_status == "success"):
             from app.services.ai_scoring_service import enqueue_scoring_job
             await enqueue_scoring_job(article, uf.user_id, db)
+
+
+# ── AI filter batch processing ────────────────────────────────────────────────
+
+_AI_FILTER_BATCH_SIZE = 50
+
+
+async def process_ai_filters_batch(db: AsyncSession) -> int:
+    """Apply AI filters to articles that have a fresh ai_score (ai_filters_applied=false)."""
+    from app.models.article import UserArticleState
+    from app.models.settings import AppSettings
+
+    ai_enabled = await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1))
+    if not ai_enabled:
+        return 0
+
+    states_result = await db.execute(
+        select(UserArticleState)
+        .where(
+            UserArticleState.ai_score.isnot(None),
+            UserArticleState.ai_filters_applied == False,  # noqa: E712
+        )
+        .limit(_AI_FILTER_BATCH_SIZE)
+    )
+    states = states_result.scalars().all()
+    if not states:
+        return 0
+
+    article_ids = list({s.article_id for s in states})
+    user_ids = list({s.user_id for s in states})
+
+    articles_map: dict[int, Article] = {
+        a.id: a
+        for a in (await db.scalars(select(Article).where(Article.id.in_(article_ids)))).all()
+    }
+
+    filters_by_user: dict[int, list[Filter]] = {}
+    for uid in user_ids:
+        result = await db.execute(
+            select(Filter)
+            .where(Filter.user_id == uid, Filter.is_active == True)  # noqa: E712
+            .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+            .order_by(Filter.position)
+        )
+        filters_by_user[uid] = [f for f in result.scalars().all() if is_ai_filter(f)]
+
+    user_feeds_result = await db.execute(
+        select(UserFeed).where(UserFeed.user_id.in_(user_ids))
+    )
+    feed_user_map: dict[tuple[int, int], UserFeed] = {
+        (uf.user_id, uf.feed_id): uf for uf in user_feeds_result.scalars()
+    }
+
+    for state in states:
+        article = articles_map.get(state.article_id)
+        if not article:
+            state.ai_filters_applied = True
+            continue
+
+        uf = feed_user_map.get((state.user_id, article.feed_id))
+        for f in filters_by_user.get(state.user_id, []):
+            if evaluate_filter(f, article, uf, state):
+                await _execute_actions(f, article, state.user_id, uf, db)
+                if f.stop_on_match:
+                    break
+
+        state.ai_filters_applied = True
+
+    await db.commit()
+    logger.info("ai_filters: processed %d states", len(states))
+    return len(states)
 
 
 # ── Test / retroactive apply ──────────────────────────────────────────────────
@@ -496,7 +612,24 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     )
     rows = articles_result.all()
 
-    matched = [(a, ft) for a, ft in rows if evaluate_filter(f, a, user_feeds_map.get(a.feed_id))]
+    states_map: dict[int, "UserArticleState"] = {}
+    if is_ai_filter(f):
+        from app.models.article import UserArticleState
+        article_ids = [a.id for a, _ in rows]
+        if article_ids:
+            states_result = await db.execute(
+                select(UserArticleState).where(
+                    UserArticleState.user_id == user_id,
+                    UserArticleState.article_id.in_(article_ids),
+                )
+            )
+            states_map = {s.article_id: s for s in states_result.scalars()}
+
+    matched = [
+        (a, ft)
+        for a, ft in rows
+        if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+    ]
     return FilterTestResult(
         matched_count=len(matched),
         samples=[
@@ -536,6 +669,19 @@ async def apply_filter_retroactively(
     )
     articles = articles_result.scalars().all()
 
+    states_map: dict[int, "UserArticleState"] = {}
+    if is_ai_filter(f):
+        from app.models.article import UserArticleState
+        article_ids = [a.id for a in articles]
+        if article_ids:
+            states_result = await db.execute(
+                select(UserArticleState).where(
+                    UserArticleState.user_id == user_id,
+                    UserArticleState.article_id.in_(article_ids),
+                )
+            )
+            states_map = {s.article_id: s for s in states_result.scalars()}
+
     action_types = {a.action_type for a in f.actions}
     triggers_readable = bool(action_types & {"star", "label"})
 
@@ -543,7 +689,7 @@ async def apply_filter_retroactively(
     changed = 0
     for article in articles:
         uf = user_feeds_map.get(article.feed_id)
-        if evaluate_filter(f, article, uf):
+        if evaluate_filter(f, article, uf, states_map.get(article.id)):
             matched += 1
             action_changed = await _execute_actions(f, article, user_id, uf, db)
             if action_changed:

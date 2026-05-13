@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, ArticleAiJob, UserArticleState
@@ -13,7 +14,7 @@ from app.models.user import UserSettings
 
 logger = logging.getLogger(__name__)
 
-_BATCH_SIZE = 20
+_BATCH_SIZE = 30
 _MAX_RETRIES = 3
 _BACKOFF_MINUTES = [5, 30, 120]
 _CONTENT_MAX_CHARS = 2000
@@ -74,25 +75,28 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
     if not s.ai_fast_provider or not s.ai_fast_model:
         return False
 
-    # Idempotent: skip if pending/success job already exists
+    # Idempotent: skip if any job already exists for this article/user/operation
     existing = await db.scalar(
         select(ArticleAiJob.id).where(
             ArticleAiJob.article_id == article.id,
             ArticleAiJob.user_id == user_id,
             ArticleAiJob.operation == "scoring",
-            ArticleAiJob.status.in_(["pending", "success"]),
         )
     )
     if existing is not None:
         return False
 
-    db.add(ArticleAiJob(
-        article_id=article.id,
-        user_id=user_id,
-        operation="scoring",
-        status="pending",
-    ))
-    return True
+    result = await db.execute(
+        pg_insert(ArticleAiJob).values(
+            article_id=article.id,
+            user_id=user_id,
+            operation="scoring",
+            status="pending",
+        ).on_conflict_do_nothing(
+            index_elements=["article_id", "user_id", "operation"]
+        )
+    )
+    return result.rowcount > 0
 
 
 async def enqueue_scoring_after_readable(article: Article, db: AsyncSession) -> None:
@@ -195,10 +199,14 @@ async def process_pending_scoring(db: AsyncSession) -> int:
                 state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
                 db.add(state)
             state.ai_score = score
+            state.ai_filters_applied = False
 
             job.status = "success"
             job.processed_at = now
             job.error_message = None
+            if s.last_ai_error:
+                s.last_ai_error = None
+                s.last_ai_error_at = None
 
         except Exception as exc:
             msg = str(exc)[:300]

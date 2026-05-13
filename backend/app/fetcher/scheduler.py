@@ -141,6 +141,15 @@ async def _process_ai_scoring() -> None:
         await process_pending_scoring(session)
 
 
+async def _process_ai_filters() -> None:
+    """Job: apply AI filters to articles that received a fresh ai_score."""
+    if db.async_session_factory is None:
+        return
+    from app.services.filter_service import process_ai_filters_batch
+    async with db.async_session_factory() as session:
+        await process_ai_filters_batch(session)
+
+
 async def _purge_old_articles() -> None:
     """Job: delete articles exceeding retention limits."""
     if db.async_session_factory is None:
@@ -175,6 +184,15 @@ def create_scheduler() -> AsyncIOScheduler:
         trigger="interval",
         minutes=2,
         id="process_ai_scoring",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        _process_ai_filters,
+        trigger="interval",
+        minutes=2,
+        id="process_ai_filters",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,

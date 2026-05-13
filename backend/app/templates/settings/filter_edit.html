@@ -3,9 +3,12 @@
 {% block title %}{% if filter %}Edit filter{% else %}New filter{% endif %} – Readfine{% endblock %}
 
 {% block settings_content %}
-<h1 class="text-xl font-semibold text-gray-900 mb-6">
-  {% if filter %}Edit filter{% else %}New filter{% endif %}
-</h1>
+<div class="flex items-baseline gap-3 mb-6">
+  <h1 class="text-xl font-semibold text-gray-900">
+    {% if filter %}Edit filter{% else %}New filter{% endif %}
+  </h1>
+  <span id="filter-type-badge" class="hidden text-xs px-2 py-0.5 rounded font-medium"></span>
+</div>
 
 {% if error %}
 <div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
@@ -15,49 +18,51 @@
       action="{% if filter %}/settings/filters/{{ filter.id }}/edit{% else %}/settings/filters{% endif %}"
       hx-boost="true"
       class="space-y-6">
+  {# fv = submitted form values on error, otherwise saved filter values #}
+  {% set fv = form_values if form_values is defined else filter %}
 
   <!-- Basic info -->
   <div class="space-y-4">
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
       <input type="text" name="name" required
-             value="{{ filter.name if filter else '' }}"
+             value="{{ fv.name if fv else '' }}"
              class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
     </div>
     <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
       <label class="flex items-center gap-2 text-sm text-gray-700">
         <input type="hidden" name="is_active" value="false">
         <input type="checkbox" name="is_active" value="true"
-               {% if not filter or filter.is_active %}checked{% endif %}
+               {% if not fv or fv.is_active %}checked{% endif %}
                class="rounded">
         Active
       </label>
       <label class="flex items-center gap-2 text-sm text-gray-700">
         <input type="hidden" name="stop_on_match" value="false">
         <input type="checkbox" name="stop_on_match" value="true"
-               {% if filter and filter.stop_on_match %}checked{% endif %}
+               {% if fv and fv.stop_on_match %}checked{% endif %}
                class="rounded">
         Stop on match
       </label>
       <div class="flex items-center gap-2">
         <label class="text-sm text-gray-700">Match</label>
         <select name="match_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="AND" {% if not filter or filter.match_operator == 'AND' %}selected{% endif %}>ALL conditions (AND)</option>
-          <option value="OR" {% if filter and filter.match_operator == 'OR' %}selected{% endif %}>ANY condition (OR)</option>
+          <option value="AND" {% if not fv or fv.match_operator == 'AND' %}selected{% endif %}>ALL conditions (AND)</option>
+          <option value="OR" {% if fv and fv.match_operator == 'OR' %}selected{% endif %}>ANY condition (OR)</option>
         </select>
       </div>
       <div class="flex items-center gap-2">
         <label class="text-sm text-gray-700">Priority</label>
         <input type="number" name="position" min="0"
-               value="{{ filter.position if filter else 0 }}"
+               value="{{ fv.position if fv else 0 }}"
                class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
     </div>
   </div>
 
   <!-- Scope -->
-  {% set scope_include_list = filter.scope_include if filter else [] %}
-  {% set scope_except_list  = filter.scope_except  if filter else [] %}
+  {% set scope_include_list = fv.scope_include if fv else [] %}
+  {% set scope_except_list  = fv.scope_except  if fv else [] %}
   {% set scope_is_all = not scope_include_list %}
   {% set ns_nf = namespace(feeds=[]) %}
   {% for uf in user_feeds %}{% if uf.folder_id is none %}{% set ns_nf.feeds = ns_nf.feeds + [uf] %}{% endif %}{% endfor %}
@@ -142,15 +147,21 @@
   <!-- Conditions -->
   <div>
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Conditions</h2>
+    <div id="ai-filter-notice" class="hidden mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+      Score filters run after regular filters and scoring — they only apply to articles that have received an AI score.<br>Pipeline: regular filters → scoring (labeled articles) → score filters.
+    </div>
     <div id="conditions" class="space-y-2">
-      {% set existing_conditions = filter.conditions if filter else [] %}
+      {% set existing_conditions = fv.conditions if fv else [] %}
       {% for c in existing_conditions %}
       <div class="flex flex-wrap items-center gap-2 condition-row">
         <div class="flex items-center gap-2 shrink-0">
-          <select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-field-select">
             {% for f in ['title_or_content','title','content','author','url','published_at'] %}
               <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f | replace('_', ' ') }}</option>
             {% endfor %}
+            {% if ai_score_available %}
+              <option value="ai_score" {% if c.field == 'ai_score' %}selected{% endif %}>ai score</option>
+            {% endif %}
           </select>
           <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
             {% for op in ['contains','not_contains','equals','regex','gt','lt'] %}
@@ -173,11 +184,11 @@
   <div>
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Actions</h2>
     <div id="actions" class="space-y-2">
-      {% set existing_actions = filter.actions if filter else [] %}
+      {% set existing_actions = fv.actions if fv else [] %}
       {% for a in existing_actions %}
       <div class="flex flex-wrap items-center gap-2 action-row">
         <select name="action_type" class="border border-gray-300 rounded px-2 py-1.5 text-sm action-type-select">
-          {% for at in ['label','mark_read','star','hide'] %}
+          {% for at in ['label','mark_read','star'] %}
             <option value="{{ at }}" {% if a.action_type == at %}selected{% endif %}>{{ at }}</option>
           {% endfor %}
         </select>
@@ -217,6 +228,6 @@
   {% endif %}
 </form>
 
-<script type="application/json" id="filter-edit-cfg">{"fields":["title_or_content","title","content","author","url","published_at"],"operators":["contains","not_contains","equals","regex","gt","lt"],"actionTypes":["label","mark_read","star","hide"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
+<script type="application/json" id="filter-edit-cfg">{"fields":["title_or_content","title","content","author","url","published_at"{% if ai_score_available %},"ai_score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"aiScoreOperators":["equals","gt","lt"],"aiScoreAvailable":{{ 'true' if ai_score_available else 'false' }},"actionTypes":["label","mark_read","star"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
 {% endblock %}
 {% block scripts %}<script src="/static/js/filter-edit.js"></script>{% endblock %}

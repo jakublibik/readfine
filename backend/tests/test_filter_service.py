@@ -4,7 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.filter_service import _matches_condition, evaluate_filter
+from app.services.filter_service import (
+    _matches_condition,
+    _validate_ai_conditions,
+    _validate_published_at_conditions,
+    evaluate_filter,
+    is_ai_filter,
+)
 
 
 def make_article(**kwargs):
@@ -150,6 +156,73 @@ class TestRegex:
         article = make_article(title="BREAKING NEWS")
         cond = make_condition("title", "regex", "breaking")
         assert _matches_condition(cond, article, None) is True
+
+
+class TestValidatePublishedAt:
+    def test_valid_date(self):
+        _validate_published_at_conditions([make_condition("published_at", "gt", "2024-06-15")])
+
+    def test_invalid_date_text(self):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            _validate_published_at_conditions([make_condition("published_at", "gt", "tomorrow")])
+
+    def test_invalid_date_with_time(self):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            _validate_published_at_conditions([make_condition("published_at", "gt", "2024-06-15T14:00")])
+
+    def test_non_published_at_fields_ignored(self):
+        _validate_published_at_conditions([make_condition("title", "contains", "not-a-date")])
+
+
+class TestGtLtDatetime:
+    def test_gt_strictly_after_date(self):
+        # published ON 2024-06-15 — gt should NOT match (strict)
+        article = make_article(published_at=datetime(2024, 6, 15, 14, 30, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "gt", "2024-06-15")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_gt_day_after_matches(self):
+        article = make_article(published_at=datetime(2024, 6, 16, 0, 0, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "gt", "2024-06-15")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_lt_strictly_before_date(self):
+        # published ON 2024-06-15 — lt should NOT match (strict)
+        article = make_article(published_at=datetime(2024, 6, 15, 14, 30, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "lt", "2024-06-15")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_lt_day_before_matches(self):
+        article = make_article(published_at=datetime(2024, 6, 14, 23, 59, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "lt", "2024-06-15")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_invalid_date_returns_false(self):
+        article = make_article(published_at=datetime(2024, 6, 15, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "gt", "not-a-date")
+        assert _matches_condition(cond, article, None) is False
+
+
+class TestEqualsDatetime:
+    def test_date_only_matches_same_day(self):
+        article = make_article(published_at=datetime(2024, 6, 15, 14, 30, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "equals", "2024-06-15")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_date_only_different_day(self):
+        article = make_article(published_at=datetime(2024, 6, 16, 0, 0, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "equals", "2024-06-15")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_invalid_date_returns_false(self):
+        article = make_article(published_at=datetime(2024, 6, 15, tzinfo=timezone.utc))
+        cond = make_condition("published_at", "equals", "not-a-date")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_none_published_at_returns_false(self):
+        article = make_article(published_at=None)
+        cond = make_condition("published_at", "equals", "2024-06-15")
+        assert _matches_condition(cond, article, None) is False
 
 
 class TestGtLt:
@@ -419,6 +492,196 @@ class TestScope:
         f = make_filter([make_condition("title", "contains", "python")],
                         scope_except=json.dumps([1, None, {}, "feed:10"]))
         assert evaluate_filter(f, article, uf) is False  # "feed:10" still excludes
+
+
+# ── AI filters ────────────────────────────────────────────────────────────────
+
+def make_state(ai_score=None, ai_filters_applied=False):
+    return SimpleNamespace(ai_score=ai_score, ai_filters_applied=ai_filters_applied)
+
+
+class TestIsAiFilter:
+    def test_regular_filter(self):
+        f = make_filter([make_condition("title", "contains", "python")])
+        assert is_ai_filter(f) is False
+
+    def test_ai_filter(self):
+        f = make_filter([make_condition("ai_score", "gt", "70")])
+        assert is_ai_filter(f) is True
+
+    def test_mixed_filter_is_ai(self):
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "50"),
+        ])
+        assert is_ai_filter(f) is True
+
+    def test_empty_conditions(self):
+        f = make_filter([])
+        assert is_ai_filter(f) is False
+
+
+class TestValidateAiConditions:
+    def test_valid_gt(self):
+        _validate_ai_conditions([make_condition("ai_score", "gt", "70")])
+
+    def test_valid_lt(self):
+        _validate_ai_conditions([make_condition("ai_score", "lt", "30")])
+
+    def test_valid_equals(self):
+        _validate_ai_conditions([make_condition("ai_score", "equals", "50")])
+
+    def test_valid_boundary_0(self):
+        _validate_ai_conditions([make_condition("ai_score", "gt", "0")])
+
+    def test_valid_boundary_100(self):
+        _validate_ai_conditions([make_condition("ai_score", "lt", "100")])
+
+    def test_invalid_operator_contains(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_ai_conditions([make_condition("ai_score", "contains", "70")])
+
+    def test_invalid_operator_regex(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_ai_conditions([make_condition("ai_score", "regex", "70")])
+
+    def test_value_above_100(self):
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            _validate_ai_conditions([make_condition("ai_score", "gt", "101")])
+
+    def test_value_below_0(self):
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            _validate_ai_conditions([make_condition("ai_score", "lt", "-1")])
+
+    def test_non_numeric_value(self):
+        with pytest.raises(ValueError, match="must be a number"):
+            _validate_ai_conditions([make_condition("ai_score", "gt", "high")])
+
+    def test_non_ai_conditions_ignored(self):
+        # Should not raise for regular fields
+        _validate_ai_conditions([make_condition("title", "contains", "abc")])
+
+
+class TestAiScoreCondition:
+    def test_gt_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.8)
+        cond = make_condition("ai_score", "gt", "70")
+        assert _matches_condition(cond, article, None, state) is True
+
+    def test_gt_no_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.5)
+        cond = make_condition("ai_score", "gt", "70")
+        assert _matches_condition(cond, article, None, state) is False
+
+    def test_lt_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.2)
+        cond = make_condition("ai_score", "lt", "30")
+        assert _matches_condition(cond, article, None, state) is True
+
+    def test_lt_no_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.5)
+        cond = make_condition("ai_score", "lt", "30")
+        assert _matches_condition(cond, article, None, state) is False
+
+    def test_equals_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.75)
+        cond = make_condition("ai_score", "equals", "75.0")
+        assert _matches_condition(cond, article, None, state) is True
+
+    def test_no_state_returns_false_for_gt(self):
+        article = make_article()
+        cond = make_condition("ai_score", "gt", "50")
+        assert _matches_condition(cond, article, None, None) is False
+
+    def test_none_score_returns_false(self):
+        article = make_article()
+        state = make_state(ai_score=None)
+        cond = make_condition("ai_score", "gt", "50")
+        assert _matches_condition(cond, article, None, state) is False
+
+    def test_boundary_gt_exact_value_not_matched(self):
+        article = make_article()
+        state = make_state(ai_score=0.7)
+        # 0.7 * 100 = 70.0, gt 70 → False
+        cond = make_condition("ai_score", "gt", "70")
+        assert _matches_condition(cond, article, None, state) is False
+
+    def test_boundary_lt_exact_value_not_matched(self):
+        article = make_article()
+        state = make_state(ai_score=0.3)
+        cond = make_condition("ai_score", "lt", "30")
+        assert _matches_condition(cond, article, None, state) is False
+
+
+class TestEvaluateFilterWithAiScore:
+    def test_ai_filter_matches(self):
+        article = make_article()
+        state = make_state(ai_score=0.85)
+        f = make_filter([make_condition("ai_score", "gt", "80")])
+        assert evaluate_filter(f, article, None, state) is True
+
+    def test_ai_filter_no_match(self):
+        article = make_article()
+        state = make_state(ai_score=0.5)
+        f = make_filter([make_condition("ai_score", "gt", "80")])
+        assert evaluate_filter(f, article, None, state) is False
+
+    def test_mixed_filter_and_both_match(self):
+        article = make_article(title="Python")
+        state = make_state(ai_score=0.9)
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "80"),
+        ], match_operator="AND")
+        assert evaluate_filter(f, article, None, state) is True
+
+    def test_mixed_filter_and_title_fails(self):
+        article = make_article(title="Weather")
+        state = make_state(ai_score=0.9)
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "80"),
+        ], match_operator="AND")
+        assert evaluate_filter(f, article, None, state) is False
+
+    def test_mixed_filter_and_score_fails(self):
+        article = make_article(title="Python")
+        state = make_state(ai_score=0.3)
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "80"),
+        ], match_operator="AND")
+        assert evaluate_filter(f, article, None, state) is False
+
+    def test_mixed_filter_or_score_saves(self):
+        # Title doesn't match but score does — OR → True
+        article = make_article(title="Weather")
+        state = make_state(ai_score=0.9)
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "80"),
+        ], match_operator="OR")
+        assert evaluate_filter(f, article, None, state) is True
+
+    def test_mixed_filter_or_neither_matches(self):
+        article = make_article(title="Weather")
+        state = make_state(ai_score=0.2)
+        f = make_filter([
+            make_condition("title", "contains", "python"),
+            make_condition("ai_score", "gt", "80"),
+        ], match_operator="OR")
+        assert evaluate_filter(f, article, None, state) is False
+
+    def test_ai_filter_no_state_no_match(self):
+        # AI filter without state → score is None → no match
+        article = make_article()
+        f = make_filter([make_condition("ai_score", "gt", "50")])
+        assert evaluate_filter(f, article, None, None) is False
 
     # ── scope_include + scope_except combined ─────────────────────────────────
 
