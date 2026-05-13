@@ -1,3 +1,12 @@
+// Show loading text in a target element before an HTMX request fires
+document.addEventListener('htmx:beforeRequest', function (e) {
+  var btn = e.detail.elt;
+  var targetId = btn.dataset && btn.dataset.loadingTarget;
+  if (!targetId) return;
+  var el = document.getElementById(targetId);
+  if (el) el.innerHTML = '<span class="text-gray-400 text-sm">' + (btn.dataset.loadingText || 'Loading…') + '</span>';
+});
+
 document.addEventListener('DOMContentLoaded', function () {
   // Provider select → update "Available models" link
   document.querySelectorAll('select[data-slot]').forEach(function (sel) {

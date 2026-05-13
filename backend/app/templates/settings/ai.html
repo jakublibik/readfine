@@ -87,7 +87,7 @@
               hx-target="#verify-{{ slot }}"
               hx-swap="innerHTML"
               hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model']"
-              hx-on:htmx:before-request="document.getElementById('verify-{{ slot }}').innerHTML='<span class=\'text-gray-400 text-sm\'>Verifying…</span>'"
+              data-loading-target="verify-{{ slot }}" data-loading-text="Verifying…"
               class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 whitespace-nowrap">
         Verify
       </button>
@@ -163,7 +163,7 @@
             hx-post="/settings/ai/generate-preference"
             hx-target="#preference-message"
             hx-swap="innerHTML"
-            hx-on:htmx:before-request="document.getElementById('preference-message').innerHTML='<span class=\'text-gray-400 text-sm\'>Generating…</span>'"
+            data-loading-target="preference-message" data-loading-text="Generating…"
             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
             class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
       ✨ Generate from feeds
