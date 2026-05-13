@@ -35,13 +35,13 @@
       <span class="w-24 text-sm text-gray-700 capitalize">{{ provider }}</span>
       {% if keys[provider] %}
         <span class="text-xs text-green-600 mr-2">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
-        <input type="password" name="api_key" autocomplete="one-time-code" placeholder="Replace key…"
+        <input type="text" name="api_key" autocomplete="off" placeholder="Replace key…"
                class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
         <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
         <button type="submit" formaction="/settings/ai/keys" data-clear-key
                 class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
       {% else %}
-        <input type="password" name="api_key" autocomplete="one-time-code" placeholder="Paste API key…"
+        <input type="text" name="api_key" autocomplete="off" placeholder="Paste API key…"
                class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
         <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
       {% endif %}
