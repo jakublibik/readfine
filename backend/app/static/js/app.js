@@ -1,3 +1,27 @@
+// ── Generic: clear named input after HTMX swap (data-clear-on-swap="fieldname") ──
+document.addEventListener('htmx:afterSwap', function (e) {
+  var form = e.detail && e.detail.elt;
+  if (!form || !form.dataset || !form.dataset.clearOnSwap) return;
+  var inp = form.querySelector('[name="' + form.dataset.clearOnSwap + '"]');
+  if (inp) inp.value = '';
+});
+
+// ── Generic: reset form after HTMX request (data-reset-on-request) ───────
+document.addEventListener('htmx:afterRequest', function (e) {
+  var el = e.detail && e.detail.elt;
+  if (!el || !el.dataset || !('resetOnRequest' in el.dataset)) return;
+  el.reset();
+});
+
+// ── Sidebar: remove touch-active class after feed refresh ─────────────────
+document.addEventListener('htmx:afterRequest', function (e) {
+  var btn = e.detail && e.detail.elt;
+  if (!btn || btn.dataset.action !== 'feed-refresh') return;
+  var row = btn.closest('.feed-nav-row');
+  if (row) row.classList.remove('touch-active');
+  btn.blur();
+});
+
 // ── Dark mode: system preference live listener ────────────────────────────
 (function () {
   var mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');

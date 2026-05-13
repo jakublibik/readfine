@@ -10,10 +10,10 @@
 <form hx-post="/settings/labels"
       hx-target="#labels-list"
       hx-swap="outerHTML"
-      hx-on:htmx:after-swap="this.querySelector('[name=name]').value=''"
+      data-clear-on-swap="name"
       class="mb-6 space-y-3">
   <div class="flex items-center gap-3">
-    <input type="text" name="name" placeholder="Label name" required
+    <input type="text" name="name" placeholder="Label name" required autocomplete="off"
            class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
     <button type="submit"
             class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">

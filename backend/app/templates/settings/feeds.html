@@ -123,7 +123,7 @@
   <form hx-post="/settings/folders"
         hx-target="#feeds-list"
         hx-swap="outerHTML"
-        hx-on:htmx:after-request="this.reset()"
+        data-reset-on-request
         class="flex gap-3">
     <input type="text" name="name" placeholder="Folder name" required
            class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
