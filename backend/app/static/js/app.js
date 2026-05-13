@@ -750,17 +750,13 @@ document.addEventListener('articleStarChanged', function (e) {
   var isRead = row.dataset.isRead === 'true';
   var span = btn.querySelector('span');
   if (span) {
+    var sizeClass = (span.className.match(/text-(?:xs|sm|base|lg|xl)/) || ['text-base'])[0];
     if (isStarred) {
       span.textContent = '★';
-      span.className = span.className
-        .replace('text-gray-300', isRead ? 'text-gray-800' : 'text-gray-900')
-        .replace(' hover:text-gray-800', '');
+      span.className = sizeClass + ' ' + (isRead ? 'text-gray-700' : 'text-gray-900');
     } else {
       span.textContent = '☆';
-      span.className = span.className
-        .replace('text-gray-900', 'text-gray-300')
-        .replace('text-gray-800', 'text-gray-300');
-      if (!span.className.includes('hover:text-gray-800')) span.className += ' hover:text-gray-800';
+      span.className = sizeClass + ' text-gray-300 hover:text-gray-500';
     }
   }
   btn.title = isStarred ? 'Remove star' : 'Star article';

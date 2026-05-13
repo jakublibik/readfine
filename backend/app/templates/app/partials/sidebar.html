@@ -163,7 +163,7 @@
          hx-push-url="false">
         <span class="collapse-toggle flex-shrink-0 p-1 -ml-1 text-gray-400" data-collapse="labels"><svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg></span>
         <span class="flex-1">Labels</span>
-        {% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}
+        <span id="label-badge-all">{% if nav_unread_labeled > 0 %}{{ badge_unread(nav_unread_labeled) }}{% else %}{{ badge_total(nav_labeled) }}{% endif %}</span>
       </a>
       <button class="{{ mark_read_btn }}"
               title="Mark all as read"
@@ -180,8 +180,7 @@
            hx-push-url="false">
           <span class="w-2 h-2 rounded-full flex-shrink-0 mr-2" style="background-color: {{ label.color }}"></span>
           <span class="flex-1 truncate">{{ label.name }}</span>
-          {% set lu = label_unread_counts.get(label.id, 0) %}
-          {% if lu > 0 %}{{ badge_unread(lu) }}{% else %}{{ badge_total(label_counts.get(label.id, 0)) }}{% endif %}
+          <span id="label-badge-{{ label.id }}">{% set lu = label_unread_counts.get(label.id, 0) %}{% if lu > 0 %}{{ badge_unread(lu) }}{% else %}{{ badge_total(label_counts.get(label.id, 0)) }}{% endif %}</span>
         </a>
         <button class="{{ mark_read_btn }}"
                 title="Mark all as read"

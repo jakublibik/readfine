@@ -376,6 +376,51 @@ async def htmx_search_modal(
     })
 
 
+def _badge_html(unread: int, total: int) -> str:
+    if unread > 0:
+        return f'<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{unread}</span>'
+    return f'<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{total}</span>'
+
+
+async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: bool, db: AsyncSession) -> str:
+    """Return OOB HTML snippets to update label badge(s) in the sidebar."""
+    if not label_id and not labeled_only:
+        return ""
+    oob = ""
+    if label_id:
+        lu = (await db.scalar(
+            select(func.count(ArticleLabel.article_id))
+            .outerjoin(UserArticleState,
+                (UserArticleState.article_id == ArticleLabel.article_id) &
+                (UserArticleState.user_id == user_id))
+            .where(
+                ArticleLabel.user_id == user_id,
+                ArticleLabel.label_id == label_id,
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
+        )) or 0
+        lt = (await db.scalar(
+            select(func.count(ArticleLabel.article_id))
+            .where(ArticleLabel.user_id == user_id, ArticleLabel.label_id == label_id)
+        )) or 0
+        oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
+    # Aggregate "Labels" badge
+    all_unread = (await db.scalar(
+        select(func.count(Article.id.distinct()))
+        .select_from(Article)
+        .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
+        .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
+        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+    )) or 0
+    all_total = (await db.scalar(
+        select(func.count()).select_from(
+            select(ArticleLabel.article_id).where(ArticleLabel.user_id == user_id).distinct().subquery()
+        )
+    )) or 0
+    oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
+    return oob
+
+
 @router.get("/htmx/articles", response_class=HTMLResponse)
 async def htmx_article_list(
     request: Request,
@@ -505,24 +550,27 @@ async def htmx_article_list(
                 {"showToast": {"msg": feed_obj.last_error[:150], "type": "warning"}}
             )
 
-    return templates.TemplateResponse(request, "app/partials/article_list.html", {
-        "articles": articles,
-        "feed_id": feed_id,
-        "folder_id": folder_id,
-        "unread_only": effective_unread_only,
-        "starred_only": starred_only,
-        "archived_only": archived_only,
-        "search_query": q.strip() if q and q.strip() else None,
-        "mark_read_on_scroll": mark_read_on_scroll,
-        "density": density,
-        "label_display": label_display,
-        "show_ai_score": settings.ai_score_show_in_list if settings else False,
-        "has_more": has_more,
-        "filter_qs": urlencode(filter_params),
-        "next_offset": len(articles),
-        "title_bar_count": title_bar_count,
-        "title_bar_count_type": title_bar_count_type,
-    }, headers=extra_headers)
+    list_html = templates.env.get_template("app/partials/article_list.html").render(
+        request=request,
+        articles=articles,
+        feed_id=feed_id,
+        folder_id=folder_id,
+        unread_only=effective_unread_only,
+        starred_only=starred_only,
+        archived_only=archived_only,
+        search_query=q.strip() if q and q.strip() else None,
+        mark_read_on_scroll=mark_read_on_scroll,
+        density=density,
+        label_display=label_display,
+        show_ai_score=settings.ai_score_show_in_list if settings else False,
+        has_more=has_more,
+        filter_qs=urlencode(filter_params),
+        next_offset=len(articles),
+        title_bar_count=title_bar_count,
+        title_bar_count_type=title_bar_count_type,
+    )
+    oob = await _label_badge_oob(user.id, label_id, labeled_only, db)
+    return HTMLResponse(list_html + oob, headers=extra_headers)
 
 
 @router.get("/htmx/articles/more", response_class=HTMLResponse)
