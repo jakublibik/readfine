@@ -176,6 +176,20 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
 
 # ── verification ──────────────────────────────────────────────────────────────
 
+def _friendly_ai_error(exc: Exception) -> str:
+    raw = str(exc)
+    low = raw.lower()
+    if "not_found" in low or '"404"' in raw or " 404 " in raw:
+        return "Model not found — check the model name."
+    if "401" in raw or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
+        return "Invalid API key."
+    if "429" in raw or "rate_limit" in low or "too many requests" in low:
+        return "Rate limit reached — try again later."
+    if "403" in raw or "forbidden" in low:
+        return "Access denied — check your API key permissions."
+    return raw.splitlines()[0][:150]
+
+
 async def verify_ai_slot(
     user_id: int, slot: str, db: AsyncSession,
     provider_override: str | None = None,
@@ -222,10 +236,7 @@ async def verify_ai_slot(
             _ = resp.text
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
-        msg = str(exc)
-        # Surface concise error: first line only
-        msg = msg.splitlines()[0][:200]
-        return {"ok": False, "model": model, "error": msg}
+        return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
 
 
 # ── AI calls ──────────────────────────────────────────────────────────────────
