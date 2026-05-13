@@ -38,7 +38,7 @@
         <input type="password" name="api_key" autocomplete="one-time-code" placeholder="Replace key…"
                class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
         <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
-        <button type="submit" formaction="/settings/ai/keys" onclick="this.form.querySelector('[name=api_key]').value=''"
+        <button type="submit" formaction="/settings/ai/keys" data-clear-key
                 class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
       {% else %}
         <input type="password" name="api_key" autocomplete="one-time-code" placeholder="Paste API key…"
@@ -69,7 +69,7 @@
     <div class="flex items-center gap-3 mb-1">
       <span class="w-16 text-sm font-medium text-gray-700">{{ slot_label }}</span>
       <select name="ai_{{ slot }}_provider"
-              onchange="(function(v,s){var a=document.getElementById('models-link-'+s);if(v&&a.dataset[v]){a.href=a.dataset[v];a.classList.remove('hidden');}else{a.classList.add('hidden');}})(this.value,'{{ slot }}')"
+              data-slot="{{ slot }}"
               class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
         <option value="">— provider —</option>
         {% for p in providers %}
@@ -112,7 +112,7 @@
         <input type="checkbox" name="ai_scoring_enabled_default" id="ai_scoring_enabled_default"
                {% if s.ai_scoring_enabled_default %}checked{% endif %}
                class="w-4 h-4 text-blue-600 rounded border-gray-300"
-               onchange="(function(on){document.getElementById('ai_preference_text').disabled=!on;document.getElementById('btn-generate-preference').disabled=!on;document.getElementById('preference-section').classList.toggle('opacity-50',!on);})(this.checked)">
+               id="chk-scoring-enabled">
         <label for="ai_scoring_enabled_default" class="text-sm font-medium text-gray-700">
           Enable article scoring
         </label>
@@ -154,7 +154,6 @@
   <textarea name="ai_preference_text" id="ai_preference_text" rows="4"
             placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Low relevance: sports, lifestyle&#10;No relevance: celebrity news, entertainment gossip"
             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
-            oninput="(function(t){var n=t.value.length,c=document.getElementById('pref-char-count');c.textContent=n;c.parentElement.classList.toggle('text-red-500',n>5000);c.parentElement.classList.toggle('text-gray-400',n<=5000);})(this)"
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
   <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
 
@@ -228,4 +227,8 @@
   </table>
 </section>
 
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/ai-settings.js"></script>
 {% endblock %}
