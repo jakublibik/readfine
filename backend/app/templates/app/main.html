@@ -34,6 +34,8 @@
     if (targetId === 'article-detail' || targetId === 'article-list') _send();
   }
 
+  window._dwellSend = _send;
+
   document.body.addEventListener('htmx:before-request', _onHtmxRequest);
   window.addEventListener('beforeunload', _send);
 

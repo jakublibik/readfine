@@ -600,6 +600,15 @@ document.addEventListener('click', function (e) {
   }
 });
 
+// ── Dwell stop on bottom un-star ───────────────────────────────────────────
+document.body.addEventListener('click', function (e) {
+  var btn = e.target.closest('[data-bottom-star]');
+  if (!btn) return;
+  var span = btn.querySelector('span');
+  if (!span || !span.classList.contains('text-gray-900')) return;
+  if (window._dwellSend) window._dwellSend();
+});
+
 // ── Link-opened tracking ───────────────────────────────────────────────────
 document.body.addEventListener('click', function (e) {
   var link = e.target.closest('a[target="_blank"]');
