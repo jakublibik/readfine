@@ -604,8 +604,7 @@ document.addEventListener('click', function (e) {
 document.body.addEventListener('click', function (e) {
   var btn = e.target.closest('[data-bottom-star]');
   if (!btn) return;
-  var span = btn.querySelector('span');
-  if (!span || !span.classList.contains('text-gray-900')) return;
+  if (!btn._optimisticStarred) return;
   if (window._dwellSend) window._dwellSend();
 });
 
@@ -817,6 +816,55 @@ document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisti
 document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticStar(e.detail.elt); });
 document.body.addEventListener('htmx:afterRequest', function (e) {
   var btn = e.detail.elt && e.detail.elt.closest ? e.detail.elt.closest('[data-star-btn]') : null;
+  if (btn) delete btn._optimisticStarred;
+});
+
+// Optimistic star toggle for detail bottom-bar and header-menu star buttons
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('[data-bottom-star], [data-header-star]');
+  if (!btn) return;
+  var articleId, wasStarred;
+  if (btn.hasAttribute('data-bottom-star')) {
+    var bar = btn.closest('.article-bottom-bar');
+    if (!bar || !bar.dataset.articleId) return;
+    articleId = parseInt(bar.dataset.articleId, 10);
+    var span = btn.querySelector('span');
+    wasStarred = !!(span && span.textContent.trim() === '★');
+  } else {
+    var articleEl = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
+    if (!articleEl) return;
+    articleId = parseInt(articleEl.dataset.articleId, 10);
+    var svg = btn.querySelector('svg');
+    wasStarred = !!(svg && svg.getAttribute('fill') === 'currentColor');
+  }
+  btn._optimisticStarred = wasStarred;
+  document.dispatchEvent(new CustomEvent('articleStarChanged', {
+    detail: { id: articleId, isStarred: !wasStarred }
+  }));
+}, true);
+
+function _revertOptimisticDetailStar(elt) {
+  var btn = elt && elt.closest ? (elt.closest('[data-bottom-star]') || elt.closest('[data-header-star]')) : null;
+  if (!btn || typeof btn._optimisticStarred === 'undefined') return;
+  var articleId;
+  if (btn.hasAttribute('data-bottom-star')) {
+    var bar = btn.closest('.article-bottom-bar');
+    if (!bar || !bar.dataset.articleId) return;
+    articleId = parseInt(bar.dataset.articleId, 10);
+  } else {
+    var articleEl = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
+    if (!articleEl) return;
+    articleId = parseInt(articleEl.dataset.articleId, 10);
+  }
+  document.dispatchEvent(new CustomEvent('articleStarChanged', {
+    detail: { id: articleId, isStarred: btn._optimisticStarred }
+  }));
+  delete btn._optimisticStarred;
+}
+document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisticDetailStar(e.detail.elt); });
+document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticDetailStar(e.detail.elt); });
+document.body.addEventListener('htmx:afterRequest', function (e) {
+  var btn = e.detail.elt && e.detail.elt.closest ? (e.detail.elt.closest('[data-bottom-star]') || e.detail.elt.closest('[data-header-star]')) : null;
   if (btn) delete btn._optimisticStarred;
 });
 
@@ -1037,6 +1085,11 @@ document.addEventListener('articleArchiveChanged', function (e) {
 
     var content = document.createElement('div');
     content.id = CONTENT_ID;
+    content.innerHTML = '<div class="px-6 py-6 flex items-center gap-2 text-sm text-gray-400">' +
+      '<svg class="animate-spin h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">' +
+      '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+      '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>' +
+      '</svg>Loading…</div>';
     container.appendChild(content);
 
     row.insertAdjacentElement('afterend', container);

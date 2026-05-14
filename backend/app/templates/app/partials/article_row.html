@@ -4,7 +4,7 @@
 {% set show_score = show_ai_score | default(false) %}
 {% if show_score and article.ai_score is not none %}
   {% set score_int = (article.ai_score * 100) | round | int %}
-  {% if article.ai_score >= 0.7 %}{% set score_class = "ai-score-high" %}
+  {% if article.ai_score >= 0.75 %}{% set score_class = "ai-score-high" %}
   {% elif article.ai_score >= 0.4 %}{% set score_class = "ai-score-mid" %}
   {% else %}{% set score_class = "ai-score-low" %}{% endif %}
 {% endif %}
