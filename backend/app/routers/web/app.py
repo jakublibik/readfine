@@ -825,6 +825,24 @@ async def htmx_article_dwell(
     return HTMLResponse("", status_code=204)
 
 
+@router.post("/htmx/articles/{article_id}/link-opened")
+async def htmx_article_link_opened(
+    article_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.article_id == article_id,
+            UserArticleState.user_id == user.id,
+        )
+    )
+    if state is not None and not state.link_opened:
+        state.link_opened = True
+        await db.commit()
+    return HTMLResponse("", status_code=204)
+
+
 @router.post("/htmx/articles/{article_id}/star", response_class=HTMLResponse)
 async def htmx_toggle_star(
     article_id: int,

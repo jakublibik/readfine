@@ -600,6 +600,23 @@ document.addEventListener('click', function (e) {
   }
 });
 
+// ── Link-opened tracking ───────────────────────────────────────────────────
+document.body.addEventListener('click', function (e) {
+  var link = e.target.closest('a[target="_blank"]');
+  if (!link) return;
+  var row = link.closest('[data-article-id]');
+  if (!row) return;
+  var articleId = row.dataset.articleId;
+  if (!articleId) return;
+  var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
+  fetch('/htmx/articles/' + articleId + '/link-opened', {
+    method: 'POST',
+    keepalive: true,
+    credentials: 'include',
+    headers: { 'x-csrftoken': csrf },
+  });
+});
+
 // ── Search modal ───────────────────────────────────────────────────────────
 function openSearchModal() {
   var el = document.getElementById('full-menu-dropdown');

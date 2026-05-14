@@ -59,6 +59,7 @@ class UserArticleState(Base):
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     dwell_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unstar_dwell_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    link_opened: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)

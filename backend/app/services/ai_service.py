@@ -306,23 +306,25 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
     cutoff_3m = now - timedelta(days=90)
     cutoff_2m = now - timedelta(days=60)
 
-    # Group 1: starred + read thoroughly (strongest signal)
+    # Group 1: starred + read thoroughly or opened link (strongest signal)
     g1 = await db.execute(text("""
         SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
-          AND uas.user_starred = true AND uas.dwell_seconds >= 60
+          AND uas.user_starred = true
+          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 30
     """), {"uid": user_id, "cutoff": cutoff_6m})
     g1_titles = [r[0] for r in g1]
 
-    # Group 2: read thoroughly, not starred
+    # Group 2: read thoroughly or opened link, not starred
     g2 = await db.execute(text("""
         SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
-          AND uas.user_starred = false AND uas.dwell_seconds >= 60
+          AND uas.user_starred = false
+          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 50
     """), {"uid": user_id, "cutoff": cutoff_3m})

@@ -52,16 +52,17 @@ async def subscribe(
         if not folder_result.scalar_one_or_none():
             raise ValueError("Folder not found")
 
-    # Check subscription limit
-    app_settings_result = await db.execute(
-        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-    )
-    max_feeds = app_settings_result.scalar_one_or_none() or 200
-    count_result = await db.execute(
-        select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-    )
-    if (count_result.scalar() or 0) >= max_feeds:
-        raise ValueError(f"Feed limit reached ({max_feeds})")
+    # Check subscription limit (admins are exempt)
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise ValueError(f"Feed limit reached ({max_feeds})")
 
     feed: Feed | None = None
     parsed = None
@@ -193,15 +194,16 @@ async def subscribe_scrape(
         if not folder_result.scalar_one_or_none():
             raise ValueError("Folder not found")
 
-    app_settings_result = await db.execute(
-        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-    )
-    max_feeds = app_settings_result.scalar_one_or_none() or 200
-    count_result = await db.execute(
-        select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-    )
-    if (count_result.scalar() or 0) >= max_feeds:
-        raise ValueError(f"Feed limit reached ({max_feeds})")
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise ValueError(f"Feed limit reached ({max_feeds})")
 
     selector = selector.strip()
     if not selector:
