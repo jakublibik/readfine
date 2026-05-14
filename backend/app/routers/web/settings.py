@@ -60,6 +60,7 @@ from app.services.ai_service import (
     estimate_monthly_cost,
     generate_preference_text,
     get_ai_client,
+    get_preference_strong_count,
     list_api_keys,
     save_api_key,
     verify_ai_slot,
@@ -1199,12 +1200,14 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     s = await _get_or_create_settings(user, db)
     keys = await list_api_keys(user.id, db)
     cost = await estimate_monthly_cost(user.id, db)
+    strong_count = await get_preference_strong_count(user.id, db)
     return {
         "s": s,
         "keys": keys,
         "cost": cost,
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
+        "pref_strong_count": strong_count,
     }
 
 
@@ -1334,10 +1337,18 @@ async def settings_ai_generate_preference(
             f'<span class="text-red-600 text-sm">Error: {str(exc)[:150]}</span>'
         )
 
+    strong_count = await get_preference_strong_count(user.id, db)
     escaped = text_result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    warning_inner = (
+        f'<p class="text-xs text-amber-600 mt-1 mb-1">'
+        f'Only {strong_count} article{"s" if strong_count != 1 else ""} with strong reading signals so far — '
+        f'profile was supplemented with feed names. Keep reading and starring to improve accuracy.'
+        f'</p>'
+    ) if strong_count < 20 else ""
     return HTMLResponse(
         f'<span class="text-green-600 text-sm">Generated — review and save below.</span>'
         f'<textarea name="ai_preference_text" id="ai_preference_text" rows="4"'
         f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
         f' hx-swap-oob="true">{escaped}</textarea>'
+        f'<div id="pref-cold-start-warning" hx-swap-oob="true">{warning_inner}</div>'
     )

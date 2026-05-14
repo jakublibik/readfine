@@ -157,7 +157,14 @@
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
   <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
 
-  <p class="text-xs text-gray-400 mt-1 mb-1">Generated from articles you recently starred and read. Falls back to feed names when there's not enough reading history yet.</p>
+  <p class="text-xs text-gray-400 mt-1">Generated from your reading history.</p>
+  <div id="pref-cold-start-warning">
+    {% if pref_strong_count < 20 %}
+    <p class="text-xs text-amber-600 mt-1 mb-1">
+      Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far — profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
+    </p>
+    {% endif %}
+  </div>
   <div class="flex items-center gap-3">
     <button type="button" id="btn-generate-preference"
             hx-post="/settings/ai/generate-preference"

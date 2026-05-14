@@ -298,6 +298,27 @@ async def generate_css_selector(url: str, html: str, client, provider: str, mode
     return await _complete(prompt, client, provider, model, max_tokens=100)
 
 
+async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
+    """Return count of strong reading signals (g1 + g2) used for preference generation."""
+    from sqlalchemy import text
+    now = datetime.now(timezone.utc)
+    g1 = await db.execute(text("""
+        SELECT COUNT(*) FROM user_article_states uas
+        WHERE uas.user_id = :uid
+          AND uas.user_starred = true
+          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
+          AND uas.created_at >= :cutoff
+    """), {"uid": user_id, "cutoff": now - timedelta(days=180)})
+    g2 = await db.execute(text("""
+        SELECT COUNT(*) FROM user_article_states uas
+        WHERE uas.user_id = :uid
+          AND uas.user_starred = false
+          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
+          AND uas.created_at >= :cutoff
+    """), {"uid": user_id, "cutoff": now - timedelta(days=90)})
+    return int(g1.scalar() or 0) + int(g2.scalar() or 0)
+
+
 async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
     """Generate preference text from user's reading behaviour signals."""
     from sqlalchemy import text
