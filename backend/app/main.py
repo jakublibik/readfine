@@ -102,7 +102,7 @@ def create_app() -> FastAPI:
             # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-eval' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU=' 'sha256-yF/AgXJr5eU+0PI4tdElAq5mc3MPZWQhf3eCtLYeOYA=' 'sha256-fEeZZqxjvf8KnXGpUawHozmwW1PaiGqeIEY/BIC5WBE=' 'sha256-9i2VQpB8OdqYIGArEPf6WBbJCyznLjJxkkjGUlzXPsE='; "  # unsafe-eval: htmx.js; hashes: share.html, preferences.html, scrape_setup.html, main.html inline scripts
+                "script-src 'self' 'unsafe-eval' 'sha256-ieoeWczDHkReVBsRBqaal5AFMlBtNjMzgwKvLqi/tSU=' 'sha256-yF/AgXJr5eU+0PI4tdElAq5mc3MPZWQhf3eCtLYeOYA=' 'sha256-fEeZZqxjvf8KnXGpUawHozmwW1PaiGqeIEY/BIC5WBE=' 'sha256-9i2VQpB8OdqYIGArEPf6WBbJCyznLjJxkkjGUlzXPsE=' 'sha256-lYhrqfYVQqa9ldr/JriAShIMkVtKRVcdzlVs3JBCAnE='; "  # unsafe-eval: htmx.js; hashes: share.html, preferences.html, scrape_setup.html, main.html inline scripts
                 "img-src * data:; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self';"
