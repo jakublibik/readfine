@@ -30,20 +30,27 @@
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">API Keys</h2>
   <div class="space-y-3">
     {% for provider in providers %}
-    <form method="POST" action="/settings/ai/keys" hx-boost="true" hx-push-url="/settings/ai" class="flex items-center gap-3">
+    <form method="POST" action="/settings/ai/keys" hx-boost="true" hx-push-url="/settings/ai"
+          class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <input type="hidden" name="provider" value="{{ provider }}">
-      <span class="w-24 text-sm text-gray-700 capitalize">{{ provider }}</span>
+      <div class="flex items-center gap-3">
+        <span class="w-24 text-sm text-gray-700 capitalize">{{ provider }}</span>
+        {% if keys[provider] %}
+          <span class="text-xs text-green-600">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
+        {% endif %}
+      </div>
       {% if keys[provider] %}
-        <span class="text-xs text-green-600 mr-2">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
         <input type="text" name="api_key" autocomplete="off" placeholder="Replace key…"
-               class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
-        <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
-        <button type="submit" formaction="/settings/ai/keys" data-clear-key
-                class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
+               class="w-full sm:flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono min-w-0">
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 sm:flex-none px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
+          <button type="submit" formaction="/settings/ai/keys" data-clear-key
+                  class="flex-1 sm:flex-none px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
+        </div>
       {% else %}
         <input type="text" name="api_key" autocomplete="off" placeholder="Paste API key…"
-               class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
-        <button type="submit" class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+               class="w-full sm:flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono min-w-0">
+        <button type="submit" class="sm:self-auto px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
       {% endif %}
     </form>
     {% endfor %}
@@ -66,34 +73,36 @@
     ("quality", "Quality", s.ai_quality_provider, s.ai_quality_model),
   ] %}
   <div class="mb-5">
-    <div class="flex items-center gap-3 mb-1">
-      <span class="w-16 text-sm font-medium text-gray-700">{{ slot_label }}</span>
-      <select name="ai_{{ slot }}_provider"
-              data-slot="{{ slot }}"
-              class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
-        <option value="">— provider —</option>
-        {% for p in providers %}
-        <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ p }}</option>
-        {% endfor %}
-      </select>
-      <div class="relative flex-1">
+    <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-1">
+      <div class="flex items-center gap-3">
+        <span class="w-16 text-sm font-medium text-gray-700">{{ slot_label }}</span>
+        <select name="ai_{{ slot }}_provider"
+                data-slot="{{ slot }}"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
+          <option value="">— provider —</option>
+          {% for p in providers %}
+          <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex items-center gap-2 sm:gap-3 sm:flex-1">
         <input type="text" name="ai_{{ slot }}_model"
                value="{{ model_val or '' }}"
                placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
-               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono pr-28">
+               class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
+        <button type="button"
+                hx-post="/settings/ai/verify/{{ slot }}"
+                hx-target="#verify-{{ slot }}"
+                hx-swap="innerHTML"
+                hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model']"
+                data-loading-target="verify-{{ slot }}" data-loading-text="Verifying…"
+                class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 whitespace-nowrap">
+          Verify
+        </button>
       </div>
-      <button type="button"
-              hx-post="/settings/ai/verify/{{ slot }}"
-              hx-target="#verify-{{ slot }}"
-              hx-swap="innerHTML"
-              hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model']"
-              data-loading-target="verify-{{ slot }}" data-loading-text="Verifying…"
-              class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 whitespace-nowrap">
-        Verify
-      </button>
     </div>
-    <div class="flex items-center gap-3">
-      <span class="w-16"></span>
+    <div class="flex items-center gap-3 mt-0.5">
+      <span class="w-16 hidden sm:block"></span>
       <span id="verify-{{ slot }}" class="text-sm text-gray-400"></span>
       <a id="models-link-{{ slot }}"
          href="{{ provider_docs[provider_val] if provider_val else '#' }}"
@@ -192,7 +201,8 @@
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Estimated monthly cost</h2>
   <p class="text-xs text-gray-500 mb-3">Based on your last 30 days of activity. Estimates only — actual cost depends on article length.</p>
 
-  <table class="w-full text-sm">
+  <div class="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+  <table class="w-full text-sm min-w-[28rem]">
     <thead>
       <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
         <th class="pb-1 font-medium">Operation</th>
@@ -232,6 +242,7 @@
       </tr>
     </tbody>
   </table>
+  </div>
 </section>
 
 {% endblock %}
