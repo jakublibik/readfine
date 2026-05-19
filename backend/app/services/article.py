@@ -303,6 +303,8 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         is_archived=state.is_archived if state else False,
         read_at=state.read_at if state else None,
         share_token=state.share_token if state else None,
+        ai_summary=state.ai_summary if state else None,
+        ai_context=state.ai_context if state else None,
         labels=[
             {"id": r.id, "name": r.name, "color": r.color}
             for r in (await db.execute(

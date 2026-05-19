@@ -3,6 +3,7 @@ from sqlalchemy import (
     BigInteger, Boolean, DateTime, Float, Integer, SmallInteger,
     String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -63,6 +64,8 @@ class UserArticleState(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
+    ai_summary: Mapped[str | None] = mapped_column(Text)
+    ai_context: Mapped[str | None] = mapped_column(Text)
     ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
@@ -87,6 +90,7 @@ class ArticleAiJob(Base):
     retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
+    job_params: Mapped[dict | None] = mapped_column(JSONB)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

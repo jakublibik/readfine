@@ -1,5 +1,6 @@
 """Web routes for the main application UI."""
 import asyncio
+import html as html_module
 import json
 import logging
 import secrets
@@ -18,7 +19,7 @@ from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.rate_limit import limiter
-from app.models.article import Article, UserArticleState
+from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
@@ -692,7 +693,25 @@ async def htmx_article_detail(
     )
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
-    return templates.TemplateResponse(request, "app/partials/article_detail.html", {"article": article, "mark_read_on_scroll": mark_read_on_scroll})
+    from app.models.settings import AppSettings as _AS
+    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
+    summary_pending = False
+    if ai_avail and not article.ai_summary:
+        summary_pending = bool(await db.scalar(
+            select(ArticleAiJob.id).where(
+                ArticleAiJob.article_id == article_id,
+                ArticleAiJob.user_id == user.id,
+                ArticleAiJob.operation == "summary",
+                ArticleAiJob.status == "pending",
+            )
+        ))
+    return templates.TemplateResponse(request, "app/partials/article_detail.html", {
+        "article": article,
+        "mark_read_on_scroll": mark_read_on_scroll,
+        "ai_available": ai_avail,
+        "summary_pending": summary_pending,
+    })
 
 
 @router.get("/htmx/articles/{article_id}/readable-poll", response_class=HTMLResponse)
@@ -853,6 +872,16 @@ async def htmx_toggle_star(
     article = await toggle_article_state(user, article_id, "is_starred", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
+
+    if article.is_starred:
+        settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+        if settings and settings.ai_summary_enabled_default:
+            article_obj = await db.scalar(select(Article).where(Article.id == article_id))
+            if article_obj is not None:
+                from app.services.ai_summary_service import enqueue_summary_job
+                await enqueue_summary_job(article_obj, user.id, db)
+                await db.commit()
+
     return _star_response(request, article)
 
 
@@ -1050,6 +1079,213 @@ async def htmx_extract_readable(
     await db.refresh(article)
 
     return _content_with_readtime_oob(request, article)
+
+
+def _ai_available(settings: UserSettings | None) -> bool:
+    if settings is None:
+        return False
+    # TODO: respect settings.ai_enabled as per-user killswitch once multi-user demand is confirmed
+    return bool(settings.ai_quality_provider and settings.ai_quality_model)
+
+
+async def _get_article_access(user: User, article_id: int, db: AsyncSession):
+    """Return Article ORM object if user has access, else None."""
+    stmt = (
+        select(Article)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+        )
+        .where(
+            Article.id == article_id,
+            (UserFeed.id != None)
+            | (UserArticleState.is_starred == True)
+            | (UserArticleState.is_archived == True),
+        )
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+def _ai_summary_block(article_id: int, summary: str) -> str:
+    return (
+        f'<div id="ai-summary-{article_id}" '
+        f'class="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-gray-700 dark:bg-blue-950 dark:border-blue-900 dark:text-gray-200">'
+        f'<div class="font-medium text-blue-700 dark:text-blue-300 mb-1 text-xs uppercase tracking-wide">Summary</div>'
+        f'<p>{html_module.escape(summary)}</p>'
+        f'</div>'
+    )
+
+
+def _ai_context_block(article_id: int, context: str) -> str:
+    return (
+        f'<div id="ai-context-{article_id}" '
+        f'class="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-gray-700 dark:bg-amber-950 dark:border-amber-900 dark:text-gray-200">'
+        f'<div class="font-medium text-amber-700 dark:text-amber-300 mb-1 text-xs uppercase tracking-wide">Context</div>'
+        f'<p>{html_module.escape(context)}</p>'
+        f'</div>'
+    )
+
+
+def _ai_spinner(target_id: str, poll_url: str) -> str:
+    return (
+        f'<div id="{target_id}" '
+        f'hx-get="{poll_url}" hx-trigger="every 30s" hx-swap="outerHTML" '
+        f'class="flex items-center gap-2 text-sm text-gray-500 py-2">'
+        f'<svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">'
+        f'<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
+        f'<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>'
+        f'</svg>'
+        f'Generating…'
+        f'</div>'
+    )
+
+
+@router.post("/htmx/articles/{article_id}/ai-summary", response_class=HTMLResponse)
+async def htmx_ai_summary_trigger(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """On-demand: enqueue summary job and return spinner with polling."""
+    from app.models.settings import AppSettings as _AS
+    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    if not ai_on:
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
+        )
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
+        )
+
+    article = await _get_article_access(user, article_id, db)
+    if not article:
+        return HTMLResponse("", status_code=404)
+
+    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS, enqueue_summary_job
+    content_text = _normalize_content(article.title, article.readable_content or article.content)
+    if len(content_text) < _MIN_CONTENT_CHARS:
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">'
+            f'Article is too short for a summary (minimum {_MIN_CONTENT_CHARS} characters).'
+            f'</div>'
+        )
+
+    await enqueue_summary_job(article, user.id, db)
+    await db.commit()
+
+    return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
+
+
+@router.get("/htmx/articles/{article_id}/ai-summary/poll", response_class=HTMLResponse)
+async def htmx_ai_summary_poll(
+    article_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Poll summary job status and return final block or keep spinner."""
+    job = await db.scalar(
+        select(ArticleAiJob).where(
+            ArticleAiJob.article_id == article_id,
+            ArticleAiJob.user_id == user.id,
+            ArticleAiJob.operation == "summary",
+        )
+    )
+
+    if job is None or job.status == "pending":
+        return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
+
+    if job.status == "failed":
+        msg = (job.error_message or "Unknown error")[:120]
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
+        )
+
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.article_id == article_id,
+        )
+    )
+    if state and state.ai_summary:
+        return HTMLResponse(_ai_summary_block(article_id, state.ai_summary))
+
+    return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
+
+
+@router.post("/htmx/articles/{article_id}/ai-context", response_class=HTMLResponse)
+async def htmx_ai_context_trigger(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """On-demand: call AI directly and return context block (synchronous, may take several seconds)."""
+    from app.models.settings import AppSettings as _AS
+    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    if not ai_on:
+        return HTMLResponse(
+            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
+        )
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
+        return HTMLResponse(
+            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
+        )
+
+    article = await _get_article_access(user, article_id, db)
+    if not article:
+        return HTMLResponse("", status_code=404)
+
+    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS
+    content_text = _normalize_content(article.title, article.readable_content or article.content)
+    if len(content_text) < _MIN_CONTENT_CHARS:
+        return HTMLResponse(
+            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">'
+            f'Article is too short for context generation (minimum {_MIN_CONTENT_CHARS} characters).'
+            f'</div>'
+        )
+
+    form = await request.form()
+    focus = (form.get("focus") or "").strip() or None
+
+    from app.services.ai_service import get_ai_client, get_article_context
+    client, provider, model = await get_ai_client(user.id, "quality", db)
+    if client is None:
+        return HTMLResponse(
+            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
+        )
+
+    try:
+        result = await get_article_context(
+            content_text, client, provider, model,
+            base_prompt=settings.ai_context_prompt,
+            focus=focus,
+        )
+    except Exception as exc:
+        msg = str(exc)[:120]
+        return HTMLResponse(
+            f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
+        )
+
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.article_id == article_id,
+        )
+    )
+    if state is None:
+        state = UserArticleState(user_id=user.id, article_id=article_id)
+        db.add(state)
+    state.ai_context = result
+    await db.commit()
+
+    return HTMLResponse(_ai_context_block(article_id, result))
 
 
 @router.get("/share/{token}", response_class=HTMLResponse)

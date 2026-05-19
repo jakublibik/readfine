@@ -1756,3 +1756,41 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 })();
 
+// AI context panel: [data-show-context-panel] closes ··· dropdown and reveals the panel
+(function () {
+  function closeAllMenus() {
+    document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
+  }
+
+  function attachContextPanel(root) {
+    (root || document).querySelectorAll('[data-show-context-panel]').forEach(function (btn) {
+      if (btn._aiContextAttached) return;
+      btn._aiContextAttached = true;
+      btn.addEventListener('click', function () {
+        var articleId = btn.getAttribute('data-show-context-panel');
+        closeAllMenus();
+        var panel = document.getElementById('context-panel-' + articleId);
+        if (panel) panel.classList.remove('hidden');
+      });
+    });
+  }
+
+  // [data-close-menu] buttons close the dropdown on click
+  function attachCloseMenu(root) {
+    (root || document).querySelectorAll('[data-close-menu]').forEach(function (btn) {
+      if (btn._aiCloseMenuAttached) return;
+      btn._aiCloseMenuAttached = true;
+      btn.addEventListener('click', function () { closeAllMenus(); });
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    attachContextPanel();
+    attachCloseMenu();
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    attachContextPanel();
+    attachCloseMenu();
+  });
+})();
+

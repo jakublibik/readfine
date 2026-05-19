@@ -125,6 +125,29 @@
             </button>
           </div>
           {% endif %}
+          {% if ai_available %}
+          <div class="border-t border-gray-100 mt-1 pt-1">
+            {% if not article.ai_summary %}
+            <button hx-post="/htmx/articles/{{ article.id }}/ai-summary"
+                    hx-target="#ai-summary-{{ article.id }}"
+                    hx-swap="outerHTML"
+                    data-close-menu
+                    class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+              <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+              </svg>
+              Generate summary
+            </button>
+            {% endif %}
+            <button data-show-context-panel="{{ article.id }}"
+                    class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+              <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+              </svg>
+              {% if article.ai_context %}Regenerate context{% else %}Generate context{% endif %}
+            </button>
+          </div>
+          {% endif %}
         </div>
       </div>
     </div>
@@ -138,6 +161,68 @@
     <div id="read-btn-{{ article.id }}">{% include "app/partials/read_button.html" %}</div>
     <div id="share-btn-{{ article.id }}">{% include "app/partials/share_button.html" %}</div>
   </div>
+
+  <!-- AI blocks -->
+  {% if article.ai_summary or article.ai_context or ai_available %}
+  <div class="mb-5 space-y-3">
+
+    {% if article.ai_summary %}
+    <div id="ai-summary-{{ article.id }}" class="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-gray-700 dark:bg-blue-950 dark:border-blue-900 dark:text-gray-200">
+      <div class="font-medium text-blue-700 dark:text-blue-300 mb-1 text-xs uppercase tracking-wide">Summary</div>
+      <p>{{ article.ai_summary }}</p>
+    </div>
+    {% elif summary_pending %}
+    <div id="ai-summary-{{ article.id }}"
+         hx-get="/htmx/articles/{{ article.id }}/ai-summary/poll"
+         hx-trigger="every 30s"
+         hx-swap="outerHTML"
+         class="flex items-center gap-2 text-sm text-gray-500 py-2">
+      <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+      </svg>
+      Generating summary…
+    </div>
+    {% else %}
+    <div id="ai-summary-{{ article.id }}"></div>
+    {% endif %}
+
+    <div id="ai-context-area-{{ article.id }}">
+      {% if article.ai_context %}
+      <div id="ai-context-{{ article.id }}" class="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-gray-700 dark:bg-amber-950 dark:border-amber-900 dark:text-gray-200">
+        <div class="font-medium text-amber-700 dark:text-amber-300 mb-1 text-xs uppercase tracking-wide">Context</div>
+        <p>{{ article.ai_context }}</p>
+      </div>
+      {% else %}
+      <div id="ai-context-{{ article.id }}"></div>
+      {% endif %}
+
+      {% if ai_available %}
+      <div id="context-panel-{{ article.id }}" class="hidden rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3">
+        <p class="text-xs text-gray-500 mb-2">Optional: what to focus on</p>
+        <textarea id="context-focus-{{ article.id }}" rows="2"
+                  placeholder="e.g. economic impact, technical details…"
+                  class="w-full text-sm border border-gray-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 rounded p-1.5 resize-none mb-2"></textarea>
+        <div class="flex items-center gap-2">
+          <button hx-post="/htmx/articles/{{ article.id }}/ai-context"
+                  hx-vals="js:{focus: document.getElementById('context-focus-{{ article.id }}').value}"
+                  hx-target="#ai-context-area-{{ article.id }}"
+                  hx-swap="innerHTML"
+                  hx-indicator="#context-spinner-{{ article.id }}"
+                  class="text-xs px-3 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded">
+            {% if article.ai_context %}Regenerate{% else %}Generate{% endif %}
+          </button>
+          <svg id="context-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-4 w-4 text-amber-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+  </div>
+  {% endif %}
 
   <!-- Content -->
   {% include "app/partials/article_content.html" %}

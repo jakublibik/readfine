@@ -147,11 +147,30 @@
                {% if s.ai_summary_enabled_default %}checked{% endif %}
                class="w-4 h-4 text-blue-600 rounded border-gray-300">
         <label for="ai_summary_enabled_default" class="text-sm font-medium text-gray-700">
-          Enable article summaries
+          Auto-summarize starred articles
         </label>
       </div>
-      <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles. New feeds default to this setting. When disabled, summaries are not generated for any feed.</p>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the quality model. Per-feed override available in feed settings.</p>
+      <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
     </div>
+    <div class="ml-6">
+      <label for="ai_summary_prompt" class="text-xs font-medium text-gray-600 block mb-1">Summary prompt <span class="font-normal text-gray-400">(leave blank for default)</span></label>
+      <textarea name="ai_summary_prompt" id="ai_summary_prompt" rows="2"
+                placeholder="Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."
+                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_summary_prompt or '' }}</textarea>
+    </div>
+    <div class="ml-6">
+      <label for="ai_context_prompt" class="text-xs font-medium text-gray-600 block mb-1">Context prompt <span class="font-normal text-gray-400">(leave blank for default)</span></label>
+      <textarea name="ai_context_prompt" id="ai_context_prompt" rows="2"
+                placeholder="Explain the broader context and significance of the following article in 2–4 sentences. What should the reader know to understand why this matters? Respond in the same language as the article. Do not use markdown formatting."
+                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_context_prompt or '' }}</textarea>
+      <p class="text-xs text-gray-400 mt-1">Users can add a per-article focus when generating context.</p>
+    </div>
+    {% if summary_banner_html is defined %}
+    {{ summary_banner_html | safe }}
+    {% else %}
+    <div id="ai-summary-banner"></div>
+    {% endif %}
   </div>
 </section>
 

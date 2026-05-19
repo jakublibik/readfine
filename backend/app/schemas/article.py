@@ -61,6 +61,8 @@ class ArticleResponse(BaseModel):
     is_archived: bool
     read_at: datetime | None
     share_token: str | None = None
+    ai_summary: str | None = None
+    ai_context: str | None = None
     labels: list[dict] = []
 
     model_config = {"from_attributes": False}

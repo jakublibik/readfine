@@ -87,6 +87,27 @@
     {% endif %}
   </div>
 
+  {% if ai_summary_global_enabled %}
+  <div>
+    <label class="flex items-start gap-2 text-sm text-gray-700 cursor-pointer select-none">
+      <input type="hidden" name="ai_summary_enabled_present" value="1">
+      <input type="checkbox" name="ai_summary_enabled"
+             {% if uf.ai_summary_enabled is not none %}
+               {% if uf.ai_summary_enabled %}checked{% endif %}
+             {% else %}
+               checked
+             {% endif %}
+             class="mt-0.5 rounded">
+      <span>
+        Auto-generate AI summary
+        <span class="block text-xs text-gray-400 font-normal">
+          Uncheck to disable summary generation for this feed, even when globally enabled.
+        </span>
+      </span>
+    </label>
+  </div>
+  {% endif %}
+
   {% if uf.feed.feed_type == 'scrape' and is_sole_subscriber %}
   <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>

@@ -141,6 +141,15 @@ async def _process_ai_scoring() -> None:
         await process_pending_scoring(session)
 
 
+async def _process_ai_summaries() -> None:
+    """Job: process pending AI summary jobs."""
+    if db.async_session_factory is None:
+        return
+    from app.services.ai_summary_service import process_pending_summaries
+    async with db.async_session_factory() as session:
+        await process_pending_summaries(session)
+
+
 async def _process_ai_filters() -> None:
     """Job: apply AI filters to articles that received a fresh ai_score."""
     if db.async_session_factory is None:
@@ -196,6 +205,15 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        _process_ai_summaries,
+        trigger="interval",
+        minutes=5,
+        id="process_ai_summaries",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
     scheduler.add_job(
         _purge_old_articles,

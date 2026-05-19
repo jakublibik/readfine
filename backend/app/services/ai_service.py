@@ -260,23 +260,38 @@ async def score_article(content: str, preference_text: str, client, provider: st
         return 0.5
 
 
-async def summarize_article(content: str, client, provider: str, model: str) -> str:
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."
+_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of the following article in 2–4 sentences. What should the reader know to understand why this matters? Respond in the same language as the article. Do not use markdown formatting."
+_SUMMARY_CONTENT_LIMIT = 12_000
+
+
+async def summarize_article(
+    content: str,
+    client,
+    provider: str,
+    model: str,
+    custom_prompt: str | None = None,
+) -> str:
     """Generate a concise article summary."""
-    prompt = (
-        f"Summarize the following article in 2–4 sentences. Be concise and factual.\n\n"
-        f"Article:\n{content[:8000]}"  # 8000 chars for full context needed in summary
-    )
-    return await _complete(prompt, client, provider, model, max_tokens=300)
+    instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
+    prompt = f"{instruction}\n\nArticle:\n{content[:_SUMMARY_CONTENT_LIMIT]}"
+    return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
-async def get_article_context(content: str, client, provider: str, model: str) -> str:
+async def get_article_context(
+    content: str,
+    client,
+    provider: str,
+    model: str,
+    base_prompt: str | None = None,
+    focus: str | None = None,
+) -> str:
     """Generate background context and significance for an article."""
-    prompt = (
-        f"Explain the broader context and significance of the following article in 2–4 sentences. "
-        f"What should the reader know to understand why this matters?\n\n"
-        f"Article:\n{content[:8000]}"
-    )
-    return await _complete(prompt, client, provider, model, max_tokens=300)
+    instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
+    if focus:
+        instruction += f"\n\nFocus on: {focus}"
+    prompt = f"{instruction}\n\nArticle:\n{content[:_SUMMARY_CONTENT_LIMIT]}"
+    return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
 async def catch_me_up(articles_meta: list[dict], period: str, client, provider: str, model: str) -> str:
