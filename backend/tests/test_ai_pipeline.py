@@ -213,28 +213,18 @@ class TestEnqueueSummaryJob:
         ])
         assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
 
-    async def test_returns_false_when_summary_default_disabled_and_no_override(self):
-        """New check: ai_summary_enabled_default=False blocks unless per-feed enabled."""
-        from app.services.ai_summary_service import enqueue_summary_job
-        db = make_mock_db()
-        db.scalar = AsyncMock(side_effect=[
-            True,
-            make_settings(ai_summary_enabled_default=False),
-            make_user_feed(ai_summary_enabled=None),  # no override
-        ])
-        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
-
-    async def test_returns_true_when_summary_default_disabled_but_feed_overrides(self):
-        """Per-feed ai_summary_enabled=True overrides disabled default."""
+    async def test_not_blocked_by_summary_default_disabled(self):
+        """enqueue_summary_job does NOT check ai_summary_enabled_default — that's for auto pipeline only."""
         from app.services.ai_summary_service import enqueue_summary_job
         long_content = "word " * 500
         db = make_mock_db()
         db.scalar = AsyncMock(side_effect=[
             True,
-            make_settings(ai_summary_enabled_default=False),
-            make_user_feed(ai_summary_enabled=True),
+            make_settings(ai_summary_enabled_default=False),  # disabled globally
+            make_user_feed(ai_summary_enabled=None),           # no per-feed override either
         ])
         db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        # Should still return True — on-demand is not gated by ai_summary_enabled_default
         assert await enqueue_summary_job(make_article(content=long_content), user_id=1, db=db) is True
 
     async def test_returns_false_when_content_too_short(self):
@@ -331,6 +321,7 @@ class TestRunArticlePipeline:
         """Summary not enqueued (ineligible) → _run_summary_now not called."""
         article = make_article()
         db = make_mock_db()
+        db.scalar = AsyncMock(return_value=make_settings(ai_summary_enabled_default=True))
         with (
             patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
             patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
@@ -342,6 +333,41 @@ class TestRunArticlePipeline:
             from app.services.ai_pipeline_service import run_article_pipeline
             await run_article_pipeline(article, user_id=1, db=db)
             mock_summary.assert_not_called()
+
+    async def test_auto_summary_skipped_when_default_disabled(self):
+        """ai_summary_enabled_default=False → auto-summary never triggered, even if enqueue would succeed."""
+        article = make_article()
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=make_settings(ai_summary_enabled_default=False))
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_enqueue.assert_not_called()
+            mock_summary.assert_not_called()
+
+    async def test_auto_summary_runs_when_default_enabled(self):
+        """ai_summary_enabled_default=True → auto-summary triggered after scoring."""
+        article = make_article()
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=make_settings(ai_summary_enabled_default=True))
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_summary.assert_called_once_with(article, 1, db)
 
 
 # ── process_pending_scoring pipeline continuation ─────────────────────────────
@@ -387,6 +413,43 @@ class TestProcessPendingScoringContinuation:
             mock_filters.assert_called_once_with(article, job.user_id, db)
             mock_summary.assert_not_called()  # enqueue_summary_job returned False
 
+    async def test_no_auto_summary_when_default_disabled(self):
+        """ai_summary_enabled_default=False → summary not triggered after scoring, even if enqueue would succeed."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings(ai_summary_enabled_default=False)
+
+        async def fake_execute_scoring(j, a, s, d, now):
+            j.status = "success"
+
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)  # ai_enabled check; settings loaded via scalars_mock
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        call_count = 0
+
+        async def smart_execute(query):
+            nonlocal call_count
+            call_count += 1
+            return make_execute_result(rows=[job] if call_count == 1 else [])
+
+        db.execute = AsyncMock(side_effect=smart_execute)
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+        mock_enqueue.assert_not_called()
+        mock_summary.assert_not_called()
+
     async def test_no_pipeline_continuation_on_failure(self):
         """After scoring failure, AI filters must NOT be called."""
         job = make_job()
@@ -427,6 +490,35 @@ class TestProcessPendingScoringContinuation:
 # ── run_summary_on_demand ─────────────────────────────────────────────────────
 
 class TestRunSummaryOnDemand:
+    async def test_on_demand_works_when_default_disabled(self):
+        """On-demand summary works even when ai_summary_enabled_default=False."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        long_content = "word " * 500
+        job = make_job(operation="summary", status="pending")
+        settings = make_settings(ai_summary_enabled_default=False)
+        state_after = make_state(ai_summary="On-demand summary text")
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,           # _ai_enabled_globally in enqueue_summary_job
+            settings,       # UserSettings in enqueue_summary_job (default=False, but not checked)
+            make_user_feed(),  # UserFeed in enqueue_summary_job
+            job,            # job SELECT after flush
+            settings,       # UserSettings for _execute_summary_job
+            state_after,    # state SELECT after execution
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+
+        async def fake_execute(j, a, s, d, now):
+            j.status = "success"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
+            summary, error = await run_summary_on_demand(
+                make_article(content=long_content), user_id=1, db=db
+            )
+
+        assert summary == "On-demand summary text"
+        assert error is None
+
     async def test_returns_none_when_ineligible(self):
         """If enqueue_summary_job finds no eligible path, return None."""
         from app.services.ai_summary_service import run_summary_on_demand
@@ -437,11 +529,12 @@ class TestRunSummaryOnDemand:
             False,  # _ai_enabled_globally in enqueue_summary_job
             None,   # job SELECT returns None
         ])
-        result = await run_summary_on_demand(make_article(), user_id=1, db=db)
-        assert result is None
+        summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        assert summary is None
+        assert error is not None  # specific message, not None
 
     async def test_returns_existing_summary_when_already_done(self):
-        """Job status='success' → returns state.ai_summary without re-running."""
+        """Job status='success' → returns (summary, None) without re-running."""
         from app.services.ai_summary_service import run_summary_on_demand
         job = make_job(operation="summary", status="success")
         state = make_state(ai_summary="Existing summary text")
@@ -451,11 +544,12 @@ class TestRunSummaryOnDemand:
             job,    # job SELECT
             state,  # state SELECT
         ])
-        result = await run_summary_on_demand(make_article(), user_id=1, db=db)
-        assert result == "Existing summary text"
+        summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        assert summary == "Existing summary text"
+        assert error is None
 
     async def test_resets_failed_job_and_retries(self):
-        """job.status='failed' → reset to pending, then execute."""
+        """job.status='failed' → reset to pending, execute, return (summary, None)."""
         from app.services.ai_summary_service import run_summary_on_demand
         job = make_job(operation="summary", status="failed", retry_count=2)
         settings = make_settings()
@@ -475,13 +569,14 @@ class TestRunSummaryOnDemand:
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
-            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert job.status == "success"
         assert job.retry_count == 0
         assert job.next_retry_at is None
         assert len(executed) == 1
-        assert result == "Fresh summary"
+        assert summary == "Fresh summary"
+        assert error is None
 
     async def test_resets_skipped_job_and_retries(self):
         """job.status='skipped' → also reset and retry on demand."""
@@ -501,33 +596,55 @@ class TestRunSummaryOnDemand:
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
-            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert job.retry_count == 0
-        assert result == "New summary"
+        assert summary == "New summary"
+        assert error is None
 
-    async def test_returns_none_when_execution_fails(self):
-        """Execution sets status='failed' → state has no summary → returns None."""
+    async def test_returns_error_message_when_execution_fails(self):
+        """Execution sets status='failed' → returns (None, error_message)."""
         from app.services.ai_summary_service import run_summary_on_demand
         job = make_job(operation="summary", status="pending")
         settings = make_settings()
-        state_no_summary = make_state(ai_summary=None)
         db = make_mock_db()
         db.scalar = AsyncMock(side_effect=[
             False,
             job,
             settings,
-            state_no_summary,
         ])
 
         async def fake_execute_fail(j, a, s, d, now):
             j.status = "failed"
-            j.error_message = "Rate limit exceeded"
+            j.error_message = "Rate limit exceeded: too many requests"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_fail):
-            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
-        assert result is None
+        assert summary is None
+        assert error == "Rate limit exceeded: too many requests"
+
+    async def test_returns_skipped_message_when_content_rejected(self):
+        """Execution sets status='skipped' → returns (None, descriptive message)."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        job = make_job(operation="summary", status="pending")
+        settings = make_settings()
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            False,
+            job,
+            settings,
+        ])
+
+        async def fake_execute_skip(j, a, s, d, now):
+            j.status = "skipped"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_skip):
+            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+
+        assert summary is None
+        assert error is not None
+        assert "too short" in error or "not available" in error
 
 
 # ── run_pipeline_for_article_all_users ───────────────────────────────────────

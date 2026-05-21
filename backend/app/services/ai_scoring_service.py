@@ -225,8 +225,9 @@ async def process_pending_scoring(db: AsyncSession) -> int:
             from app.services.ai_pipeline_service import _run_ai_filters_now, _run_summary_now
             from app.services.ai_summary_service import enqueue_summary_job
             await _run_ai_filters_now(article, job.user_id, db)
-            if await enqueue_summary_job(article, job.user_id, db):
-                await _run_summary_now(article, job.user_id, db)
+            if s.ai_summary_enabled_default:
+                if await enqueue_summary_job(article, job.user_id, db):
+                    await _run_summary_now(article, job.user_id, db)
             logger.info("pipeline: article=%d user=%d done (scoring path)", article.id, job.user_id)
 
         processed += 1

@@ -1110,9 +1110,9 @@ async def _get_article_access(user: User, article_id: int, db: AsyncSession):
 def _ai_summary_block(article_id: int, summary: str) -> str:
     return (
         f'<div id="ai-summary-{article_id}" '
-        f'class="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-gray-700 dark:bg-blue-950 dark:border-blue-900 dark:text-gray-200">'
-        f'<div class="font-medium text-blue-700 dark:text-blue-300 mb-1 text-xs uppercase tracking-wide">Summary</div>'
-        f'<p>{html_module.escape(summary)}</p>'
+        f'class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">'
+        f'<div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>'
+        f'<p class="ai-text">{html_module.escape(summary)}</p>'
         f'</div>'
     )
 
@@ -1120,9 +1120,9 @@ def _ai_summary_block(article_id: int, summary: str) -> str:
 def _ai_context_block(article_id: int, context: str) -> str:
     return (
         f'<div id="ai-context-{article_id}" '
-        f'class="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-gray-700 dark:bg-amber-950 dark:border-amber-900 dark:text-gray-200">'
-        f'<div class="font-medium text-amber-700 dark:text-amber-300 mb-1 text-xs uppercase tracking-wide">Context</div>'
-        f'<p>{html_module.escape(context)}</p>'
+        f'class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">'
+        f'<div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>'
+        f'<p class="ai-text">{html_module.escape(context)}</p>'
         f'</div>'
     )
 
@@ -1175,12 +1175,14 @@ async def htmx_ai_summary_trigger(
             f'</div>'
         )
 
-    result = await run_summary_on_demand(article, user.id, db)
-    if result is None:
+    import html as _html
+    summary, error = await run_summary_on_demand(article, user.id, db)
+    if summary is None:
+        msg = _html.escape(error) if error else "Summary unavailable."
         return HTMLResponse(
-            f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed. Check your AI settings or try again.</div>'
+            f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
-    return HTMLResponse(_ai_summary_block(article_id, result))
+    return HTMLResponse(_ai_summary_block(article_id, summary))
 
 
 @router.get("/htmx/articles/{article_id}/ai-summary/poll", response_class=HTMLResponse)

@@ -131,6 +131,7 @@
             <button hx-post="/htmx/articles/{{ article.id }}/ai-summary"
                     hx-target="#ai-summary-{{ article.id }}"
                     hx-swap="outerHTML"
+                    hx-indicator="#ai-summary-{{ article.id }}"
                     data-close-menu
                     class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
               <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -184,7 +185,15 @@
       Generating summary…
     </div>
     {% else %}
-    <div id="ai-summary-{{ article.id }}"></div>
+    <div id="ai-summary-{{ article.id }}">
+      <div class="htmx-indicator flex items-center gap-2 text-sm text-gray-500 py-1">
+        <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
+        Generating summary…
+      </div>
+    </div>
     {% endif %}
 
     <div id="ai-context-area-{{ article.id }}">

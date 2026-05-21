@@ -62,10 +62,6 @@ async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) 
         if uf is not None and uf.ai_summary_enabled is False:
             return False
 
-    # Skip if summary disabled globally and no per-feed override
-    if not s.ai_summary_enabled_default and not (uf and uf.ai_summary_enabled is True):
-        return False
-
     content_text = _normalize_content(article.title, article.readable_content or article.content)
     if len(content_text) < _MIN_CONTENT_CHARS:
         return False
@@ -148,8 +144,14 @@ async def _execute_summary_job(
         s.last_ai_error_at = now
 
 
-async def run_summary_on_demand(article: Article, user_id: int, db: AsyncSession) -> str | None:
-    """Enqueue + immediately process summary job. Returns summary text or None on failure/skip."""
+async def run_summary_on_demand(
+    article: Article, user_id: int, db: AsyncSession
+) -> tuple[str | None, str | None]:
+    """Enqueue + immediately process summary job.
+
+    Returns (summary_text, error_message).
+    On success: (text, None). On failure: (None, error). On ineligible: (None, None).
+    """
     await enqueue_summary_job(article, user_id, db)
     await db.flush()
     job = await db.scalar(
@@ -160,7 +162,7 @@ async def run_summary_on_demand(article: Article, user_id: int, db: AsyncSession
         )
     )
     if job is None:
-        return None  # ineligible
+        return None, "Summary could not be started. Check that a quality AI model is configured."
     if job.status == "success":
         state = await db.scalar(
             select(UserArticleState).where(
@@ -168,7 +170,7 @@ async def run_summary_on_demand(article: Article, user_id: int, db: AsyncSession
                 UserArticleState.article_id == article.id,
             )
         )
-        return state.ai_summary if state else None
+        return (state.ai_summary if state else None), None
     if job.status in ("failed", "skipped"):
         # On-demand: reset backoff so we retry immediately
         job.status = "pending"
@@ -179,13 +181,19 @@ async def run_summary_on_demand(article: Article, user_id: int, db: AsyncSession
     now = datetime.now(timezone.utc)
     await _execute_summary_job(job, article, s, db, now)
     await db.commit()
-    state = await db.scalar(
-        select(UserArticleState).where(
-            UserArticleState.user_id == user_id,
-            UserArticleState.article_id == article.id,
+    if job.status == "success":
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id == article.id,
+            )
         )
-    )
-    return state.ai_summary if state else None
+        return (state.ai_summary if state else None), None
+    if job.status == "skipped":
+        return None, "Article content is too short or AI model not available."
+    # failed
+    error = (job.error_message or "Unknown error")[:200]
+    return None, error
 
 
 async def process_pending_summaries(db: AsyncSession) -> int:
