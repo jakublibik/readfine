@@ -153,15 +153,15 @@
       <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the quality model. Per-feed override available in feed settings.</p>
       <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
     </div>
-    <div class="ml-6">
+    <div>
       <label for="ai_summary_prompt" class="text-xs font-medium text-gray-600 block mb-1">Summary prompt <span class="font-normal text-gray-400">(leave blank for default)</span></label>
-      <textarea name="ai_summary_prompt" id="ai_summary_prompt" rows="2"
+      <textarea name="ai_summary_prompt" id="ai_summary_prompt" rows="3"
                 placeholder="Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."
                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_summary_prompt or '' }}</textarea>
     </div>
-    <div class="ml-6">
+    <div>
       <label for="ai_context_prompt" class="text-xs font-medium text-gray-600 block mb-1">Context prompt <span class="font-normal text-gray-400">(leave blank for default)</span></label>
-      <textarea name="ai_context_prompt" id="ai_context_prompt" rows="2"
+      <textarea name="ai_context_prompt" id="ai_context_prompt" rows="3"
                 placeholder="Explain the broader context and significance of the following article in 2–4 sentences. What should the reader know to understand why this matters? Respond in the same language as the article. Do not use markdown formatting."
                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_context_prompt or '' }}</textarea>
       <p class="text-xs text-gray-400 mt-1">Users can add a per-article focus when generating context.</p>
@@ -179,13 +179,13 @@
   <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Interest profile</h2>
   <p class="text-xs text-gray-500 mb-3">Used by scoring to rate article relevance. The more specific, the better.</p>
 
-  <textarea name="ai_preference_text" id="ai_preference_text" rows="4"
+  <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
             placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Low relevance: sports, lifestyle&#10;No relevance: celebrity news, entertainment gossip"
             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
   <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
 
-  <p class="text-xs text-gray-400 mt-1">Generated from your reading history.</p>
+  <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles — <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
   <div id="pref-cold-start-warning">
     {% if pref_strong_count < 20 %}
     <p class="text-xs text-amber-600 mt-1 mb-1">
