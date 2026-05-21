@@ -217,8 +217,15 @@ document.addEventListener('click', function (e) {
     document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
     if (!isOpen) {
       var rect = toggle.getBoundingClientRect();
+      var menuMinW = 144; // min-w-36
       menu.style.top = (rect.bottom + 4) + 'px';
-      menu.style.right = (window.innerWidth - rect.right) + 'px';
+      if (rect.right >= menuMinW) {
+        menu.style.right = (window.innerWidth - rect.right) + 'px';
+        menu.style.left = '';
+      } else {
+        menu.style.left = Math.max(4, rect.left) + 'px';
+        menu.style.right = '';
+      }
       menu.classList.remove('hidden');
     }
     return;
@@ -390,6 +397,7 @@ function _flushMarkRead() {
 }
 
 function _queueMarkRead(id) {
+  if (window._dwellSend) window._dwellSend();
   _pendingMarkRead.add(id);
   clearTimeout(_markReadTimer);
   _markReadTimer = setTimeout(_flushMarkRead, 500);
@@ -755,7 +763,7 @@ document.addEventListener('articleStarChanged', function (e) {
       var bsSpan = bsBtn.querySelector('span');
       if (bsSpan) {
         bsSpan.textContent = detail.isStarred ? '★' : '☆';
-        bsSpan.className = 'text-base leading-none ' + (detail.isStarred ? 'text-gray-900' : 'text-gray-300');
+        bsSpan.className = 'text-base leading-none ' + (detail.isStarred ? 'text-gray-600' : 'text-gray-300');
       }
       bsBtn.title = detail.isStarred ? 'Remove star' : 'Star';
     }
@@ -766,6 +774,13 @@ document.addEventListener('articleStarChanged', function (e) {
     if (hsSvg) hsSvg.setAttribute('fill', detail.isStarred ? 'currentColor' : 'none');
     var hsLabel = headerStar.querySelector('[data-label]');
     if (hsLabel) hsLabel.textContent = detail.isStarred ? 'Starred' : 'Star';
+  }
+  if (e.target === document && window._titleBarCountType === 'starred') {
+    var badge = document.getElementById('mobile-title-count');
+    if (badge && !badge.classList.contains('hidden')) {
+      var cur = parseInt(badge.textContent, 10);
+      _setTitleBarCount(Math.max(0, cur + (detail.isStarred ? 1 : -1)), 'starred');
+    }
   }
   var row = document.getElementById('article-row-' + detail.id);
   if (!row) return;
@@ -874,7 +889,7 @@ document.addEventListener('articleArchiveChanged', function (e) {
   if (bottomBar && !bottomBar.classList.contains('hidden')) {
     var baBtn = bottomBar.querySelector('[data-bottom-archive]');
     if (baBtn) {
-      baBtn.classList.toggle('text-gray-700', detail.isArchived);
+      baBtn.classList.toggle('text-gray-500', detail.isArchived);
       baBtn.classList.toggle('text-gray-400', !detail.isArchived);
       baBtn.title = detail.isArchived ? 'Unarchive' : 'Archive';
     }
