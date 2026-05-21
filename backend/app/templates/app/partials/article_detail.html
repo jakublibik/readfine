@@ -167,9 +167,9 @@
   <div class="mb-5 space-y-3">
 
     {% if article.ai_summary %}
-    <div id="ai-summary-{{ article.id }}" class="rounded-lg bg-blue-50 border border-blue-100 px-4 py-3 text-sm text-gray-700 dark:bg-blue-950 dark:border-blue-900 dark:text-gray-200">
-      <div class="font-medium text-blue-700 dark:text-blue-300 mb-1 text-xs uppercase tracking-wide">Summary</div>
-      <p>{{ article.ai_summary }}</p>
+    <div id="ai-summary-{{ article.id }}" class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
+      <div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>
+      <p class="ai-text">{{ article.ai_summary }}</p>
     </div>
     {% elif summary_pending %}
     <div id="ai-summary-{{ article.id }}"
@@ -189,9 +189,9 @@
 
     <div id="ai-context-area-{{ article.id }}">
       {% if article.ai_context %}
-      <div id="ai-context-{{ article.id }}" class="rounded-lg bg-amber-50 border border-amber-100 px-4 py-3 text-sm text-gray-700 dark:bg-amber-950 dark:border-amber-900 dark:text-gray-200">
-        <div class="font-medium text-amber-700 dark:text-amber-300 mb-1 text-xs uppercase tracking-wide">Context</div>
-        <p>{{ article.ai_context }}</p>
+      <div id="ai-context-{{ article.id }}" class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">
+        <div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>
+        <p class="ai-text">{{ article.ai_context }}</p>
       </div>
       {% else %}
       <div id="ai-context-{{ article.id }}"></div>
