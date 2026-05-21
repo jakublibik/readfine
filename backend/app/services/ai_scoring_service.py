@@ -99,21 +99,80 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
     return result.rowcount > 0
 
 
-async def enqueue_scoring_after_readable(article: Article, db: AsyncSession) -> None:
-    """Enqueue scoring for all users who have labeled this article (called after readable success)."""
-    from app.models.label import ArticleLabel
-    user_ids = (await db.scalars(
-        select(ArticleLabel.user_id)
-        .where(ArticleLabel.article_id == article.id)
-        .distinct()
-    )).all()
-    for uid in user_ids:
-        await enqueue_scoring_job(article, uid, db)
+async def _execute_scoring_job(
+    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime
+) -> None:
+    """Process a single scoring job — AI call + result write. Does not commit."""
+    if not s.ai_preference_text or not s.ai_fast_provider or not s.ai_fast_model:
+        job.status = "skipped"
+        job.processed_at = now
+        return
+
+    content_text = _normalize_content(
+        article.title,
+        article.readable_content or article.content,
+    )
+
+    from app.services.ai_service import get_ai_client, score_article
+    client, provider, model = await get_ai_client(job.user_id, "fast", db)
+    if client is None:
+        job.status = "skipped"
+        job.processed_at = now
+        return
+
+    try:
+        score = await score_article(content_text, s.ai_preference_text, client, provider, model)
+
+        estimated_tokens = len(content_text) // 4 + len(s.ai_preference_text) // 4 + 150
+        job.input_tokens = estimated_tokens
+        job.output_tokens = 1
+
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == job.user_id,
+                UserArticleState.article_id == job.article_id,
+            )
+        )
+        if state is None:
+            state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
+            db.add(state)
+        state.ai_score = score
+        state.ai_filters_applied = False
+
+        job.status = "success"
+        job.processed_at = now
+        job.error_message = None
+        if s.last_ai_error:
+            s.last_ai_error = None
+            s.last_ai_error_at = None
+
+    except Exception as exc:
+        msg = str(exc)[:300]
+        http_status = _extract_http_status(exc)
+        retries = job.retry_count + 1
+        job.retry_count = retries
+
+        if http_status is not None and 400 <= http_status < 500 and http_status != 429:
+            job.status = "failed"
+            job.processed_at = now
+        elif retries >= _MAX_RETRIES:
+            job.status = "failed"
+            job.processed_at = now
+        else:
+            delay = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            job.next_retry_at = now + timedelta(minutes=delay)
+
+        job.error_message = msg
+        logger.warning("AI scoring failed job=%d article=%d user=%d: %s", job.id, job.article_id, job.user_id, msg)
+
+        if s:
+            s.last_ai_error = f"Scoring error: {msg}"
+            s.last_ai_error_at = now
 
 
 async def process_pending_scoring(db: AsyncSession) -> int:
     """
-    Process a batch of pending scoring jobs.
+    Process a batch of pending scoring jobs, then run AI filters + summary inline.
     Returns number of jobs processed.
     """
     if not await _ai_enabled_globally(db):
@@ -132,6 +191,7 @@ async def process_pending_scoring(db: AsyncSession) -> int:
         )
         .order_by(ArticleAiJob.id)
         .limit(_BATCH_SIZE)
+        .with_for_update(skip_locked=True)
     )
     jobs = jobs_result.scalars().all()
     if not jobs:
@@ -159,78 +219,15 @@ async def process_pending_scoring(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        if not s.ai_preference_text or not s.ai_fast_provider or not s.ai_fast_model:
-            job.status = "skipped"
-            job.processed_at = now
-            processed += 1
-            continue
+        await _execute_scoring_job(job, article, s, db, now)
 
-        content_text = _normalize_content(
-            article.title,
-            article.readable_content or article.content,
-        )
-
-        from app.services.ai_service import get_ai_client, score_article
-        client, provider, model = await get_ai_client(job.user_id, "fast", db)
-        if client is None:
-            job.status = "skipped"
-            job.processed_at = now
-            processed += 1
-            continue
-
-        try:
-            score = await score_article(content_text, s.ai_preference_text, client, provider, model)
-
-            # Store token usage if available (provider-specific)
-            # score_article returns a float; token tracking would require refactor of _complete()
-            # Tokens are estimated for now, actual tracking deferred to a future step
-            estimated_tokens = len(content_text) // 4 + len(s.ai_preference_text) // 4 + 150
-            job.input_tokens = estimated_tokens
-            job.output_tokens = 1
-
-            # Upsert UserArticleState.ai_score
-            state = await db.scalar(
-                select(UserArticleState).where(
-                    UserArticleState.user_id == job.user_id,
-                    UserArticleState.article_id == job.article_id,
-                )
-            )
-            if state is None:
-                state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
-                db.add(state)
-            state.ai_score = score
-            state.ai_filters_applied = False
-
-            job.status = "success"
-            job.processed_at = now
-            job.error_message = None
-            if s.last_ai_error:
-                s.last_ai_error = None
-                s.last_ai_error_at = None
-
-        except Exception as exc:
-            msg = str(exc)[:300]
-            http_status = _extract_http_status(exc)
-            retries = job.retry_count + 1
-            job.retry_count = retries
-
-            if http_status is not None and 400 <= http_status < 500 and http_status != 429:
-                job.status = "failed"
-                job.processed_at = now
-            elif retries >= _MAX_RETRIES:
-                job.status = "failed"
-                job.processed_at = now
-            else:
-                delay = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-                job.next_retry_at = now + timedelta(minutes=delay)
-
-            job.error_message = msg
-            logger.warning("AI scoring failed job=%d article=%d user=%d: %s", job.id, job.article_id, job.user_id, msg)
-
-            # Persist last error to user settings
-            if s:
-                s.last_ai_error = f"Scoring error: {msg}"
-                s.last_ai_error_at = now
+        if job.status == "success":
+            from app.services.ai_pipeline_service import _run_ai_filters_now, _run_summary_now
+            from app.services.ai_summary_service import enqueue_summary_job
+            await _run_ai_filters_now(article, job.user_id, db)
+            if await enqueue_summary_job(article, job.user_id, db):
+                await _run_summary_now(article, job.user_id, db)
+            logger.info("pipeline: article=%d user=%d done (scoring path)", article.id, job.user_id)
 
         processed += 1
 

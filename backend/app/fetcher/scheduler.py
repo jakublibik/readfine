@@ -200,7 +200,7 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(
         _process_ai_filters,
         trigger="interval",
-        minutes=2,
+        minutes=10,
         id="process_ai_filters",
         replace_existing=True,
         max_instances=1,

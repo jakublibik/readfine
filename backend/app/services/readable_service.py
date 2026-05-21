@@ -309,8 +309,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
         is_403 = apply_readable_result(article, content, error, http_status)
         if content:
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
-            from app.services.ai_scoring_service import enqueue_scoring_after_readable
-            await enqueue_scoring_after_readable(article, db)
+            from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+            await run_pipeline_for_article_all_users(article, db)
         elif is_403:
             streak = feed_403_streak.get(article.feed_id, 0) + 1
             feed_403_streak[article.feed_id] = streak
@@ -319,8 +319,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
                 feeds_to_disable.add(article.feed_id)
 
         processed += 1
-
-    await db.commit()
+        await db.commit()  # per-article: keeps transactions short even with inline AI calls
 
     # Feeds that hit the threshold within this batch — disable immediately
     for feed_id in feeds_to_disable:

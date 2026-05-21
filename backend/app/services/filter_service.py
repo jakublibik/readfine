@@ -569,17 +569,27 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
             continue
 
         uf = feed_user_map.get((state.user_id, article.feed_id))
-        for f in filters_by_user.get(state.user_id, []):
-            if evaluate_filter(f, article, uf, state):
-                await _execute_actions(f, article, state.user_id, uf, db)
-                if f.stop_on_match:
-                    break
-
-        state.ai_filters_applied = True
+        await _apply_ai_filters_for_state(state, article, uf, filters_by_user.get(state.user_id, []), db)
 
     await db.commit()
     logger.info("ai_filters: processed %d states", len(states))
     return len(states)
+
+
+async def _apply_ai_filters_for_state(
+    state: "UserArticleState",
+    article: Article,
+    uf: "UserFeed | None",
+    filters: "list[Filter]",
+    db: AsyncSession,
+) -> None:
+    """Evaluate AI filters and execute actions for a single article state. Does not commit."""
+    for f in filters:
+        if evaluate_filter(f, article, uf, state):
+            await _execute_actions(f, article, state.user_id, uf, db)
+            if f.stop_on_match:
+                break
+    state.ai_filters_applied = True
 
 
 # ── Test / retroactive apply ──────────────────────────────────────────────────

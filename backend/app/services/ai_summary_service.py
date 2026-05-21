@@ -50,6 +50,7 @@ async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) 
     if s is None or not s.ai_quality_provider or not s.ai_quality_model:
         return False
 
+    uf = None
     if article.feed_id is not None:
         from app.models.feed import UserFeed
         uf = await db.scalar(
@@ -60,6 +61,10 @@ async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) 
         )
         if uf is not None and uf.ai_summary_enabled is False:
             return False
+
+    # Skip if summary disabled globally and no per-feed override
+    if not s.ai_summary_enabled_default and not (uf and uf.ai_summary_enabled is True):
+        return False
 
     content_text = _normalize_content(article.title, article.readable_content or article.content)
     if len(content_text) < _MIN_CONTENT_CHARS:
@@ -76,6 +81,111 @@ async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) 
         )
     )
     return result.rowcount > 0
+
+
+async def _execute_summary_job(
+    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime
+) -> None:
+    """Process a single summary job — AI call + result write. Does not commit."""
+    if s is None or not s.ai_quality_provider or not s.ai_quality_model:
+        job.status = "skipped"
+        job.processed_at = now
+        return
+
+    content_text = _normalize_content(article.title, article.readable_content or article.content)
+    if len(content_text) < _MIN_CONTENT_CHARS:
+        job.status = "skipped"
+        job.processed_at = now
+        return
+
+    from app.services.ai_service import get_ai_client, summarize_article
+    client, provider, model = await get_ai_client(job.user_id, "quality", db)
+    if client is None:
+        job.status = "skipped"
+        job.processed_at = now
+        return
+
+    try:
+        result = await summarize_article(content_text, client, provider, model, custom_prompt=s.ai_summary_prompt)
+
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == job.user_id,
+                UserArticleState.article_id == job.article_id,
+            )
+        )
+        if state is None:
+            state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
+            db.add(state)
+        state.ai_summary = result
+
+        job.status = "success"
+        job.processed_at = now
+        job.error_message = None
+        if s.last_ai_error:
+            s.last_ai_error = None
+            s.last_ai_error_at = None
+
+    except Exception as exc:
+        msg = str(exc)[:300]
+        retries = job.retry_count + 1
+        job.retry_count = retries
+        http_status = _extract_http_status(exc)
+
+        if http_status is not None and 400 <= http_status < 500 and http_status != 429:
+            job.status = "failed"
+            job.processed_at = now
+        elif retries >= _MAX_RETRIES:
+            job.status = "failed"
+            job.processed_at = now
+        else:
+            delay = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            job.next_retry_at = now + timedelta(minutes=delay)
+
+        job.error_message = msg
+        logger.warning("AI summary failed job=%d article=%d user=%d: %s", job.id, job.article_id, job.user_id, msg)
+        s.last_ai_error = f"Summary error: {msg}"
+        s.last_ai_error_at = now
+
+
+async def run_summary_on_demand(article: Article, user_id: int, db: AsyncSession) -> str | None:
+    """Enqueue + immediately process summary job. Returns summary text or None on failure/skip."""
+    await enqueue_summary_job(article, user_id, db)
+    await db.flush()
+    job = await db.scalar(
+        select(ArticleAiJob).where(
+            ArticleAiJob.article_id == article.id,
+            ArticleAiJob.user_id == user_id,
+            ArticleAiJob.operation == "summary",
+        )
+    )
+    if job is None:
+        return None  # ineligible
+    if job.status == "success":
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id == article.id,
+            )
+        )
+        return state.ai_summary if state else None
+    if job.status in ("failed", "skipped"):
+        # On-demand: reset backoff so we retry immediately
+        job.status = "pending"
+        job.retry_count = 0
+        job.next_retry_at = None
+        await db.flush()
+    s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+    now = datetime.now(timezone.utc)
+    await _execute_summary_job(job, article, s, db, now)
+    await db.commit()
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id == article.id,
+        )
+    )
+    return state.ai_summary if state else None
 
 
 async def process_pending_summaries(db: AsyncSession) -> int:
@@ -117,69 +227,13 @@ async def process_pending_summaries(db: AsyncSession) -> int:
         article = articles_map.get(job.article_id)
         s = settings_map.get(job.user_id)
 
-        if article is None or s is None or not s.ai_quality_provider or not s.ai_quality_model:
+        if article is None or s is None:
             job.status = "skipped"
             job.processed_at = now
             processed += 1
             continue
 
-        content_text = _normalize_content(article.title, article.readable_content or article.content)
-        if len(content_text) < _MIN_CONTENT_CHARS:
-            job.status = "skipped"
-            job.processed_at = now
-            processed += 1
-            continue
-
-        from app.services.ai_service import get_ai_client, summarize_article
-        client, provider, model = await get_ai_client(job.user_id, "quality", db)
-        if client is None:
-            job.status = "skipped"
-            job.processed_at = now
-            processed += 1
-            continue
-
-        try:
-            result = await summarize_article(content_text, client, provider, model, custom_prompt=s.ai_summary_prompt)
-
-            state = await db.scalar(
-                select(UserArticleState).where(
-                    UserArticleState.user_id == job.user_id,
-                    UserArticleState.article_id == job.article_id,
-                )
-            )
-            if state is None:
-                state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
-                db.add(state)
-            state.ai_summary = result
-
-            job.status = "success"
-            job.processed_at = now
-            job.error_message = None
-            if s.last_ai_error:
-                s.last_ai_error = None
-                s.last_ai_error_at = None
-
-        except Exception as exc:
-            msg = str(exc)[:300]
-            retries = job.retry_count + 1
-            job.retry_count = retries
-            http_status = _extract_http_status(exc)
-
-            if http_status is not None and 400 <= http_status < 500 and http_status != 429:
-                job.status = "failed"
-                job.processed_at = now
-            elif retries >= _MAX_RETRIES:
-                job.status = "failed"
-                job.processed_at = now
-            else:
-                delay = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-                job.next_retry_at = now + timedelta(minutes=delay)
-
-            job.error_message = msg
-            logger.warning("AI summary failed job=%d article=%d user=%d: %s", job.id, job.article_id, job.user_id, msg)
-            s.last_ai_error = f"Summary error: {msg}"
-            s.last_ai_error_at = now
-
+        await _execute_summary_job(job, article, s, db, now)
         processed += 1
 
     await db.commit()

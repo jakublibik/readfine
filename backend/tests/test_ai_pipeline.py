@@ -1,0 +1,685 @@
+"""Tests for AI pipeline: enqueue logic, pipeline orchestration, and on-demand processing."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def make_article(**kwargs):
+    defaults = {
+        "id": 10,
+        "feed_id": 5,
+        "title": "Test Article",
+        "content": "Some content " * 100,
+        "readable_content": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def make_settings(**kwargs):
+    defaults = {
+        "user_id": 1,
+        "ai_scoring_enabled_default": True,
+        "ai_summary_enabled_default": True,
+        "ai_preference_text": "Technology and science news",
+        "ai_fast_provider": "anthropic",
+        "ai_fast_model": "claude-haiku-4-5",
+        "ai_quality_provider": "anthropic",
+        "ai_quality_model": "claude-sonnet-4-6",
+        "ai_summary_prompt": None,
+        "last_ai_error": None,
+        "last_ai_error_at": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def make_user_feed(**kwargs):
+    defaults = {
+        "user_id": 1,
+        "feed_id": 5,
+        "ai_scoring_enabled": None,
+        "ai_summary_enabled": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def make_job(**kwargs):
+    defaults = {
+        "id": 1,
+        "article_id": 10,
+        "user_id": 1,
+        "operation": "scoring",
+        "status": "pending",
+        "retry_count": 0,
+        "next_retry_at": None,
+        "processed_at": None,
+        "error_message": None,
+        "input_tokens": None,
+        "output_tokens": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def make_state(**kwargs):
+    defaults = {
+        "user_id": 1,
+        "article_id": 10,
+        "ai_score": None,
+        "ai_filters_applied": False,
+        "ai_summary": None,
+    }
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+def make_mock_db():
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.commit = AsyncMock()
+    db.flush = AsyncMock()
+    db.execute = AsyncMock()
+    return db
+
+
+def make_execute_result(rows=None, rowcount=1):
+    """Mock for db.execute() — supports .scalars().all() and .rowcount."""
+    result = MagicMock()
+    result.rowcount = rowcount
+    result.scalars.return_value.all.return_value = rows or []
+    return result
+
+
+# ── enqueue_scoring_job ───────────────────────────────────────────────────────
+
+class TestEnqueueScoringJob:
+    async def test_returns_false_when_ai_globally_disabled(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=False)  # ai_enabled = False
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_no_user_settings(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[True, None])  # ai_enabled, no settings
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_scoring_disabled_globally(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_scoring_enabled_default=False),
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_per_feed_scoring_disabled(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(ai_scoring_enabled=False),
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_no_preference_text(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_preference_text=""),
+            make_user_feed(),
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_no_fast_provider(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_fast_provider=None),
+            make_user_feed(),
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_job_already_exists(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(),
+            42,  # existing job id
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_true_when_job_created(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(),
+            None,  # no existing job
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is True
+
+    async def test_returns_false_on_conflict(self):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(),
+            None,
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=0))
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+
+# ── enqueue_summary_job ───────────────────────────────────────────────────────
+
+class TestEnqueueSummaryJob:
+    async def test_returns_false_when_ai_globally_disabled(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=False)
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_no_quality_provider(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_quality_provider=None),
+        ])
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_per_feed_summary_disabled(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(ai_summary_enabled=False),
+        ])
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_summary_default_disabled_and_no_override(self):
+        """New check: ai_summary_enabled_default=False blocks unless per-feed enabled."""
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_summary_enabled_default=False),
+            make_user_feed(ai_summary_enabled=None),  # no override
+        ])
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_true_when_summary_default_disabled_but_feed_overrides(self):
+        """Per-feed ai_summary_enabled=True overrides disabled default."""
+        from app.services.ai_summary_service import enqueue_summary_job
+        long_content = "word " * 500
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_summary_enabled_default=False),
+            make_user_feed(ai_summary_enabled=True),
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_summary_job(make_article(content=long_content), user_id=1, db=db) is True
+
+    async def test_returns_false_when_content_too_short(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(),
+        ])
+        assert await enqueue_summary_job(make_article(content="short"), user_id=1, db=db) is False
+
+    async def test_returns_true_when_eligible(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        long_content = "word " * 500
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(),
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_summary_job(make_article(content=long_content), user_id=1, db=db) is True
+
+
+# ── run_article_pipeline ──────────────────────────────────────────────────────
+
+class TestRunArticlePipeline:
+    """Test pipeline orchestration logic by patching the helper functions."""
+
+    async def test_stops_when_scoring_ineligible(self):
+        """enqueue_scoring_job=False + no existing job → pipeline stops, neither filters nor summary run."""
+        article = make_article()
+        db = make_mock_db()
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=False)),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value=None)),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_filters.assert_not_called()
+            mock_summary.assert_not_called()
+
+    async def test_continues_when_already_scored(self):
+        """enqueue_scoring_job=False but job is 'success' → skip scoring, run filters."""
+        article = make_article()
+        db = make_mock_db()
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=False)),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()) as mock_scoring,
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=False)),
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_scoring.assert_not_called()
+            mock_filters.assert_called_once()
+
+    async def test_stops_when_scoring_fails(self):
+        """Newly enqueued job fails → AI filters not called."""
+        article = make_article()
+        db = make_mock_db()
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="failed")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_filters.assert_not_called()
+
+    async def test_full_pipeline_scoring_success(self):
+        """Scoring succeeds → AI filters → summary all called."""
+        article = make_article()
+        db = make_mock_db()
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_filters.assert_called_once_with(article, 1, db)
+            mock_summary.assert_called_once_with(article, 1, db)
+
+    async def test_skips_summary_when_not_eligible(self):
+        """Summary not enqueued (ineligible) → _run_summary_now not called."""
+        article = make_article()
+        db = make_mock_db()
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=False)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_summary.assert_not_called()
+
+
+# ── process_pending_scoring pipeline continuation ─────────────────────────────
+
+class TestProcessPendingScoringContinuation:
+    """Verify that after scoring, AI filters + summary run inline."""
+
+    async def test_pipeline_continuation_on_success(self):
+        """After job.status='success', _run_ai_filters_now is called; _run_summary_now not called when summary ineligible."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings()
+        db = make_mock_db()
+
+        async def fake_execute_scoring(j, a, s, d, now):
+            j.status = "success"
+
+        # Mock db.scalars so pre-load maps return our objects
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        # First execute call returns jobs; no other execute calls expected
+        call_count = 0
+
+        async def smart_execute(query):
+            nonlocal call_count
+            call_count += 1
+            return make_execute_result(rows=[job] if call_count == 1 else [])
+
+        db.execute = AsyncMock(side_effect=smart_execute)
+        db.scalar = AsyncMock(return_value=True)  # ai_enabled check
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=False)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+            mock_filters.assert_called_once_with(article, job.user_id, db)
+            mock_summary.assert_not_called()  # enqueue_summary_job returned False
+
+    async def test_no_pipeline_continuation_on_failure(self):
+        """After scoring failure, AI filters must NOT be called."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings()
+
+        async def fake_execute_scoring_fail(j, a, s, d, now):
+            j.status = "failed"
+
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        call_count = 0
+
+        async def smart_execute(query):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return make_execute_result(rows=[job])
+            return make_execute_result()
+
+        db.execute = AsyncMock(side_effect=smart_execute)
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring_fail),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()) as mock_filters,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+        mock_filters.assert_not_called()
+
+
+# ── run_summary_on_demand ─────────────────────────────────────────────────────
+
+class TestRunSummaryOnDemand:
+    async def test_returns_none_when_ineligible(self):
+        """If enqueue_summary_job finds no eligible path, return None."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        db = make_mock_db()
+        # enqueue_summary_job returns False (AI disabled), so no job row is created
+        # db.scalar after flush returns None (job doesn't exist)
+        db.scalar = AsyncMock(side_effect=[
+            False,  # _ai_enabled_globally in enqueue_summary_job
+            None,   # job SELECT returns None
+        ])
+        result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        assert result is None
+
+    async def test_returns_existing_summary_when_already_done(self):
+        """Job status='success' → returns state.ai_summary without re-running."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        job = make_job(operation="summary", status="success")
+        state = make_state(ai_summary="Existing summary text")
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            False,  # enqueue_summary_job: ai_enabled False → no new job
+            job,    # job SELECT
+            state,  # state SELECT
+        ])
+        result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        assert result == "Existing summary text"
+
+    async def test_resets_failed_job_and_retries(self):
+        """job.status='failed' → reset to pending, then execute."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        job = make_job(operation="summary", status="failed", retry_count=2)
+        settings = make_settings()
+        state_after = make_state(ai_summary="Fresh summary")
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            False,        # enqueue: ai_enabled False
+            job,          # job SELECT
+            settings,     # UserSettings
+            state_after,  # state SELECT after execution
+        ])
+
+        executed = []
+
+        async def fake_execute(j, a, s, d, now):
+            executed.append(True)
+            j.status = "success"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
+            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+
+        assert job.status == "success"
+        assert job.retry_count == 0
+        assert job.next_retry_at is None
+        assert len(executed) == 1
+        assert result == "Fresh summary"
+
+    async def test_resets_skipped_job_and_retries(self):
+        """job.status='skipped' → also reset and retry on demand."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        job = make_job(operation="summary", status="skipped")
+        settings = make_settings()
+        state_after = make_state(ai_summary="New summary")
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            False,
+            job,
+            settings,
+            state_after,
+        ])
+
+        async def fake_execute(j, a, s, d, now):
+            j.status = "success"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
+            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+
+        assert job.retry_count == 0
+        assert result == "New summary"
+
+    async def test_returns_none_when_execution_fails(self):
+        """Execution sets status='failed' → state has no summary → returns None."""
+        from app.services.ai_summary_service import run_summary_on_demand
+        job = make_job(operation="summary", status="pending")
+        settings = make_settings()
+        state_no_summary = make_state(ai_summary=None)
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            False,
+            job,
+            settings,
+            state_no_summary,
+        ])
+
+        async def fake_execute_fail(j, a, s, d, now):
+            j.status = "failed"
+            j.error_message = "Rate limit exceeded"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_fail):
+            result = await run_summary_on_demand(make_article(), user_id=1, db=db)
+
+        assert result is None
+
+
+# ── run_pipeline_for_article_all_users ───────────────────────────────────────
+
+class TestRunPipelineForArticleAllUsers:
+    async def test_no_pipeline_when_no_labels(self):
+        """Article with no labels → run_article_pipeline never called."""
+        db = make_mock_db()
+        # db.scalars returns empty list (no labeled users)
+        scalars_result = AsyncMock()
+        scalars_result.all = MagicMock(return_value=[])
+        db.scalars = AsyncMock(return_value=scalars_result)
+
+        with patch("app.services.ai_pipeline_service.run_article_pipeline", AsyncMock()) as mock_pipeline:
+            from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+            await run_pipeline_for_article_all_users(make_article(), db=db)
+            mock_pipeline.assert_not_called()
+
+    async def test_runs_pipeline_for_each_labeled_user(self):
+        """Two users labeled the article → pipeline runs twice with correct user IDs."""
+        db = make_mock_db()
+        scalars_result = AsyncMock()
+        scalars_result.all = MagicMock(return_value=[1, 2])  # user_id 1 and 2
+        db.scalars = AsyncMock(return_value=scalars_result)
+
+        article = make_article()
+        calls = []
+
+        async def fake_pipeline(art, user_id, d):
+            calls.append(user_id)
+
+        with patch("app.services.ai_pipeline_service.run_article_pipeline", side_effect=fake_pipeline):
+            from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+            await run_pipeline_for_article_all_users(article, db=db)
+
+        assert calls == [1, 2]
+
+
+# ── _run_ai_filters_now idempotency ──────────────────────────────────────────
+
+class TestRunAiFiltersNowIdempotency:
+    async def test_skips_when_already_applied(self):
+        """ai_filters_applied=True → _apply_ai_filters_for_state must NOT be called."""
+        db = make_mock_db()
+        state = make_state(ai_filters_applied=True)
+        db.scalar = AsyncMock(return_value=state)  # returns state with ai_filters_applied=True
+
+        with patch("app.services.filter_service._apply_ai_filters_for_state", AsyncMock()) as mock_apply:
+            from app.services.ai_pipeline_service import _run_ai_filters_now
+            await _run_ai_filters_now(make_article(), user_id=1, db=db)
+            mock_apply.assert_not_called()
+
+    async def test_skips_when_no_state(self):
+        """No UserArticleState (score never written) → nothing to apply."""
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=None)  # no state row
+
+        with patch("app.services.filter_service._apply_ai_filters_for_state", AsyncMock()) as mock_apply:
+            from app.services.ai_pipeline_service import _run_ai_filters_now
+            await _run_ai_filters_now(make_article(), user_id=1, db=db)
+            mock_apply.assert_not_called()
+
+
+# ── _apply_ai_filters_for_state ───────────────────────────────────────────────
+
+class TestApplyAiFiltersForState:
+    async def test_sets_ai_filters_applied_true(self):
+        from app.services.filter_service import _apply_ai_filters_for_state
+        state = make_state()
+        db = make_mock_db()
+        await _apply_ai_filters_for_state(state, make_article(), None, [], db)
+        assert state.ai_filters_applied is True
+
+    async def test_executes_matching_filter_action(self):
+        from app.services.filter_service import _apply_ai_filters_for_state
+        state = make_state(ai_score=0.8)
+        article = make_article()
+        db = make_mock_db()
+
+        filter_obj = SimpleNamespace(
+            id=1, user_id=1, is_active=True, stop_on_match=False,
+            conditions=[SimpleNamespace(field="ai_score", operator="gt", value="50")],
+            actions=[SimpleNamespace(action_type="mark_read")],
+            match_operator="AND",
+            scope_include=None, scope_except=None,
+        )
+
+        executed_actions = []
+
+        async def fake_execute_actions(f, art, uid, uf, d):
+            executed_actions.append(f.id)
+
+        with (
+            patch("app.services.filter_service.evaluate_filter", return_value=True),
+            patch("app.services.filter_service._execute_actions", side_effect=fake_execute_actions),
+        ):
+            await _apply_ai_filters_for_state(state, article, None, [filter_obj], db)
+
+        assert 1 in executed_actions
+        assert state.ai_filters_applied is True
+
+    async def test_respects_stop_on_match(self):
+        from app.services.filter_service import _apply_ai_filters_for_state
+        state = make_state(ai_score=0.8)
+        article = make_article()
+        db = make_mock_db()
+
+        f1 = SimpleNamespace(
+            id=1, stop_on_match=True,
+            conditions=[], actions=[], match_operator="AND",
+            scope_include=None, scope_except=None,
+        )
+        f2 = SimpleNamespace(
+            id=2, stop_on_match=False,
+            conditions=[], actions=[], match_operator="AND",
+            scope_include=None, scope_except=None,
+        )
+
+        executed = []
+
+        async def fake_execute_actions(f, art, uid, uf, d):
+            executed.append(f.id)
+
+        with (
+            patch("app.services.filter_service.evaluate_filter", return_value=True),
+            patch("app.services.filter_service._execute_actions", side_effect=fake_execute_actions),
+        ):
+            await _apply_ai_filters_for_state(state, article, None, [f1, f2], db)
+
+        assert executed == [1]  # f2 not reached
+
+    async def test_no_actions_when_filter_does_not_match(self):
+        from app.services.filter_service import _apply_ai_filters_for_state
+        state = make_state(ai_score=0.3)
+        db = make_mock_db()
+
+        f = SimpleNamespace(
+            id=1, stop_on_match=False,
+            conditions=[], actions=[], match_operator="AND",
+            scope_include=None, scope_except=None,
+        )
+
+        executed = []
+
+        async def fake_execute_actions(f, art, uid, uf, d):
+            executed.append(f.id)
+
+        with (
+            patch("app.services.filter_service.evaluate_filter", return_value=False),
+            patch("app.services.filter_service._execute_actions", side_effect=fake_execute_actions),
+        ):
+            await _apply_ai_filters_for_state(state, make_article(), None, [f], db)
+
+        assert executed == []
+        assert state.ai_filters_applied is True  # always set, even with no matches

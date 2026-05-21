@@ -1148,7 +1148,7 @@ async def htmx_ai_summary_trigger(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """On-demand: enqueue summary job and return spinner with polling."""
+    """On-demand: run summary synchronously and return result block."""
     from app.models.settings import AppSettings as _AS
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     if not ai_on:
@@ -1166,7 +1166,7 @@ async def htmx_ai_summary_trigger(
     if not article:
         return HTMLResponse("", status_code=404)
 
-    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS, enqueue_summary_job
+    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS, run_summary_on_demand
     content_text = _normalize_content(article.title, article.readable_content or article.content)
     if len(content_text) < _MIN_CONTENT_CHARS:
         return HTMLResponse(
@@ -1175,10 +1175,12 @@ async def htmx_ai_summary_trigger(
             f'</div>'
         )
 
-    await enqueue_summary_job(article, user.id, db)
-    await db.commit()
-
-    return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
+    result = await run_summary_on_demand(article, user.id, db)
+    if result is None:
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed. Check your AI settings or try again.</div>'
+        )
+    return HTMLResponse(_ai_summary_block(article_id, result))
 
 
 @router.get("/htmx/articles/{article_id}/ai-summary/poll", response_class=HTMLResponse)
