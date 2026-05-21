@@ -40,4 +40,138 @@
   {% include "settings/partials/tokens_list.html" %}
 </div>
 
+<!-- API Documentation -->
+<div class="mt-10 pt-8 border-t border-gray-200">
+  <h2 class="text-base font-semibold text-gray-900 mb-1">API Documentation</h2>
+  <p class="text-sm text-gray-500 mb-5">
+    Use your token to access the REST API from scripts, clients, or external tools.
+    Machine-readable spec: <a href="/openapi.json" target="_blank" class="text-blue-600 hover:underline font-mono text-xs">/openapi.json</a>
+    (import into Postman, Insomnia, etc.)
+  </p>
+
+  <!-- Authentication -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Authentication</h3>
+  <p class="text-sm text-gray-600 mb-2">Add the token to every request as a Bearer header:</p>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">Authorization: Bearer &lt;your-token&gt;</pre>
+
+  <!-- Base URL -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Base URL</h3>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">{{ request.base_url }}api/v1</pre>
+
+  <!-- Quick example -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Example</h3>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">curl -H "Authorization: Bearer &lt;token&gt;" \
+     {{ request.base_url }}api/v1/articles?unread_only=true</pre>
+
+  <!-- Endpoint reference -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-3">Endpoints</h3>
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="bg-gray-50 border border-gray-200">
+          <th class="text-left px-3 py-2 font-semibold text-gray-700 border-r border-gray-200 w-16">Method</th>
+          <th class="text-left px-3 py-2 font-semibold text-gray-700 border-r border-gray-200">Path</th>
+          <th class="text-left px-3 py-2 font-semibold text-gray-700">Description</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100 border border-gray-200 border-t-0">
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Articles</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles</td>
+          <td class="px-3 py-2 text-gray-600">List articles. Params: <code class="bg-gray-100 px-1 rounded">feed_id</code> <code class="bg-gray-100 px-1 rounded">folder_id</code> <code class="bg-gray-100 px-1 rounded">unread_only</code> <code class="bg-gray-100 px-1 rounded">starred_only</code> <code class="bg-gray-100 px-1 rounded">archived_only</code> <code class="bg-gray-100 px-1 rounded">q</code> <code class="bg-gray-100 px-1 rounded">limit</code> <code class="bg-gray-100 px-1 rounded">offset</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Get article detail (includes readable content)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Update state. Body: <code class="bg-gray-100 px-1 rounded">{"is_read": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_starred": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_archived": true}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}/labels</td>
+          <td class="px-3 py-2 text-gray-600">Assign label. Body: <code class="bg-gray-100 px-1 rounded">{"label_id": 1}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}/labels/{label_id}</td>
+          <td class="px-3 py-2 text-gray-600">Remove label from article</td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Feeds</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds</td>
+          <td class="px-3 py-2 text-gray-600">List subscribed feeds</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds</td>
+          <td class="px-3 py-2 text-gray-600">Subscribe. Body: <code class="bg-gray-100 px-1 rounded">{"url": "...", "folder_id": null}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Get feed details</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Update feed (title, folder, readable extraction, purge settings)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Unsubscribe from feed</td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Folders &amp; Labels</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders</td>
+          <td class="px-3 py-2 text-gray-600">List folders</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders</td>
+          <td class="px-3 py-2 text-gray-600">Create folder. Body: <code class="bg-gray-100 px-1 rounded">{"name": "..."}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Rename folder</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Delete folder (feeds moved to uncategorized)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/labels</td>
+          <td class="px-3 py-2 text-gray-600">List labels</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/labels</td>
+          <td class="px-3 py-2 text-gray-600">Create label. Body: <code class="bg-gray-100 px-1 rounded">{"name": "...", "color": "#3b82f6"}</code></td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Auth</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/auth/me</td>
+          <td class="px-3 py-2 text-gray-600">Verify token and return current user info</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="text-xs text-gray-400 mt-4">All endpoints return JSON. Errors follow <code class="bg-gray-100 px-1 rounded">{"detail": "..."}</code> format. 401 = invalid/revoked token.</p>
+</div>
+
 {% endblock %}
