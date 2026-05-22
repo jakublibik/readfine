@@ -2029,6 +2029,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     attachArticlePlaceholder(newArea);
     var msgs = document.getElementById('chat-messages-' + articleId);
     updateChatIndicator(articleId, msgs && msgs.children.length > 0);
+    if (input) input.focus();
     var pending = _chatPending[articleId];
     if (pending) {
       if (newArea.querySelector('.text-red-500') && input) { input.value = pending; input.focus(); }
@@ -2184,6 +2185,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
     attachGeneralChatKeydown();
     syncGeneralChatContext();
+    if (input) input.focus();
     var pending = _chatPending['general'];
     if (pending) {
       if (newArea.querySelector('.text-red-500') && input) { input.value = pending; input.focus(); }
