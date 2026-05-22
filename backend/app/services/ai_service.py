@@ -262,9 +262,6 @@ async def score_article(content: str, preference_text: str, client, provider: st
 
 _DEFAULT_SUMMARY_PROMPT = "Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."
 _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of the following article in 2–4 sentences. What should the reader know to understand why this matters? Respond in the same language as the article. Do not use markdown formatting."
-_SUMMARY_CONTENT_LIMIT = 12_000
-
-
 async def summarize_article(
     content: str,
     client,
@@ -274,7 +271,7 @@ async def summarize_article(
 ) -> str:
     """Generate a concise article summary."""
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
-    prompt = f"{instruction}\n\nArticle:\n{content[:_SUMMARY_CONTENT_LIMIT]}"
+    prompt = f"{instruction}\n\nArticle:\n{content}"
     return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
@@ -290,7 +287,7 @@ async def get_article_context(
     instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
     if focus:
         instruction += f"\n\nFocus on: {focus}"
-    prompt = f"{instruction}\n\nArticle:\n{content[:_SUMMARY_CONTENT_LIMIT]}"
+    prompt = f"{instruction}\n\nArticle:\n{content}"
     return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
@@ -306,7 +303,7 @@ async def chat_with_article(
         system_prompt = (
             "You are a helpful assistant discussing the following article. "
             "Answer questions based on the article content.\n\n"
-            f"Article:\n{article_content[:_SUMMARY_CONTENT_LIMIT]}"
+            f"Article:\n{article_content}"
         )
     else:
         system_prompt = None

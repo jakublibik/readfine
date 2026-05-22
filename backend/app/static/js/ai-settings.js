@@ -46,6 +46,29 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   });
 
+  // Content limit input — format with space as thousands separator
+  var limitInput = document.getElementById('ai_content_limit');
+  if (limitInput) {
+    function fmtLimit(digits) {
+      return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    }
+    limitInput.addEventListener('input', function () {
+      var pos = limitInput.selectionStart;
+      var digitsBeforeCursor = limitInput.value.slice(0, pos).replace(/[^\d]/g, '').length;
+      var digits = limitInput.value.replace(/[^\d]/g, '');
+      limitInput.value = fmtLimit(digits);
+      var newPos = 0, count = 0;
+      for (var i = 0; i < limitInput.value.length; i++) {
+        if (limitInput.value[i] !== ' ') count++;
+        if (count === digitsBeforeCursor) { newPos = i + 1; break; }
+      }
+      limitInput.setSelectionRange(newPos, newPos);
+    });
+    limitInput.closest('form').addEventListener('submit', function () {
+      limitInput.value = limitInput.value.replace(/[^\d]/g, '');
+    });
+  }
+
   // Preference text character counter
   var ta = document.getElementById('ai_preference_text');
   var counter = document.getElementById('pref-char-count');

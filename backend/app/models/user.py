@@ -62,6 +62,7 @@ class UserSettings(Base):
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)
     ai_score_show_in_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_chat_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    ai_content_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=20_000)
     last_ai_error: Mapped[str | None] = mapped_column(Text)
     last_ai_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

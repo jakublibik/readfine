@@ -18,19 +18,19 @@ _BATCH_SIZE = 5
 _MAX_RETRIES = 3
 _BACKOFF_MINUTES = [5, 30, 120]
 _MIN_CONTENT_CHARS = 1500
-_CONTENT_MAX_CHARS = 12_000
+_DEFAULT_CONTENT_LIMIT = 20_000
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
-def _normalize_content(title: str, content: str | None) -> str:
+def _normalize_content(title: str, content: str | None, limit: int = _DEFAULT_CONTENT_LIMIT) -> str:
     import nh3
     raw = content or ""
     plain = nh3.clean(raw, tags=set())
     plain = html_module.unescape(plain)
     plain = _WHITESPACE_RE.sub(" ", plain).strip()
     combined = f"{title}\n\n{plain}" if plain else title
-    return combined[:_CONTENT_MAX_CHARS]
+    return combined[:limit]
 
 
 async def _ai_enabled_globally(db: AsyncSession) -> bool:
@@ -88,7 +88,7 @@ async def _execute_summary_job(
         job.processed_at = now
         return
 
-    content_text = _normalize_content(article.title, article.readable_content or article.content)
+    content_text = _normalize_content(article.title, article.readable_content or article.content, s.ai_content_limit)
     if len(content_text) < _MIN_CONTENT_CHARS:
         job.status = "skipped"
         job.processed_at = now

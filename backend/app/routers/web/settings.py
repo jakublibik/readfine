@@ -1,5 +1,6 @@
 """Web routes for settings: feeds, folders, labels, filters, API tokens, and OPML."""
 import logging
+import re
 import secrets
 from datetime import datetime, timezone
 
@@ -1287,6 +1288,16 @@ async def settings_ai_preferences_save(
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"
+    _raw_limit = re.sub(r"\s", "", form.get("ai_content_limit") or "")
+    _content_limit_reset = False
+    try:
+        _parsed_limit = int(_raw_limit) if _raw_limit else 20_000
+        if not (1_000 <= _parsed_limit <= 100_000):
+            raise ValueError
+        s.ai_content_limit = _parsed_limit
+    except (ValueError, TypeError):
+        s.ai_content_limit = 20_000
+        _content_limit_reset = True
     s.ai_summary_prompt = (form.get("ai_summary_prompt") or "").strip() or None
     s.ai_context_prompt = (form.get("ai_context_prompt") or "").strip() or None
 
@@ -1294,6 +1305,8 @@ async def settings_ai_preferences_save(
 
     ctx = await _ai_page_context(user, db)
     ctx["prefs_saved"] = True
+    if _content_limit_reset:
+        ctx["content_limit_reset"] = True
     ctx["summary_banner_html"] = ""
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
