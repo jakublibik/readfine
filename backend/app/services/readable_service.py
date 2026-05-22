@@ -307,11 +307,14 @@ async def process_pending_readable(db: AsyncSession) -> int:
             continue
 
         is_403 = apply_readable_result(article, content, error, http_status)
+        from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if content:
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
-            from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
             await run_pipeline_for_article_all_users(article, db)
-        elif is_403:
+        elif article.readable_status == "failed":
+            # Terminal failure — score with RSS content
+            await run_pipeline_for_article_all_users(article, db)
+        if is_403:
             streak = feed_403_streak.get(article.feed_id, 0) + 1
             feed_403_streak[article.feed_id] = streak
             feeds_with_403.add(article.feed_id)
@@ -425,6 +428,10 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
         article.readable_error = "HTTP 403 Forbidden"
 
     await db.commit()
+
+    from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+    for article in pending:
+        await run_pipeline_for_article_all_users(article, db)
     logger.warning(
         "readable: disabled extraction for feed %d after %d consecutive 403 errors"
         " (cancelled %d pending articles)",
