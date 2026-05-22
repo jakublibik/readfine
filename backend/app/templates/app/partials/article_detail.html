@@ -255,12 +255,10 @@
                 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
       <div class="flex items-center gap-3">
         <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">AI Chat</span>
-        {% if chat_messages %}
         <button hx-delete="/htmx/articles/{{ article.id }}/ai-chat"
                 hx-target="#chat-area-{{ article.id }}"
                 hx-swap="outerHTML"
-                class="text-xs text-gray-400 hover:text-red-500">Clear</button>
-        {% endif %}
+                class="text-xs text-gray-400 hover:text-red-500 mt-px">Clear</button>
       </div>
       <button data-close-chat-modal="{{ article.id }}"
                 class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">

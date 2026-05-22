@@ -1811,10 +1811,25 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
 // AI chat modal
 (function () {
+  function applyVisualViewport(modal) {
+    if (!window.visualViewport) return;
+    var vv = window.visualViewport;
+    modal.style.top = vv.offsetTop + 'px';
+    modal.style.height = vv.height + 'px';
+    modal.style.bottom = 'auto';
+  }
+
   function openChatModal(articleId) {
     var modal = document.getElementById('chat-modal-' + articleId);
     if (!modal) return;
     modal.classList.remove('hidden');
+    if (window.visualViewport) {
+      applyVisualViewport(modal);
+      var listener = function () { applyVisualViewport(modal); };
+      modal._vvpListener = listener;
+      window.visualViewport.addEventListener('resize', listener);
+      window.visualViewport.addEventListener('scroll', listener);
+    }
     scrollChatToBottom(modal);
     var input = document.getElementById('chat-input-' + articleId);
     if (input) input.focus();
@@ -1822,7 +1837,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   function closeChatModal(articleId) {
     var modal = document.getElementById('chat-modal-' + articleId);
-    if (modal) modal.classList.add('hidden');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.style.top = '';
+    modal.style.height = '';
+    modal.style.bottom = '';
+    if (modal._vvpListener && window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', modal._vvpListener);
+      window.visualViewport.removeEventListener('scroll', modal._vvpListener);
+      modal._vvpListener = null;
+    }
   }
 
   function attachChatModal(root) {
