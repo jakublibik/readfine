@@ -1,6 +1,9 @@
 """Web routes for the main application UI."""
 import asyncio
 import html as html_module
+import mistune as _mistune_module
+
+_md_render = _mistune_module.create_markdown(escape=True)
 import json
 import logging
 import secrets
@@ -19,7 +22,7 @@ from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.rate_limit import limiter
-from app.models.article import Article, ArticleAiJob, UserArticleState
+from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
@@ -706,11 +709,24 @@ async def htmx_article_detail(
                 ArticleAiJob.status == "pending",
             )
         ))
+    chat_available = bool(ai_avail and settings and getattr(settings, 'ai_chat_enabled', True))
+    chat_messages: list[dict] = []
+    if chat_available:
+        existing_chat = await db.scalar(
+            select(ArticleAiChat).where(
+                ArticleAiChat.article_id == article_id,
+                ArticleAiChat.user_id == user.id,
+            )
+        )
+        if existing_chat and existing_chat.messages:
+            chat_messages = list(existing_chat.messages)
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {
         "article": article,
         "mark_read_on_scroll": mark_read_on_scroll,
         "ai_available": ai_avail,
         "summary_pending": summary_pending,
+        "chat_available": chat_available,
+        "chat_messages": chat_messages,
     })
 
 
@@ -742,7 +758,7 @@ async def _get_row_context(user, request: Request, db) -> dict:
 def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     """Return article_content.html + OOB span to update the reading-time metadata."""
     content_html = templates.env.get_template("app/partials/article_content.html").render(
-        request=request, article=article
+        request=request, article=article, chat_available=False
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (
@@ -1127,6 +1143,92 @@ def _ai_context_block(article_id: int, context: str) -> str:
     )
 
 
+_CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
+
+
+def _chat_messages_html(article_id: int, messages: list[dict]) -> str:
+    parts = [f'<div id="chat-messages-{article_id}" '
+             f'class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">']
+    for msg in messages:
+        if msg["role"] == "user":
+            parts.append(
+                f'<div class="flex justify-end">'
+                f'<div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 '
+                f'border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm '
+                f'text-gray-800 dark:text-gray-200">'
+                f'{html_module.escape(msg["content"])}</div></div>'
+            )
+        else:
+            parts.append(
+                f'<div class="flex justify-start">'
+                f'<div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 '
+                f'border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 '
+                f'prose prose-sm dark:prose-invert max-w-none ai-text">'
+                f'{_md_render(msg["content"])}</div></div>'
+            )
+    parts.append('</div>')
+    return ''.join(parts)
+
+
+def _chat_input_html(article_id: int, model_tier: str = "quality",
+                     include_article: bool = True) -> str:
+    quality_sel = 'selected' if model_tier == "quality" else ''
+    fast_sel = 'selected' if model_tier == "fast" else ''
+    article_chk = 'checked' if include_article else ''
+    return (
+        f'<div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">'
+        f'<textarea id="chat-input-{article_id}" name="message" rows="3" '
+        f'placeholder="Ask a question about this article…" '
+        f'class="w-full text-sm border border-gray-200 dark:border-gray-600 '
+        f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2" '
+        f'data-chat-input-id="{article_id}"></textarea>'
+        f'<div class="flex items-center gap-3 pl-2">'
+        f'<label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">'
+        f'Model '
+        f'<select name="model_tier" id="chat-tier-{article_id}" '
+        f'class="text-xs border border-gray-200 dark:border-gray-700 '
+        f'text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">'
+        f'<option value="quality" {quality_sel}>Quality</option>'
+        f'<option value="fast" {fast_sel}>Fast</option>'
+        f'</select></label>'
+        f'<label class="flex items-center gap-1 text-xs text-gray-400 '
+        f'dark:text-gray-500 cursor-pointer" '
+        f'title="Send article text with each message">'
+        f'<input type="checkbox" name="include_article" '
+        f'id="chat-article-{article_id}" {article_chk} '
+        f'class="rounded border-gray-300 dark:border-gray-600 text-gray-400">'
+        f'Attach article</label>'
+        f'<svg id="chat-spinner-{article_id}" '
+        f'class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2" '
+        f'fill="none" viewBox="0 0 24 24">'
+        f'<circle class="opacity-25" cx="12" cy="12" r="10" '
+        f'stroke="currentColor" stroke-width="4"/>'
+        f'<path class="opacity-75" fill="currentColor" '
+        f'd="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>'
+        f'</svg>'
+        f'</div>'
+        f'<button class="hidden" '
+        f'hx-post="/htmx/articles/{article_id}/ai-chat" '
+        f'hx-include="#chat-input-{article_id},#chat-tier-{article_id},'
+        f'#chat-article-{article_id}" '
+        f'hx-target="#chat-area-{article_id}" hx-swap="outerHTML" '
+        f'hx-indicator="#chat-spinner-{article_id}"></button>'
+        f'</div>'
+    )
+
+
+def _render_chat_area(article_id: int, messages: list[dict],
+                      model_tier: str = "quality",
+                      include_article: bool = True) -> str:
+    return (
+        f'<div id="chat-area-{article_id}" '
+        f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+        + _chat_messages_html(article_id, messages)
+        + _chat_input_html(article_id, model_tier, include_article)
+        + '</div>'
+    )
+
+
 def _ai_spinner(target_id: str, poll_url: str) -> str:
     return (
         f'<div id="{target_id}" '
@@ -1290,6 +1392,128 @@ async def htmx_ai_context_trigger(
     await db.commit()
 
     return HTMLResponse(_ai_context_block(article_id, result))
+
+
+@router.post("/htmx/articles/{article_id}/ai-chat", response_class=HTMLResponse)
+async def htmx_ai_chat(
+    article_id: int,
+    request: Request,
+    message: str = Form(...),
+    model_tier: str = Form("quality"),
+    include_article: str = Form(""),   # checkbox: "on" when checked, absent (→ "") when not
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.settings import AppSettings as _AS
+    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    if not ai_on:
+        return HTMLResponse(
+            f'<div id="chat-area-{article_id}" '
+            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+            f'<p class="text-xs text-gray-400 py-2">AI is disabled.</p></div>'
+        )
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
+        return HTMLResponse(
+            f'<div id="chat-area-{article_id}" '
+            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+            f'<p class="text-xs text-gray-400 py-2">Quality AI model not configured.</p></div>'
+        )
+    if not getattr(settings, 'ai_chat_enabled', True):
+        return HTMLResponse("", status_code=403)
+
+    msg_text = message.strip()
+    if not msg_text:
+        return HTMLResponse("", status_code=400)
+
+    article = await _get_article_access(user, article_id, db)
+    if not article:
+        return HTMLResponse("", status_code=404)
+
+    chat = await db.scalar(
+        select(ArticleAiChat).where(
+            ArticleAiChat.user_id == user.id,
+            ArticleAiChat.article_id == article_id,
+        )
+    )
+    if chat is None:
+        chat = ArticleAiChat(user_id=user.id, article_id=article_id, messages=[])
+        db.add(chat)
+
+    current_messages: list[dict] = list(chat.messages or [])
+    current_messages.append({"role": "user", "content": msg_text})
+
+    tier = model_tier if model_tier in ("quality", "fast") else "quality"
+    use_article = (include_article == "on")
+
+    article_ctx = None
+    if use_article:
+        from app.services.ai_summary_service import _normalize_content
+        article_ctx = _normalize_content(article.title, article.readable_content or article.content)
+
+    from app.services.ai_service import get_ai_client, chat_with_article
+    client, provider, model = await get_ai_client(user.id, tier, db)
+    if client is None:
+        return HTMLResponse(
+            f'<div id="chat-area-{article_id}" '
+            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+            + _chat_messages_html(article_id, current_messages[:-1])
+            + f'<p class="text-xs text-red-500 py-1">'
+            f'{tier.capitalize()} AI model not configured.</p>'
+            + _chat_input_html(article_id, tier, use_article)
+            + '</div>'
+        )
+
+    try:
+        response_text = await chat_with_article(current_messages, article_ctx, client, provider, model)
+    except Exception as exc:
+        exc_str = str(exc)
+        status = getattr(exc, "status_code", None)
+        if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
+            err_msg = "AI provider is overloaded — please try again in a moment."
+        elif status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
+            err_msg = "Rate limit reached — please wait a moment and try again."
+        elif status and status >= 500:
+            err_msg = "AI provider returned a server error — please try again."
+        else:
+            err_msg = "Chat failed — please try again."
+        return HTMLResponse(
+            f'<div id="chat-area-{article_id}" '
+            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+            + _chat_messages_html(article_id, current_messages[:-1])
+            + f'<p class="text-xs text-red-500 py-1">{html_module.escape(err_msg)}</p>'
+            + _chat_input_html(article_id, tier, use_article)
+            + '</div>'
+        )
+
+    current_messages.append({"role": "assistant", "content": response_text})
+    if len(current_messages) > _CHAT_MAX_MESSAGES:
+        current_messages = current_messages[-_CHAT_MAX_MESSAGES:]
+    chat.messages = current_messages  # reassign — SQLAlchemy JSONB change tracking
+    chat.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+
+    return HTMLResponse(_render_chat_area(article_id, current_messages, tier, use_article))
+
+
+@router.delete("/htmx/articles/{article_id}/ai-chat", response_class=HTMLResponse)
+async def htmx_ai_chat_clear(
+    article_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    chat = await db.scalar(
+        select(ArticleAiChat).where(
+            ArticleAiChat.user_id == user.id,
+            ArticleAiChat.article_id == article_id,
+        )
+    )
+    if chat is not None:
+        chat.messages = []
+        chat.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+    return HTMLResponse(_render_chat_area(article_id, []))
 
 
 @router.get("/share/{token}", response_class=HTMLResponse)

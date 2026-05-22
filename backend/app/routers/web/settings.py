@@ -1286,6 +1286,7 @@ async def settings_ai_preferences_save(
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
+    s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"
     s.ai_summary_prompt = (form.get("ai_summary_prompt") or "").strip() or None
     s.ai_context_prompt = (form.get("ai_context_prompt") or "").strip() or None
 

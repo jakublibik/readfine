@@ -100,6 +100,24 @@ class ArticleAiJob(Base):
     user: Mapped["User"] = relationship()
 
 
+class ArticleAiChat(Base):
+    __tablename__ = "article_ai_chats"
+    __table_args__ = (
+        UniqueConstraint("user_id", "article_id", name="uq_article_ai_chats_user_article"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    article_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
+    messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 from app.models.feed import Feed  # noqa: E402
 from app.models.user import User  # noqa: E402
 from app.models.label import ArticleLabel  # noqa: E402

@@ -147,6 +147,16 @@
               </svg>
               {% if article.ai_context %}Regenerate context{% else %}Generate context{% endif %}
             </button>
+            {% if chat_available %}
+            <button data-show-chat-modal="{{ article.id }}"
+                    class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+              <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+              </svg>
+              Chat
+            </button>
+            {% endif %}
           </div>
           {% endif %}
         </div>
@@ -236,6 +246,102 @@
   <!-- Content -->
   {% include "app/partials/article_content.html" %}
 
-
 </article>
+
+{% if chat_available %}
+<div id="chat-modal-{{ article.id }}"
+     class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center pt-12 sm:p-8"
+     data-chat-modal-id="{{ article.id }}">
+  <!-- Backdrop -->
+  <div class="absolute inset-0 bg-black/50 dark:bg-black/70"
+       data-close-chat-modal="{{ article.id }}"></div>
+  <!-- Dialog -->
+  <div class="relative z-10 w-full max-w-3xl max-h-[90vh] sm:max-h-[80vh]
+              flex flex-col bg-white dark:bg-gray-900 rounded-xl shadow-xl">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-2 sm:px-4 py-3
+                border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">AI Chat</span>
+        {% if chat_messages %}
+        <button hx-delete="/htmx/articles/{{ article.id }}/ai-chat"
+                hx-target="#chat-area-{{ article.id }}"
+                hx-swap="outerHTML"
+                class="text-xs text-gray-400 hover:text-red-500">Clear</button>
+        {% endif %}
+      </div>
+      <button data-close-chat-modal="{{ article.id }}"
+                class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+    </div>
+    <!-- Chat area (swapped by HTMX) -->
+    <div id="chat-area-{{ article.id }}"
+         class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
+      <div id="chat-messages-{{ article.id }}"
+           class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">
+        {% for msg in chat_messages %}
+          {% if msg.role == "user" %}
+          <div class="flex justify-end">
+            <div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border
+                        border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2
+                        text-sm text-gray-800 dark:text-gray-200">{{ msg.content }}</div>
+          </div>
+          {% else %}
+          <div class="flex justify-start">
+            <div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border
+                        border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2
+                        prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | markdown }}</div>
+          </div>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <!-- Input area -->
+      <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
+        <textarea id="chat-input-{{ article.id }}" name="message" rows="3"
+                  placeholder="Ask a question about this article…"
+                  class="w-full text-sm border border-gray-200 dark:border-gray-600
+                         dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
+                  data-chat-input-id="{{ article.id }}"></textarea>
+        <!-- Toolbar -->
+        <div class="flex items-center gap-3 pl-2">
+          <label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">
+            Model
+            <select name="model_tier" id="chat-tier-{{ article.id }}"
+                    class="text-xs border border-gray-200 dark:border-gray-700
+                           text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">
+              <option value="quality" selected>Quality</option>
+              <option value="fast">Fast</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 cursor-pointer"
+                 title="Send article text with each message">
+            <input type="checkbox" name="include_article"
+                   id="chat-article-{{ article.id }}" checked
+                   class="rounded border-gray-300 dark:border-gray-600 text-gray-400">
+            Attach article
+          </label>
+          <svg id="chat-spinner-{{ article.id }}"
+               class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2"
+               fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10"
+                    stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+        </div>
+        <button class="hidden"
+                hx-post="/htmx/articles/{{ article.id }}/ai-chat"
+                hx-include="#chat-input-{{ article.id }},#chat-tier-{{ article.id }},#chat-article-{{ article.id }}"
+                hx-target="#chat-area-{{ article.id }}"
+                hx-swap="outerHTML"
+                hx-indicator="#chat-spinner-{{ article.id }}"></button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 </div>

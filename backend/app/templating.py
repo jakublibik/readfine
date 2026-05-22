@@ -1,6 +1,12 @@
+import mistune
+from markupsafe import Markup
 from fastapi.templating import Jinja2Templates
 
 templates = Jinja2Templates(directory="app/templates")
+
+_md_render = mistune.create_markdown(escape=True)
+
+templates.env.filters["markdown"] = lambda text: Markup(_md_render(text or ""))
 
 _ai_enabled: bool = False
 

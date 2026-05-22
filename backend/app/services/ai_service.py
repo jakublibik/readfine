@@ -294,6 +294,58 @@ async def get_article_context(
     return await _complete(prompt, client, provider, model, max_tokens=400)
 
 
+async def chat_with_article(
+    messages: list[dict],
+    article_content: str | None,
+    client,
+    provider: str,
+    model: str,
+) -> str:
+    """Multi-turn chat. article_content=None → no system prompt (history-only mode)."""
+    if article_content:
+        system_prompt = (
+            "You are a helpful assistant discussing the following article. "
+            "Answer questions based on the article content.\n\n"
+            f"Article:\n{article_content[:_SUMMARY_CONTENT_LIMIT]}"
+        )
+    else:
+        system_prompt = None
+
+    if provider == "anthropic":
+        kwargs: dict = dict(
+            model=model,
+            max_tokens=600,
+            messages=[{"role": m["role"], "content": m["content"]} for m in messages],
+        )
+        if system_prompt:
+            kwargs["system"] = system_prompt
+        resp = await client.messages.create(**kwargs)
+        return resp.content[0].text.strip()
+
+    elif provider == "openai":
+        openai_msgs = []
+        if system_prompt:
+            openai_msgs.append({"role": "system", "content": system_prompt})
+        openai_msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
+        resp = await client.chat.completions.create(
+            model=model, max_tokens=600, messages=openai_msgs)
+        return resp.choices[0].message.content.strip()
+
+    elif provider == "gemini":
+        from google.genai import types
+        contents = [
+            {"role": "model" if m["role"] == "assistant" else "user",
+             "parts": [{"text": m["content"]}]}
+            for m in messages
+        ]
+        cfg = types.GenerateContentConfig(system_instruction=system_prompt) if system_prompt else None
+        resp = await client.aio.models.generate_content(
+            model=model, config=cfg, contents=contents)
+        return resp.text.strip()
+
+    raise ValueError(f"Unknown provider: {provider}")
+
+
 async def catch_me_up(articles_meta: list[dict], period: str, client, provider: str, model: str) -> str:
     """Generate a catch-up digest grouped by topic."""
     lines = [f"- [{a['feed']}] {a['title']} ({a['date']})" for a in articles_meta[:200]]

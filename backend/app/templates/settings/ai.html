@@ -154,6 +154,17 @@
       <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
     </div>
     <div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_chat_enabled" id="ai_chat_enabled"
+               {% if s.ai_chat_enabled %}checked{% endif %}
+               class="w-4 h-4 text-purple-600 rounded border-gray-300">
+        <label for="ai_chat_enabled" class="text-sm font-medium text-gray-700">
+          Enable chat
+        </label>
+      </div>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Show AI Chat option in article menu. Uses the quality or fast model per your choice in the chat panel.</p>
+    </div>
+    <div>
       <label for="ai_summary_prompt" class="text-xs font-medium text-gray-600 block mb-1">Summary prompt <span class="font-normal text-gray-400">(leave blank for default)</span></label>
       <textarea name="ai_summary_prompt" id="ai_summary_prompt" rows="3"
                 placeholder="Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."

@@ -50,9 +50,9 @@
               class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
               title="{% if article.is_starred %}Remove star{% else %}Star{% endif %}">
         {% if article.is_starred %}
-          <span class="text-base leading-none text-gray-600">★</span>
+          <span class="text-[16px] leading-none text-gray-600" style="margin-top:-2px">★</span>
         {% else %}
-          <span class="text-base leading-none text-gray-300">☆</span>
+          <span class="text-[16px] leading-none text-gray-300" style="margin-top:-2px">☆</span>
         {% endif %}
       </button>
       <button data-bottom-archive
@@ -61,7 +61,7 @@
               hx-swap="innerHTML"
               class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 {% if article.is_archived %}text-gray-500{% else %}text-gray-400{% endif %}"
               title="{% if article.is_archived %}Unarchive{% else %}Archive{% endif %}">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4" style="margin-top:1px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 6l1.5-3h13L20 6M4 6v12a1 1 0 001 1h14a1 1 0 001-1V6M12 10v5m-2-2.5l2 2.5 2-2.5"/>
         </svg>
       </button>
@@ -72,6 +72,16 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
         </svg>
       </button>
+      {% if chat_available %}
+      <button data-show-chat-modal="{{ article.id }}"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Chat">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        </svg>
+      </button>
+      {% endif %}
       <div id="detail-labels-btn-{{ article.id }}" class="detail-labels-btn flex">
         <button class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
                 data-stop-propagation

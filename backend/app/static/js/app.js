@@ -1809,3 +1809,140 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 })();
 
+// AI chat modal
+(function () {
+  function openChatModal(articleId) {
+    var modal = document.getElementById('chat-modal-' + articleId);
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    scrollChatToBottom(modal);
+    var input = document.getElementById('chat-input-' + articleId);
+    if (input) input.focus();
+  }
+
+  function closeChatModal(articleId) {
+    var modal = document.getElementById('chat-modal-' + articleId);
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function attachChatModal(root) {
+    (root || document).querySelectorAll('[data-show-chat-modal]').forEach(function (btn) {
+      if (btn._aiChatAttached) return;
+      btn._aiChatAttached = true;
+      btn.addEventListener('click', function () {
+        var articleId = btn.getAttribute('data-show-chat-modal');
+        document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
+        openChatModal(articleId);
+      });
+    });
+    (root || document).querySelectorAll('[data-close-chat-modal]').forEach(function (el) {
+      if (el._aiChatCloseAttached) return;
+      el._aiChatCloseAttached = true;
+      el.addEventListener('click', function () {
+        closeChatModal(el.getAttribute('data-close-chat-modal'));
+      });
+    });
+  }
+
+  function scrollChatToBottom(root) {
+    (root || document).querySelectorAll('[id^="chat-messages-"]').forEach(function (el) {
+      requestAnimationFrame(function () {
+        var last = el.lastElementChild;
+        if (last) {
+          last.scrollIntoView({ block: 'start', behavior: 'instant' });
+        } else {
+          el.scrollTop = el.scrollHeight;
+        }
+      });
+    });
+  }
+
+  function confirmLongMessage(textarea) {
+    if (textarea.value.length <= 2000) return true;
+    return confirm(textarea.value.length + ' characters — may use significant AI tokens. Send anyway?');
+  }
+
+  // Enter submits, Shift+Enter inserts newline
+  function attachArticlePlaceholder(root) {
+    (root || document).querySelectorAll('[id^="chat-article-"]').forEach(function (chk) {
+      if (chk._placeholderAttached) return;
+      chk._placeholderAttached = true;
+      var articleId = chk.id.replace('chat-article-', '');
+      var input = document.getElementById('chat-input-' + articleId);
+      if (!input) return;
+      function update() {
+        input.placeholder = chk.checked
+          ? 'Ask a question about this article…'
+          : 'Ask a question…';
+      }
+      chk.addEventListener('change', update);
+    });
+  }
+
+  function attachChatKeydown(root) {
+    (root || document).querySelectorAll('[data-chat-input-id]').forEach(function (el) {
+      if (el._chatKeyAttached) return;
+      el._chatKeyAttached = true;
+      el.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        e.preventDefault();
+        var area = el.closest('[id^="chat-area-"]');
+        var sendBtn = area && area.querySelector('button[hx-post*="/ai-chat"]');
+        if (sendBtn) {
+          if (!confirmLongMessage(el)) return;
+          htmx.trigger(sendBtn, 'click');
+        }
+      });
+    });
+  }
+
+  // Capture-phase click intercept for long message warning on Send button
+  document.body.addEventListener('click', function (e) {
+    var btn = e.target.closest('button[hx-post*="/ai-chat"]');
+    if (!btn) return;
+    var match = (btn.getAttribute('hx-post') || '').match(/articles\/(\d+)\/ai-chat/);
+    if (!match) return;
+    var input = document.getElementById('chat-input-' + match[1]);
+    if (input && !confirmLongMessage(input)) {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  // Clear textarea + scroll + re-attach keydown after HTMX swap of #chat-area-*
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    var target = e.detail.target;
+    if (!target || !target.id || !target.id.startsWith('chat-area-')) return;
+    var articleId = target.id.replace('chat-area-', '');
+    // outerHTML swap detaches the original element — find the new one in DOM
+    var newArea = document.getElementById('chat-area-' + articleId);
+    if (!newArea) return;
+    var input = document.getElementById('chat-input-' + articleId);
+    if (input) input.value = '';
+    scrollChatToBottom(newArea);
+    attachChatKeydown(newArea);
+    attachArticlePlaceholder(newArea);
+  });
+
+  // Esc closes open chat modals
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('[id^="chat-modal-"]').forEach(function (modal) {
+      if (!modal.classList.contains('hidden')) {
+        closeChatModal(modal.getAttribute('data-chat-modal-id'));
+      }
+    });
+  });
+
+  document.addEventListener('DOMContentLoaded', function () {
+    attachChatModal();
+    attachChatKeydown();
+    attachArticlePlaceholder();
+    scrollChatToBottom();
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    attachChatModal();
+    attachChatKeydown();
+    attachArticlePlaceholder();
+  });
+})();
+
