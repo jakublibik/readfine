@@ -1947,6 +1947,78 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     attachArticlePlaceholder(newArea);
   });
 
+  // General (non-article) chat modal
+  function openGeneralChat() {
+    var modal = document.getElementById('general-chat-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    var root = document.getElementById('article-detail-root');
+    var artId = root ? (root.getAttribute('data-article-id') || '') : '';
+    var artInput = document.getElementById('general-chat-article-id');
+    if (artInput) artInput.value = artId;
+    var attachLabel = document.getElementById('general-chat-attach-label');
+    if (attachLabel) attachLabel.classList.toggle('hidden', !artId);
+    if (window.visualViewport) {
+      applyVisualViewport(modal);
+      var listener = function () { applyVisualViewport(modal); };
+      modal._vvpListener = listener;
+      window.visualViewport.addEventListener('resize', listener);
+      window.visualViewport.addEventListener('scroll', listener);
+    }
+    var input = document.getElementById('general-chat-input');
+    if (input) input.focus();
+  }
+
+  function closeGeneralChat() {
+    var modal = document.getElementById('general-chat-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.style.top = '';
+    modal.style.height = '';
+    modal.style.bottom = '';
+    if (modal._vvpListener && window.visualViewport) {
+      window.visualViewport.removeEventListener('resize', modal._vvpListener);
+      window.visualViewport.removeEventListener('scroll', modal._vvpListener);
+      modal._vvpListener = null;
+    }
+  }
+
+  function attachGeneralChat() {
+    ['sidebar-chat-btn', 'sidebar-rail-chat-btn', 'mobile-bottom-chat-btn'].forEach(function (id) {
+      var btn = document.getElementById(id);
+      if (btn && !btn._generalChatAttached) {
+        btn._generalChatAttached = true;
+        btn.addEventListener('click', openGeneralChat);
+      }
+    });
+    var closeBtn = document.getElementById('general-chat-close-btn');
+    if (closeBtn && !closeBtn._generalChatCloseAttached) {
+      closeBtn._generalChatCloseAttached = true;
+      closeBtn.addEventListener('click', closeGeneralChat);
+    }
+    var backdrop = document.getElementById('general-chat-backdrop');
+    if (backdrop && !backdrop._generalChatCloseAttached) {
+      backdrop._generalChatCloseAttached = true;
+      backdrop.addEventListener('click', closeGeneralChat);
+    }
+  }
+
+  function attachGeneralChatKeydown() {
+    var input = document.getElementById('general-chat-input');
+    if (input && !input._generalChatKeyAttached) {
+      input._generalChatKeyAttached = true;
+      input.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || e.shiftKey) return;
+        e.preventDefault();
+        var sendBtn = document.getElementById('general-chat-submit');
+        if (sendBtn) {
+          if (input.value.length > 2000 && !confirm(input.value.length + ' characters — may use significant AI tokens. Send anyway?')) return;
+          htmx.trigger(sendBtn, 'click');
+        }
+      });
+    }
+  }
+
   // Esc closes open chat modals
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Escape') return;
@@ -1955,6 +2027,35 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         closeChatModal(modal.getAttribute('data-chat-modal-id'));
       }
     });
+    closeGeneralChat();
+  });
+
+  // After HTMX swap of #general-chat-area: clear textarea, scroll, re-attach keydown
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    var target = e.detail && e.detail.target;
+    if (!target) return;
+    if (target.id === 'general-chat-area') {
+      var newArea = document.getElementById('general-chat-area');
+      if (!newArea) return;
+      var input = document.getElementById('general-chat-input');
+      if (input) input.value = '';
+      var msgs = document.getElementById('general-chat-messages');
+      if (msgs) {
+        requestAnimationFrame(function () {
+          var last = msgs.lastElementChild;
+          if (last) last.scrollIntoView({ block: 'start', behavior: 'instant' });
+          else msgs.scrollTop = msgs.scrollHeight;
+        });
+      }
+      attachGeneralChatKeydown();
+      // re-populate article_id and attach label visibility after swap
+      var root = document.getElementById('article-detail-root');
+      var artId = root ? (root.getAttribute('data-article-id') || '') : '';
+      var artInput = document.getElementById('general-chat-article-id');
+      if (artInput) artInput.value = artId;
+      var attachLabel = document.getElementById('general-chat-attach-label');
+      if (attachLabel) attachLabel.classList.toggle('hidden', !artId);
+    }
   });
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -1962,11 +2063,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     attachChatKeydown();
     attachArticlePlaceholder();
     scrollChatToBottom();
+    attachGeneralChat();
+    attachGeneralChatKeydown();
   });
   document.body.addEventListener('htmx:afterSettle', function () {
     attachChatModal();
     attachChatKeydown();
     attachArticlePlaceholder();
+    attachGeneralChat();
   });
 })();
 

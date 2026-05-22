@@ -69,6 +69,16 @@
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
     </svg>
   </button>
+  {% if chat_available %}
+  <button id="mobile-bottom-chat-btn" type="button"
+          class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+          aria-label="AI Chat">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+    </svg>
+  </button>
+  {% endif %}
   <div class="flex-1"></div>
   <button id="mobile-bottom-refresh-btn" type="button"
           class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Refresh">
@@ -127,6 +137,80 @@
     Readfine link
   </button>
 </div>
+
+{% if chat_available %}
+<!-- General AI Chat Modal -->
+<div id="general-chat-modal"
+     class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center pt-12 sm:p-8">
+  <div id="general-chat-backdrop" class="absolute inset-0 bg-black/50 dark:bg-black/70"></div>
+  <div class="relative z-10 w-full max-w-3xl max-h-[90vh] sm:max-h-[80vh]
+              flex flex-col bg-white dark:bg-gray-900 rounded-xl shadow-xl">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-2 sm:px-4 py-3
+                border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">AI Chat</span>
+        <button hx-delete="/htmx/ai-chat"
+                hx-target="#general-chat-area"
+                hx-swap="outerHTML"
+                class="text-xs text-gray-400 hover:text-red-500 mt-px">Clear</button>
+      </div>
+      <button id="general-chat-close-btn"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Chat area (swapped by HTMX) -->
+    <div id="general-chat-area"
+         class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
+      <input type="hidden" id="general-chat-history" name="history" value="[]">
+      <input type="hidden" id="general-chat-article-id" name="article_id" value="">
+      <div id="general-chat-messages"
+           class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0"></div>
+      <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
+        <textarea id="general-chat-input" name="message" rows="3"
+                  placeholder="Ask a question…"
+                  class="w-full text-sm border border-gray-200 dark:border-gray-600
+                         dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
+                  data-general-chat-input></textarea>
+        <div class="flex items-center gap-3 pl-2">
+          <label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">
+            Model
+            <select name="model_tier" id="general-chat-tier"
+                    class="text-xs border border-gray-200 dark:border-gray-700
+                           text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">
+              <option value="quality" selected>Quality</option>
+              <option value="fast">Fast</option>
+            </select>
+          </label>
+          <label id="general-chat-attach-label"
+                 class="hidden flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 cursor-pointer"
+                 title="Send article text with this message">
+            <input type="checkbox" name="include_article" id="general-chat-include-article"
+                   class="rounded border-gray-300 dark:border-gray-600 text-gray-400">
+            Attach article
+          </label>
+          <svg id="general-chat-spinner"
+               class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2"
+               fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor"
+                  d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+        </div>
+        <button id="general-chat-submit" class="hidden"
+                hx-post="/htmx/ai-chat"
+                hx-include="#general-chat-input,#general-chat-tier,#general-chat-include-article,#general-chat-history,#general-chat-article-id"
+                hx-target="#general-chat-area"
+                hx-swap="outerHTML"
+                hx-indicator="#general-chat-spinner"></button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <div class="flex h-screen overflow-hidden bg-gray-50">
 
