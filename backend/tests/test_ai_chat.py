@@ -26,6 +26,7 @@ def make_settings(**kwargs):
         "ai_fast_provider": "anthropic",
         "ai_fast_model": "claude-haiku-4-5",
         "ai_chat_enabled": True,
+        "ai_content_limit": 20000,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

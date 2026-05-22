@@ -1811,6 +1811,36 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
 // AI chat modal
 (function () {
+  var _chatPending = {};
+
+  function _escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function _userBubble(msg) {
+    var d = document.createElement('div');
+    d.className = 'flex justify-end';
+    d.innerHTML = '<div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200">' + _escHtml(msg) + '</div>';
+    return d;
+  }
+  function _typingIndicator(id) {
+    var d = document.createElement('div');
+    d.id = id;
+    d.className = 'flex justify-start';
+    d.innerHTML = '<div class="bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-3 flex gap-1 items-center">'
+      + '<span class="w-1 h-1 bg-gray-400 dark:bg-gray-500 rounded-full animate-chat-bounce" style="animation-delay:0ms"></span>'
+      + '<span class="w-1 h-1 bg-gray-400 dark:bg-gray-500 rounded-full animate-chat-bounce" style="animation-delay:150ms"></span>'
+      + '<span class="w-1 h-1 bg-gray-400 dark:bg-gray-500 rounded-full animate-chat-bounce" style="animation-delay:300ms"></span>'
+      + '</div>';
+    return d;
+  }
+  function _inlineChatError(area, msg) {
+    var err = document.createElement('p');
+    err.className = 'text-xs text-red-500 py-1';
+    err.textContent = msg;
+    var inputDiv = area.querySelector('.flex-shrink-0.pt-2');
+    if (inputDiv) area.insertBefore(err, inputDiv); else area.appendChild(err);
+  }
+
   function applyVisualViewport(modal) {
     if (!window.visualViewport) return;
     var vv = window.visualViewport;
@@ -1835,6 +1865,11 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (input) input.focus();
   }
 
+  function updateChatIndicator(articleId, hasMessages) {
+    var el = document.getElementById('chat-indicator-' + articleId);
+    if (el) el.classList.toggle('hidden', !hasMessages);
+  }
+
   function closeChatModal(articleId) {
     var modal = document.getElementById('chat-modal-' + articleId);
     if (!modal) return;
@@ -1847,6 +1882,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       window.visualViewport.removeEventListener('scroll', modal._vvpListener);
       modal._vvpListener = null;
     }
+    var msgs = document.getElementById('chat-messages-' + articleId);
+    updateChatIndicator(articleId, msgs && msgs.children.length > 0);
   }
 
   function attachChatModal(root) {
@@ -1887,6 +1924,44 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   }
 
   // Enter submits, Shift+Enter inserts newline
+  function _syncTierBtn(btn, hiddenInput) {
+    var q = hiddenInput.value === 'quality';
+    btn.textContent = q ? 'Quality' : 'Fast';
+    btn.title = q ? 'Model: Quality — click to switch' : 'Model: Fast — click to switch';
+  }
+
+  function attachChatTierBtn(root) {
+    (root || document).querySelectorAll('[id^="chat-tier-btn-"]').forEach(function (btn) {
+      if (btn._tierBtnAttached) return;
+      btn._tierBtnAttached = true;
+      var articleId = btn.id.replace('chat-tier-btn-', '');
+      var hiddenInput = document.getElementById('chat-tier-' + articleId);
+      var textarea = document.getElementById('chat-input-' + articleId);
+      if (!hiddenInput) return;
+      btn.addEventListener('click', function () {
+        hiddenInput.value = hiddenInput.value === 'quality' ? 'fast' : 'quality';
+        _syncTierBtn(btn, hiddenInput);
+        if (textarea) textarea.focus();
+      });
+    });
+  }
+
+  function attachChatAttachBtn(root) {
+    (root || document).querySelectorAll('[id^="chat-attach-btn-"]').forEach(function (btn) {
+      if (btn._attachBtnAttached) return;
+      btn._attachBtnAttached = true;
+      var articleId = btn.id.replace('chat-attach-btn-', '');
+      var chk = document.getElementById('chat-article-' + articleId);
+      var textarea = document.getElementById('chat-input-' + articleId);
+      if (!chk) return;
+      btn.addEventListener('click', function () {
+        chk.checked = !chk.checked;
+        chk.dispatchEvent(new Event('change'));
+        if (textarea) textarea.focus();
+      });
+    });
+  }
+
   function attachArticlePlaceholder(root) {
     (root || document).querySelectorAll('[id^="chat-article-"]').forEach(function (chk) {
       if (chk._placeholderAttached) return;
@@ -1898,6 +1973,12 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         input.placeholder = chk.checked
           ? 'Ask a question about this article…'
           : 'Ask a question…';
+        input.focus();
+        var attachBtn = document.getElementById('chat-attach-btn-' + articleId);
+        if (attachBtn) {
+          attachBtn.classList.toggle('text-blue-500', chk.checked);
+          attachBtn.classList.toggle('text-gray-400', !chk.checked);
+        }
       }
       chk.addEventListener('change', update);
     });
@@ -1937,27 +2018,50 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var target = e.detail.target;
     if (!target || !target.id || !target.id.startsWith('chat-area-')) return;
     var articleId = target.id.replace('chat-area-', '');
-    // outerHTML swap detaches the original element — find the new one in DOM
     var newArea = document.getElementById('chat-area-' + articleId);
     if (!newArea) return;
     var input = document.getElementById('chat-input-' + articleId);
     if (input) input.value = '';
     scrollChatToBottom(newArea);
     attachChatKeydown(newArea);
+    attachChatTierBtn(newArea);
+    attachChatAttachBtn(newArea);
     attachArticlePlaceholder(newArea);
+    var msgs = document.getElementById('chat-messages-' + articleId);
+    updateChatIndicator(articleId, msgs && msgs.children.length > 0);
+    var pending = _chatPending[articleId];
+    if (pending) {
+      if (newArea.querySelector('.text-red-500') && input) { input.value = pending; input.focus(); }
+      delete _chatPending[articleId];
+    }
   });
 
   // General (non-article) chat modal
-  function openGeneralChat() {
-    var modal = document.getElementById('general-chat-modal');
-    if (!modal) return;
-    modal.classList.remove('hidden');
+  function syncGeneralChatContext() {
     var root = document.getElementById('article-detail-root');
     var artId = root ? (root.getAttribute('data-article-id') || '') : '';
     var artInput = document.getElementById('general-chat-article-id');
     if (artInput) artInput.value = artId;
-    var attachLabel = document.getElementById('general-chat-attach-label');
-    if (attachLabel) attachLabel.classList.toggle('hidden', !artId);
+    var attachBtn = document.getElementById('general-chat-attach-btn');
+    var titleSpan = document.getElementById('general-chat-attach-title');
+    var short = '';
+    if (artId) {
+      var artElem = document.querySelector('article[data-article-id="' + artId + '"]');
+      var title = artElem ? (artElem.getAttribute('data-title') || '') : '';
+      short = title.length > 25 ? title.slice(0, 25) + '…' : title;
+    }
+    if (attachBtn) attachBtn.classList.toggle('hidden', !artId);
+    if (titleSpan) {
+      titleSpan.classList.toggle('hidden', !artId);
+      titleSpan.textContent = short;
+    }
+  }
+
+  function openGeneralChat() {
+    var modal = document.getElementById('general-chat-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    syncGeneralChatContext();
     if (window.visualViewport) {
       applyVisualViewport(modal);
       var listener = function () { applyVisualViewport(modal); };
@@ -1991,6 +2095,38 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         btn.addEventListener('click', openGeneralChat);
       }
     });
+    var genTierBtn = document.getElementById('general-chat-tier-btn');
+    if (genTierBtn && !genTierBtn._tierBtnAttached) {
+      genTierBtn._tierBtnAttached = true;
+      var genTierInput = document.getElementById('general-chat-tier');
+      genTierBtn.addEventListener('click', function () {
+        if (genTierInput) {
+          genTierInput.value = genTierInput.value === 'quality' ? 'fast' : 'quality';
+          _syncTierBtn(genTierBtn, genTierInput);
+        }
+        var inp = document.getElementById('general-chat-input');
+        if (inp) inp.focus();
+      });
+    }
+    var genAttachBtn = document.getElementById('general-chat-attach-btn');
+    if (genAttachBtn && !genAttachBtn._attachBtnAttached) {
+      genAttachBtn._attachBtnAttached = true;
+      var genChk = document.getElementById('general-chat-include-article');
+      genAttachBtn.addEventListener('click', function () {
+        if (genChk) {
+          genChk.checked = !genChk.checked;
+          genAttachBtn.classList.toggle('text-blue-500', genChk.checked);
+          genAttachBtn.classList.toggle('text-gray-400', !genChk.checked);
+        }
+        var inp = document.getElementById('general-chat-input');
+        if (inp) {
+          inp.placeholder = (genChk && genChk.checked)
+            ? 'Ask a question about this article…'
+            : 'Ask a question…';
+          inp.focus();
+        }
+      });
+    }
     var closeBtn = document.getElementById('general-chat-close-btn');
     if (closeBtn && !closeBtn._generalChatCloseAttached) {
       closeBtn._generalChatCloseAttached = true;
@@ -2033,34 +2169,90 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // After HTMX swap of #general-chat-area: clear textarea, scroll, re-attach keydown
   document.body.addEventListener('htmx:afterSwap', function (e) {
     var target = e.detail && e.detail.target;
-    if (!target) return;
-    if (target.id === 'general-chat-area') {
-      var newArea = document.getElementById('general-chat-area');
-      if (!newArea) return;
-      var input = document.getElementById('general-chat-input');
-      if (input) input.value = '';
-      var msgs = document.getElementById('general-chat-messages');
-      if (msgs) {
-        requestAnimationFrame(function () {
-          var last = msgs.lastElementChild;
-          if (last) last.scrollIntoView({ block: 'start', behavior: 'instant' });
-          else msgs.scrollTop = msgs.scrollHeight;
-        });
-      }
-      attachGeneralChatKeydown();
-      // re-populate article_id and attach label visibility after swap
-      var root = document.getElementById('article-detail-root');
-      var artId = root ? (root.getAttribute('data-article-id') || '') : '';
-      var artInput = document.getElementById('general-chat-article-id');
-      if (artInput) artInput.value = artId;
-      var attachLabel = document.getElementById('general-chat-attach-label');
-      if (attachLabel) attachLabel.classList.toggle('hidden', !artId);
+    if (!target || target.id !== 'general-chat-area') return;
+    var newArea = document.getElementById('general-chat-area');
+    if (!newArea) return;
+    var input = document.getElementById('general-chat-input');
+    if (input) input.value = '';
+    var msgs = document.getElementById('general-chat-messages');
+    if (msgs) {
+      requestAnimationFrame(function () {
+        var last = msgs.lastElementChild;
+        if (last) last.scrollIntoView({ block: 'start', behavior: 'instant' });
+        else msgs.scrollTop = msgs.scrollHeight;
+      });
     }
+    attachGeneralChatKeydown();
+    syncGeneralChatContext();
+    var pending = _chatPending['general'];
+    if (pending) {
+      if (newArea.querySelector('.text-red-500') && input) { input.value = pending; input.focus(); }
+      delete _chatPending['general'];
+    }
+  });
+
+  // Optimistic UI: show user message + typing indicator before server responds
+  document.body.addEventListener('htmx:beforeRequest', function (e) {
+    var postUrl = (e.detail.elt.getAttribute('hx-post') || '');
+    var artMatch = postUrl.match(/articles\/(\d+)\/ai-chat/);
+    var isGeneral = postUrl === '/htmx/ai-chat';
+    if (!artMatch && !isGeneral) return;
+    var key     = artMatch ? artMatch[1] : 'general';
+    var inputId = artMatch ? 'chat-input-' + artMatch[1] : 'general-chat-input';
+    var msgsId  = artMatch ? 'chat-messages-' + artMatch[1] : 'general-chat-messages';
+    var typingId = artMatch ? 'chat-typing-' + artMatch[1] : 'general-chat-typing';
+    var input = document.getElementById(inputId);
+    if (!input || !input.value.trim()) return;
+    var msg = input.value.trim();
+    _chatPending[key] = msg;
+    input.value = '';
+    var msgs = document.getElementById(msgsId);
+    if (msgs) {
+      msgs.appendChild(_userBubble(msg));
+      msgs.appendChild(_typingIndicator(typingId));
+      requestAnimationFrame(function () {
+        var last = msgs.lastElementChild;
+        if (last) last.scrollIntoView({ block: 'start', behavior: 'instant' });
+      });
+    }
+  });
+
+  function _handleChatCommError(elt, errMsg) {
+    var postUrl = (elt.getAttribute('hx-post') || '');
+    var artMatch = postUrl.match(/articles\/(\d+)\/ai-chat/);
+    var isGeneral = postUrl === '/htmx/ai-chat';
+    if (!artMatch && !isGeneral) return;
+    var key     = artMatch ? artMatch[1] : 'general';
+    var inputId = artMatch ? 'chat-input-' + artMatch[1] : 'general-chat-input';
+    var msgsId  = artMatch ? 'chat-messages-' + artMatch[1] : 'general-chat-messages';
+    var areaId  = artMatch ? 'chat-area-' + artMatch[1] : 'general-chat-area';
+    var msgs = document.getElementById(msgsId);
+    if (msgs) {
+      if (msgs.lastChild) msgs.removeChild(msgs.lastChild); // typing indicator
+      if (msgs.lastChild) msgs.removeChild(msgs.lastChild); // user bubble
+    }
+    var area = document.getElementById(areaId);
+    if (area) _inlineChatError(area, errMsg);
+    var pending = _chatPending[key];
+    if (pending) {
+      var input = document.getElementById(inputId);
+      if (input) { input.value = pending; input.focus(); }
+      delete _chatPending[key];
+    }
+  }
+
+  document.body.addEventListener('htmx:responseError', function (e) {
+    _handleChatCommError(e.detail.elt, 'Request failed — please try again.');
+  });
+  document.body.addEventListener('htmx:sendError', function (e) {
+    _handleChatCommError(e.detail.elt, 'Network error — please try again.');
   });
 
   document.addEventListener('DOMContentLoaded', function () {
     attachChatModal();
     attachChatKeydown();
+    attachChatTierBtn();
+    attachChatAttachBtn();
     attachArticlePlaceholder();
     scrollChatToBottom();
     attachGeneralChat();
@@ -2069,8 +2261,11 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.body.addEventListener('htmx:afterSettle', function () {
     attachChatModal();
     attachChatKeydown();
+    attachChatTierBtn();
+    attachChatAttachBtn();
     attachArticlePlaceholder();
     attachGeneralChat();
+    syncGeneralChatContext();
   });
 })();
 

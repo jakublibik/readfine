@@ -566,6 +566,12 @@ async def htmx_article_list(
                 {"showToast": {"msg": feed_obj.last_error[:150], "type": "warning"}}
             )
 
+    extra_ctx: dict = {}
+    if settings and getattr(settings, 'ai_chat_enabled', True):
+        extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
+            user.id, [a.id for a in articles], db
+        )
+
     list_html = templates.env.get_template("app/partials/article_list.html").render(
         request=request,
         articles=articles,
@@ -584,6 +590,7 @@ async def htmx_article_list(
         next_offset=len(articles),
         title_bar_count=title_bar_count,
         title_bar_count_type=title_bar_count_type,
+        **extra_ctx,
     )
     oob = await _label_badge_oob(user.id, label_id, labeled_only, db)
     return HTMLResponse(list_html + oob, headers=extra_headers)
@@ -651,6 +658,12 @@ async def htmx_article_list_more(
     if q and q.strip():
         filter_params["q"] = q.strip()
 
+    extra_ctx = {}
+    if settings and getattr(settings, 'ai_chat_enabled', True):
+        extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
+            user.id, [a.id for a in articles], db
+        )
+
     return templates.TemplateResponse(request, "app/partials/article_list_append.html", {
         "articles": articles,
         "density": density,
@@ -659,6 +672,7 @@ async def htmx_article_list_more(
         "has_more": has_more,
         "filter_qs": urlencode(filter_params),
         "next_offset": offset + len(articles),
+        **extra_ctx,
     })
 
 
@@ -1158,9 +1172,8 @@ def _ai_context_block(article_id: int, context: str) -> str:
 _CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
 
 
-def _chat_messages_html(article_id: int, messages: list[dict]) -> str:
-    parts = [f'<div id="chat-messages-{article_id}" '
-             f'class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">']
+def _chat_messages_html(container_id: str, messages: list[dict]) -> str:
+    parts = [f'<div id="{container_id}" class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">']
     for msg in messages:
         if msg["role"] == "user":
             parts.append(
@@ -1182,61 +1195,108 @@ def _chat_messages_html(article_id: int, messages: list[dict]) -> str:
     return ''.join(parts)
 
 
-def _chat_input_html(article_id: int, model_tier: str = "quality",
-                     include_article: bool = True) -> str:
-    quality_sel = 'selected' if model_tier == "quality" else ''
-    fast_sel = 'selected' if model_tier == "fast" else ''
+def _chat_input_html(
+    *,
+    input_id: str,
+    tier_id: str,
+    include_id: str,
+    area_id: str,
+    post_url: str,
+    hx_include_extra: str = "",
+    model_tier: str = "quality",
+    include_article: bool = True,
+    placeholder: str = "Ask a question…",
+    input_extra_attr: str = "",
+    attach_btn_id: str = "",
+    attach_visible: bool = True,
+    attach_tooltip: str = "Attach article",
+    attach_title_id: str = "",
+    attach_title_text: str = "",
+    tier_btn_id: str = "",
+    submit_id: str = "",
+    error: str = "",
+) -> str:
     article_chk = 'checked' if include_article else ''
+    hx_include = f"#{input_id},#{tier_id},#{include_id}{hx_include_extra}"
+    submit_id_attr = f'id="{submit_id}" ' if submit_id else ''
+    input_extra = f' {input_extra_attr}' if input_extra_attr else ''
+    attach_btn_id_attr = f'id="{attach_btn_id}" ' if attach_btn_id else ''
+    tier_btn_id_attr = f'id="{tier_btn_id}" ' if tier_btn_id else ''
+    attach_title_id_attr = f'id="{attach_title_id}" ' if attach_title_id else ''
+    attach_hidden_cls = '' if attach_visible else 'hidden '
+    attach_color = 'text-blue-500' if include_article else 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
+    tier_label = 'Quality' if model_tier == 'quality' else 'Fast'
+    tier_title = 'Model: Quality — click to switch' if model_tier == 'quality' else 'Model: Fast — click to switch'
+    error_html = f'<p class="text-xs text-red-500 py-1">{html_module.escape(error)}</p>' if error else ''
     return (
+        f'{error_html}'
         f'<div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">'
-        f'<textarea id="chat-input-{article_id}" name="message" rows="3" '
-        f'placeholder="Ask a question about this article…" '
+        f'<textarea id="{input_id}" name="message" rows="3" '
+        f'placeholder="{html_module.escape(placeholder)}" '
         f'class="w-full text-sm border border-gray-200 dark:border-gray-600 '
-        f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2" '
-        f'data-chat-input-id="{article_id}"></textarea>'
-        f'<div class="flex items-center gap-3 pl-2">'
-        f'<label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">'
-        f'Model '
-        f'<select name="model_tier" id="chat-tier-{article_id}" '
-        f'class="text-xs border border-gray-200 dark:border-gray-700 '
-        f'text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">'
-        f'<option value="quality" {quality_sel}>Quality</option>'
-        f'<option value="fast" {fast_sel}>Fast</option>'
-        f'</select></label>'
-        f'<label class="flex items-center gap-1 text-xs text-gray-400 '
-        f'dark:text-gray-500 cursor-pointer" '
-        f'title="Send article text with each message">'
-        f'<input type="checkbox" name="include_article" '
-        f'id="chat-article-{article_id}" {article_chk} '
-        f'class="rounded border-gray-300 dark:border-gray-600 text-gray-400">'
-        f'Attach article</label>'
-        f'<svg id="chat-spinner-{article_id}" '
-        f'class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2" '
-        f'fill="none" viewBox="0 0 24 24">'
-        f'<circle class="opacity-25" cx="12" cy="12" r="10" '
-        f'stroke="currentColor" stroke-width="4"/>'
-        f'<path class="opacity-75" fill="currentColor" '
-        f'd="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>'
-        f'</svg>'
+        f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"'
+        f'{input_extra}></textarea>'
+        f'<div class="flex items-center pl-0.5">'
+        # Left: attach group
+        f'<div class="flex items-center gap-1 min-w-0 flex-1">'
+        f'<button type="button" {attach_btn_id_attr}'
+        f'class="{attach_hidden_cls}w-6 h-6 flex items-center justify-center rounded {attach_color} '
+        f'bg-transparent border-0 cursor-pointer flex-shrink-0" '
+        f'title="{html_module.escape(attach_tooltip)}">'
+        f'<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
+        f'<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
+        f'd="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656'
+        f'l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>'
+        f'</svg></button>'
+        f'<span {attach_title_id_attr}'
+        f'class="{attach_hidden_cls}text-xs text-gray-400 dark:text-gray-500 truncate">'
+        f'{html_module.escape(attach_title_text)}</span>'
+        f'<input type="checkbox" name="include_article" id="{include_id}" class="sr-only" {article_chk}>'
         f'</div>'
-        f'<button class="hidden" '
-        f'hx-post="/htmx/articles/{article_id}/ai-chat" '
-        f'hx-include="#chat-input-{article_id},#chat-tier-{article_id},'
-        f'#chat-article-{article_id}" '
-        f'hx-target="#chat-area-{article_id}" hx-swap="outerHTML" '
-        f'hx-indicator="#chat-spinner-{article_id}"></button>'
+        # Right: model toggle
+        f'<button type="button" {tier_btn_id_attr}'
+        f'class="w-14 text-xs font-semibold text-center text-gray-500 dark:text-gray-400 hover:text-gray-700 '
+        f'dark:hover:text-gray-200 py-0.5 rounded border border-gray-300 dark:border-gray-600 '
+        f'bg-transparent cursor-pointer leading-none flex-shrink-0" '
+        f'title="{tier_title}">{tier_label}</button>'
+        f'<input type="hidden" name="model_tier" id="{tier_id}" value="{model_tier}">'
+        f'<button {submit_id_attr}class="hidden" '
+        f'hx-post="{post_url}" '
+        f'hx-include="{hx_include}" '
+        f'hx-target="#{area_id}" hx-swap="outerHTML"></button>'
+        f'</div>'
         f'</div>'
     )
 
 
 def _render_chat_area(article_id: int, messages: list[dict],
                       model_tier: str = "quality",
-                      include_article: bool = True) -> str:
+                      include_article: bool = True,
+                      error: str = "",
+                      article_title: str = "") -> str:
+    short = (article_title[:25] + '…') if len(article_title) > 25 else article_title
     return (
         f'<div id="chat-area-{article_id}" '
         f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-        + _chat_messages_html(article_id, messages)
-        + _chat_input_html(article_id, model_tier, include_article)
+        + _chat_messages_html(f"chat-messages-{article_id}", messages)
+        + _chat_input_html(
+            input_id=f"chat-input-{article_id}",
+            tier_id=f"chat-tier-{article_id}",
+            include_id=f"chat-article-{article_id}",
+            area_id=f"chat-area-{article_id}",
+            post_url=f"/htmx/articles/{article_id}/ai-chat",
+            model_tier=model_tier,
+            include_article=include_article,
+            placeholder="Ask a question about this article…",
+            input_extra_attr=f'data-chat-input-id="{article_id}"',
+            attach_btn_id=f"chat-attach-btn-{article_id}",
+            attach_visible=True,
+            attach_tooltip="Attach article",
+            attach_title_id=f"chat-attach-title-{article_id}",
+            attach_title_text=short,
+            tier_btn_id=f"chat-tier-btn-{article_id}",
+            error=error,
+        )
         + '</div>'
     )
 
@@ -1406,78 +1466,53 @@ async def htmx_ai_context_trigger(
     return HTMLResponse(_ai_context_block(article_id, result))
 
 
+async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncSession) -> set[int]:
+    if not article_ids:
+        return set()
+    rows = await db.execute(
+        select(ArticleAiChat.article_id).where(
+            ArticleAiChat.user_id == user_id,
+            ArticleAiChat.article_id.in_(article_ids),
+            func.jsonb_array_length(ArticleAiChat.messages) > 0,
+        )
+    )
+    return {r[0] for r in rows.all()}
+
+
 def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
                                error: str = "") -> str:
-    quality_sel = 'selected' if model_tier == "quality" else ''
-    fast_sel = 'selected' if model_tier == "fast" else ''
     history_json = html_module.escape(json.dumps(messages, ensure_ascii=False))
-    parts = [
-        f'<div id="general-chat-area" '
-        f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">',
-        f'<input type="hidden" id="general-chat-history" name="history" value="{history_json}">',
-        f'<input type="hidden" id="general-chat-article-id" name="article_id" value="">',
-        f'<div id="general-chat-messages" class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">',
-    ]
-    for msg in messages:
-        if msg["role"] == "user":
-            parts.append(
-                f'<div class="flex justify-end">'
-                f'<div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 '
-                f'border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm '
-                f'text-gray-800 dark:text-gray-200">'
-                f'{html_module.escape(msg["content"])}</div></div>'
-            )
-        else:
-            parts.append(
-                f'<div class="flex justify-start">'
-                f'<div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 '
-                f'border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 '
-                f'prose prose-sm dark:prose-invert max-w-none ai-text">'
-                f'{_md_render(msg["content"])}</div></div>'
-            )
-    parts.append('</div>')
-    if error:
-        parts.append(f'<p class="text-xs text-red-500 py-1">{html_module.escape(error)}</p>')
-    parts.append(
-        f'<div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">'
-        f'<textarea id="general-chat-input" name="message" rows="3" '
-        f'placeholder="Ask a question…" '
-        f'class="w-full text-sm border border-gray-200 dark:border-gray-600 '
-        f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2" '
-        f'data-general-chat-input></textarea>'
-        f'<div class="flex items-center gap-3 pl-2">'
-        f'<label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">'
-        f'Model '
-        f'<select name="model_tier" id="general-chat-tier" '
-        f'class="text-xs border border-gray-200 dark:border-gray-700 '
-        f'text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">'
-        f'<option value="quality" {quality_sel}>Quality</option>'
-        f'<option value="fast" {fast_sel}>Fast</option>'
-        f'</select></label>'
-        f'<label id="general-chat-attach-label" '
-        f'class="hidden flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 cursor-pointer" '
-        f'title="Send article text with this message">'
-        f'<input type="checkbox" name="include_article" id="general-chat-include-article" '
-        f'class="rounded border-gray-300 dark:border-gray-600 text-gray-400">'
-        f'Attach article</label>'
-        f'<svg id="general-chat-spinner" '
-        f'class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2" '
-        f'fill="none" viewBox="0 0 24 24">'
-        f'<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
-        f'<path class="opacity-75" fill="currentColor" '
-        f'd="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>'
-        f'</svg>'
-        f'</div>'
-        f'<button id="general-chat-submit" class="hidden" '
-        f'hx-post="/htmx/ai-chat" '
-        f'hx-include="#general-chat-input,#general-chat-tier,#general-chat-include-article,'
-        f'#general-chat-history,#general-chat-article-id" '
-        f'hx-target="#general-chat-area" hx-swap="outerHTML" '
-        f'hx-indicator="#general-chat-spinner"></button>'
-        f'</div>'
+    extra_inputs = (
+        f'<input type="hidden" id="general-chat-history" name="history" value="{history_json}">'
+        f'<input type="hidden" id="general-chat-article-id" name="article_id" value="">'
     )
-    parts.append('</div>')
-    return ''.join(parts)
+    return (
+        f'<div id="general-chat-area" '
+        f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
+        + extra_inputs
+        + _chat_messages_html("general-chat-messages", messages)
+        + _chat_input_html(
+            input_id="general-chat-input",
+            tier_id="general-chat-tier",
+            include_id="general-chat-include-article",
+            area_id="general-chat-area",
+            post_url="/htmx/ai-chat",
+            hx_include_extra=",#general-chat-history,#general-chat-article-id",
+            model_tier=model_tier,
+            include_article=False,
+            placeholder="Ask a question…",
+            input_extra_attr="data-general-chat-input",
+            attach_btn_id="general-chat-attach-btn",
+            attach_visible=False,
+            attach_tooltip="Attach article",
+            attach_title_id="general-chat-attach-title",
+            attach_title_text="",
+            tier_btn_id="general-chat-tier-btn",
+            submit_id="general-chat-submit",
+            error=error,
+        )
+        + '</div>'
+    )
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)
@@ -1526,6 +1561,8 @@ async def htmx_general_ai_chat(
     use_article = (include_article == "on")
 
     article_ctx = None
+    art_id: int | None = None
+    article = None
     if use_article and article_id.strip().isdigit():
         art_id = int(article_id)
         article = await _get_article_access(user, art_id, db)
@@ -1567,6 +1604,25 @@ async def htmx_general_ai_chat(
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
         current_messages = current_messages[-_CHAT_MAX_MESSAGES:]
+
+    if use_article and art_id and article:
+        chat_record = await db.scalar(
+            select(ArticleAiChat).where(
+                ArticleAiChat.user_id == user.id,
+                ArticleAiChat.article_id == art_id,
+            )
+        )
+        if chat_record is None:
+            chat_record = ArticleAiChat(user_id=user.id, article_id=art_id, messages=[])
+            db.add(chat_record)
+        saved = list(chat_record.messages or [])
+        saved.append({"role": "user", "content": msg_text})
+        saved.append({"role": "assistant", "content": response_text})
+        if len(saved) > _CHAT_MAX_MESSAGES:
+            saved = saved[-_CHAT_MAX_MESSAGES:]
+        chat_record.messages = saved
+        chat_record.updated_at = datetime.now(timezone.utc)
+        await db.commit()
 
     return HTMLResponse(_render_general_chat_area(current_messages, tier))
 
@@ -1638,16 +1694,13 @@ async def htmx_ai_chat(
 
     from app.services.ai_service import get_ai_client, chat_with_article
     client, provider, model = await get_ai_client(user.id, tier, db)
+    title = article.title or ""
     if client is None:
-        return HTMLResponse(
-            f'<div id="chat-area-{article_id}" '
-            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-            + _chat_messages_html(article_id, current_messages[:-1])
-            + f'<p class="text-xs text-red-500 py-1">'
-            f'{tier.capitalize()} AI model not configured.</p>'
-            + _chat_input_html(article_id, tier, use_article)
-            + '</div>'
-        )
+        return HTMLResponse(_render_chat_area(
+            article_id, current_messages[:-1], tier, use_article,
+            error=f"{tier.capitalize()} AI model not configured.",
+            article_title=title,
+        ))
 
     try:
         response_text = await chat_with_article(current_messages, article_ctx, client, provider, model)
@@ -1662,14 +1715,10 @@ async def htmx_ai_chat(
             err_msg = "AI provider returned a server error — please try again."
         else:
             err_msg = "Chat failed — please try again."
-        return HTMLResponse(
-            f'<div id="chat-area-{article_id}" '
-            f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-            + _chat_messages_html(article_id, current_messages[:-1])
-            + f'<p class="text-xs text-red-500 py-1">{html_module.escape(err_msg)}</p>'
-            + _chat_input_html(article_id, tier, use_article)
-            + '</div>'
-        )
+        return HTMLResponse(_render_chat_area(
+            article_id, current_messages[:-1], tier, use_article,
+            error=err_msg, article_title=title,
+        ))
 
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
@@ -1678,7 +1727,8 @@ async def htmx_ai_chat(
     chat.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    return HTMLResponse(_render_chat_area(article_id, current_messages, tier, use_article))
+    return HTMLResponse(_render_chat_area(article_id, current_messages, tier, use_article,
+                                          article_title=title))
 
 
 @router.delete("/htmx/articles/{article_id}/ai-chat", response_class=HTMLResponse)

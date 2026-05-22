@@ -254,7 +254,7 @@
     <div class="flex items-center justify-between px-2 sm:px-4 py-3
                 border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
       <div class="flex items-center gap-3">
-        <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">AI Chat</span>
+        <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">Article Chat</span>
         <button hx-delete="/htmx/articles/{{ article.id }}/ai-chat"
                 hx-target="#chat-area-{{ article.id }}"
                 hx-swap="outerHTML"
@@ -297,38 +297,31 @@
                          dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
                   data-chat-input-id="{{ article.id }}"></textarea>
         <!-- Toolbar -->
-        <div class="flex items-center gap-3 pl-2">
-          <label class="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 flex-shrink-0">
-            Model
-            <select name="model_tier" id="chat-tier-{{ article.id }}"
-                    class="text-xs border border-gray-200 dark:border-gray-700
-                           text-gray-400 dark:text-gray-500 dark:bg-gray-800 rounded px-1 py-0.5">
-              <option value="quality" selected>Quality</option>
-              <option value="fast">Fast</option>
-            </select>
-          </label>
-          <label class="flex items-center gap-1 text-xs text-gray-400 dark:text-gray-500 cursor-pointer"
-                 title="Send article text with each message">
+        <div class="flex items-center pl-0.5">
+          <div class="flex items-center gap-1 min-w-0 flex-1">
+            <button type="button" id="chat-attach-btn-{{ article.id }}"
+                    class="w-6 h-6 flex items-center justify-center rounded text-blue-500 bg-transparent border-0 cursor-pointer flex-shrink-0"
+                    title="Attach article">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+              </svg>
+            </button>
+            <span class="text-xs text-gray-400 dark:text-gray-500 truncate">{{ article.title[:25] }}{% if article.title|length > 25 %}…{% endif %}</span>
             <input type="checkbox" name="include_article"
-                   id="chat-article-{{ article.id }}" checked
-                   class="rounded border-gray-300 dark:border-gray-600 text-gray-400">
-            Attach article
-          </label>
-          <svg id="chat-spinner-{{ article.id }}"
-               class="htmx-indicator animate-spin h-4 w-4 text-blue-500 ml-auto mr-2"
-               fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10"
-                    stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor"
-                  d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-          </svg>
+                   id="chat-article-{{ article.id }}" checked class="sr-only">
+          </div>
+          <button type="button" id="chat-tier-btn-{{ article.id }}"
+                  class="w-14 text-xs font-semibold text-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200
+                         py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-transparent cursor-pointer leading-none flex-shrink-0"
+                  title="Model: Quality — click to switch">Quality</button>
+          <input type="hidden" name="model_tier" id="chat-tier-{{ article.id }}" value="quality">
         </div>
         <button class="hidden"
                 hx-post="/htmx/articles/{{ article.id }}/ai-chat"
                 hx-include="#chat-input-{{ article.id }},#chat-tier-{{ article.id }},#chat-article-{{ article.id }}"
                 hx-target="#chat-area-{{ article.id }}"
-                hx-swap="outerHTML"
-                hx-indicator="#chat-spinner-{{ article.id }}"></button>
+                hx-swap="outerHTML"></button>
       </div>
     </div>
   </div>

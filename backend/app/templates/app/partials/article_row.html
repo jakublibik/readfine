@@ -43,6 +43,14 @@
          class="text-sm leading-snug whitespace-nowrap text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
     </div>
     <div class="flex items-center gap-1 flex-shrink-0">
+      {% if chat_article_ids is defined %}
+      <svg id="chat-indicator-{{ article.id }}"
+           class="w-3 h-3 text-gray-400 flex-shrink-0 {% if article.id not in chat_article_ids %}hidden{% endif %}"
+           fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      {% endif %}
       {% if show_score and article.ai_score is not none %}
       <span class="text-xs {{ score_class }}">{{ score_int }}</span>
       {% endif %}
@@ -114,6 +122,14 @@
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
+      {% if chat_article_ids is defined %}
+      <svg id="chat-indicator-{{ article.id }}"
+           class="w-3 h-3 text-gray-400 flex-shrink-0 {% if article.id not in chat_article_ids %}hidden{% endif %}"
+           fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      {% endif %}
       {% if show_score and article.ai_score is not none %}
       <span class="text-xs {{ score_class }}">{{ score_int }}</span>
       {% endif %}
