@@ -2191,6 +2191,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       if (newArea.querySelector('.text-red-500') && input) { input.value = pending; input.focus(); }
       delete _chatPending['general'];
     }
+    var hist = document.getElementById('general-chat-history');
+    var msgsEl = document.getElementById('general-chat-messages');
+    if (hist && hist.value === '[]') {
+      try { sessionStorage.removeItem('_gchat_history'); sessionStorage.removeItem('_gchat_html'); } catch (e) {}
+    } else if (hist && msgsEl) {
+      try {
+        sessionStorage.setItem('_gchat_history', hist.value);
+        sessionStorage.setItem('_gchat_html', msgsEl.innerHTML);
+      } catch (e) {}
+    }
   });
 
   // Optimistic UI: show user message + typing indicator before server responds
@@ -2269,5 +2279,17 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     attachGeneralChat();
     syncGeneralChatContext();
   });
+
+  (function restoreGeneralChatSession() {
+    try {
+      var html = sessionStorage.getItem('_gchat_html');
+      var history = sessionStorage.getItem('_gchat_history');
+      if (!html || !history || history === '[]') return;
+      var msgs = document.getElementById('general-chat-messages');
+      var hist = document.getElementById('general-chat-history');
+      if (msgs) msgs.innerHTML = html;
+      if (hist) hist.value = history;
+    } catch (e) {}
+  })();
 })();
 
