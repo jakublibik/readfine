@@ -1065,6 +1065,13 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   var INLINE_ID = 'inline-article-detail';
   var CONTENT_ID = INLINE_ID + '-content';
 
+  function openExternal(url) {
+    // window.open may return null on mobile when popup is blocked (e.g. after Android app-open
+    // dialog is dismissed and the user gesture is expired); fall back to same-tab navigation.
+    var w = window.open(url, '_blank', 'noopener,noreferrer');
+    if (!w) window.location.href = url;
+  }
+
   // Title <a> click handling: prevent native navigation except when row is expanded in 2-panel
   document.addEventListener('click', function (e) {
     var a = e.target.closest('[data-article-title]');
@@ -1073,15 +1080,24 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     if (!row) return;
     var isExpanded = _shouldUseInline() && row.classList.contains('inline-expanded');
     if (isExpanded) {
-      e.stopImmediatePropagation(); // block HTMX; let native <a target="_blank"> handle navigation
+      e.stopImmediatePropagation(); // block HTMX
+      e.preventDefault();
       if (row.dataset.density === 'compact') {
-        closeInline(); // HTMX won't fire (propagation stopped), close manually
+        closeInline();
       }
-      // comfortable: row stays expanded
+      openExternal(a.href);
     } else {
       e.preventDefault(); // block link navigation, let HTMX load detail
     }
   }, true);
+
+  // External links in article detail panel: use openExternal for popup-blocked fallback
+  document.addEventListener('click', function (e) {
+    var a = e.target.closest('[data-external-link]');
+    if (!a || !a.href) return;
+    e.preventDefault();
+    openExternal(a.href);
+  });
 
   function closeInline() {
     var el = document.getElementById(INLINE_ID);

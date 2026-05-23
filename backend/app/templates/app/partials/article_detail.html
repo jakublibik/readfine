@@ -40,7 +40,7 @@
     <!-- Title row -->
     <div class="article-detail-title-row mb-1">
       {% if article.url %}
-        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" data-external-link
            class="text-2xl font-bold text-gray-900 leading-snug hover:underline">
           {{ article.title or "↗" }}
         </a>
