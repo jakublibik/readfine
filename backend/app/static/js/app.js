@@ -1066,9 +1066,10 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   var CONTENT_ID = INLINE_ID + '-content';
 
   function openExternal(url) {
-    // window.open may return null on mobile when popup is blocked (e.g. after Android app-open
-    // dialog is dismissed and the user gesture is expired); fall back to same-tab navigation.
-    var w = window.open(url, '_blank', 'noopener,noreferrer');
+    // Do not pass a features string — window.open with 'noopener' intentionally returns null
+    // even on success, making the blocked-popup check unreliable. Modern browsers apply
+    // noopener by default for cross-origin _blank. Fall back to same-tab only when truly blocked.
+    var w = window.open(url, '_blank');
     if (!w) window.location.href = url;
   }
 
