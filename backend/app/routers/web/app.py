@@ -91,6 +91,7 @@ async def main_app(
     bucket_medium_max = settings.bucket_medium_max if settings else 1100
     reading_font_size = settings.reading_font_size if settings else "md"
     reading_font_family = settings.reading_font_family if settings else "sans"
+    label_display = settings.label_display if settings else "indicator"
     from app.models.settings import AppSettings as _AS
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
@@ -101,6 +102,7 @@ async def main_app(
         "bucket_medium_max": bucket_medium_max,
         "reading_font_size": reading_font_size,
         "reading_font_family": reading_font_family,
+        "label_display": label_display,
         "chat_available": chat_available,
     })
 

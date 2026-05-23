@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-font-size="{{ reading_font_size | default('md') }}" data-font-family="{{ reading_font_family | default('sans') }}">
+<html lang="en" data-font-size="{{ reading_font_size | default('md') }}" data-font-family="{{ reading_font_family | default('sans') }}" data-label-display="{{ label_display | default('indicator') }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -24,7 +24,7 @@
       #inline-article-detail-content .article-detail-title-row { display: none; }
       #inline-article-detail-content .article-detail-meta { padding-left: 0 !important; }
       #inline-article-detail-content article { padding-top: 0.75rem; }
-      #inline-article-detail-content .detail-labels-area { display: none; }
+      html[data-label-display="dots"] #inline-article-detail-content .detail-labels-area { display: none; }
       #inline-article-detail-content .detail-meta-feed,
       #inline-article-detail-content .detail-meta-author-sep,
       #inline-article-detail-content .detail-meta-date-sep,
