@@ -1785,7 +1785,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         var articleId = btn.getAttribute('data-show-context-panel');
         closeAllMenus();
         var panel = document.getElementById('context-panel-' + articleId);
-        if (panel) panel.classList.remove('hidden');
+        if (panel) {
+          panel.classList.remove('hidden');
+          var textarea = document.getElementById('context-focus-' + articleId);
+          if (textarea) {
+            textarea.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            textarea.focus();
+          }
+        }
       });
     });
   }
