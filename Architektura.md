@@ -387,23 +387,6 @@ Poznámka: Záznamy starší 30 dní se automaticky mažou (purge job). Aktuáln
 
 ---
 
-### Tabulka: `ai_profiles` (Fáze 2 – připravena v DB od Fáze 1)
-
-| Sloupec | Typ | Constraints | Popis |
-|---|---|---|---|
-| `id` | `SERIAL` | PK | Primární klíč |
-| `name` | `VARCHAR(100)` | NOT NULL | Název profilu |
-| `purpose` | `VARCHAR(30)` | NOT NULL | `summary`, `translation`, `scoring`, `categorization`, `tts` |
-| `provider` | `VARCHAR(30)` | NOT NULL | `anthropic`, `openai`, `gemini` |
-| `model` | `VARCHAR(100)` | NOT NULL | Název modelu (např. `claude-sonnet-4-6`) |
-| `api_key_encrypted` | `TEXT` | | Globální API klíč (šifrovaný) |
-| `max_tokens` | `INTEGER` | DEFAULT `1000` | Max tokeny |
-| `summary_language` | `VARCHAR(10)` | DEFAULT `'cs'` | Jazyk výstupu |
-| `is_active` | `BOOLEAN` | DEFAULT `FALSE` | Aktivní profil |
-| `created_at` | `TIMESTAMPTZ` | NOT NULL, DEFAULT `NOW()` | Datum vytvoření |
-
----
-
 ### Tabulka: `user_ai_keys` (Fáze 2 – připravena od Fáze 1)
 
 | Sloupec | Typ | Constraints | Popis |
@@ -874,7 +857,7 @@ V Alembic downgrade: `DROP TRIGGER` + `DROP FUNCTION`.
 
 ### Příprava na Fázi 2 (AI)
 
-- Tabulky `ai_profiles` a `user_ai_keys` vytvořeny v první DB migraci.
+- Tabulka `user_ai_keys` vytvořena v první DB migraci (`ai_profiles` byla dropnuta v migraci 0046).
 - AI sloupce v `articles` přítomny od začátku (nullable).
 - `ai_service.py` jako stub s definovaným interface.
 - `app_settings.ai_enabled = FALSE` přepínač.

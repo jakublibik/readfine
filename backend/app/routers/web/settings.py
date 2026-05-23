@@ -1,4 +1,5 @@
 """Web routes for settings: feeds, folders, labels, filters, API tokens, and OPML."""
+import html as html_module
 import logging
 import re
 import secrets
@@ -1202,6 +1203,7 @@ async def settings_opml_import(
 # ── AI settings ───────────────────────────────────────────────────────────────
 
 async def _ai_page_context(user: User, db: AsyncSession) -> dict:
+    from app.services.ai_service import _DEFAULT_SUMMARY_PROMPT, _DEFAULT_CONTEXT_PROMPT
     s = await _get_or_create_settings(user, db)
     keys = await list_api_keys(user.id, db)
     cost = await estimate_monthly_cost(user.id, db)
@@ -1213,6 +1215,8 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "pref_strong_count": strong_count,
+        "default_summary_prompt": _DEFAULT_SUMMARY_PROMPT,
+        "default_context_prompt": _DEFAULT_CONTEXT_PROMPT,
     }
 
 
@@ -1333,7 +1337,7 @@ async def settings_ai_verify(
         )
     else:
         html = (
-            f'<span class="text-red-600 text-sm">✗ {result["error"]}</span>'
+            f'<span class="text-red-600 text-sm">✗ {html_module.escape(result["error"])}</span>'
         )
     return HTMLResponse(html)
 
@@ -1392,7 +1396,7 @@ async def settings_ai_generate_preference(
     except Exception as exc:
         logger.warning("generate_preference_text failed for user=%s: %s", user.id, exc)
         return HTMLResponse(
-            f'<span class="text-red-600 text-sm">Error: {str(exc)[:150]}</span>'
+            f'<span class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:150])}</span>'
         )
 
     strong_count = await get_preference_strong_count(user.id, db)

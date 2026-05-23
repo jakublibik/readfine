@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     rate_limit_share_token: str = "20/minute"
     rate_limit_api_tokens: str = "5/hour"
     rate_limit_extract_readable: str = "10/minute"
+    rate_limit_ai_summary: str = "15/minute"
+    rate_limit_ai_context: str = "6/minute"
+    rate_limit_ai_chat: str = "20/minute"
 
 
 settings = Settings()

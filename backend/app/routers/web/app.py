@@ -1318,6 +1318,7 @@ def _ai_spinner(target_id: str, poll_url: str) -> str:
 
 
 @router.post("/htmx/articles/{article_id}/ai-summary", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_summary)
 async def htmx_ai_summary_trigger(
     article_id: int,
     request: Request,
@@ -1380,7 +1381,7 @@ async def htmx_ai_summary_poll(
         return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
 
     if job.status == "failed":
-        msg = (job.error_message or "Unknown error")[:120]
+        msg = html_module.escape((job.error_message or "Unknown error")[:120])
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
@@ -1398,6 +1399,7 @@ async def htmx_ai_summary_poll(
 
 
 @router.post("/htmx/articles/{article_id}/ai-context", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_context)
 async def htmx_ai_context_trigger(
     article_id: int,
     request: Request,
@@ -1448,7 +1450,7 @@ async def htmx_ai_context_trigger(
             focus=focus,
         )
     except Exception as exc:
-        msg = str(exc)[:120]
+        msg = html_module.escape(str(exc)[:120])
         return HTMLResponse(
             f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
         )
@@ -1518,7 +1520,9 @@ def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_chat)
 async def htmx_general_ai_chat(
+    request: Request,
     message: str = Form(...),
     model_tier: str = Form("quality"),
     include_article: str = Form(""),
@@ -1546,7 +1550,7 @@ async def htmx_general_ai_chat(
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
-    msg_text = message.strip()
+    msg_text = message.strip()[:2000]
     if not msg_text:
         return HTMLResponse("", status_code=400)
 
@@ -1558,6 +1562,8 @@ async def htmx_general_ai_chat(
         current_messages = []
 
     current_messages.append({"role": "user", "content": msg_text})
+    if len(current_messages) > _CHAT_MAX_MESSAGES:
+        current_messages = current_messages[-_CHAT_MAX_MESSAGES:]
 
     tier = model_tier if model_tier in ("quality", "fast") else "quality"
     use_article = (include_article == "on")
@@ -1637,6 +1643,7 @@ async def htmx_general_ai_chat_clear(
 
 
 @router.post("/htmx/articles/{article_id}/ai-chat", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_chat)
 async def htmx_ai_chat(
     article_id: int,
     request: Request,
