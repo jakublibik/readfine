@@ -59,7 +59,7 @@
               hx-post="/htmx/articles/{{ article.id }}/archive"
               hx-target="#archive-btn-{{ article.id }}"
               hx-swap="innerHTML"
-              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 {% if article.is_archived %}text-gray-500{% else %}text-gray-400{% endif %}"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 {% if article.is_archived %}text-gray-500 dark:text-gray-200{% else %}text-gray-400 dark:text-gray-500{% endif %}"
               title="{% if article.is_archived %}Unarchive{% else %}Archive{% endif %}">
         <svg class="w-4 h-4" style="margin-top:1px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 6l1.5-3h13L20 6M4 6v12a1 1 0 001 1h14a1 1 0 001-1V6M12 10v5m-2-2.5l2 2.5 2-2.5"/>
