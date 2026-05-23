@@ -73,7 +73,12 @@ def _format_date(dt: datetime | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     today = datetime.now(timezone.utc).date()
-    return dt.strftime("%H:%M") if dt.date() == today else dt.strftime("%b %d, %H:%M")
+    if dt.date() == today:
+        return dt.strftime("%H:%M")
+    pad = lambda n: str(n).zfill(2)
+    if dt.year == datetime.now(timezone.utc).year:
+        return pad(dt.day) + "." + pad(dt.month) + ". " + dt.strftime("%H:%M")
+    return pad(dt.day) + "." + pad(dt.month) + "." + str(dt.year) + " " + dt.strftime("%H:%M")
 
 
 _FTS_VECTOR = (
