@@ -260,8 +260,8 @@ async def score_article(content: str, preference_text: str, client, provider: st
         return 0.5
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article in 3–5 sentences. Focus on key facts, main arguments, and conclusions. Respond in the same language as the article. Do not use markdown formatting."
-_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of the following article in 2–4 sentences. What should the reader know to understand why this matters? Respond in the same language as the article. Do not use markdown formatting."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
 async def summarize_article(
     content: str,
     client,
@@ -272,7 +272,7 @@ async def summarize_article(
     """Generate a concise article summary."""
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=400)
+    return await _complete(prompt, client, provider, model, max_tokens=500)
 
 
 async def get_article_context(
@@ -288,7 +288,7 @@ async def get_article_context(
     if focus:
         instruction += f"\n\nFocus on: {focus}"
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=400)
+    return await _complete(prompt, client, provider, model, max_tokens=500)
 
 
 async def chat_with_article(
