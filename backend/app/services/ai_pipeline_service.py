@@ -121,11 +121,18 @@ async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession)
     # 2. AI filters
     await _run_ai_filters_now(article, user_id, db)
 
-    # 3. auto-summary — only if user has auto-summarize enabled (global default or per-feed override)
+    # 3. auto-summary — only if enabled AND article is starred by this user
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     if s and s.ai_summary_enabled_default:
-        if await enqueue_summary_job(article, user_id, db):
-            await _run_summary_now(article, user_id, db)
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id == article.id,
+            )
+        )
+        if state and state.is_starred:
+            if await enqueue_summary_job(article, user_id, db):
+                await _run_summary_now(article, user_id, db)
 
     logger.info("pipeline: article=%d user=%d done", article.id, user_id)
 

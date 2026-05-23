@@ -197,7 +197,7 @@ async def process_pending_scoring(db: AsyncSession) -> int:
     if not jobs:
         return 0
 
-    # Pre-load articles and settings to avoid N+1 queries
+    # Pre-load articles, settings, and states to avoid N+1 queries
     article_ids = list({j.article_id for j in jobs})
     user_ids = list({j.user_id for j in jobs})
 
@@ -206,6 +206,15 @@ async def process_pending_scoring(db: AsyncSession) -> int:
     }
     settings_map: dict[int, UserSettings] = {
         s.user_id: s for s in (await db.scalars(select(UserSettings).where(UserSettings.user_id.in_(user_ids)))).all()
+    }
+    states_map: dict[tuple[int, int], UserArticleState] = {
+        (st.user_id, st.article_id): st
+        for st in (await db.scalars(
+            select(UserArticleState).where(
+                UserArticleState.article_id.in_(article_ids),
+                UserArticleState.user_id.in_(user_ids),
+            )
+        )).all()
     }
 
     processed = 0
@@ -226,8 +235,10 @@ async def process_pending_scoring(db: AsyncSession) -> int:
             from app.services.ai_summary_service import enqueue_summary_job
             await _run_ai_filters_now(article, job.user_id, db)
             if s.ai_summary_enabled_default:
-                if await enqueue_summary_job(article, job.user_id, db):
-                    await _run_summary_now(article, job.user_id, db)
+                state = states_map.get((job.user_id, job.article_id))
+                if state and state.is_starred:
+                    if await enqueue_summary_job(article, job.user_id, db):
+                        await _run_summary_now(article, job.user_id, db)
             logger.info("pipeline: article=%d user=%d done (scoring path)", article.id, job.user_id)
 
         processed += 1

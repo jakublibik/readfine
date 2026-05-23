@@ -31,7 +31,7 @@ def upgrade():
     )
     op.create_index('ix_article_ai_chats_user_id', 'article_ai_chats', ['user_id'])
     op.add_column('user_settings',
-        sa.Column('ai_chat_enabled', sa.Boolean(), nullable=False, server_default='true'))
+        sa.Column('ai_chat_enabled', sa.Boolean(), nullable=False, server_default='false'))
 
 
 def downgrade():

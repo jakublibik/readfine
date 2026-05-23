@@ -94,7 +94,7 @@ async def main_app(
     from app.models.settings import AppSettings as _AS
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
-    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', True))
+    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -213,7 +213,7 @@ async def htmx_sidebar(
     from app.models.settings import AppSettings as _AS
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
-    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', True))
+    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
 
     return templates.TemplateResponse(request, "app/partials/sidebar.html", {
         "user": user,
@@ -567,7 +567,7 @@ async def htmx_article_list(
             )
 
     extra_ctx: dict = {}
-    if settings and getattr(settings, 'ai_chat_enabled', True):
+    if settings and getattr(settings, 'ai_chat_enabled', False):
         extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
             user.id, [a.id for a in articles], db
         )
@@ -659,7 +659,7 @@ async def htmx_article_list_more(
         filter_params["q"] = q.strip()
 
     extra_ctx = {}
-    if settings and getattr(settings, 'ai_chat_enabled', True):
+    if settings and getattr(settings, 'ai_chat_enabled', False):
         extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
             user.id, [a.id for a in articles], db
         )
@@ -735,7 +735,7 @@ async def htmx_article_detail(
                 ArticleAiJob.status == "pending",
             )
         ))
-    chat_available = bool(ai_avail and settings and getattr(settings, 'ai_chat_enabled', True))
+    chat_available = bool(ai_avail and settings and getattr(settings, 'ai_chat_enabled', False))
     chat_messages: list[dict] = []
     if chat_available:
         existing_chat = await db.scalar(
@@ -1541,7 +1541,7 @@ async def htmx_general_ai_chat(
             f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
             f'<p class="text-xs text-gray-400 py-2">Quality AI model not configured.</p></div>'
         )
-    if not getattr(settings, 'ai_chat_enabled', True):
+    if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
     msg_text = message.strip()
@@ -1660,7 +1660,7 @@ async def htmx_ai_chat(
             f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
             f'<p class="text-xs text-gray-400 py-2">Quality AI model not configured.</p></div>'
         )
-    if not getattr(settings, 'ai_chat_enabled', True):
+    if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
     msg_text = message.strip()

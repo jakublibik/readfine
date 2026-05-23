@@ -73,6 +73,7 @@ def make_state(**kwargs):
         "ai_score": None,
         "ai_filters_applied": False,
         "ai_summary": None,
+        "is_starred": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -321,7 +322,10 @@ class TestRunArticlePipeline:
         """Summary not enqueued (ineligible) → _run_summary_now not called."""
         article = make_article()
         db = make_mock_db()
-        db.scalar = AsyncMock(return_value=make_settings(ai_summary_enabled_default=True))
+        db.scalar = AsyncMock(side_effect=[
+            make_settings(ai_summary_enabled_default=True),  # UserSettings
+            make_state(is_starred=True),                     # UserArticleState
+        ])
         with (
             patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
             patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
@@ -353,10 +357,13 @@ class TestRunArticlePipeline:
             mock_summary.assert_not_called()
 
     async def test_auto_summary_runs_when_default_enabled(self):
-        """ai_summary_enabled_default=True → auto-summary triggered after scoring."""
+        """ai_summary_enabled_default=True AND article starred → auto-summary triggered after scoring."""
         article = make_article()
         db = make_mock_db()
-        db.scalar = AsyncMock(return_value=make_settings(ai_summary_enabled_default=True))
+        db.scalar = AsyncMock(side_effect=[
+            make_settings(ai_summary_enabled_default=True),  # UserSettings
+            make_state(is_starred=True),                     # UserArticleState
+        ])
         with (
             patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
             patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
@@ -385,9 +392,9 @@ class TestProcessPendingScoringContinuation:
         async def fake_execute_scoring(j, a, s, d, now):
             j.status = "success"
 
-        # Mock db.scalars so pre-load maps return our objects
+        # Mock db.scalars so pre-load maps return our objects (articles, settings, states)
         scalars_mock = AsyncMock()
-        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings], []])
         db.scalars = AsyncMock(return_value=scalars_mock)
 
         # First execute call returns jobs; no other execute calls expected
@@ -426,7 +433,7 @@ class TestProcessPendingScoringContinuation:
         db.scalar = AsyncMock(return_value=True)  # ai_enabled check; settings loaded via scalars_mock
 
         scalars_mock = AsyncMock()
-        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings], []])
         db.scalars = AsyncMock(return_value=scalars_mock)
 
         call_count = 0
@@ -463,7 +470,7 @@ class TestProcessPendingScoringContinuation:
         db.scalar = AsyncMock(return_value=True)
 
         scalars_mock = AsyncMock()
-        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings], []])
         db.scalars = AsyncMock(return_value=scalars_mock)
 
         call_count = 0
@@ -800,3 +807,389 @@ class TestApplyAiFiltersForState:
 
         assert executed == []
         assert state.ai_filters_applied is True  # always set, even with no matches
+
+
+# ── auto-summary starring requirement ────────────────────────────────────────
+
+class TestAutoSummaryStarringRequirement:
+    """Auto-summary triggered by the pipeline must require a starred article.
+
+    Regression tests for the bug where summary was generated for ALL labeled
+    articles when ai_summary_enabled_default=True, instead of only starred ones.
+
+    test_labeled_not_starred_no_summary is expected to FAIL before the fix.
+    """
+
+    async def test_labeled_not_starred_no_summary(self):
+        """Article labeled (pipeline triggered) but NOT starred → summary must NOT run.
+
+        EXPECTED TO FAIL before fix: currently run_article_pipeline checks only
+        ai_summary_enabled_default, without verifying is_starred on UserArticleState.
+        """
+        article = make_article()
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            make_settings(ai_summary_enabled_default=True),  # UserSettings
+            make_state(is_starred=False),                    # UserArticleState (checked after fix)
+        ])
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_enqueue.assert_not_called()
+            mock_summary.assert_not_called()
+
+    async def test_starred_article_gets_auto_summary(self):
+        """Article is starred → pipeline auto-summary IS triggered when ai_summary_enabled_default=True."""
+        article = make_article()
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            make_settings(ai_summary_enabled_default=True),  # UserSettings
+            make_state(is_starred=True),                     # UserArticleState
+        ])
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_article_pipeline
+            await run_article_pipeline(article, user_id=1, db=db)
+            mock_summary.assert_called_once_with(article, 1, db)
+
+    async def test_run_pipeline_all_users_labeled_not_starred_no_summary(self):
+        """run_pipeline_for_article_all_users: labeled user who hasn't starred → no summary.
+
+        Simulates the exact bug path: readable extraction triggers pipeline for labeled
+        users → must NOT generate summary unless user also starred the article.
+        EXPECTED TO FAIL before fix.
+        """
+        article = make_article()
+        db = make_mock_db()
+
+        scalars_result = AsyncMock()
+        scalars_result.all = MagicMock(return_value=[1])  # user_id=1 has label on article
+        db.scalars = AsyncMock(return_value=scalars_result)
+
+        db.scalar = AsyncMock(side_effect=[
+            make_settings(ai_summary_enabled_default=True),  # UserSettings inside pipeline
+            make_state(is_starred=False),                    # UserArticleState — not starred
+        ])
+
+        with (
+            patch("app.services.ai_scoring_service.enqueue_scoring_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_scoring_now", AsyncMock()),
+            patch("app.services.ai_pipeline_service._get_scoring_job_status", AsyncMock(return_value="success")),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+            await run_pipeline_for_article_all_users(article, db=db)
+            mock_enqueue.assert_not_called()
+            mock_summary.assert_not_called()
+
+
+# ── enqueue_scoring_job — missing edge cases ──────────────────────────────────
+
+class TestEnqueueScoringJobEdgeCases:
+    async def test_returns_true_when_per_feed_scoring_none(self):
+        """ai_scoring_enabled=None (no per-feed override) → inherits default, job created."""
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(ai_scoring_enabled=None),  # None = inherit default
+            None,  # no existing job
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is True
+
+    async def test_returns_false_when_no_fast_model(self):
+        """ai_fast_provider set but ai_fast_model is None → False."""
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_fast_model=None),
+            make_user_feed(),
+        ])
+        assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+
+# ── enqueue_summary_job — missing edge cases ──────────────────────────────────
+
+class TestEnqueueSummaryJobEdgeCases:
+    async def test_returns_false_when_no_user_settings(self):
+        """No UserSettings row → False."""
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[True, None])  # ai_enabled, no settings
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_false_when_no_quality_model(self):
+        """ai_quality_provider set but ai_quality_model is None → False."""
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_quality_model=None),
+        ])
+        assert await enqueue_summary_job(make_article(), user_id=1, db=db) is False
+
+    async def test_returns_true_when_per_feed_summary_none(self):
+        """ai_summary_enabled=None (no per-feed override) → job created."""
+        from app.services.ai_summary_service import enqueue_summary_job
+        long_content = "word " * 500
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(),
+            make_user_feed(ai_summary_enabled=None),  # None = inherit default
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_summary_job(make_article(content=long_content), user_id=1, db=db) is True
+
+
+# ── process_pending_scoring — starring requirement ────────────────────────────
+
+class TestProcessPendingScoringStarringRequirement:
+    """Batch scoring runner must check is_starred before auto-summary, same as run_article_pipeline."""
+
+    def _make_batch_db(self, job, article, settings, state):
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)  # ai_enabled check
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings], [state]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+        call_count = 0
+
+        async def smart_execute(query):
+            nonlocal call_count
+            call_count += 1
+            return make_execute_result(rows=[job] if call_count == 1 else [])
+
+        db.execute = AsyncMock(side_effect=smart_execute)
+        return db
+
+    async def test_no_auto_summary_when_article_not_starred(self):
+        """Batch: scoring success + default enabled, but article NOT starred → summary not triggered."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings(ai_summary_enabled_default=True)
+        state = make_state(is_starred=False)
+        db = self._make_batch_db(job, article, settings, state)
+
+        async def fake_execute_scoring(j, a, s, d, now):
+            j.status = "success"
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+        mock_enqueue.assert_not_called()
+        mock_summary.assert_not_called()
+
+    async def test_auto_summary_when_article_is_starred(self):
+        """Batch: scoring success + default enabled + article IS starred → summary triggered."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings(ai_summary_enabled_default=True)
+        state = make_state(is_starred=True)
+        db = self._make_batch_db(job, article, settings, state)
+
+        async def fake_execute_scoring(j, a, s, d, now):
+            j.status = "success"
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)),
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+        mock_summary.assert_called_once_with(article, job.user_id, db)
+
+    async def test_no_auto_summary_when_state_missing(self):
+        """Batch: no UserArticleState row (brand-new article) → summary not triggered."""
+        job = make_job()
+        article = make_article()
+        settings = make_settings(ai_summary_enabled_default=True)
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings], []])  # empty states
+        db.scalars = AsyncMock(return_value=scalars_mock)
+        call_count = 0
+
+        async def smart_execute(query):
+            nonlocal call_count
+            call_count += 1
+            return make_execute_result(rows=[job] if call_count == 1 else [])
+
+        db.execute = AsyncMock(side_effect=smart_execute)
+
+        async def fake_execute_scoring(j, a, s, d, now):
+            j.status = "success"
+
+        with (
+            patch("app.services.ai_scoring_service._execute_scoring_job", side_effect=fake_execute_scoring),
+            patch("app.services.ai_pipeline_service._run_ai_filters_now", AsyncMock()),
+            patch("app.services.ai_summary_service.enqueue_summary_job", AsyncMock(return_value=True)) as mock_enqueue,
+            patch("app.services.ai_pipeline_service._run_summary_now", AsyncMock()) as mock_summary,
+        ):
+            from app.services.ai_scoring_service import process_pending_scoring
+            await process_pending_scoring(db)
+
+        mock_enqueue.assert_not_called()
+        mock_summary.assert_not_called()
+
+
+# ── process_pending_summaries ─────────────────────────────────────────────────
+
+class TestProcessPendingSummaries:
+    """Batch summary processor — completely separate from pipeline trigger logic."""
+
+    async def test_returns_zero_when_ai_globally_disabled(self):
+        """Global AI kill-switch off → return 0 immediately."""
+        from app.services.ai_summary_service import process_pending_summaries
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=False)  # ai_enabled = False
+        result = await process_pending_summaries(db)
+        assert result == 0
+        db.execute.assert_not_called()
+
+    async def test_returns_zero_when_no_pending_jobs(self):
+        """No pending summary jobs → return 0."""
+        from app.services.ai_summary_service import process_pending_summaries
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)  # ai_enabled
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(return_value=jobs_result)
+
+        result = await process_pending_summaries(db)
+        assert result == 0
+
+    async def test_processes_job_successfully(self):
+        """One pending job → _execute_summary_job called, returns 1."""
+        from app.services.ai_summary_service import process_pending_summaries
+        job = make_job(operation="summary")
+        article = make_article()
+        settings = make_settings()
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = [job]
+        db.execute = AsyncMock(return_value=jobs_result)
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], [settings]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        executed = []
+
+        async def fake_execute(j, a, s, d, now):
+            executed.append(j)
+            j.status = "success"
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
+            result = await process_pending_summaries(db)
+
+        assert result == 1
+        assert len(executed) == 1
+
+    async def test_skips_when_article_not_found(self):
+        """Job references article that no longer exists → status=skipped, count=1."""
+        from app.services.ai_summary_service import process_pending_summaries
+        job = make_job(operation="summary", article_id=99)
+        settings = make_settings()
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = [job]
+        db.execute = AsyncMock(return_value=jobs_result)
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[], [settings]])  # no articles found
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        with patch("app.services.ai_summary_service._execute_summary_job", AsyncMock()) as mock_exec:
+            result = await process_pending_summaries(db)
+
+        assert result == 1
+        assert job.status == "skipped"
+        mock_exec.assert_not_called()
+
+    async def test_skips_when_settings_not_found(self):
+        """Job references user with no settings → status=skipped, count=1."""
+        from app.services.ai_summary_service import process_pending_summaries
+        job = make_job(operation="summary")
+        article = make_article()
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = [job]
+        db.execute = AsyncMock(return_value=jobs_result)
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article], []])  # no settings found
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        with patch("app.services.ai_summary_service._execute_summary_job", AsyncMock()) as mock_exec:
+            result = await process_pending_summaries(db)
+
+        assert result == 1
+        assert job.status == "skipped"
+        mock_exec.assert_not_called()
+
+    async def test_returns_correct_count_for_multiple_jobs(self):
+        """Two pending jobs → both processed, returns 2."""
+        from app.services.ai_summary_service import process_pending_summaries
+        job1 = make_job(id=1, operation="summary", article_id=10)
+        job2 = make_job(id=2, operation="summary", article_id=11, user_id=2)
+        article1 = make_article(id=10)
+        article2 = make_article(id=11)
+        settings1 = make_settings(user_id=1)
+        settings2 = make_settings(user_id=2)
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=True)
+
+        jobs_result = MagicMock()
+        jobs_result.scalars.return_value.all.return_value = [job1, job2]
+        db.execute = AsyncMock(return_value=jobs_result)
+
+        scalars_mock = AsyncMock()
+        scalars_mock.all = MagicMock(side_effect=[[article1, article2], [settings1, settings2]])
+        db.scalars = AsyncMock(return_value=scalars_mock)
+
+        executed = []
+
+        async def fake_execute(j, a, s, d, now):
+            executed.append(j.id)
+
+        with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
+            result = await process_pending_summaries(db)
+
+        assert result == 2
+        assert sorted(executed) == [1, 2]
