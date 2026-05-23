@@ -188,7 +188,7 @@ function localizeAllTimes() {
 }
 
 document.addEventListener('DOMContentLoaded', localizeAllTimes);
-document.body.addEventListener('htmx:afterSettle', localizeAllTimes);
+document.body.addEventListener('htmx:afterSwap', localizeAllTimes);
 
 // Copy-to-clipboard for [data-copy] buttons
 document.addEventListener('click', function (e) {
