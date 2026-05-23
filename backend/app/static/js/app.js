@@ -183,6 +183,7 @@ function localizeAllTimes() {
   document.querySelectorAll('time[datetime]').forEach(function (el) {
     var localized = _formatLocalTime(el.getAttribute('datetime'), el.dataset.format || 'short');
     if (localized) el.textContent = localized;
+    el.classList.remove('invisible');
   });
 }
 
