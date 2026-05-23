@@ -1156,7 +1156,7 @@ def _ai_summary_block(article_id: int, summary: str) -> str:
         f'<div id="ai-summary-{article_id}" '
         f'class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">'
         f'<div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>'
-        f'<p class="ai-text">{html_module.escape(summary)}</p>'
+        f'<div class="prose dark:prose-invert max-w-none ai-text">{_md_render(summary)}</div>'
         f'</div>'
     )
 
@@ -1166,7 +1166,7 @@ def _ai_context_block(article_id: int, context: str) -> str:
         f'<div id="ai-context-{article_id}" '
         f'class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">'
         f'<div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>'
-        f'<p class="ai-text">{html_module.escape(context)}</p>'
+        f'<div class="prose dark:prose-invert max-w-none ai-text">{_md_render(context)}</div>'
         f'</div>'
     )
 
