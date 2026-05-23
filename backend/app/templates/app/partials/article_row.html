@@ -87,7 +87,7 @@
       </div>
       <span class="text-xs text-gray-500">
         {% if article.published_at %}
-          <time class="invisible" datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
+          <time style="visibility:hidden" datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
         {% else %}{{ article.formatted_date }}{% endif %}
       </span>
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
