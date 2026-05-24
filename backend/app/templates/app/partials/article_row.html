@@ -166,7 +166,7 @@
       </div>
       <span class="text-xs text-gray-500">
         {% if article.published_at %}
-          <time class="invisible" datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
+          <time style="visibility:hidden" datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
         {% else %}{{ article.formatted_date }}{% endif %}
       </span>
     </div>

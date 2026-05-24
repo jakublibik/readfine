@@ -52,6 +52,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Filter akce `archive`**: přidat jako akci filtru (vedle label, mark_read, star) — nastaví `is_archived = true` na `user_article_states`. Schéma, service i šablona filter_edit.
 - **Streaming summary/context**: on-demand generování summary a context streamovat místo čekání na celou odpověď — uživatel vidí text jak se generuje. FastAPI `StreamingResponse` + SSE nebo chunked transfer + JS/HTMX update na frontendu. Zvážit také snížení `_CONTENT_MAX_CHARS` pro summary z 12 000 na ~5 000 znaků.
 - **Datum bez přebliknutí**: datum v article listu a detailu se přeformátuje JS po načtení → viditelný flicker. Řešení: formátovat datum na serveru (Jinja2/Python) s timezone uživatele — přidat pole `timezone` do user profilu, aplikovat přes `zoneinfo`. Postupně: nejdřív bez timezone (UTC), pak přidat nastavení v profilu.
+- **Web search v chatu**: prozkoumat a zvážit implementaci built-in web search nástroje pro AI chat (Anthropic web search tool, OpenAI Bing grounding, Gemini Google Search grounding) — umožní odpovídat na aktuální dotazy nad rámec tréninkových dat. Zvážit cenu, přínos a zda to dává smysl v kontextu čtečky (primární use-case je chat nad článkem, ne vyhledávání).
 
 ## Testování
 - Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů
