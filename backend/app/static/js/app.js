@@ -1760,9 +1760,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       var bar = document.getElementById('mobile-bottom-bar');
       if (!bar) return;
       var atBottom = list && (scrollTop + list.clientHeight >= list.scrollHeight - 10);
-      if (scrollTop < 5) {
-        bar.classList.remove('bottom-bar-visible');
-      } else if (atBottom || scrollTop < lastScrollTop) {
+      if (atBottom || scrollTop < lastScrollTop) {
         bar.classList.add('bottom-bar-visible');
       } else if (scrollTop > lastScrollTop) {
         bar.classList.remove('bottom-bar-visible');
