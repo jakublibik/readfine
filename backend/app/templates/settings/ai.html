@@ -240,51 +240,9 @@
 
 {# ── Cost Estimate ─────────────────────────────────────────────────────────── #}
 <section>
-  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Estimated monthly cost</h2>
-  <p class="text-xs text-gray-500 mb-3">Based on your last 30 days of activity. Estimates only — actual cost depends on article length.</p>
-
-  <div class="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
-  <table class="w-full text-sm min-w-[28rem]">
-    <thead>
-      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
-        <th class="pb-1 font-medium">Operation</th>
-        <th class="pb-1 font-medium text-right">Articles / month</th>
-        <th class="pb-1 font-medium text-right">~Tokens</th>
-        <th class="pb-1 font-medium text-right">~Cost</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-100">
-      <tr>
-        <td class="py-2 text-gray-700">Scoring <span class="text-xs text-gray-400">(fast)</span></td>
-        <td class="py-2 text-right text-gray-600">{{ cost.scoring.articles }}</td>
-        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(cost.scoring.tokens) }}</td>
-        <td class="py-2 text-right text-gray-600">
-          {% if cost.scoring.cost is not none %}
-            ${{ "%.4f"|format(cost.scoring.cost) }}
-          {% else %}
-            <span class="text-gray-400 text-xs">unknown model</span>
-          {% endif %}
-        </td>
-      </tr>
-      <tr>
-        <td class="py-2 text-gray-700">Summary <span class="text-xs text-gray-400">(quality)</span></td>
-        <td class="py-2 text-right text-gray-600">{{ cost.summary.articles }}</td>
-        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(cost.summary.tokens) }}</td>
-        <td class="py-2 text-right text-gray-600">
-          {% if cost.summary.cost is not none %}
-            ${{ "%.4f"|format(cost.summary.cost) }}
-          {% else %}
-            <span class="text-gray-400 text-xs">unknown model</span>
-          {% endif %}
-        </td>
-      </tr>
-      <tr>
-        <td class="py-2 text-gray-700">Chat / Context / Catch up</td>
-        <td class="py-2 text-right text-gray-400 text-xs" colspan="3">on-demand</td>
-      </tr>
-    </tbody>
-  </table>
-  </div>
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Usage &amp; cost estimate</h2>
+  <p class="text-xs text-gray-500 mb-3">Actual token counts from processed jobs. Cost estimates only — output tokens priced ~4–5× input.</p>
+  {% include "settings/partials/ai_cost_table.html" %}
 </section>
 
 {% endblock %}

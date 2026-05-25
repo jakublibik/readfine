@@ -232,6 +232,12 @@
 
   <!-- Right panel: article detail -->
   <main id="article-detail" class="flex-1 overflow-y-auto bg-white">
+    {% if open_article_id %}
+    <div hx-get="/htmx/articles/{{ open_article_id }}"
+         hx-target="#article-detail"
+         hx-swap="innerHTML"
+         hx-trigger="load"></div>
+    {% else %}
     <div class="flex items-center justify-center h-full text-gray-400">
       <div class="text-center">
         <svg class="mx-auto mb-3 h-10 w-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -241,6 +247,7 @@
         <p class="text-sm">Select an article to read</p>
       </div>
     </div>
+    {% endif %}
   </main>
 
 </div>

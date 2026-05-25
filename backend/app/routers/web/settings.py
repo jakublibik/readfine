@@ -55,6 +55,13 @@ from app.services.label_service import (
     update_label,
 )
 from app.services.opml import MAX_UPLOAD_BYTES, ImportResult, export_opml, import_opml
+from app.services.stats_service import (
+    get_feed_stats,
+    get_reading_stats,
+    get_ai_stats,
+    get_label_stats,
+    get_ai_cost_stats,
+)
 from app.services.ai_service import (
     PROVIDER_DOCS_URLS,
     SUPPORTED_PROVIDERS,
@@ -1206,12 +1213,13 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     from app.services.ai_service import _DEFAULT_SUMMARY_PROMPT, _DEFAULT_CONTEXT_PROMPT
     s = await _get_or_create_settings(user, db)
     keys = await list_api_keys(user.id, db)
-    cost = await estimate_monthly_cost(user.id, db)
+    cost_stats = await get_ai_cost_stats(user.id, db, days=30)
     strong_count = await get_preference_strong_count(user.id, db)
     return {
         "s": s,
         "keys": keys,
-        "cost": cost,
+        "cost_stats": cost_stats,
+        "active_days": 30,
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "pref_strong_count": strong_count,
@@ -1414,3 +1422,55 @@ async def settings_ai_generate_preference(
         f' hx-swap-oob="true">{escaped}</textarea>'
         f'<div id="pref-cold-start-warning" hx-swap-oob="true">{warning_inner}</div>'
     )
+
+
+# ── Stats ─────────────────────────────────────────────────────────────────────
+
+@router.get("/stats", response_class=HTMLResponse)
+async def settings_stats(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.settings import AppSettings as _AS
+    app_ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    reading = await get_reading_stats(user.id, db)
+    labels = await get_label_stats(user.id, db)
+    ai = await get_ai_stats(user.id, db) if app_ai_on else None
+    return templates.TemplateResponse(request, "settings/stats.html", {
+        "reading": reading,
+        "labels": labels,
+        "ai": ai,
+        "ai_enabled": bool(app_ai_on),
+    })
+
+
+@router.get("/feeds-stats-partial", response_class=HTMLResponse)
+async def settings_feeds_stats_partial(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.settings import AppSettings as _AS
+    app_ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    feed_stats = await get_feed_stats(user.id, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_stats.html", {
+        "feed_stats": feed_stats,
+        "ai_enabled": bool(app_ai_on),
+    })
+
+
+@router.get("/ai/cost-partial", response_class=HTMLResponse)
+async def settings_ai_cost_partial(
+    request: Request,
+    days: int = 30,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
+):
+    days = 7 if days == 7 else 30
+    cost_stats = await get_ai_cost_stats(user.id, db, days=days)
+    return templates.TemplateResponse(request, "settings/partials/ai_cost_table.html", {
+        "cost_stats": cost_stats,
+        "active_days": days,
+    })

@@ -1,0 +1,279 @@
+{% extends "settings/base.html" %}
+{% set active = "stats" %}
+{% block title %}Stats – Readfine{% endblock %}
+
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-1">Stats</h1>
+<p class="text-xs text-gray-400 mb-6">Last 30 days</p>
+
+{# ── Summary cards ─────────────────────────────────────────────────────────── #}
+<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Reading streak</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if reading.streak > 0 %}{{ reading.streak }}{% else %}—{% endif %}
+    </div>
+    {% if reading.streak > 0 %}<div class="text-xs text-gray-400 mt-0.5">days</div>{% endif %}
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Backlog</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if reading.backlog > 0 %}{{ reading.backlog }}{% else %}—{% endif %}
+    </div>
+    {% if reading.backlog > 0 %}
+    <div class="text-xs text-gray-400 mt-0.5">unread articles</div>
+    {% endif %}
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Label coverage</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if labels.label_coverage_pct > 0 %}{{ labels.label_coverage_pct }}%{% else %}—{% endif %}
+    </div>
+    {% if labels.label_coverage_pct > 0 %}<div class="text-xs text-gray-400 mt-0.5">articles labeled</div>{% endif %}
+  </div>
+  {% if ai_enabled and ai %}
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Scoring coverage</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if ai.scoring_coverage_pct is not none %}{{ ai.scoring_coverage_pct }}%{% else %}—{% endif %}
+    </div>
+    {% if ai.scoring_coverage_pct is not none %}<div class="text-xs text-gray-400 mt-0.5">articles scored</div>{% endif %}
+  </div>
+  {% else %}
+  <div class="bg-gray-50 border border-gray-100 rounded-lg p-4 opacity-50">
+    <div class="text-xs text-gray-400 mb-1">Scoring coverage</div>
+    <div class="text-2xl font-bold text-gray-300">—</div>
+  </div>
+  {% endif %}
+</div>
+
+{# ── Čtení ─────────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">Reading</h2>
+
+  {# Funnel #}
+  {% if reading.total_articles > 0 %}
+  <div class="mb-6">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Engagement funnel</h3>
+    <div class="space-y-1.5">
+      {% set funnel_steps = [
+        (reading.total_articles, "Fetched", ""),
+        (reading.labeled_count, "Labeled", reading.total_articles),
+        (reading.starred_count, "Starred", reading.total_articles),
+        (reading.read_count, "Read (≥30s)", reading.total_articles),
+      ] %}
+      {% for count, label, base in funnel_steps %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ count }}</div>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+          {% if base and base > 0 %}
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [count / base * 100, 100]|min|round }}%"></div>
+          {% else %}
+          <div class="bg-blue-500 h-2 rounded-full" style="width:100%"></div>
+          {% endif %}
+        </div>
+        <div class="w-28 text-xs text-gray-500">
+          {{ label }}
+          {% if base and base > 0 %}
+          <span class="text-gray-400">({{ (count / base * 100)|round(1) }}%)</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+    {# Per-day reads (last 7d) #}
+    <div>
+      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Read per day (7d)</h3>
+      {% if reading.per_day %}
+      <table class="w-full text-sm">
+        <tbody>
+          {% for day in reading.per_day %}
+          <tr class="border-b border-gray-50">
+            <td class="py-1 text-gray-500 text-xs">{{ day.date }}</td>
+            <td class="py-1 text-right font-medium text-gray-700">
+              {% if day.count > 0 %}{{ day.count }}{% else %}<span class="text-gray-300">0</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm text-gray-400">No data yet.</p>
+      {% endif %}
+    </div>
+
+    {# Active hour & day #}
+    <div class="space-y-4">
+      <div>
+        <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active hour</h3>
+        {% if reading.active_hour is not none %}
+        <p class="text-lg font-semibold text-gray-800">{{ "%02d:00"|format(reading.active_hour) }}–{{ "%02d:00"|format((reading.active_hour + 1) % 24) }}
+          <span class="text-xs text-gray-400 font-normal">UTC</span>
+        </p>
+        {% else %}
+        <p class="text-sm text-gray-400">Not enough data</p>
+        {% endif %}
+      </div>
+      <div>
+        <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active day</h3>
+        {% if reading.active_day is not none %}
+        {% set day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] %}
+        <p class="text-lg font-semibold text-gray-800">{{ day_names[reading.active_day] }}</p>
+        {% else %}
+        <p class="text-sm text-gray-400">Not enough data</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Avg time to read + avg dwell #}
+  <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
+    <div>
+      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg time to read</h3>
+      {% if reading.avg_time_to_read_hours is not none %}
+        {% if reading.avg_time_to_read_hours < 24 %}
+        <p class="text-lg font-semibold text-gray-800">{{ reading.avg_time_to_read_hours }}h after publish</p>
+        {% else %}
+        <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_time_to_read_hours / 24)|round(1) }}d after publish</p>
+        {% endif %}
+      {% else %}
+      <p class="text-sm text-gray-400">—</p>
+      {% endif %}
+    </div>
+    <div>
+      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg dwell</h3>
+      {% if reading.avg_dwell_seconds is not none %}
+      <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_dwell_seconds / 60)|round(1) }} min overall</p>
+      {% if reading.top_feeds_by_dwell %}
+      <ul class="mt-2 space-y-1">
+        {% for f in reading.top_feeds_by_dwell %}
+        <li class="text-xs text-gray-600">{{ f.title }} <span class="text-gray-400">{{ (f.avg_dwell_seconds / 60)|round(1) }}m</span></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% else %}
+      <p class="text-sm text-gray-400">—</p>
+      {% endif %}
+    </div>
+  </div>
+</section>
+
+{# ── AI ────────────────────────────────────────────────────────────────────── #}
+{% if ai_enabled and ai %}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">AI</h2>
+
+  {# Calibration #}
+  <div class="mb-5">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Score calibration</h3>
+    {% if ai.calibration.avg_score_starred is not none or ai.calibration.avg_score_not_starred is not none %}
+    <div class="flex gap-6">
+      <div>
+        <div class="text-xs text-gray-400">Starred articles</div>
+        <div class="text-lg font-semibold text-gray-800">
+          {% if ai.calibration.avg_score_starred is not none %}{{ (ai.calibration.avg_score_starred * 100)|round|int }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400">Other articles</div>
+        <div class="text-lg font-semibold text-gray-800">
+          {% if ai.calibration.avg_score_not_starred is not none %}{{ (ai.calibration.avg_score_not_starred * 100)|round|int }}{% else %}—{% endif %}
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400">No scored articles yet. <a href="/settings/ai" class="text-blue-500 hover:underline">Set up AI scoring →</a></p>
+    {% endif %}
+  </div>
+
+  {# Přehlédnuté poklady #}
+  <div class="mb-5">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(score ≥ 0.7, never opened)</span></h3>
+    {% if ai.gems %}
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm min-w-[24rem]">
+      <tbody class="divide-y divide-gray-100">
+        {% for g in ai.gems %}
+        <tr>
+          <td class="py-1.5">
+            <a href="/app?open_article_id={{ g.article_id }}" class="text-gray-800 hover:text-blue-600 hover:underline">{{ g.title }}</a>
+            <span class="text-xs text-gray-400 ml-1">{{ g.feed_title }}</span>
+          </td>
+          <td class="py-1.5 px-4 sm:px-0 text-right text-xs text-gray-500 whitespace-nowrap">{{ (g.ai_score * 100)|round|int }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400">No data yet.</p>
+    {% endif %}
+  </div>
+
+  {# AI se mýlilo #}
+  <div>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(score &lt; 0.3, you starred it)</span></h3>
+    {% if ai.wrong %}
+    <div class="overflow-x-auto">
+    <table class="w-full text-sm min-w-[24rem]">
+      <tbody class="divide-y divide-gray-100">
+        {% for g in ai.wrong %}
+        <tr>
+          <td class="py-1.5">
+            <a href="/app?open_article_id={{ g.article_id }}" class="text-gray-800 hover:text-blue-600 hover:underline">{{ g.title }}</a>
+            <span class="text-xs text-gray-400 ml-1">{{ g.feed_title }}</span>
+          </td>
+          <td class="py-1.5 px-4 sm:px-0 text-right text-xs text-gray-500 whitespace-nowrap">{{ (g.ai_score * 100)|round|int }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <p class="text-sm text-gray-400">No data yet.</p>
+    {% endif %}
+  </div>
+</section>
+{% endif %}
+
+{# ── Labely ────────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">Labels</h2>
+  {% if labels.labels %}
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm min-w-[24rem]">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
+        <th class="pb-1 font-medium">Label</th>
+        <th class="pb-1 font-medium text-right">Articles (30d)</th>
+        <th class="pb-1 font-medium text-right">Star rate</th>
+        <th class="pb-1 font-medium text-right">Read rate</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for l in labels.labels %}
+      <tr>
+        <td class="py-2">
+          <span class="inline-flex items-center gap-1.5">
+            <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color:{{ l.color }}"></span>
+            {{ l.name }}
+          </span>
+        </td>
+        <td class="py-2 text-right text-gray-600">{{ l.article_count }}</td>
+        <td class="py-2 text-right text-gray-600">{{ l.star_rate }}%</td>
+        <td class="py-2 text-right text-gray-600">{{ l.read_rate }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-400">No data yet.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

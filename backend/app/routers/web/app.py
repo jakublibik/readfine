@@ -78,6 +78,7 @@ async def _extract_readable_bg(
 @router.get("/app", response_class=HTMLResponse)
 async def main_app(
     request: Request,
+    open_article_id: int | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -104,6 +105,7 @@ async def main_app(
         "reading_font_family": reading_font_family,
         "label_display": label_display,
         "chat_available": chat_available,
+        "open_article_id": open_article_id,
     })
 
 

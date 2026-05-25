@@ -58,6 +58,8 @@ class UserArticleState(Base):
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ever_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    starred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dwell_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unstar_dwell_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     link_opened: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

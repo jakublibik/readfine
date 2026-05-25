@@ -1,0 +1,53 @@
+<div id="feeds-list">
+  {% if feed_stats %}
+  <div class="overflow-x-auto">
+  <table class="w-full table-fixed text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 w-full">Feed</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Articles (30d)</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Read %</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Labeled %</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Starred %</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Avg dwell</th>
+        {% if ai_enabled %}<th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Avg score</th>{% endif %}
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Signal</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for fs in feed_stats %}
+      <tr>
+        <td class="px-2 py-2 font-medium text-gray-900 w-full max-w-0">
+          <span class="block truncate">{{ fs.feed_title }}</span>
+        </td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.total_articles }}</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.read_pct }}%</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.labeled_pct }}%</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.starred_pct }}%</td>
+        <td class="px-2 py-2 text-right text-gray-500 text-xs whitespace-nowrap">
+          {% if fs.avg_dwell %}{{ (fs.avg_dwell / 60)|round(1) }}m{% else %}—{% endif %}
+        </td>
+        {% if ai_enabled %}
+        <td class="px-2 py-2 text-right text-gray-600 text-xs whitespace-nowrap">
+          {% if fs.avg_ai_score is not none %}{{ (fs.avg_ai_score * 100)|round|int }}{% else %}—{% endif %}
+        </td>
+        {% endif %}
+        <td class="px-2 py-2 text-right whitespace-nowrap">
+          {% if fs.signal >= 0.4 %}
+            <span class="text-green-600 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+          {% elif fs.signal >= 0.1 %}
+            <span class="text-yellow-500 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+          {% else %}
+            <span class="text-red-500 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="text-xs text-gray-400 mt-2">Signal: weighted engagement score — starring (50%), opening (30%), labeling (20%).</p>
+  {% else %}
+  <p class="text-sm text-gray-400">No feeds yet.</p>
+  {% endif %}
+</div>

@@ -501,8 +501,12 @@ async def toggle_article_state(
     if field == "is_starred":
         if new_value:
             state.user_starred = True
+            state.ever_starred = True
+            state.starred_at = datetime.now(timezone.utc)
         else:
             state.unstar_dwell_seconds = state.dwell_seconds
+            if state.starred_at and (datetime.now(timezone.utc) - state.starred_at).total_seconds() < 60:
+                state.ever_starred = False
 
     if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
         article.readable_status = "pending"
