@@ -118,13 +118,11 @@
           hx-get="/settings/feeds-list"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
-          onclick="document.getElementById('tab-feeds').classList.add('bg-white','shadow-sm','text-gray-900');document.getElementById('tab-stats').classList.remove('bg-white','shadow-sm','text-gray-900');document.getElementById('tab-stats').classList.add('text-gray-500');"
           class="px-3 py-1 text-sm rounded bg-white shadow-sm text-gray-900 font-medium">Feeds</button>
   <button id="tab-stats"
           hx-get="/settings/feeds-stats-partial"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
-          onclick="document.getElementById('tab-stats').classList.add('bg-white','shadow-sm','text-gray-900');document.getElementById('tab-feeds').classList.remove('bg-white','shadow-sm','text-gray-900');document.getElementById('tab-feeds').classList.add('text-gray-500');"
           class="px-3 py-1 text-sm rounded text-gray-500 font-medium hover:bg-white hover:shadow-sm">Stats</button>
 </div>
 <div id="feeds-list">
@@ -148,4 +146,8 @@
   </form>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/feeds-settings.js"></script>
 {% endblock %}
