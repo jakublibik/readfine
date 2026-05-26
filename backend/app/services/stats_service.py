@@ -63,6 +63,7 @@ class GemArticle:
     title: str
     feed_title: str
     ai_score: float
+    is_starred: bool = False
 
 
 @dataclass
@@ -426,7 +427,7 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
     # Přehlédnuté poklady — high score, never opened (dwell=0, link_opened=false)
     gems_result = await db.execute(
         text("""
-            SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score
+            SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score, uas.is_starred
             FROM user_article_states uas
             JOIN articles a ON a.id = uas.article_id
             JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
@@ -442,7 +443,7 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
         {"uid": user_id, "cutoff": cutoff},
     )
     gems = [
-        GemArticle(article_id=r.id, title=r.title, feed_title=r.feed_title, ai_score=round(float(r.ai_score), 2))
+        GemArticle(article_id=r.id, title=r.title, feed_title=r.feed_title, ai_score=round(float(r.ai_score), 2), is_starred=bool(r.is_starred))
         for r in gems_result.fetchall()
     ]
 

@@ -199,6 +199,21 @@
       <tbody class="divide-y divide-gray-100">
         {% for g in ai.gems %}
         <tr>
+          <td class="py-1.5 pr-2 w-5">
+            <span id="star-btn-{{ g.article_id }}">
+              <button hx-post="/htmx/articles/{{ g.article_id }}/star"
+                      hx-target="#star-btn-{{ g.article_id }}"
+                      hx-swap="innerHTML"
+                      class="leading-none cursor-pointer bg-transparent border-0 p-0 focus:outline-none"
+                      title="{% if g.is_starred %}Remove star{% else %}Star article{% endif %}">
+                {% if g.is_starred %}
+                  <span class="text-lg text-gray-900">★</span>
+                {% else %}
+                  <span class="text-lg text-gray-300 hover:text-gray-500">☆</span>
+                {% endif %}
+              </button>
+            </span>
+          </td>
           <td class="py-1.5">
             <a href="/app?open_article_id={{ g.article_id }}" class="text-gray-800 hover:text-blue-600 hover:underline">{{ g.title }}</a>
             <span class="text-xs text-gray-400 ml-1">{{ g.feed_title }}</span>
