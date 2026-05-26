@@ -16,7 +16,7 @@ from app.fetcher.rss import (
     _struct_to_dt,
     fetch_feed,
 )
-from app.fetcher.scheduler import create_scheduler
+from app.fetcher.scheduler import _slot_matches, create_scheduler
 from app.models.fetch_log import FetchLog
 from app.routers.web.admin import _quantize15
 
@@ -57,7 +57,7 @@ class TestQuantize15:
         assert _quantize15(None, 65) == 60
 
     def test_all_standard_values_unchanged(self):
-        for v in (15, 30, 45, 60, 90, 120, 180, 360, 720, 1440):
+        for v in (15, 30, 60, 90, 120, 180, 360, 720, 1440):
             assert _quantize15(v, 60) == v
 
 
@@ -104,6 +104,72 @@ class TestSchedulerTrigger:
     def test_error_backoff_minimum_is_15(self):
         # Very short interval (e.g. 1 min) still yields at least 15 min backoff.
         assert max(15, 1 * 2) == 15
+
+
+# ── _slot_matches ─────────────────────────────────────────────────────────────
+
+class TestSlotMatches:
+    """Slot pre-filter: which intervals fire at which minute marks."""
+
+    # :00 — all intervals fire
+    def test_00_fires_all_intervals(self):
+        for interval in (15, 30, 60, 90, 120, 180, 360, 720, 1440):
+            assert _slot_matches(interval, 0), f"interval={interval} should fire at :00"
+
+    # :15 — only 15-min feeds (sub_period == 15)
+    def test_15_fires_15min(self):
+        assert _slot_matches(15, 15) is True
+
+    def test_15_skips_30min(self):
+        assert _slot_matches(30, 15) is False
+
+    def test_15_skips_60min(self):
+        assert _slot_matches(60, 15) is False
+
+    def test_15_skips_90min(self):
+        assert _slot_matches(90, 15) is False
+
+    def test_15_skips_120min(self):
+        assert _slot_matches(120, 15) is False
+
+    # :30 — 15-min and 30-min feeds, including 90-min (sub_period in {15, 30})
+    def test_30_fires_15min(self):
+        assert _slot_matches(15, 30) is True
+
+    def test_30_fires_30min(self):
+        assert _slot_matches(30, 30) is True
+
+    def test_30_fires_90min(self):
+        # 90 % 60 == 30 → should fire at :30
+        assert _slot_matches(90, 30) is True
+
+    def test_30_skips_60min(self):
+        assert _slot_matches(60, 30) is False
+
+    def test_30_skips_120min(self):
+        assert _slot_matches(120, 30) is False
+
+    def test_30_skips_180min(self):
+        assert _slot_matches(180, 30) is False
+
+    # :45 — same as :15 (only 15-min feeds)
+    def test_45_fires_15min(self):
+        assert _slot_matches(15, 45) is True
+
+    def test_45_skips_30min(self):
+        assert _slot_matches(30, 45) is False
+
+    def test_45_skips_90min(self):
+        assert _slot_matches(90, 45) is False
+
+    def test_45_skips_60min(self):
+        assert _slot_matches(60, 45) is False
+
+    # symmetry: :15 and :45 behave identically for all standard intervals
+    def test_15_and_45_symmetric(self):
+        for interval in (15, 30, 60, 90, 120, 180):
+            assert _slot_matches(interval, 15) == _slot_matches(interval, 45), \
+                f"interval={interval}: :15 and :45 should behave the same"
 
 
 # ── _clamp_published_at ───────────────────────────────────────────────────────

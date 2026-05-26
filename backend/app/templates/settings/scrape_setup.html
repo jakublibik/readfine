@@ -89,7 +89,7 @@
     <select name="fetch_interval_min"
             class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       <option value="">Default</option>
-      {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+      {% for m in [15,30,60,90,120,180,360,720,1440] %}
         <option value="{{ m }}" {% if fetch_interval_min == m %}selected{% endif %}>{{ m }} min</option>
       {% endfor %}
     </select>

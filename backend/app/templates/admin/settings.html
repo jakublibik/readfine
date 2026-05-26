@@ -46,7 +46,7 @@
         <label class="text-sm font-medium text-gray-700">Default fetch interval</label>
         <select name="default_fetch_interval_min"
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+          {% for m in [15,30,60,90,120,180,360,720,1440] %}
             <option value="{{ m }}" {% if s.default_fetch_interval_min == m %}selected{% endif %}>
               {{ m }} min
             </option>
@@ -60,7 +60,7 @@
         </div>
         <select name="min_fetch_interval_min"
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          {% for m in [15,30,45,60,90,120,180,360,720,1440] %}
+          {% for m in [15,30,60,90,120,180,360,720,1440] %}
             <option value="{{ m }}" {% if s.min_fetch_interval_min == m %}selected{% endif %}>
               {{ m }} min
             </option>

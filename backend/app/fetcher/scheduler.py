@@ -16,6 +16,24 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler(timezone="UTC")
 
 
+def _slot_matches(effective_interval_min: int, minute: int) -> bool:
+    """Return True if a feed with *effective_interval_min* should be evaluated at *minute*.
+
+    The scheduler fires at :00/:15/:30/:45. Each slot checks only feeds whose
+    sub-hour period (interval % 60) aligns with that minute:
+      :00  — all feeds
+      :15/:45 — only 15-min feeds (sub_period == 15)
+      :30  — 15-min and 30-min feeds, including 90-min (sub_period in {15, 30})
+    """
+    if minute == 0:
+        return True
+    sub_period = effective_interval_min % 60
+    if minute in (15, 45):
+        return sub_period == 15
+    # minute == 30
+    return sub_period in (15, 30)
+
+
 async def _fetch_due_feeds() -> None:
     """Job: fetch all active feeds that are due for an update."""
     if db.async_session_factory is None:
@@ -40,10 +58,21 @@ async def _fetch_due_feeds() -> None:
         error_backoff_min = max(15, default_interval * 2)
         one_minute = literal_column("interval '1 minute'")
         # per-feed interval clamped to global minimum
-        effective_interval = func.greatest(
+        effective_interval_min = func.greatest(
             func.coalesce(Feed.fetch_interval_min, default_interval),
             min_interval,
-        ) * one_minute
+        )
+        effective_interval = effective_interval_min * one_minute
+
+        # Slot pre-filter — see _slot_matches() for the full rule.
+        # TODO: make this behaviour configurable (app_settings flag) if needed.
+        minute = now.minute
+        if minute == 0:
+            slot_conditions = []
+        elif minute in (15, 45):
+            slot_conditions = [effective_interval_min % 60 == 15]
+        else:  # minute == 30
+            slot_conditions = [(effective_interval_min % 60).in_([15, 30])]
         # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
         error_backoff = case(
             (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
@@ -53,6 +82,7 @@ async def _fetch_due_feeds() -> None:
         due_feeds = await session.execute(
             select(Feed).where(
                 Feed.subscriber_count > 0,
+                *slot_conditions,
                 or_(
                     and_(
                         Feed.status == "active",
