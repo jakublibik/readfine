@@ -121,11 +121,10 @@ async def _execute_scoring_job(
         return
 
     try:
-        score = await score_article(content_text, s.ai_preference_text, client, provider, model)
+        score, in_tok, out_tok = await score_article(content_text, s.ai_preference_text, client, provider, model)
 
-        estimated_tokens = len(content_text) // 4 + len(s.ai_preference_text) // 4 + 150
-        job.input_tokens = estimated_tokens
-        job.output_tokens = 1
+        job.input_tokens = in_tok
+        job.output_tokens = out_tok
 
         state = await db.scalar(
             select(UserArticleState).where(

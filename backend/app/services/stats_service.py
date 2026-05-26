@@ -55,6 +55,8 @@ class ReadingStats:
 class AiCalibration:
     avg_score_starred: float | None
     avg_score_not_starred: float | None
+    gap: int | None           # (avg_starred - avg_not_starred) * 100, rounded
+    min_score_starred: int | None  # min AI score among starred articles * 100
 
 
 @dataclass
@@ -101,6 +103,7 @@ class OperationCostRow:
     est_cost: float | None
     trend_pct: float | None   # positive = up, negative = down, None = no prev data
     is_placeholder: bool = False
+    row_type: str = "operation"  # "operation" | "separator" | "subtotal" | "total"
 
 
 @dataclass
@@ -403,12 +406,13 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
     scored_cov = int(cov.scored or 0)
     scoring_coverage_pct = round(scored_cov / total_cov * 100, 1) if total_cov > 0 else None
 
-    # Calibration: avg score starred vs non-starred
+    # Calibration: avg score starred vs non-starred + min starred
     cal_result = await db.execute(
         text("""
             SELECT
                 AVG(CASE WHEN uas.ever_starred THEN uas.ai_score END) AS avg_starred,
-                AVG(CASE WHEN NOT uas.ever_starred THEN uas.ai_score END) AS avg_not_starred
+                AVG(CASE WHEN NOT uas.ever_starred THEN uas.ai_score END) AS avg_not_starred,
+                MIN(CASE WHEN uas.ever_starred THEN uas.ai_score END) AS min_starred
             FROM user_article_states uas
             JOIN articles a ON a.id = uas.article_id
             JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
@@ -419,9 +423,13 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
         {"uid": user_id, "cutoff": cutoff},
     )
     cal = cal_result.one()
+    avg_s = round(float(cal.avg_starred), 2) if cal.avg_starred is not None else None
+    avg_n = round(float(cal.avg_not_starred), 2) if cal.avg_not_starred is not None else None
     calibration = AiCalibration(
-        avg_score_starred=round(float(cal.avg_starred), 2) if cal.avg_starred is not None else None,
-        avg_score_not_starred=round(float(cal.avg_not_starred), 2) if cal.avg_not_starred is not None else None,
+        avg_score_starred=avg_s,
+        avg_score_not_starred=avg_n,
+        gap=round((avg_s - avg_n) * 100) if avg_s is not None and avg_n is not None else None,
+        min_score_starred=round(float(cal.min_starred) * 100) if cal.min_starred is not None else None,
     )
 
     # Přehlédnuté poklady — high score, never opened (dwell=0, link_opened=false)
@@ -607,10 +615,10 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     prev_cutoff = cutoff - timedelta(days=days)
 
-    s = await db.scalar(
+    s = (await db.execute(
         text("SELECT ai_fast_model, ai_quality_model FROM user_settings WHERE user_id = :uid"),
         {"uid": user_id},
-    )
+    )).one_or_none()
     fast_model = s[0] if s else None
     quality_model = s[1] if s else None
 
@@ -666,26 +674,48 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
             trend_pct=_trend(cnt, prev_cnt),
         ))
 
-    # Chat: count messages from article_ai_chats (no token tracking)
+    # Chat: messages + tokens from article_ai_chats UNION general_chat_log
     chat_result = await db.execute(
         text("""
-            SELECT COUNT(*),
-                   COALESCE(SUM(jsonb_array_length(messages)), 0)
-            FROM article_ai_chats
-            WHERE user_id = :uid AND updated_at >= :cutoff
+            SELECT
+                COALESCE(SUM(msg_count), 0),
+                COALESCE(SUM(in_tok), 0),
+                COALESCE(SUM(out_tok), 0)
+            FROM (
+                SELECT jsonb_array_length(messages) AS msg_count,
+                       total_input_tokens AS in_tok,
+                       total_output_tokens AS out_tok
+                FROM article_ai_chats
+                WHERE user_id = :uid AND updated_at >= :cutoff
+                UNION ALL
+                SELECT 2 AS msg_count,
+                       input_tokens AS in_tok,
+                       output_tokens AS out_tok
+                FROM general_chat_log
+                WHERE user_id = :uid AND created_at >= :cutoff
+            ) t
         """),
         {"uid": user_id, "cutoff": cutoff},
     )
     chat_row = chat_result.one()
-    chat_count = int(chat_row[1] or 0)  # message count
+    chat_count = int(chat_row[0] or 0)
+    chat_in_tok = int(chat_row[1] or 0)
+    chat_out_tok = int(chat_row[2] or 0)
 
     prev_chat_result = await db.execute(
         text("""
-            SELECT COALESCE(SUM(jsonb_array_length(messages)), 0)
-            FROM article_ai_chats
-            WHERE user_id = :uid
-              AND updated_at >= :prev_cutoff
-              AND updated_at < :cutoff
+            SELECT COALESCE(SUM(msg_count), 0)
+            FROM (
+                SELECT jsonb_array_length(messages) AS msg_count
+                FROM article_ai_chats
+                WHERE user_id = :uid
+                  AND updated_at >= :prev_cutoff AND updated_at < :cutoff
+                UNION ALL
+                SELECT 2 AS msg_count
+                FROM general_chat_log
+                WHERE user_id = :uid
+                  AND created_at >= :prev_cutoff AND created_at < :cutoff
+            ) t
         """),
         {"uid": user_id, "prev_cutoff": prev_cutoff, "cutoff": cutoff},
     )
@@ -696,9 +726,9 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         label="Chat",
         slot="quality",
         count=chat_count,
-        input_tokens=0,
-        output_tokens=0,
-        est_cost=None,
+        input_tokens=chat_in_tok,
+        output_tokens=chat_out_tok,
+        est_cost=_calc_cost(quality_model, chat_in_tok, chat_out_tok),
         trend_pct=_trend(chat_count, prev_chat_count),
     ))
 
@@ -714,5 +744,48 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         trend_pct=None,
         is_placeholder=True,
     ))
+
+    # Subtotals
+    real_rows = [r for r in operation_rows if not r.is_placeholder]
+    fast_rows = [r for r in real_rows if r.slot == "fast"]
+    quality_rows = [r for r in real_rows if r.slot == "quality"]
+
+    def _subtotal(rows: list[OperationCostRow], label: str, slot: str, model: str | None) -> OperationCostRow:
+        inp = sum(r.input_tokens for r in rows)
+        out = sum(r.output_tokens for r in rows)
+        return OperationCostRow(
+            operation=f"_total_{slot}",
+            label=label,
+            slot=slot,
+            count=0,
+            input_tokens=inp,
+            output_tokens=out,
+            est_cost=_calc_cost(model, inp, out),
+            trend_pct=None,
+            row_type="subtotal",
+        )
+
+    fast_total = _subtotal(fast_rows, "Fast total", "fast", fast_model)
+    quality_total = _subtotal(quality_rows, "Quality total", "quality", quality_model)
+
+    all_inp = fast_total.input_tokens + quality_total.input_tokens
+    all_out = fast_total.output_tokens + quality_total.output_tokens
+    grand_total = OperationCostRow(
+        operation="_total_all",
+        label="Total",
+        slot="",
+        count=0,
+        input_tokens=all_inp,
+        output_tokens=all_out,
+        est_cost=(
+            (fast_total.est_cost or 0.0) + (quality_total.est_cost or 0.0)
+            if fast_total.est_cost is not None or quality_total.est_cost is not None
+            else None
+        ),
+        trend_pct=None,
+        row_type="total",
+    )
+
+    operation_rows += [fast_total, quality_total, grand_total]
 
     return AiCostStats(period_days=days, operations=operation_rows)

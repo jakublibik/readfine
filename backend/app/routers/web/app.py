@@ -1446,7 +1446,7 @@ async def htmx_ai_context_trigger(
         )
 
     try:
-        result = await get_article_context(
+        result, in_tok, out_tok = await get_article_context(
             content_text, client, provider, model,
             base_prompt=settings.ai_context_prompt,
             focus=focus,
@@ -1457,6 +1457,7 @@ async def htmx_ai_context_trigger(
             f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
         )
 
+    now = datetime.now(timezone.utc)
     state = await db.scalar(
         select(UserArticleState).where(
             UserArticleState.user_id == user.id,
@@ -1467,6 +1468,22 @@ async def htmx_ai_context_trigger(
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
     state.ai_context = result
+
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    await db.execute(
+        pg_insert(ArticleAiJob).values(
+            article_id=article_id,
+            user_id=user.id,
+            operation="context",
+            status="success",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            processed_at=now,
+        ).on_conflict_do_update(
+            index_elements=["article_id", "user_id", "operation"],
+            set_={"status": "success", "input_tokens": in_tok, "output_tokens": out_tok, "processed_at": now},
+        )
+    )
     await db.commit()
 
     return HTMLResponse(_ai_context_block(article_id, result))
@@ -1595,7 +1612,7 @@ async def htmx_general_ai_chat(
         )
 
     try:
-        response_text = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
     except Exception as exc:
         exc_str = str(exc)
         status = getattr(exc, "status_code", None)
@@ -1631,8 +1648,13 @@ async def htmx_general_ai_chat(
         if len(saved) > _CHAT_MAX_MESSAGES:
             saved = saved[-_CHAT_MAX_MESSAGES:]
         chat_record.messages = saved
+        chat_record.total_input_tokens = (chat_record.total_input_tokens or 0) + in_tok
+        chat_record.total_output_tokens = (chat_record.total_output_tokens or 0) + out_tok
         chat_record.updated_at = datetime.now(timezone.utc)
-        await db.commit()
+    else:
+        from app.models.article import GeneralChatLog
+        db.add(GeneralChatLog(user_id=user.id, input_tokens=in_tok, output_tokens=out_tok))
+    await db.commit()
 
     return HTMLResponse(_render_general_chat_area(current_messages, tier))
 
@@ -1714,7 +1736,7 @@ async def htmx_ai_chat(
         ))
 
     try:
-        response_text = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
     except Exception as exc:
         exc_str = str(exc)
         status = getattr(exc, "status_code", None)
@@ -1735,6 +1757,8 @@ async def htmx_ai_chat(
     if len(current_messages) > _CHAT_MAX_MESSAGES:
         current_messages = current_messages[-_CHAT_MAX_MESSAGES:]
     chat.messages = current_messages  # reassign — SQLAlchemy JSONB change tracking
+    chat.total_input_tokens = (chat.total_input_tokens or 0) + in_tok
+    chat.total_output_tokens = (chat.total_output_tokens or 0) + out_tok
     chat.updated_at = datetime.now(timezone.utc)
     await db.commit()
 

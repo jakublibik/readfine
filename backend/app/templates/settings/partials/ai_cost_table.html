@@ -23,16 +23,34 @@
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for op in cost_stats.operations %}
+      {% if op.row_type in ("subtotal", "total") %}
+      <tr class="{% if op.operation in ('_total_fast', '_total_all') %}border-t !border-gray-300{% elif op.operation == '_total_quality' %}border-t{% endif %} {% if op.row_type == 'total' %}font-semibold{% else %}text-gray-500{% endif %}">
+        <td class="py-1 {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ op.label }}</td>
+        <td class="py-1"></td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.input_tokens) }}</td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.output_tokens) }}</td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">
+          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% else %}<span class="text-gray-400 text-xs">—</span>{% endif %}
+        </td>
+        <td class="py-1"></td>
+      </tr>
+      {% else %}
       <tr {% if op.is_placeholder %}class="opacity-40"{% endif %}>
         <td class="py-2 text-gray-700">
           {{ op.label }}
-          <span class="text-xs text-gray-400">({{ op.slot }})</span>
+          {% if op.slot %}<span class="text-xs text-gray-400">({{ op.slot }})</span>{% endif %}
         </td>
         {% if op.is_placeholder %}
         <td class="py-2 text-right text-gray-400 text-xs" colspan="5">coming in step 6</td>
         {% elif op.operation == "chat" %}
         <td class="py-2 text-right text-gray-600">{{ op.count }} msg</td>
-        <td class="py-2 text-right text-gray-400 text-xs" colspan="3">not tracked</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.output_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">
+          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% else %}<span class="text-gray-400 text-xs">unknown model</span>{% endif %}
+        </td>
         <td class="py-2 text-right">
           {% if op.trend_pct is not none %}
             {% if op.trend_pct > 5 %}<span class="text-red-500 text-xs">↑{{ op.trend_pct|abs }}%</span>
@@ -57,6 +75,7 @@
         </td>
         {% endif %}
       </tr>
+      {% endif %}
       {% endfor %}
     </tbody>
   </table>

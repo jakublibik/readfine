@@ -114,9 +114,23 @@ class ArticleAiChat(Base):
     article_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("articles.id", ondelete="CASCADE"), nullable=False)
     messages: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    total_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    total_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class GeneralChatLog(Base):
+    __tablename__ = "general_chat_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

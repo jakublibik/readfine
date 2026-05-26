@@ -102,7 +102,7 @@ async def _execute_summary_job(
         return
 
     try:
-        result = await summarize_article(content_text, client, provider, model, custom_prompt=s.ai_summary_prompt)
+        result, in_tok, out_tok = await summarize_article(content_text, client, provider, model, custom_prompt=s.ai_summary_prompt)
 
         state = await db.scalar(
             select(UserArticleState).where(
@@ -118,6 +118,8 @@ async def _execute_summary_job(
         job.status = "success"
         job.processed_at = now
         job.error_message = None
+        job.input_tokens = in_tok
+        job.output_tokens = out_tok
         if s.last_ai_error:
             s.last_ai_error = None
             s.last_ai_error_at = None

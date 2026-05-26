@@ -37,6 +37,8 @@ def make_chat(**kwargs):
         "user_id": 1,
         "article_id": 10,
         "messages": [],
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
         "updated_at": None,
     }
     defaults.update(kwargs)
@@ -53,18 +55,24 @@ def make_execute_result(value):
 def make_anthropic_response(text: str):
     resp = MagicMock()
     resp.content = [MagicMock(text=text)]
+    resp.usage.input_tokens = 10
+    resp.usage.output_tokens = 5
     return resp
 
 
 def make_openai_response(text: str):
     resp = MagicMock()
     resp.choices = [MagicMock(message=MagicMock(content=text))]
+    resp.usage.prompt_tokens = 10
+    resp.usage.completion_tokens = 5
     return resp
 
 
 def make_gemini_response(text: str):
     resp = MagicMock()
     resp.text = text
+    resp.usage_metadata.prompt_token_count = 10
+    resp.usage_metadata.candidates_token_count = 5
     return resp
 
 
@@ -76,12 +84,14 @@ class TestChatWithArticle:
         client = AsyncMock()
         client.messages.create = AsyncMock(
             return_value=make_anthropic_response("  Anthropic answer  "))
-        result = await chat_with_article(
+        result, in_tok, out_tok = await chat_with_article(
             messages=[{"role": "user", "content": "What is this about?"}],
             article_content="Some article text",
             client=client, provider="anthropic", model="claude-sonnet-4-6",
         )
         assert result == "Anthropic answer"
+        assert in_tok == 10
+        assert out_tok == 5
         call_kwargs = client.messages.create.call_args.kwargs
         assert "system" in call_kwargs
         assert "Some article text" in call_kwargs["system"]
@@ -105,12 +115,14 @@ class TestChatWithArticle:
         client = AsyncMock()
         client.chat.completions.create = AsyncMock(
             return_value=make_openai_response("OpenAI answer"))
-        result = await chat_with_article(
+        result, in_tok, out_tok = await chat_with_article(
             messages=[{"role": "user", "content": "Question"}],
             article_content="Article text",
             client=client, provider="openai", model="gpt-4o",
         )
         assert result == "OpenAI answer"
+        assert in_tok == 10
+        assert out_tok == 5
         sent_messages = client.chat.completions.create.call_args.kwargs["messages"]
         assert sent_messages[0]["role"] == "system"
         assert "Article text" in sent_messages[0]["content"]
@@ -133,7 +145,7 @@ class TestChatWithArticle:
         client = MagicMock()
         client.aio.models.generate_content = AsyncMock(
             return_value=make_gemini_response("Gemini answer"))
-        result = await chat_with_article(
+        result, in_tok, out_tok = await chat_with_article(
             messages=[
                 {"role": "user", "content": "Q"},
                 {"role": "assistant", "content": "A"},
@@ -143,6 +155,8 @@ class TestChatWithArticle:
             client=client, provider="gemini", model="gemini-2.0-flash",
         )
         assert result == "Gemini answer"
+        assert in_tok == 10
+        assert out_tok == 5
         contents = client.aio.models.generate_content.call_args.kwargs["contents"]
         roles = [m["role"] for m in contents]
         assert roles == ["user", "model", "user"]  # assistant → model
@@ -174,7 +188,7 @@ class TestChatWithArticle:
         client = AsyncMock()
         client.messages.create = AsyncMock(
             return_value=make_anthropic_response("\n  Trimmed  \n"))
-        result = await chat_with_article(
+        result, _, _ = await chat_with_article(
             messages=[{"role": "user", "content": "Q"}],
             article_content=None,
             client=client, provider="anthropic", model="claude-haiku-4-5",
@@ -258,7 +272,7 @@ class TestHtmxAiChatEndpoint:
             patch("app.services.ai_service.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
             patch("app.services.ai_service.chat_with_article",
-                  new=AsyncMock(return_value="AI response")),
+                  new=AsyncMock(return_value=("AI response", 10, 5))),
         ):
             resp = client.post(
                 "/htmx/articles/10/ai-chat",
@@ -276,7 +290,7 @@ class TestHtmxAiChatEndpoint:
         captured = {}
         async def fake_chat(messages, article_content, client, provider, model):
             captured["article_content"] = article_content
-            return "answer"
+            return "answer", 10, 5
 
         with (
             patch("app.services.ai_service.get_ai_client",
@@ -302,7 +316,7 @@ class TestHtmxAiChatEndpoint:
             patch("app.services.ai_service.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
             patch("app.services.ai_service.chat_with_article",
-                  new=AsyncMock(return_value="new answer")),
+                  new=AsyncMock(return_value=("new answer", 10, 5))),
         ):
             resp = client.post("/htmx/articles/10/ai-chat", data={"message": "New question"})
 

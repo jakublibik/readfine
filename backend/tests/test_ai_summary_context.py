@@ -206,7 +206,7 @@ class TestHtmxAiContextTrigger:
             ),
             patch(
                 "app.services.ai_service.get_article_context",
-                new=AsyncMock(return_value="Broader context text."),
+                new=AsyncMock(return_value=("Broader context text.", 10, 5)),
             ),
         ):
             resp = client.post("/htmx/articles/10/ai-context")

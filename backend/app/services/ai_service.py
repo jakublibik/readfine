@@ -241,8 +241,10 @@ async def verify_ai_slot(
 
 # ── AI calls ──────────────────────────────────────────────────────────────────
 
-async def score_article(content: str, preference_text: str, client, provider: str, model: str) -> float:
-    """Score article relevance 0.0–1.0 based on user preference text."""
+async def score_article(
+    content: str, preference_text: str, client, provider: str, model: str
+) -> tuple[float, int, int]:
+    """Score article relevance 0.0–1.0. Returns (score, input_tokens, output_tokens)."""
     prompt = (
         f"Rate how relevant this article is to the reader based on their interest profile.\n"
         f"Score from 0.0 (no interest / actively avoid) to 1.0 (exactly what they want to read).\n\n"
@@ -251,13 +253,13 @@ async def score_article(content: str, preference_text: str, client, provider: st
         f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
-    raw = await _complete(prompt, client, provider, model, max_tokens=10)
+    raw, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=10)
     try:
         score = float(raw.strip())
-        return max(0.0, min(1.0, score))
+        return max(0.0, min(1.0, score)), in_tok, out_tok
     except ValueError:
         logger.warning("score_article: unexpected AI response %r, defaulting to 0.5", raw)
-        return 0.5
+        return 0.5, in_tok, out_tok
 
 
 _DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
@@ -268,8 +270,8 @@ async def summarize_article(
     provider: str,
     model: str,
     custom_prompt: str | None = None,
-) -> str:
-    """Generate a concise article summary."""
+) -> tuple[str, int, int]:
+    """Generate a concise article summary. Returns (text, input_tokens, output_tokens)."""
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
     return await _complete(prompt, client, provider, model, max_tokens=500)
@@ -282,8 +284,8 @@ async def get_article_context(
     model: str,
     base_prompt: str | None = None,
     focus: str | None = None,
-) -> str:
-    """Generate background context and significance for an article."""
+) -> tuple[str, int, int]:
+    """Generate background context and significance. Returns (text, input_tokens, output_tokens)."""
     instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
     if focus:
         instruction += f"\n\nFocus on: {focus}"
@@ -297,8 +299,8 @@ async def chat_with_article(
     client,
     provider: str,
     model: str,
-) -> str:
-    """Multi-turn chat. article_content=None → no system prompt (history-only mode)."""
+) -> tuple[str, int, int]:
+    """Multi-turn chat. Returns (text, input_tokens, output_tokens)."""
     if article_content:
         system_prompt = (
             "You are a helpful assistant discussing the following article. "
@@ -317,7 +319,11 @@ async def chat_with_article(
         if system_prompt:
             kwargs["system"] = system_prompt
         resp = await client.messages.create(**kwargs)
-        return resp.content[0].text.strip()
+        return (
+            resp.content[0].text.strip(),
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+        )
 
     elif provider == "openai":
         openai_msgs = []
@@ -326,7 +332,11 @@ async def chat_with_article(
         openai_msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
         resp = await client.chat.completions.create(
             model=model, max_tokens=600, messages=openai_msgs)
-        return resp.choices[0].message.content.strip()
+        return (
+            resp.choices[0].message.content.strip(),
+            resp.usage.prompt_tokens,
+            resp.usage.completion_tokens,
+        )
 
     elif provider == "gemini":
         from google.genai import types
@@ -338,7 +348,12 @@ async def chat_with_article(
         cfg = types.GenerateContentConfig(system_instruction=system_prompt) if system_prompt else None
         resp = await client.aio.models.generate_content(
             model=model, config=cfg, contents=contents)
-        return resp.text.strip()
+        meta = resp.usage_metadata
+        return (
+            resp.text.strip(),
+            getattr(meta, "prompt_token_count", 0) or 0,
+            getattr(meta, "candidates_token_count", 0) or 0,
+        )
 
     raise ValueError(f"Unknown provider: {provider}")
 
@@ -352,14 +367,16 @@ async def catch_me_up(articles_meta: list[dict], period: str, client, provider: 
         f"Group them by topic and write a brief digest (2–5 sentences per topic). "
         f"Focus on what's important.\n\n{article_list}"
     )
-    return await _complete(prompt, client, provider, model, max_tokens=1000)
+    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=1000)
+    return text
 
 
 async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:
     """Generate a CSS selector for article links from a page."""
     from app.utils.scrape_ai import generate_selector_prompt
     prompt = generate_selector_prompt(url, html)
-    return await _complete(prompt, client, provider, model, max_tokens=100)
+    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=100)
+    return text
 
 
 async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
@@ -465,33 +482,41 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         f"---\n"
         f"{data}"
     )
-    return await _complete(prompt, client, provider, model, max_tokens=400)
+    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=400)
+    return text
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
 
-async def _complete(prompt: str, client, provider: str, model: str, max_tokens: int = 500) -> str:
-    """Send a prompt and return the text response."""
+async def _complete(
+    prompt: str, client, provider: str, model: str, max_tokens: int = 500
+) -> tuple[str, int, int]:
+    """Send a prompt and return (text, input_tokens, output_tokens)."""
     if provider == "anthropic":
         resp = await client.messages.create(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.content[0].text.strip()
+        return resp.content[0].text.strip(), resp.usage.input_tokens, resp.usage.output_tokens
     elif provider == "openai":
         resp = await client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.choices[0].message.content.strip()
+        return resp.choices[0].message.content.strip(), resp.usage.prompt_tokens, resp.usage.completion_tokens
     elif provider == "gemini":
         resp = await client.aio.models.generate_content(
             model=model,
             contents=prompt,
         )
-        return resp.text.strip()
+        meta = resp.usage_metadata
+        return (
+            resp.text.strip(),
+            getattr(meta, "prompt_token_count", 0) or 0,
+            getattr(meta, "candidates_token_count", 0) or 0,
+        )
     raise ValueError(f"Unknown provider: {provider}")
 
 

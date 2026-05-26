@@ -84,54 +84,30 @@
   </div>
   {% endif %}
 
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-    {# Per-day reads (last 7d) #}
+  {# TODO: Read per day tabulka skryta — zvážit rozšíření zobrazovaných hodnot
+     (např. přečteno vs. otevřeno, dwell time, trend) než ji znovu zobrazíme. #}
+
+  {# 3 stat chips #}
+  <div class="grid grid-cols-3 gap-6 mb-6">
     <div>
-      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Read per day (7d)</h3>
-      {% if reading.per_day %}
-      <table class="w-full text-sm">
-        <tbody>
-          {% for day in reading.per_day %}
-          <tr class="border-b border-gray-50">
-            <td class="py-1 text-gray-500 text-xs">{{ day.date }}</td>
-            <td class="py-1 text-right font-medium text-gray-700">
-              {% if day.count > 0 %}{{ day.count }}{% else %}<span class="text-gray-300">0</span>{% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active hour</h3>
+      {% if reading.active_hour is not none %}
+      <p class="text-lg font-semibold text-gray-800">{{ "%02d:00"|format(reading.active_hour) }}–{{ "%02d:00"|format((reading.active_hour + 1) % 24) }}
+        <span class="text-xs text-gray-400 font-normal">UTC</span>
+      </p>
       {% else %}
-      <p class="text-sm text-gray-400">No data yet.</p>
+      <p class="text-sm text-gray-400">Not enough data</p>
       {% endif %}
     </div>
-
-    {# Active hour & day #}
-    <div class="space-y-4">
-      <div>
-        <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active hour</h3>
-        {% if reading.active_hour is not none %}
-        <p class="text-lg font-semibold text-gray-800">{{ "%02d:00"|format(reading.active_hour) }}–{{ "%02d:00"|format((reading.active_hour + 1) % 24) }}
-          <span class="text-xs text-gray-400 font-normal">UTC</span>
-        </p>
-        {% else %}
-        <p class="text-sm text-gray-400">Not enough data</p>
-        {% endif %}
-      </div>
-      <div>
-        <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active day</h3>
-        {% if reading.active_day is not none %}
-        {% set day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] %}
-        <p class="text-lg font-semibold text-gray-800">{{ day_names[reading.active_day] }}</p>
-        {% else %}
-        <p class="text-sm text-gray-400">Not enough data</p>
-        {% endif %}
-      </div>
+    <div>
+      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active day</h3>
+      {% if reading.active_day is not none %}
+      {% set day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] %}
+      <p class="text-lg font-semibold text-gray-800">{{ day_names[reading.active_day] }}</p>
+      {% else %}
+      <p class="text-sm text-gray-400">Not enough data</p>
+      {% endif %}
     </div>
-  </div>
-
-  {# Avg time to read + avg dwell #}
-  <div class="grid grid-cols-1 sm:grid-cols-2 gap-6 mt-6">
     <div>
       <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg time to read</h3>
       {% if reading.avg_time_to_read_hours is not none %}
@@ -144,21 +120,25 @@
       <p class="text-sm text-gray-400">—</p>
       {% endif %}
     </div>
-    <div>
-      <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg dwell</h3>
-      {% if reading.avg_dwell_seconds is not none %}
+  </div>
+
+  {# Avg dwell — full width with per-feed breakdown #}
+  <div>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg dwell</h3>
+    {% if reading.avg_dwell_seconds is not none %}
+    <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
       <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_dwell_seconds / 60)|round(1) }} min overall</p>
       {% if reading.top_feeds_by_dwell %}
-      <ul class="mt-2 space-y-1">
-        {% for f in reading.top_feeds_by_dwell %}
-        <li class="text-xs text-gray-600">{{ f.title }} <span class="text-gray-400">{{ (f.avg_dwell_seconds / 60)|round(1) }}m</span></li>
-        {% endfor %}
-      </ul>
-      {% endif %}
-      {% else %}
-      <p class="text-sm text-gray-400">—</p>
+      <span class="text-xs text-gray-300">·</span>
+      {% for f in reading.top_feeds_by_dwell %}
+      <span class="text-xs text-gray-600">{{ f.title }} <span class="text-gray-400">{{ (f.avg_dwell_seconds / 60)|round(1) }}m</span></span>
+      {% if not loop.last %}<span class="text-xs text-gray-300">·</span>{% endif %}
+      {% endfor %}
       {% endif %}
     </div>
+    {% else %}
+    <p class="text-sm text-gray-400">—</p>
+    {% endif %}
   </div>
 </section>
 
@@ -173,15 +153,32 @@
     {% if ai.calibration.avg_score_starred is not none or ai.calibration.avg_score_not_starred is not none %}
     <div class="flex gap-6">
       <div>
-        <div class="text-xs text-gray-400">Starred articles</div>
+        <div class="text-xs text-gray-400">Starred avg</div>
         <div class="text-lg font-semibold text-gray-800">
           {% if ai.calibration.avg_score_starred is not none %}{{ (ai.calibration.avg_score_starred * 100)|round|int }}{% else %}—{% endif %}
         </div>
       </div>
       <div>
-        <div class="text-xs text-gray-400">Other articles</div>
+        <div class="text-xs text-gray-400">Other avg</div>
         <div class="text-lg font-semibold text-gray-800">
           {% if ai.calibration.avg_score_not_starred is not none %}{{ (ai.calibration.avg_score_not_starred * 100)|round|int }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400">Gap</div>
+        <div class="text-lg font-semibold
+          {% if ai.calibration.gap is not none %}
+            {% if ai.calibration.gap > 20 %}text-green-600
+            {% elif ai.calibration.gap >= 10 %}text-yellow-500
+            {% else %}text-red-500{% endif %}
+          {% else %}text-gray-800{% endif %}">
+          {% if ai.calibration.gap is not none %}+{{ ai.calibration.gap }}{% else %}—{% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="text-xs text-gray-400">Starred min</div>
+        <div class="text-lg font-semibold text-gray-800">
+          {% if ai.calibration.min_score_starred is not none %}{{ ai.calibration.min_score_starred }}{% else %}—{% endif %}
         </div>
       </div>
     </div>
