@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 import feedparser
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.auth.security import hash_password, verify_password, hash_token
 from app.config import settings as app_settings_config
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 from app.auth.dependencies import get_current_user, require_ai_enabled
 from app.database import get_db
 from app.models.auth import ApiToken
+from app.models.article import Article
 from app.models.feed import Folder, UserFeed
 from app.models.label import Label
 from app.models.settings import AppSettings
@@ -160,7 +161,17 @@ async def _get_feeds_context(user, db):
         select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
     )
     folders = folders_result.scalars().all()
-    return user_feeds, folders
+    feed_ids = [uf.feed_id for uf in user_feeds]
+    if feed_ids:
+        counts_result = await db.execute(
+            select(Article.feed_id, func.count(Article.id).label("cnt"))
+            .where(Article.feed_id.in_(feed_ids))
+            .group_by(Article.feed_id)
+        )
+        article_counts = {row.feed_id: row.cnt for row in counts_result}
+    else:
+        article_counts = {}
+    return user_feeds, folders, article_counts
 
 
 @router.get("/feeds", response_class=HTMLResponse)
@@ -170,10 +181,11 @@ async def settings_feeds(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/feeds.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
         "error": None,
         "subscribe_url": "",
         "detected_feeds": [],
@@ -295,7 +307,7 @@ async def settings_feeds_subscribe(
     fetch_auth_pass = form.get("fetch_auth_pass", "") or None
     is_private = form.get("is_private") == "on"
 
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
     detected_feeds = []
     try:
@@ -331,7 +343,7 @@ async def settings_feeds_subscribe(
         error = "Could not subscribe to feed. Please check the URL and try again."
 
     # Re-fetch after failed subscribe (no commit happened)
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse", "404", "403", "HTTP error"))
     show_scrape_option = (
         is_rss_error
@@ -341,6 +353,7 @@ async def settings_feeds_subscribe(
     return templates.TemplateResponse(request, "settings/feeds.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
         "error": error if not detected_feeds else None,
         "subscribe_url": url,
         "detected_feeds": detected_feeds,
@@ -359,7 +372,7 @@ async def settings_scrape_setup(
     if not url.startswith(("http://", "https://")):
         return RedirectResponse("/settings/feeds", status_code=303)
 
-    _, folders = await _get_feeds_context(user, db)
+    _, folders, _ = await _get_feeds_context(user, db)
     loop = asyncio.get_running_loop()
     html = ""
     page_title = ""
@@ -435,7 +448,7 @@ async def settings_scrape_subscribe(
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15)) if interval_raw else None
 
-    _, folders = await _get_feeds_context(user, db)
+    _, folders, _ = await _get_feeds_context(user, db)
     try:
         await subscribe_scrape(user=user, url=url, selector=selector, title=title,
                                folder_id=folder_id, fetch_interval_min=fetch_interval_min, db=db)
@@ -570,10 +583,11 @@ async def settings_feed_delete(
         await unsubscribe(user, user_feed_id, db)
     except ValueError:
         pass
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
     })
 
 
@@ -594,10 +608,11 @@ async def settings_folder_create(
         if not existing.scalar_one_or_none():
             db.add(Folder(user_id=user.id, name=name))
             await db.commit()
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
     })
 
 
@@ -615,10 +630,11 @@ async def settings_folder_delete(
     if folder:
         await db.delete(folder)
         await db.commit()
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
     })
 
 
@@ -628,10 +644,11 @@ async def settings_feeds_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
     })
 
 
@@ -669,10 +686,11 @@ async def settings_folder_rename(
     if folder and name:
         folder.name = name
         await db.commit()
-    user_feeds, folders = await _get_feeds_context(user, db)
+    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         "user_feeds": user_feeds,
         "folders": folders,
+        "article_counts": article_counts,
     })
 
 
