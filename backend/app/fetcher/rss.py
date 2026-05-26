@@ -271,6 +271,9 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
     Catches race conditions where _dedup_cross_feed (per-feed, pre-commit) couldn't see
     the other feed's uncommitted articles. Scoped to articles fetched since `since`.
     Returns number of (user, article) pairs marked as read.
+
+    Only marks the higher-ID article (newer) as read, keeping the lowest-ID one unread.
+    This prevents the race-condition case where both duplicates get marked as read.
     """
     ArticleB = aliased(Article)
     UserFeedB = aliased(UserFeed)
@@ -282,7 +285,7 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
         .where(
             UserFeedB.user_id == UserFeed.user_id,
             ArticleB.url_normalized == Article.url_normalized,
-            ArticleB.id != Article.id,
+            ArticleB.id < Article.id,
         )
         .correlate(UserFeed, Article)
         .exists()
