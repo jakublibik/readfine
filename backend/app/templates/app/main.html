@@ -7,26 +7,34 @@
 <script>
 (function () {
   var _articleId = null;
-  var _start = null;
+  var _start = null;       // Date.now() when current visible period started, null when tab hidden
+  var _accumulated = 0;   // seconds accumulated during previous visible periods
 
   function _csrf() {
     var c = document.cookie.split('; ').find(function(r) { return r.startsWith('csrftoken='); });
     return c ? c.split('=')[1] : '';
   }
 
+  function _elapsed() {
+    var vis = _start ? Math.round((Date.now() - _start) / 1000) : 0;
+    return _accumulated + vis;
+  }
+
   function _send() {
-    if (!_articleId || !_start) return;
-    var seconds = Math.round((Date.now() - _start) / 1000);
-    if (seconds <= 3) { _articleId = null; _start = null; return; }
-    fetch('/htmx/articles/' + _articleId + '/dwell', {
+    if (!_articleId) return;
+    var seconds = _elapsed();
+    var id = _articleId;
+    _articleId = null;
+    _start = null;
+    _accumulated = 0;
+    if (seconds <= 3) return;
+    fetch('/htmx/articles/' + id + '/dwell', {
       method: 'POST',
       keepalive: true,
       credentials: 'include',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-csrftoken': _csrf() },
       body: 'seconds=' + seconds,
     });
-    _articleId = null;
-    _start = null;
   }
 
   function _onHtmxRequest(e) {
@@ -44,8 +52,21 @@
       var root = document.getElementById('article-detail-root');
       if (root) {
         _articleId = root.dataset.articleId || null;
-        _start = _articleId ? Date.now() : null;
+        _accumulated = 0;
+        _start = (_articleId && document.visibilityState !== 'hidden') ? Date.now() : null;
       }
+    }
+  });
+
+  document.addEventListener('visibilitychange', function () {
+    if (!_articleId) return;
+    if (document.visibilityState === 'hidden') {
+      if (_start) {
+        _accumulated += Math.round((Date.now() - _start) / 1000);
+        _start = null;
+      }
+    } else {
+      _start = Date.now();
     }
   });
 })();

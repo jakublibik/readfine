@@ -876,6 +876,7 @@ async def htmx_article_dwell(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    seconds = max(0, min(seconds, 1800))  # cap at 30 minutes per session
     if seconds <= 3:
         return HTMLResponse("", status_code=204)
     state = await db.scalar(
