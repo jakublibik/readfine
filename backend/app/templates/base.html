@@ -228,8 +228,10 @@
       }
       html.dark[data-bucket="small"].mobile-detail-open #article-detail { background: #141414 !important; }
     </style>
+    <meta name="csp-nonce" content="{{ request.state.csp_nonce | default('') }}">
     <script src="/static/js/init.js"></script>
     <script src="/static/js/htmx.min.js"></script>
+    <script nonce="{{ request.state.csp_nonce }}">htmx.config.inlineScriptNonce = document.querySelector('meta[name="csp-nonce"]').content;</script>
     <script src="/static/js/csrf.js"></script>
     <script src="/static/js/app.js" defer></script>
 </head>
