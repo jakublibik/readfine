@@ -153,7 +153,7 @@
             Article limit
           </label>
           <input type="number" name="article_limit" id="article-limit"
-                 min="10" max="500" value="200"
+                 min="10" max="500" value="500"
                  class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
         </div>
 
@@ -345,7 +345,7 @@
     costTimer = setTimeout(function () {
       var form = document.getElementById('catchup-form');
       var fd = new FormData(form);
-      var limit = fd.get('article_limit') || '200';
+      var limit = fd.get('article_limit') || '500';
       var slot = fd.get('model_slot') || 'fast';
       var snippet = fd.has('include_snippet') ? 'true' : 'false';
       var qs = 'article_limit=' + limit + '&model_slot=' + slot + '&include_snippet=' + snippet;
