@@ -315,6 +315,10 @@
   .mark-read-row.touch-active .mark-read-badge { transform: translateX(-1.5rem); }
   .feed-nav-row.touch-active [data-action="feed-refresh"] { opacity: 1; }
   .feed-nav-row.touch-active .mark-read-badge { transform: translateX(-3.5rem); }
+  /* Loading state: keep button visible + spin, override hover transition-delay */
+  [data-action="mark-read"].htmx-request { opacity: 1 !important; transition: none !important; animation: spin-check 0.7s linear infinite; }
+  @keyframes spin-check { to { transform: translateY(-50%) rotate(360deg); } }
+  .mark-read-row:has([data-action="mark-read"].htmx-request) .mark-read-badge { transform: translateX(-1.5rem) !important; transition: none !important; }
   @media (any-hover: hover) {
     .mark-read-row [data-action="mark-read"] { transition: opacity 150ms 0ms; }
     .mark-read-row:hover [data-action="mark-read"],

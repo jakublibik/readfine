@@ -1,23 +1,23 @@
 <div id="feeds-list">
   {% if feed_stats %}
   <div class="overflow-x-auto">
-  <table class="w-full table-fixed text-sm">
+  <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-20">Art. 30d</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14">Read%</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-16">Label%</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-16">Star%</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-16">Dwell</th>
-        {% if ai_enabled %}<th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14">Score</th>{% endif %}
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-16">Signal</th>
+        <th class="text-left pr-2 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Art. 30d</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Read%</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Label%</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Star%</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Dwell</th>
+        {% if ai_enabled %}<th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Score</th>{% endif %}
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Signal</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for fs in feed_stats %}
       <tr>
-        <td class="px-2 py-2 font-medium text-gray-900 max-w-0">
+        <td class="pr-2 py-2 font-medium text-gray-900">
           <span class="block truncate">{{ fs.feed_title }}</span>
         </td>
         <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.total_articles }}</td>

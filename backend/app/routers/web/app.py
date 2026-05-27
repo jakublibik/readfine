@@ -284,7 +284,11 @@ async def htmx_mark_articles_read(
         labeled_only=labeled_only == "1",
         label_id=int(label_id) if label_id else None,
     )
-    return HTMLResponse("", status_code=200)
+    lid = int(label_id) if label_id else None
+    total = await _mark_read_total(user, db, starred_only == "1", archived_only == "1", labeled_only == "1", lid)
+    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp.headers["HX-Trigger"] = "sidebarRefresh"
+    return resp
 
 
 @router.post("/htmx/feeds/{feed_id}/mark-read", response_class=HTMLResponse)
@@ -299,7 +303,12 @@ async def htmx_mark_feed_read(
     except ValueError:
         return HTMLResponse("", status_code=400)
     await mark_scope_read(user, db, before=before_dt, feed_id=feed_id)
-    return HTMLResponse("", status_code=200)
+    total = (await db.execute(
+        select(func.count(Article.id)).where(Article.feed_id == feed_id)
+    )).scalar() or 0
+    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp.headers["HX-Trigger"] = "sidebarRefresh"
+    return resp
 
 
 @router.post("/htmx/folders/{folder_id}/mark-read", response_class=HTMLResponse)
@@ -314,11 +323,52 @@ async def htmx_mark_folder_read(
     except ValueError:
         return HTMLResponse("", status_code=400)
     await mark_scope_read(user, db, before=before_dt, folder_id=folder_id)
-    return HTMLResponse("", status_code=200)
+    folder_cond = UserFeed.folder_id.is_(None) if folder_id == 0 else (UserFeed.folder_id == folder_id)
+    total = (await db.execute(
+        select(func.count(Article.id))
+        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(folder_cond)
+    )).scalar() or 0
+    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp.headers["HX-Trigger"] = "sidebarRefresh"
+    return resp
 
 
 _BADGE_UNREAD = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{}</span>'
 _BADGE_TOTAL  = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{}</span>'
+
+
+async def _mark_read_total(
+    user: User, db: AsyncSession,
+    starred_only: bool, archived_only: bool, labeled_only: bool,
+    label_id: int | None,
+) -> int:
+    if starred_only:
+        return (await db.execute(
+            select(func.count()).select_from(UserArticleState)
+            .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)
+        )).scalar() or 0
+    if archived_only:
+        return (await db.execute(
+            select(func.count()).select_from(UserArticleState)
+            .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
+        )).scalar() or 0
+    if label_id is not None:
+        return (await db.execute(
+            select(func.count(ArticleLabel.article_id))
+            .where(ArticleLabel.user_id == user.id, ArticleLabel.label_id == label_id)
+        )).scalar() or 0
+    if labeled_only:
+        return (await db.execute(
+            select(func.count()).select_from(
+                select(ArticleLabel.article_id).where(ArticleLabel.user_id == user.id).distinct().subquery()
+            )
+        )).scalar() or 0
+    # All articles
+    return (await db.execute(
+        select(func.count(Article.id))
+        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+    )).scalar() or 0
 
 
 @router.post("/htmx/feeds/{feed_id}/refresh", response_class=HTMLResponse)

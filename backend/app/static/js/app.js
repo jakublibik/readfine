@@ -1248,7 +1248,13 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
     r.classList.remove('touch-active');
   });
   if (!e.detail.successful) return;
-  htmx.trigger(document.body, 'sidebarRefresh');
+  e.detail.elt.style.display = 'none';
+  // Replace badge with server-returned total badge HTML
+  var row = e.detail.elt.closest('.mark-read-row');
+  if (row && e.detail.xhr && e.detail.xhr.responseText) {
+    var badge = row.querySelector('.mark-read-badge');
+    if (badge) badge.outerHTML = e.detail.xhr.responseText;
+  }
   var active = document.querySelector('.nav-item.active[hx-get]');
   var url = active ? active.getAttribute('hx-get') : '/htmx/articles';
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
