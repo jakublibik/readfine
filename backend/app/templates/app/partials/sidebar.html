@@ -279,13 +279,13 @@
             {% if fu > 0 %}{{ badge_unread(fu) }}{% else %}{{ badge_total(feed_total_counts.get(uf.feed_id, 0)) }}{% endif %}
           </span>
         </a>
-        <button class="absolute right-7 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-gray-500 bg-white hover:bg-gray-50 rounded cursor-pointer border border-gray-200"
+        <button class="absolute right-10 md:right-7 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-6 h-6 md:w-5 md:h-5 text-xs text-gray-500 bg-white hover:bg-gray-50 rounded cursor-pointer border border-gray-200"
                 title="Refresh feed"
                 hx-post="/htmx/feeds/{{ uf.feed_id }}/refresh"
                 hx-target="#feed-badge-{{ uf.feed_id }}"
                 hx-swap="innerHTML"
                 data-action="feed-refresh">↻</button>
-        <button class="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-5 h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
+        <button class="absolute right-2 md:right-1 top-1/2 -translate-y-1/2 opacity-0 flex items-center justify-center w-6 h-6 md:w-5 md:h-5 text-xs text-blue-600 bg-white hover:bg-blue-50 rounded cursor-pointer border border-blue-200"
                 title="Mark all as read"
                 hx-post="/htmx/feeds/{{ uf.feed_id }}/mark-read"
                 hx-vals='{}'
