@@ -87,7 +87,7 @@
 
 <script>
 (function () {
-  var sid = {{ selector_id | tojson }};
+  var sid = document.currentScript.previousElementSibling.dataset.selectorId;
   var hiddenInput = document.getElementById(sid + '-value');
   var allCb = document.getElementById(sid + '-all');
 
