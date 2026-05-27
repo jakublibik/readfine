@@ -41,7 +41,8 @@
               hx-target="#catchup-configs-list-wrapper"
               hx-swap="innerHTML"
               hx-include="#catchup-form"
-              hx-on::after-request="this.querySelector('[name=name]').value = ''"
+              hx-on::before-request="if (!this.querySelector('[name=name]').value.trim()) { document.body.dispatchEvent(new CustomEvent('showToast', {detail:{msg:'Enter a configuration name.',type:'warning'}})); event.preventDefault(); }"
+              hx-on::after-request="if (event.detail.successful) this.querySelector('[name=name]').value = ''"
               id="save-config-form">
           <input type="text" name="name" placeholder="Configuration name…" maxlength="100"
                  class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm min-w-0">

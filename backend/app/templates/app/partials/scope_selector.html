@@ -102,11 +102,20 @@
     hiddenInput.value = selected.length ? JSON.stringify(selected) : '';
   }
 
+  function setItemsDimmed(dimmed) {
+    var labels = document.querySelectorAll(
+      'input.scope-item-cb[data-selector="' + sid + '"]'
+    );
+    labels.forEach(function (cb) {
+      cb.style.opacity = dimmed ? '0.35' : '';
+    });
+  }
+
   function syncAllCb() {
     var items = document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]');
     var anyChecked = Array.from(items).some(function (cb) { return cb.checked; });
     allCb.checked = !anyChecked;
-    items.forEach(function (cb) { cb.disabled = !anyChecked; });
+    setItemsDimmed(!anyChecked);
   }
 
   // Init from current value
@@ -122,22 +131,20 @@
       });
     } catch (e) {}
     allCb.checked = false;
-    document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]')
-      .forEach(function (cb) { cb.disabled = false; });
+    setItemsDimmed(false);
   } else {
     allCb.checked = true;
-    document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]')
-      .forEach(function (cb) { cb.disabled = true; });
+    setItemsDimmed(true);
   }
 
   allCb.addEventListener('change', function () {
     if (allCb.checked) {
       document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]')
-        .forEach(function (cb) { cb.checked = false; cb.disabled = true; });
+        .forEach(function (cb) { cb.checked = false; });
       hiddenInput.value = '';
+      setItemsDimmed(true);
     } else {
-      document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]')
-        .forEach(function (cb) { cb.disabled = false; });
+      setItemsDimmed(false);
     }
     hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));
   });
@@ -145,6 +152,7 @@
   document.querySelectorAll('input.scope-item-cb[data-selector="' + sid + '"]')
     .forEach(function (cb) {
       cb.addEventListener('change', function () {
+        if (cb.checked) allCb.checked = false;  // auto-deselect "All feeds"
         updateHidden();
         syncAllCb();
         hiddenInput.dispatchEvent(new Event('change', { bubbles: true }));

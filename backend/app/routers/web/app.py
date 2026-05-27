@@ -2108,6 +2108,11 @@ async def htmx_catchup_config_create(
         return HTMLResponse(f'<div class="text-red-600 text-sm">Invalid scope: {html_module.escape(str(exc)[:200])}</div>', status_code=422)
 
     clean_name = name.strip()[:100]
+    if not clean_name:
+        return HTMLResponse(
+            '<p class="text-yellow-600 text-sm mt-1">Configuration name cannot be empty.</p>',
+            status_code=200,
+        )
     # Upsert by name — update existing config with same name, otherwise create new
     config = (await db.execute(
         select(UserCatchupConfig).where(
