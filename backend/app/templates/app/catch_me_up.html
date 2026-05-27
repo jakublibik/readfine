@@ -262,10 +262,11 @@
 {% endblock %}
 
 {% block scripts %}
+<script type="application/json" id="period-descs-data">{{ period_descs | default({}) | tojson }}</script>
 <script>
 (function () {
 
-  var PERIOD_DESCS = {{ period_descs | default({}) | tojson }};
+  var PERIOD_DESCS = JSON.parse(document.getElementById('period-descs-data').textContent);
 
   function updatePeriodDesc() {
     var sel = document.querySelector('input[name="period"]:checked');
