@@ -102,6 +102,20 @@ class ArticleAiJob(Base):
     user: Mapped["User"] = relationship()
 
 
+class AiUsageLog(Base):
+    """Generic log for non-article AI operations (e.g. preference_generation)."""
+    __tablename__ = "ai_usage_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    operation: Mapped[str] = mapped_column(String(50), nullable=False)
+    model_slot: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
 class ArticleAiChat(Base):
     __tablename__ = "article_ai_chats"
     __table_args__ = (

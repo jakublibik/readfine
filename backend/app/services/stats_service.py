@@ -685,6 +685,42 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     )
     prev_chat_count = int(prev_chat_result.scalar() or 0)
 
+    # Interest profile generation — from ai_usage_logs
+    async def _usage_log_stats(operation: str, period_cutoff: datetime) -> tuple[int, int, int]:
+        r = await db.execute(
+            text("""
+                SELECT COUNT(*),
+                       COALESCE(SUM(input_tokens), 0),
+                       COALESCE(SUM(output_tokens), 0)
+                FROM ai_usage_logs
+                WHERE user_id = :uid
+                  AND operation = :op
+                  AND created_at >= :cutoff
+                  AND created_at < :end_cutoff
+            """),
+            {
+                "uid": user_id,
+                "op": operation,
+                "cutoff": period_cutoff,
+                "end_cutoff": period_cutoff + timedelta(days=days),
+            },
+        )
+        row = r.one()
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+
+    pref_cnt, pref_inp, pref_out = await _usage_log_stats("preference_generation", cutoff)
+    prev_pref_cnt, _, _ = await _usage_log_stats("preference_generation", prev_cutoff)
+    operation_rows.append(OperationCostRow(
+        operation="preference_generation",
+        label="Interest profile",
+        slot="quality",
+        count=pref_cnt,
+        input_tokens=pref_inp,
+        output_tokens=pref_out,
+        est_cost=_calc_cost(quality_model, pref_inp, pref_out),
+        trend_pct=_trend(pref_cnt, prev_pref_cnt),
+    ))
+
     operation_rows.append(OperationCostRow(
         operation="chat",
         label="Chat",

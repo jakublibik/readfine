@@ -1418,12 +1418,25 @@ async def settings_ai_generate_preference(
             '<span class="text-red-600 text-sm">Quality model not configured.</span>'
         )
     try:
-        text_result = await generate_preference_text(user.id, db, client, provider, model)
+        text_result, in_tok, out_tok = await generate_preference_text(user.id, db, client, provider, model)
     except Exception as exc:
         logger.warning("generate_preference_text failed for user=%s: %s", user.id, exc)
         return HTMLResponse(
             f'<span class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:150])}</span>'
         )
+
+    # Log token usage
+    from app.models.article import AiUsageLog  # noqa: PLC0415
+    db.add(AiUsageLog(
+        user_id=user.id,
+        operation="preference_generation",
+        model_slot="quality",
+        model=model,
+        provider=provider,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    ))
+    await db.commit()
 
     strong_count = await get_preference_strong_count(user.id, db)
     escaped = text_result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")

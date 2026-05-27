@@ -532,8 +532,8 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         f"---\n"
         f"{data}"
     )
-    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=400)
-    return text
+    text, input_tokens, output_tokens = await _complete(prompt, client, provider, model, max_tokens=400)
+    return text, input_tokens, output_tokens
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
