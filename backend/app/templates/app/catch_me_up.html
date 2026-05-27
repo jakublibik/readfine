@@ -264,7 +264,7 @@
 
 {% block scripts %}
 <div id="period-descs-data" hidden aria-hidden="true">{{ period_descs | default({}) | tojson }}</div>
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
 (function () {
 
   var PERIOD_DESCS = JSON.parse(document.getElementById('period-descs-data').textContent);

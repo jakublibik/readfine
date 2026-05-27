@@ -254,7 +254,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
 (function () {
   var cs;
   try { cs = localStorage.getItem('colorScheme'); } catch(e) {}

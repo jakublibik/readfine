@@ -71,7 +71,7 @@
       If the preview shows too few or wrong articles, tell the AI: <em>"that selector returns wrong results, suggest an alternative"</em>.
     </p>
   </div>
-  <script>document.getElementById('copy-prompt-btn').addEventListener('click',function(){navigator.clipboard.writeText(document.getElementById('ai-prompt').value).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000);});});</script>
+  <script nonce="{{ request.state.csp_nonce }}">document.getElementById('copy-prompt-btn').addEventListener('click',function(){navigator.clipboard.writeText(document.getElementById('ai-prompt').value).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000);});});</script>
   {% endif %}
 
   <div>

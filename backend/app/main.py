@@ -1,5 +1,6 @@
 import asyncio
 import re
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -93,16 +94,16 @@ def create_app() -> FastAPI:
     # Security headers
     @app.middleware("http")
     async def security_headers(request, call_next):
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         if not settings.debug:
-            # Note: <script type="application/json"> is a data block, not executable —
-            # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-eval' 'sha256-0uxrvilPUJCT3k/+dqd7J1+BNEI+pjD5pHGdBigJAS0=' 'sha256-Ndjk6JNMLJ7YWddVtAwiNzMrOWCG3u03r3HXuWjNL/0=' 'sha256-yF/AgXJr5eU+0PI4tdElAq5mc3MPZWQhf3eCtLYeOYA=' 'sha256-K6rirCj5yHt397t8MrdBWlD202RTOrsMEf6GnkICoXg=' 'sha256-Qg3X8MilaCm0DyUmYgpGr6Ak7XcyNG4P7fYBbx1w4HE='; "  # unsafe-eval: htmx.js; hashes: main.html, share.html, preferences.html, scrape_setup.html, catch_me_up.html; scope_selector.html → external JS
+                f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
                 "img-src * data:; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self';"
