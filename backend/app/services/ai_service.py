@@ -416,7 +416,7 @@ async def catch_me_up(
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
     text, input_tokens, output_tokens = await _complete(
-        full_prompt, client, provider, model, max_tokens=1500
+        full_prompt, client, provider, model, max_tokens=8000
     )
     return text, input_tokens, output_tokens
 
