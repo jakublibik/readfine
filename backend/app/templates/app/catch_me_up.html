@@ -471,7 +471,7 @@
       // Re-init checkboxes
       var allCb = document.getElementById('scope-all');
       var items = document.querySelectorAll('input.scope-item-cb[data-selector="scope"]');
-      items.forEach(function (cb) { cb.checked = false; cb.disabled = false; });
+      items.forEach(function (cb) { cb.checked = false; cb.style.opacity = ''; });
       if (cfg.scope_include) {
         try {
           var selected = JSON.parse(cfg.scope_include);
@@ -483,7 +483,7 @@
         } catch (e) {}
       } else {
         if (allCb) allCb.checked = true;
-        items.forEach(function (cb) { cb.disabled = true; });
+        items.forEach(function (cb) { cb.style.opacity = '0.35'; });
       }
     }
 
