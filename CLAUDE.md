@@ -47,6 +47,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Filter scope S2: scope_include/scope_except → JSONB
 - **OPML export scrape feedů**: OPML standard CSS selektory nepodporuje — zvážit vlastní rozšíření formátu pro round-trip export/import scrape feedů
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
+- **Catch me up — user profile v promptu**: přidat volitelný checkbox "Use my reading profile" do catch me up formuláře — pokud `ai_preference_text` existuje, přidat ho do systémového promptu pro framing digestu. Výchozí vypnuté, zobrazovat jen pokud profil existuje. Poznámka: scoring + scope selector už pre-filtrují dle preferencí, profil přidá spíš framing než selekci.
 - **htmldate pro published_at**: integrovat `htmldate.find_date()` do `readable_service.py` — po úspěšné readable extraction spustit na stránce článku a aktualizovat `published_at`, pokud dosud nebylo nastaveno z listingu. Pomůže webům bez `<time datetime>` v kartičkách (Aktuálně, Respekt, Deník…). Nevyřeší weby se zakázaným readable. Závislost htmldate je tranzitivní přes trafilatura (uv add htmldate).
 - **robots.txt pro scrape feedy**: před scrapingem zkontrolovat robots.txt cílového webu (urllib.robotparser). Zvážit: snížení úspěšnosti vs. férovost vůči serverům. Readable extraction je jako browser reader mode — robots.txt typicky neřeší.
 - **Filter akce `archive`**: přidat jako akci filtru (vedle label, mark_read, star) — nastaví `is_archived = true` na `user_article_states`. Schéma, service i šablona filter_edit.

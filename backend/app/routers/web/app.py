@@ -97,6 +97,7 @@ async def main_app(
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
     chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
+    catchup_avail = _catchup_available(bool(ai_on), settings)
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -105,6 +106,7 @@ async def main_app(
         "reading_font_family": reading_font_family,
         "label_display": label_display,
         "chat_available": chat_available,
+        "catchup_available": catchup_avail,
         "open_article_id": open_article_id,
     })
 
@@ -218,6 +220,7 @@ async def htmx_sidebar(
     ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
     chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
+    catchup_avail = _catchup_available(bool(ai_on), settings)
 
     return templates.TemplateResponse(request, "app/partials/sidebar.html", {
         "user": user,
@@ -239,6 +242,7 @@ async def htmx_sidebar(
         "folder_total_counts": folder_total_counts,
         "pinned": pinned,
         "chat_available": chat_available,
+        "catchup_available": catchup_avail,
     })
 
 
@@ -1834,6 +1838,385 @@ async def htmx_ai_chat_clear(
         chat.updated_at = datetime.now(timezone.utc)
         await db.commit()
     return HTMLResponse(_render_chat_area(article_id, []))
+
+
+# ── Catch me up ──────────────────────────────────────────────────────────────
+
+def _catchup_available(ai_on: bool, settings: UserSettings | None) -> bool:
+    if not ai_on or not settings:
+        return False
+    return bool(settings.ai_fast_provider or settings.ai_quality_provider)
+
+
+def _scoring_available(ai_on: bool, settings: UserSettings | None) -> bool:
+    if not ai_on or not settings:
+        return False
+    return bool(settings.ai_scoring_enabled_default)
+
+
+@router.get("/app/catch-me-up", response_class=HTMLResponse)
+async def catchup_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.settings import AppSettings as _AS
+    from app.models.user import UserCatchupConfig
+    from app.services.ai_service import _DEFAULT_CATCHUP_PROMPT
+    from app.services.feed import list_user_feeds
+
+    ai_on = bool(await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1)))
+    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
+
+    if not _catchup_available(ai_on, settings):
+        return templates.TemplateResponse(request, "app/catch_me_up.html", {
+            "user": user,
+            "catchup_available": False,
+            "ai_scoring_available": False,
+            "user_feeds": [],
+            "saved_configs": [],
+        })
+
+    user_feeds_data = await list_user_feeds(user, db)
+    saved_configs = (await db.execute(
+        select(UserCatchupConfig)
+        .where(UserCatchupConfig.user_id == user.id)
+        .order_by(UserCatchupConfig.name)
+    )).scalars().all()
+
+    # Period descriptions with user timezone
+    from app.services.catchup_service import _period_to_start_dt
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    tz_str = settings.timezone if settings else "UTC"
+    try:
+        _tz = ZoneInfo(tz_str)
+    except ZoneInfoNotFoundError:
+        _tz = ZoneInfo("UTC")
+
+    def _period_desc(period: str) -> str:
+        start = _period_to_start_dt(period, tz_str).astimezone(_tz)
+        today_date = datetime.now(_tz).date()
+        days = (today_date - start.date()).days + 1
+        day_label = f"{days} day{'s' if days != 1 else ''}"
+        return f"from {start.strftime('%d.%m')} 00:00 · {day_label}"
+
+    period_descs = {p: _period_desc(p) for p in ("today", "yesterday", "7days")}
+
+    return templates.TemplateResponse(request, "app/catch_me_up.html", {
+        "user": user,
+        "catchup_available": True,
+        "ai_scoring_available": _scoring_available(ai_on, settings),
+        "user_feeds": user_feeds_data,
+        "saved_configs": saved_configs,
+        "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
+        "period_descs": period_descs,
+    })
+
+
+@router.get("/htmx/catch-me-up/count", response_class=HTMLResponse)
+async def htmx_catchup_count(
+    request: Request,
+    period: str = Query("7days"),
+    filter_status: str = Query("all"),
+    filter_labeled: bool = Query(False),
+    filter_score_min: float | None = Query(None),
+    scope_include: str | None = Query(None),
+    article_limit: int = Query(200),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    article_limit = max(1, min(article_limit, 500))
+    from app.services.catchup_service import fetch_catchup_articles
+
+    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
+    tz_str = settings.timezone if settings else "UTC"
+
+    articles = await fetch_catchup_articles(
+        user_id=user.id, tz_str=tz_str, db=db,
+        period=period, scope_include=scope_include,
+        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_score_min=filter_score_min,
+    )
+    count = len(articles)
+    if count > article_limit:
+        return HTMLResponse(f'<span>{count} articles <span class="text-gray-400">({article_limit} will be used)</span></span>')
+    return HTMLResponse(f'<span>{count} articles</span>')
+
+
+@router.get("/htmx/catch-me-up/cost", response_class=HTMLResponse)
+async def htmx_catchup_cost(
+    request: Request,
+    article_limit: int = Query(200),
+    model_slot: str = Query("fast"),
+    include_snippet: bool = Query(True),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    article_limit = max(1, min(article_limit, 500))
+    from app.services.catchup_service import estimate_catchup_tokens
+    from app.services.ai_service import get_ai_client
+    from app.services.stats_service import _calc_cost
+
+    try:
+        client, provider, model = await get_ai_client(user.id, model_slot, db)
+    except Exception:
+        return HTMLResponse('<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>')
+
+    input_tokens, output_tokens = estimate_catchup_tokens(article_limit, include_snippet)
+    cost = _calc_cost(model, input_tokens, output_tokens)
+    if cost is None:
+        return HTMLResponse("")
+
+    slot_label = "fast" if model_slot == "fast" else "quality"
+    return HTMLResponse(
+        f'<span class="text-gray-500 text-sm">Estimated cost: ~${cost:.4f} '
+        f'<span class="text-gray-400">({article_limit} articles × {slot_label} model)</span></span>'
+    )
+
+
+@router.post("/htmx/catch-me-up/generate", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_catchup)
+async def htmx_catchup_generate(
+    request: Request,
+    period: str = Form("7days"),
+    filter_status: str = Form("all"),
+    filter_labeled: bool = Form(False),
+    filter_score_min: float | None = Form(None),
+    scope_include: str | None = Form(None),
+    article_limit: int = Form(200),
+    model_slot: str = Form("fast"),
+    custom_prompt: str | None = Form(None),
+    include_snippet: str | None = Form(None),
+    config_id: int | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    include_snippet_bool = include_snippet == 'true'
+    article_limit = max(1, min(article_limit, 500))
+    from app.models.settings import AppSettings as _AS
+    from app.models.user import CatchupLog
+    from app.services.ai_service import catch_me_up, get_ai_client
+    from app.services.catchup_service import (
+        apply_catchup_limit, build_articles_meta, fetch_catchup_articles, validate_scope
+    )
+
+    ai_on = bool(await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1)))
+    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
+
+    if not _catchup_available(ai_on, settings):
+        return HTMLResponse('<div class="text-red-600 text-sm p-4">Catch me up is not available.</div>')
+
+    # Validate scope ownership
+    try:
+        await validate_scope(user.id, scope_include, db)
+    except ValueError as exc:
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Invalid scope: {html_module.escape(str(exc)[:200])}</div>')
+
+    tz_str = settings.timezone if settings else "UTC"
+    scoring_available = _scoring_available(ai_on, settings)
+
+    try:
+        articles = await fetch_catchup_articles(
+            user_id=user.id, tz_str=tz_str, db=db,
+            period=period, scope_include=scope_include,
+            filter_status=filter_status, filter_labeled=filter_labeled,
+            filter_score_min=filter_score_min,
+        )
+    except Exception as exc:
+        logger.exception("catchup: fetch failed for user %d", user.id)
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not fetch articles: {html_module.escape(str(exc)[:200])}</div>')
+
+    if not articles:
+        return HTMLResponse('<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>')
+
+    sampled = apply_catchup_limit(articles, article_limit, scoring_available)
+    articles_meta = build_articles_meta(sampled, include_snippet_bool)
+
+    try:
+        client, provider, model = await get_ai_client(user.id, model_slot, db)
+        prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else None
+        text, input_tokens, output_tokens = await catch_me_up(
+            articles_meta=articles_meta,
+            period=period,
+            client=client,
+            provider=provider,
+            model=model,
+            custom_prompt=prompt,
+        )
+    except Exception as exc:
+        logger.exception("catchup: AI generation failed for user %d", user.id)
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(str(exc)[:200])}</div>')
+
+    # Log the run
+    log = CatchupLog(
+        user_id=user.id,
+        config_id=config_id,
+        article_count=len(sampled),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=model,
+        provider=provider,
+        model_slot=model_slot,
+    )
+    db.add(log)
+    await db.commit()
+
+    rendered = _md_render(text)
+    return HTMLResponse(
+        f'<div class="prose prose-sm dark:prose-invert max-w-none">{rendered}</div>'
+    )
+
+
+# ── Catchup config CRUD ───────────────────────────────────────────────────────
+
+async def _catchup_configs_list_html(request: Request, user_id: int, db: AsyncSession) -> HTMLResponse:
+    from app.models.user import UserCatchupConfig
+    configs = (await db.execute(
+        select(UserCatchupConfig)
+        .where(UserCatchupConfig.user_id == user_id)
+        .order_by(UserCatchupConfig.name)
+    )).scalars().all()
+    return templates.TemplateResponse(request, "app/partials/catchup_configs_list.html", {
+        "saved_configs": configs,
+    })
+
+
+@router.post("/htmx/catchup-configs", response_class=HTMLResponse)
+async def htmx_catchup_config_create(
+    request: Request,
+    name: str = Form(...),
+    scope_include: str | None = Form(None),
+    period: str = Form("7days"),
+    filter_status: str = Form("all"),
+    filter_labeled: bool = Form(False),
+    filter_score_min: float | None = Form(None),
+    article_limit: int = Form(200),
+    model_slot: str = Form("fast"),
+    custom_prompt: str | None = Form(None),
+    include_snippet: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    include_snippet_bool = include_snippet == 'true'
+    article_limit = max(1, min(article_limit, 500))
+    from app.models.user import UserCatchupConfig
+    from app.services.catchup_service import validate_scope
+
+    try:
+        await validate_scope(user.id, scope_include, db)
+    except ValueError as exc:
+        return HTMLResponse(f'<div class="text-red-600 text-sm">Invalid scope: {html_module.escape(str(exc)[:200])}</div>', status_code=422)
+
+    clean_name = name.strip()[:100]
+    # Upsert by name — update existing config with same name, otherwise create new
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user.id,
+            UserCatchupConfig.name == clean_name,
+        )
+    )).scalar_one_or_none()
+
+    if config:
+        config.scope_include = scope_include
+        config.period = period
+        config.filter_status = filter_status
+        config.filter_labeled = filter_labeled
+        config.filter_score_min = filter_score_min
+        config.article_limit = article_limit
+        config.model_slot = model_slot
+        config.custom_prompt = custom_prompt
+        config.include_snippet = include_snippet_bool
+        config.updated_at = datetime.now(timezone.utc)
+    else:
+        config = UserCatchupConfig(
+            user_id=user.id,
+            name=clean_name,
+            scope_include=scope_include,
+            period=period,
+            filter_status=filter_status,
+            filter_labeled=filter_labeled,
+            filter_score_min=filter_score_min,
+            article_limit=article_limit,
+            model_slot=model_slot,
+            custom_prompt=custom_prompt,
+            include_snippet=include_snippet_bool,
+        )
+        db.add(config)
+
+    await db.commit()
+    return await _catchup_configs_list_html(request, user.id, db)
+
+
+@router.put("/htmx/catchup-configs/{config_id}", response_class=HTMLResponse)
+async def htmx_catchup_config_update(
+    config_id: int,
+    request: Request,
+    name: str = Form(...),
+    scope_include: str | None = Form(None),
+    period: str = Form("7days"),
+    filter_status: str = Form("all"),
+    filter_labeled: bool = Form(False),
+    filter_score_min: float | None = Form(None),
+    article_limit: int = Form(200),
+    model_slot: str = Form("fast"),
+    custom_prompt: str | None = Form(None),
+    include_snippet: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    include_snippet_bool = include_snippet == 'true'
+    article_limit = max(1, min(article_limit, 500))
+    from app.models.user import UserCatchupConfig
+    from app.services.catchup_service import validate_scope
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if not config:
+        return HTMLResponse("Not found", status_code=404)
+
+    try:
+        await validate_scope(user.id, scope_include, db)
+    except ValueError as exc:
+        return HTMLResponse(f'<div class="text-red-600 text-sm">Invalid scope: {html_module.escape(str(exc)[:200])}</div>', status_code=422)
+
+    config.name = name.strip()[:100]
+    config.scope_include = scope_include
+    config.period = period
+    config.filter_status = filter_status
+    config.filter_labeled = filter_labeled
+    config.filter_score_min = filter_score_min
+    config.article_limit = article_limit
+    config.model_slot = model_slot
+    config.custom_prompt = custom_prompt
+    config.include_snippet = include_snippet_bool
+    config.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    return await _catchup_configs_list_html(request, user.id, db)
+
+
+@router.delete("/htmx/catchup-configs/{config_id}", response_class=HTMLResponse)
+async def htmx_catchup_config_delete(
+    config_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.user import UserCatchupConfig
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if config:
+        await db.delete(config)
+        await db.commit()
+    return await _catchup_configs_list_html(request, user.id, db)
 
 
 @router.get("/share/{token}", response_class=HTMLResponse)

@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, ForeignKey, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -29,6 +29,8 @@ class User(Base):
     api_tokens: Mapped[list["ApiToken"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     article_states: Mapped[list["UserArticleState"]] = relationship(back_populates="user", cascade="all, delete-orphan")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="admin", foreign_keys="AuditLog.admin_id")
+    catchup_configs: Mapped[list["UserCatchupConfig"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    catchup_logs: Mapped[list["CatchupLog"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class UserSettings(Base):
@@ -68,6 +70,49 @@ class UserSettings(Base):
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")
+
+
+class UserCatchupConfig(Base):
+    __tablename__ = "user_catchup_configs"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_catchup_configs_user_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    scope_include: Mapped[str | None] = mapped_column(Text, nullable=True)
+    period: Mapped[str] = mapped_column(String(20), nullable=False, default="7days")
+    filter_status: Mapped[str] = mapped_column(String(20), nullable=False, default="all")
+    filter_labeled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    filter_score_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    article_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
+    model_slot: Mapped[str] = mapped_column(String(10), nullable=False, default="fast")
+    custom_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    include_snippet: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    user: Mapped["User"] = relationship(back_populates="catchup_configs")
+    logs: Mapped[list["CatchupLog"]] = relationship(back_populates="config", cascade="all, delete-orphan")
+
+
+class CatchupLog(Base):
+    __tablename__ = "catchup_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    config_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("user_catchup_configs.id", ondelete="SET NULL"), nullable=True)
+    article_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model_slot: Mapped[str] = mapped_column(String(10), nullable=False, default="fast")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    # Relationships
+    user: Mapped["User"] = relationship(back_populates="catchup_logs")
+    config: Mapped["UserCatchupConfig | None"] = relationship(back_populates="logs")
 
 
 # Import here to avoid circular imports

@@ -552,47 +552,11 @@ async def get_label_stats(user_id: int, db: AsyncSession, days: int = 30) -> Lab
 
 # ── AI cost stats (for Settings → AI) ────────────────────────────────────────
 
-_OUTPUT_COST_MULTIPLIER: dict[str, float] = {
-    # output / input price ratio per provider family
-    # Anthropic: output ~5x input for Haiku, ~5x for Sonnet, ~5x for Opus
-    "claude-haiku-4-5": 4.00,
-    "claude-haiku-3-5": 4.00,
-    "claude-sonnet-4-6": 5.00,
-    "claude-sonnet-3-5": 5.00,
-    "claude-opus-4-7": 5.00,
-    # OpenAI
-    "gpt-4o-mini": 4.00,
-    "gpt-4o": 4.00,
-    # Gemini
-    "gemini-2.0-flash": 4.00,
-    "gemini-2.0-flash-lite": 4.00,
-    "gemini-1.5-flash": 4.00,
-    "gemini-1.5-pro": 4.00,
-    "gemini-2.5-pro": 4.00,
-}
-
-_MODEL_ALIAS_MAP: dict[str, str] = {
-    "claude-haiku-4-5-20251001": "claude-haiku-4-5",
-    "claude-haiku-3-5-20241022": "claude-haiku-3-5",
-    "claude-sonnet-3-5-20241022": "claude-sonnet-3-5",
-    "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
-    "gpt-4o-2024-11-20": "gpt-4o",
-}
-
-_MODEL_INPUT_COST_PER_M: dict[str, float] = {
-    "claude-haiku-4-5": 0.80,
-    "claude-haiku-3-5": 0.80,
-    "claude-sonnet-4-6": 3.00,
-    "claude-sonnet-3-5": 3.00,
-    "claude-opus-4-7": 15.00,
-    "gpt-4o-mini": 0.15,
-    "gpt-4o": 2.50,
-    "gemini-2.0-flash": 0.10,
-    "gemini-2.0-flash-lite": 0.075,
-    "gemini-1.5-flash": 0.075,
-    "gemini-1.5-pro": 1.25,
-    "gemini-2.5-pro": 1.25,
-}
+from app.services.ai_service import (  # noqa: E402
+    _MODEL_ALIAS_MAP,
+    _MODEL_INPUT_COST_PER_M,
+    _OUTPUT_COST_MULTIPLIER,
+)
 
 
 def _calc_cost(model: str | None, input_tokens: int, output_tokens: int) -> float | None:
@@ -732,18 +696,59 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         trend_pct=_trend(chat_count, prev_chat_count),
     ))
 
-    # Catch me up placeholder
-    operation_rows.append(OperationCostRow(
-        operation="catch_me_up",
-        label="Catch me up",
-        slot="fast",
-        count=0,
-        input_tokens=0,
-        output_tokens=0,
-        est_cost=None,
-        trend_pct=None,
-        is_placeholder=True,
-    ))
+    # Catch me up — per slot from catchup_logs
+    async def _catchup_slot_stats(slot: str, period_cutoff: datetime) -> tuple[int, int, int]:
+        r = await db.execute(
+            text("""
+                SELECT COUNT(*),
+                       COALESCE(SUM(input_tokens), 0),
+                       COALESCE(SUM(output_tokens), 0)
+                FROM catchup_logs
+                WHERE user_id = :uid
+                  AND model_slot = :slot
+                  AND created_at >= :cutoff
+                  AND created_at < :end_cutoff
+            """),
+            {
+                "uid": user_id,
+                "slot": slot,
+                "cutoff": period_cutoff,
+                "end_cutoff": period_cutoff + timedelta(days=days),
+            },
+        )
+        row = r.one()
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+
+    for cu_slot, cu_model in (("fast", fast_model), ("quality", quality_model)):
+        cu_cnt, cu_inp, cu_out = await _catchup_slot_stats(cu_slot, cutoff)
+        prev_cu_cnt, _, _ = await _catchup_slot_stats(cu_slot, prev_cutoff)
+        # Cold start: no runs yet → estimated per-run cost
+        if cu_cnt == 0:
+            from app.services.catchup_service import estimate_catchup_tokens  # noqa: PLC0415
+            est_inp, est_out = estimate_catchup_tokens(200, include_snippet=True)
+            est = _calc_cost(cu_model, est_inp, est_out)
+            operation_rows.append(OperationCostRow(
+                operation=f"catch_me_up_{cu_slot}",
+                label=f"Catch me up ({cu_slot})",
+                slot=cu_slot,
+                count=0,
+                input_tokens=0,
+                output_tokens=0,
+                est_cost=est,
+                trend_pct=None,
+                is_placeholder=True,
+            ))
+        else:
+            operation_rows.append(OperationCostRow(
+                operation=f"catch_me_up_{cu_slot}",
+                label=f"Catch me up ({cu_slot})",
+                slot=cu_slot,
+                count=cu_cnt,
+                input_tokens=cu_inp,
+                output_tokens=cu_out,
+                est_cost=_calc_cost(cu_model, cu_inp, cu_out),
+                trend_pct=_trend(cu_cnt, prev_cu_cnt),
+            ))
 
     # Subtotals
     real_rows = [r for r in operation_rows if not r.is_placeholder]

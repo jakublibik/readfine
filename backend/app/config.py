@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     rate_limit_ai_summary: str = "15/minute"
     rate_limit_ai_context: str = "6/minute"
     rate_limit_ai_chat: str = "20/minute"
+    rate_limit_ai_catchup: str = "1/minute"
 
 
 settings = Settings()

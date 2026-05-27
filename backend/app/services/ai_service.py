@@ -20,8 +20,12 @@ PROVIDER_DOCS_URLS: dict[str, str] = {
 
 SUPPORTED_PROVIDERS = list(PROVIDER_DOCS_URLS.keys())
 
-# Input token cost in USD per 1M tokens (approximate, updated periodically)
-# Keys are model aliases; versioned IDs are mapped to their alias below.
+# Input token cost in USD per 1M tokens.
+# !! Update manually when providers change pricing !!
+# Last updated: 2026-05-27
+# Anthropic: https://www.anthropic.com/pricing
+# OpenAI:    https://openai.com/api/pricing
+# Gemini:    https://ai.google.dev/gemini-api/docs/pricing
 _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     # Anthropic
     "claude-haiku-4-5": 0.80,
@@ -47,6 +51,22 @@ _MODEL_ALIAS_MAP: dict[str, str] = {
     "claude-sonnet-3-5-20241022": "claude-sonnet-3-5",
     "gpt-4o-mini-2024-07-18": "gpt-4o-mini",
     "gpt-4o-2024-11-20": "gpt-4o",
+}
+
+# Output token cost = input cost × multiplier (output is more expensive than input)
+_OUTPUT_COST_MULTIPLIER: dict[str, float] = {
+    "claude-haiku-4-5": 4.00,
+    "claude-haiku-3-5": 4.00,
+    "claude-sonnet-4-6": 5.00,
+    "claude-sonnet-3-5": 5.00,
+    "claude-opus-4-7": 5.00,
+    "gpt-4o-mini": 4.00,
+    "gpt-4o": 4.00,
+    "gemini-2.0-flash": 4.00,
+    "gemini-2.0-flash-lite": 4.00,
+    "gemini-1.5-flash": 4.00,
+    "gemini-1.5-pro": 4.00,
+    "gemini-2.5-pro": 4.00,
 }
 
 # Approximate tokens per article for cost estimation
@@ -358,17 +378,47 @@ async def chat_with_article(
     raise ValueError(f"Unknown provider: {provider}")
 
 
-async def catch_me_up(articles_meta: list[dict], period: str, client, provider: str, model: str) -> str:
-    """Generate a catch-up digest grouped by topic."""
-    lines = [f"- [{a['feed']}] {a['title']} ({a['date']})" for a in articles_meta[:200]]
+_DEFAULT_CATCHUP_PROMPT = (
+    "Group the following articles by topic and write a concise digest. For each topic, "
+    "use a short heading and write 2–4 sentences summarizing the key developments. Adjust the "
+    "number of topics and sentences to what the content genuinely warrants.\n\n"
+    "Avoid filler, repetition, and invented information. Do not speculate beyond what the "
+    "articles suggest. Respond in the same language as the majority of the article titles. "
+    "You may use markdown (bold, lists) where it genuinely aids clarity."
+)
+
+
+async def catch_me_up(
+    articles_meta: list[dict],
+    period: str,
+    client,
+    provider: str,
+    model: str,
+    custom_prompt: str | None = None,
+) -> tuple[str, int, int]:
+    """Generate a catch-up digest grouped by topic.
+
+    Returns (text, input_tokens, output_tokens).
+    articles_meta items: {"feed": str, "title": str, "date": str, "snippet": str (optional)}
+    """
+    system_prompt = custom_prompt or _DEFAULT_CATCHUP_PROMPT
+
+    lines = []
+    for a in articles_meta:
+        line = f"- [{a['feed']}] {a['title']} ({a['date']})"
+        snippet = a.get("snippet", "")
+        if snippet:
+            line += f" — {snippet}"
+        lines.append(line)
+
     article_list = "\n".join(lines)
-    prompt = (
-        f"Here are article headlines from the past {period}. "
-        f"Group them by topic and write a brief digest (2–5 sentences per topic). "
-        f"Focus on what's important.\n\n{article_list}"
+    user_prompt = f"Articles from the past {period}:\n\n{article_list}"
+
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
+    text, input_tokens, output_tokens = await _complete(
+        full_prompt, client, provider, model, max_tokens=1500
     )
-    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=1000)
-    return text
+    return text, input_tokens, output_tokens
 
 
 async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:

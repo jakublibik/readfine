@@ -106,6 +106,16 @@
           {% include "app/partials/user_menu_items.html" %}
         </div>
       </div>
+      {% if catchup_available %}
+      <a href="/app/catch-me-up"
+         class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 cursor-pointer ml-1"
+         title="Catch me up">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M13 10V3L4 14h7v7l9-11h-7z"/>
+        </svg>
+      </a>
+      {% endif %}
       {% if chat_available %}
       <button id="sidebar-chat-btn"
               class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 cursor-pointer bg-transparent border-0 ml-1"

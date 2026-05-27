@@ -39,10 +39,15 @@
       <tr {% if op.is_placeholder %}class="opacity-40"{% endif %}>
         <td class="py-2 text-gray-700">
           {{ op.label }}
-          {% if op.slot %}<span class="text-xs text-gray-400">({{ op.slot }})</span>{% endif %}
+          {% if op.slot and not op.operation.startswith("catch_me_up") %}<span class="text-xs text-gray-400">({{ op.slot }})</span>{% endif %}
         </td>
         {% if op.is_placeholder %}
-        <td class="py-2 text-right text-gray-400 text-xs" colspan="5">coming in step 6</td>
+        <td class="py-2 text-right text-gray-400 text-xs" colspan="3">no runs yet</td>
+        <td class="py-2 text-right text-gray-400 text-xs">
+          {% if op.est_cost is not none %}~${{ "%.4f"|format(op.est_cost) }}<span class="text-[10px] ml-0.5">est.</span>
+          {% else %}—{% endif %}
+        </td>
+        <td></td>
         {% elif op.operation == "chat" %}
         <td class="py-2 text-right text-gray-600">{{ op.count }} msg</td>
         <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
