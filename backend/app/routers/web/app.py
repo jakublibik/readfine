@@ -1949,11 +1949,16 @@ async def htmx_catchup_cost(
     article_limit: int = Query(500),
     model_slot: str = Query("fast"),
     include_snippet: bool = Query(True),
+    period: str = Query("7days"),
+    filter_status: str = Query("all"),
+    filter_labeled: bool = Query(False),
+    filter_score_min: float | None = Query(None),
+    scope_include: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     article_limit = max(1, min(article_limit, 500))
-    from app.services.catchup_service import estimate_catchup_tokens
+    from app.services.catchup_service import estimate_catchup_tokens, fetch_catchup_articles
     from app.services.ai_service import get_ai_client
     from app.services.stats_service import _calc_cost
 
@@ -1962,7 +1967,17 @@ async def htmx_catchup_cost(
     except Exception:
         return HTMLResponse('<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>')
 
-    input_tokens, output_tokens = estimate_catchup_tokens(article_limit, include_snippet)
+    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
+    tz_str = settings.timezone if settings else "UTC"
+    articles = await fetch_catchup_articles(
+        user_id=user.id, tz_str=tz_str, db=db,
+        period=period, scope_include=scope_include,
+        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_score_min=filter_score_min,
+    )
+    effective_count = min(len(articles), article_limit)
+
+    input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet)
     cost = _calc_cost(model, input_tokens, output_tokens)
     if cost is None:
         return HTMLResponse("")
@@ -1970,7 +1985,7 @@ async def htmx_catchup_cost(
     slot_label = "fast" if model_slot == "fast" else "quality"
     return HTMLResponse(
         f'<span class="text-gray-500 text-sm">Estimated cost: ~${cost:.4f} '
-        f'<span class="text-gray-400">({article_limit} articles × {slot_label} model)</span></span>'
+        f'<span class="text-gray-400">({effective_count} articles × {slot_label} model)</span></span>'
     )
 
 

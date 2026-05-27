@@ -343,12 +343,7 @@
   function triggerCostRefresh() {
     clearTimeout(costTimer);
     costTimer = setTimeout(function () {
-      var form = document.getElementById('catchup-form');
-      var fd = new FormData(form);
-      var limit = fd.get('article_limit') || '500';
-      var slot = fd.get('model_slot') || 'fast';
-      var snippet = fd.has('include_snippet') ? 'true' : 'false';
-      var qs = 'article_limit=' + limit + '&model_slot=' + slot + '&include_snippet=' + snippet;
+      var qs = buildQueryString();
       htmx.ajax('GET', '/htmx/catch-me-up/cost?' + qs, {
         target: '#catchup-cost', swap: 'innerHTML'
       });
