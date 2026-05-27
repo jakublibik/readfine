@@ -263,7 +263,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script type="application/json" id="period-descs-data">{{ period_descs | default({}) | tojson }}</script>
+<div id="period-descs-data" hidden aria-hidden="true">{{ period_descs | default({}) | tojson }}</div>
 <script>
 (function () {
 

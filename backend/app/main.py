@@ -102,7 +102,7 @@ def create_app() -> FastAPI:
             # it is NOT covered by script-src and does not require unsafe-inline.
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-eval' 'sha256-0uxrvilPUJCT3k/+dqd7J1+BNEI+pjD5pHGdBigJAS0=' 'sha256-Ndjk6JNMLJ7YWddVtAwiNzMrOWCG3u03r3HXuWjNL/0=' 'sha256-yF/AgXJr5eU+0PI4tdElAq5mc3MPZWQhf3eCtLYeOYA=' 'sha256-K6rirCj5yHt397t8MrdBWlD202RTOrsMEf6GnkICoXg=' 'sha256-Q8Zlqz4i97vmfKzpNOgDaGfkYpIKtKxHrdRVMP9IYxg=' 'sha256-Qg3X8MilaCm0DyUmYgpGr6Ak7XcyNG4P7fYBbx1w4HE='; "  # unsafe-eval: htmx.js; hashes: main.html, share.html, preferences.html, scrape_setup.html, catch_me_up.html (×2); scope_selector.html → external JS
+                "script-src 'self' 'unsafe-eval' 'sha256-0uxrvilPUJCT3k/+dqd7J1+BNEI+pjD5pHGdBigJAS0=' 'sha256-Ndjk6JNMLJ7YWddVtAwiNzMrOWCG3u03r3HXuWjNL/0=' 'sha256-yF/AgXJr5eU+0PI4tdElAq5mc3MPZWQhf3eCtLYeOYA=' 'sha256-K6rirCj5yHt397t8MrdBWlD202RTOrsMEf6GnkICoXg=' 'sha256-Qg3X8MilaCm0DyUmYgpGr6Ak7XcyNG4P7fYBbx1w4HE='; "  # unsafe-eval: htmx.js; hashes: main.html, share.html, preferences.html, scrape_setup.html, catch_me_up.html; scope_selector.html → external JS
                 "img-src * data:; "
                 "style-src 'self' 'unsafe-inline'; "
                 "connect-src 'self';"
