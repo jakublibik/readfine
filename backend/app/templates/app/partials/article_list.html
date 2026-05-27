@@ -29,4 +29,4 @@
   </div>
 {% endif %}
 
-<div id="article-list-cfg" hidden aria-hidden="true">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}, "density": {{ density | default("comfortable") | tojson }}, "labelDisplay": {{ label_display | default("indicator") | tojson }}, "titleBarCount": {{ title_bar_count | tojson }}, "titleBarCountType": {{ title_bar_count_type | tojson }}}</div>
+<script type="application/json" id="article-list-cfg" nonce="{{ request.state.csp_nonce }}">{"markReadOnScroll": {{ mark_read_on_scroll | tojson }}, "density": {{ density | default("comfortable") | tojson }}, "labelDisplay": {{ label_display | default("indicator") | tojson }}, "titleBarCount": {{ title_bar_count | tojson }}, "titleBarCountType": {{ title_bar_count_type | tojson }}}</script>

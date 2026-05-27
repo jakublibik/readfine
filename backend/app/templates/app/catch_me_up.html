@@ -263,7 +263,7 @@
 {% endblock %}
 
 {% block scripts %}
-<div id="period-descs-data" hidden aria-hidden="true">{{ period_descs | default({}) | tojson }}</div>
+<script type="application/json" id="period-descs-data" nonce="{{ request.state.csp_nonce }}">{{ period_descs | default({}) | tojson }}</script>
 <script nonce="{{ request.state.csp_nonce }}">
 (function () {
 
