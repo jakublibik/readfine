@@ -2,7 +2,7 @@
   {% if user_feeds %}
     {% set ns = namespace(current_folder=none) %}
     <div class="overflow-x-auto">
-    <table class="min-w-full text-sm">
+    <table class="w-full text-sm">
       <thead class="bg-gray-50 border-b border-gray-200">
         <tr>
           <th class="text-left pr-2 py-2 text-xs font-medium text-gray-500">Feed</th>
@@ -49,8 +49,8 @@
             </tr>
           {% endif %}
           <tr class="{% if uf.feed.status == 'error' %}bg-red-50{% elif uf.feed.status == 'disabled' %}bg-gray-50{% endif %}">
-            <td class="pr-2 py-2 w-full max-w-0">
-              <div class="flex items-center gap-2 min-w-[260px]">
+            <td class="pr-2 py-2 w-full max-w-0 min-w-[260px]">
+              <div class="flex items-center gap-2">
                 {% if uf.feed.favicon_url %}
                   <img src="{{ uf.feed.favicon_url }}" alt="" class="w-4 h-4 flex-shrink-0">
                 {% else %}
