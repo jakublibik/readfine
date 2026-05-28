@@ -1356,22 +1356,39 @@ document.addEventListener('click', function (e) {
   }
 });
 
-// ── Inline confirm (replaces native confirm() dialogs) ────────────────────
+// ── Swap confirm: two-click destructive action without layout shift ───────
+// First click arms the button (changes text + style); second click fires.
+// Disarm on outside click or 3.5s timeout. Works with htmx by stopping the
+// first click in capture phase, so htmx's bubble listener never sees it.
 document.addEventListener('click', function (e) {
-  var trigger = e.target.closest('.inline-confirm-trigger');
-  if (trigger) {
-    var wrap = trigger.closest('.inline-confirm');
-    trigger.classList.add('hidden');
-    wrap.querySelector('.inline-confirm-ask').classList.remove('hidden');
-    return;
+  var btn = e.target.closest('.swap-confirm');
+  if (!btn) return;
+  if (btn.dataset.armed === '1') return;
+  e.stopPropagation();
+  e.preventDefault();
+  btn.dataset.armed = '1';
+  btn.dataset.origText = btn.textContent;
+  btn.dataset.origClass = btn.className;
+  btn.textContent = btn.dataset.confirmText || 'Confirm';
+  if (btn.dataset.confirmClass) {
+    btn.className = btn.dataset.confirmClass.trim() + ' swap-confirm';
   }
-  var cancel = e.target.closest('.inline-confirm-cancel');
-  if (cancel) {
-    var wrap = cancel.closest('.inline-confirm');
-    wrap.querySelector('.inline-confirm-ask').classList.add('hidden');
-    wrap.querySelector('.inline-confirm-trigger').classList.remove('hidden');
-  }
-});
+
+  var timer;
+  var disarm = function () {
+    if (btn.dataset.armed !== '1') return;
+    btn.dataset.armed = '';
+    btn.textContent = btn.dataset.origText;
+    btn.className = btn.dataset.origClass;
+    clearTimeout(timer);
+    document.removeEventListener('click', outside, true);
+  };
+  var outside = function (ev) {
+    if (!btn.contains(ev.target)) disarm();
+  };
+  timer = setTimeout(disarm, 3500);
+  setTimeout(function () { document.addEventListener('click', outside, true); }, 0);
+}, true);
 
 // ── Color swatches (label color picker) ───────────────────────────────────
 document.addEventListener('click', function (e) {

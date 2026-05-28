@@ -16,14 +16,12 @@
     </div>
     <form hx-post="/settings/tokens/{{ token.id }}/revoke"
           hx-target="#tokens-list"
-          class="inline-confirm inline">
+          class="inline">
       <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
-      <button type="button" class="inline-confirm-trigger text-xs text-red-600 hover:text-red-800 hover:underline">Revoke</button>
-      <span class="inline-confirm-ask hidden inline-flex items-center gap-1.5">
-        <span class="text-xs text-gray-500">Revoke?</span>
-        <button type="submit" class="text-xs text-red-600 hover:text-red-800 font-medium">Yes</button>
-        <button type="button" class="inline-confirm-cancel text-xs text-gray-400 hover:text-gray-600">No</button>
-      </span>
+      <button type="submit"
+              class="swap-confirm text-xs text-red-600 hover:text-red-800 hover:underline"
+              data-confirm-text="Confirm"
+              data-confirm-class="text-xs text-red-600 font-medium hover:text-red-800">Revoke</button>
     </form>
   </li>
   {% endfor %}
