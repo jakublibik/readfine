@@ -4,7 +4,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (!tabFeeds || !tabStats) return;
 
   var activeClasses = ['bg-white', 'dark:bg-gray-700', 'shadow-sm', 'text-gray-900', 'dark:text-gray-100'];
-  var inactiveClasses = ['text-gray-500', 'dark:text-gray-400'];
+  var inactiveClasses = ['text-gray-500', 'dark:text-gray-400', 'hover:bg-white', 'dark:hover:bg-gray-700', 'hover:shadow-sm'];
 
   tabFeeds.addEventListener('click', function () {
     tabFeeds.classList.add(...activeClasses);
