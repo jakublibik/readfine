@@ -1,13 +1,12 @@
 import json
-import mistune
 from markupsafe import Markup
 from fastapi.templating import Jinja2Templates
 
+from app.utils.markdown import md_render
+
 templates = Jinja2Templates(directory="app/templates")
 
-_md_render = mistune.create_markdown(escape=True)
-
-templates.env.filters["markdown"] = lambda text: Markup(_md_render(text or ""))
+templates.env.filters["markdown"] = lambda text: Markup(md_render(text or ""))
 
 
 def _catchup_config_json(cfg) -> str:
@@ -29,6 +28,19 @@ def _catchup_config_json(cfg) -> str:
 
 
 templates.env.filters["catchup_config_json"] = _catchup_config_json
+
+
+def _parse_json_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        result = json.loads(value)
+        return result if isinstance(result, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+templates.env.filters["parse_json_list"] = _parse_json_list
 
 _ai_enabled: bool = False
 

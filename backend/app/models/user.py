@@ -91,6 +91,17 @@ class UserCatchupConfig(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
+    # Briefing (scheduled email digest)
+    briefing_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    briefing_interval: Mapped[str | None] = mapped_column(String(10), nullable=True)   # 'daily' | 'weekly'
+    briefing_day: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)       # 0=Mon … 6=Sun
+    briefing_time: Mapped[str | None] = mapped_column(String(5), nullable=True)         # 'HH:MM' user tz
+    briefing_recipients: Mapped[str | None] = mapped_column(Text, nullable=True)        # JSON array of extra emails
+    briefing_last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    briefing_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    briefing_retry_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    briefing_next_send_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     user: Mapped["User"] = relationship(back_populates="catchup_configs")
     logs: Mapped[list["CatchupLog"]] = relationship(back_populates="config", cascade="all, delete-orphan")

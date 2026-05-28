@@ -692,6 +692,101 @@ document.addEventListener('keydown', function (e) {
   }
 });
 
+// ── Briefing modal close via HX-Trigger ───────────────────────────────────
+document.addEventListener('closeBriefingModal', function () {
+  if (typeof closeBriefingModal === 'function') closeBriefingModal();
+});
+
+// ── Config menu ────────────────────────────────────────────────────────────
+function closeAllConfigMenus() {
+  document.querySelectorAll('[id^="config-menu-"]:not([id*="container"])').forEach(function (m) {
+    m.classList.add('hidden');
+  });
+}
+
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('[id^="config-menu-container-"]')) {
+    closeAllConfigMenus();
+  }
+});
+
+function startConfigRename(configId, currentName) {
+  closeAllConfigMenus();
+  var li = document.getElementById('catchup-config-' + configId);
+  if (!li) return;
+  var nameBtn = li.querySelector('[data-action="load-catchup-config"]');
+  if (!nameBtn) return;
+  var originalHtml = nameBtn.outerHTML;
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.value = currentName;
+  input.style.cssText = 'flex:1;min-width:0;font-size:0.875rem;border:1px solid #60a5fa;border-radius:0.25rem;padding:1px 0 1px 2px;outline:none;';
+  input.id = 'rename-input-' + configId;
+
+  var saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>';
+  saveBtn.style.cssText = 'flex-shrink:0;color:#2563eb;background:transparent;border:none;cursor:pointer;padding:0;line-height:0;';
+  saveBtn.dataset.action = 'save-config-rename';
+  saveBtn.dataset.configId = configId;
+  saveBtn.title = 'Save';
+
+  var wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;align-items:center;gap:2px;flex:1;min-width:0;';
+  wrapper.id = 'rename-wrapper-' + configId;
+  wrapper.appendChild(input);
+  wrapper.appendChild(saveBtn);
+
+  nameBtn.replaceWith(wrapper);
+  input.focus();
+  input.select();
+
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); saveConfigRename(configId); }
+    if (e.key === 'Escape') { cancelConfigRename(configId, originalHtml); }
+  });
+  input.addEventListener('blur', function (e) {
+    setTimeout(function () {
+      var w = document.getElementById('rename-wrapper-' + configId);
+      if (w && !w.contains(document.activeElement)) {
+        cancelConfigRename(configId, originalHtml);
+      }
+    }, 150);
+  });
+}
+
+function cancelConfigRename(configId, originalHtml) {
+  var wrapper = document.getElementById('rename-wrapper-' + configId);
+  if (!wrapper) return;
+  var tmp = document.createElement('div');
+  tmp.innerHTML = originalHtml;
+  wrapper.replaceWith(tmp.firstChild);
+}
+
+function saveConfigRename(configId) {
+  var input = document.getElementById('rename-input-' + configId);
+  if (!input) return;
+  var newName = input.value.trim();
+  if (!newName) { input.focus(); return; }
+
+  var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
+  var form = new FormData();
+  form.append('name', newName);
+
+  fetch('/htmx/catchup-configs/' + configId + '/rename', {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'x-csrftoken': csrf, 'HX-Request': 'true' },
+    body: form,
+  }).then(function (resp) {
+    return resp.text();
+  }).then(function (html) {
+    var wrapper = document.getElementById('catchup-configs-list-wrapper');
+    if (wrapper) { wrapper.innerHTML = html; htmx.process(wrapper); }
+  });
+}
+
 // ── data-action delegation ─────────────────────────────────────────────────
 document.addEventListener('click', function (e) {
   var el = e.target.closest('[data-action]');
@@ -704,6 +799,36 @@ document.addEventListener('click', function (e) {
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
     htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+    return;
+  }
+  if (action === 'toggle-config-menu') {
+    var id = el.dataset.configId;
+    var menu = document.getElementById('config-menu-' + id);
+    if (!menu) return;
+    var wasHidden = menu.classList.contains('hidden');
+    closeAllConfigMenus();
+    if (wasHidden) menu.classList.remove('hidden');
+    return;
+  }
+  if (action === 'rename-config') {
+    startConfigRename(el.dataset.configId, el.dataset.configName);
+    return;
+  }
+  if (action === 'save-config-rename') {
+    saveConfigRename(el.dataset.configId);
+    return;
+  }
+  if (action === 'delete-config') {
+    var id = el.dataset.configId;
+    var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
+    fetch('/htmx/catchup-configs/' + id, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: { 'x-csrftoken': csrf, 'HX-Request': 'true' },
+    }).then(function (resp) { return resp.text(); }).then(function (html) {
+      var wrapper = document.getElementById('catchup-configs-list-wrapper');
+      if (wrapper) { wrapper.innerHTML = html; htmx.process(wrapper); }
+    });
     return;
   }
 });

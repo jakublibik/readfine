@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Catch me up – Readfine{% endblock %}
+{% block title %}Catch me up & Briefings – Readfine{% endblock %}
 
 {% block content %}
 <div class="min-h-screen bg-gray-50">
@@ -11,7 +11,7 @@
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
       </svg>
     </a>
-    <h1 class="text-base font-semibold text-gray-800 -translate-y-0.5">Catch me up</h1>
+    <h1 class="text-base font-semibold text-gray-800 -translate-y-0.5">Catch me up & Briefings</h1>
   </header>
 
   {% if not catchup_available %}
@@ -81,7 +81,7 @@
               <input type="radio" name="period" value="{{ val }}" class="sr-only peer"
                      {% if loop.last %}checked{% endif %}>
               <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
-                           peer-checked:bg-blue-50 peer-checked:border-blue-400 peer-checked:text-blue-700
+                           peer-checked:bg-blue-900 peer-checked:text-white peer-checked:border-blue-900
                            hover:bg-gray-50 transition-colors">
                 {{ label }}
               </span>
@@ -110,8 +110,8 @@
                 <label>
                   <input type="radio" name="filter_status" value="{{ val }}" class="sr-only peer"
                          {% if val == "all" %}checked{% endif %}>
-                  <span class="text-xs py-1 px-2 rounded border border-gray-200 bg-white cursor-pointer
-                               peer-checked:bg-blue-50 peer-checked:border-blue-400 peer-checked:text-blue-700
+                  <span class="text-xs py-1 px-2 rounded border border-gray-200 cursor-pointer
+                               peer-checked:bg-blue-900 peer-checked:text-white peer-checked:border-blue-900
                                hover:bg-gray-100 block transition-colors">
                     {{ lbl }}
                   </span>
@@ -166,7 +166,7 @@
               <input type="radio" name="model_slot" value="{{ val }}" class="sr-only peer"
                      {% if val == "fast" %}checked{% endif %}>
               <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
-                           peer-checked:bg-blue-50 peer-checked:border-blue-400 peer-checked:text-blue-700
+                           peer-checked:bg-blue-900 peer-checked:text-white peer-checked:border-blue-900
                            hover:bg-gray-50 transition-colors">
                 {{ lbl }}
               </span>
@@ -217,7 +217,7 @@
                 hx-disabled-elt="this"
                 hx-on::before-request="document.getElementById('catchup-result').closest('.relative').scrollIntoView({ behavior: 'smooth', block: 'start' })"
                 class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-          Generate digest
+          Generate briefing
         </button>
 
       </form>
@@ -247,12 +247,12 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
           </svg>
-          Generating digest…
+          Generating briefing…
         </div>
       </div>
 
       <div id="catchup-result" class="text-sm text-gray-400">
-        Configure filters and click <em>Generate digest</em>.
+        Configure filters and click <em>Generate briefing</em>.
       </div>
     </div>
 
@@ -530,4 +530,69 @@
 })();
 </script>
 <script src="/static/js/scope-selector.js"></script>
+
+{# Briefing modal overlay #}
+<div id="briefing-modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center"
+     aria-modal="true" role="dialog">
+  <div class="absolute inset-0 bg-black/40" data-action="close-briefing-modal"></div>
+  <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+      <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100" id="briefing-modal-title">Briefing</h2>
+      <button data-action="close-briefing-modal" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div id="briefing-modal-content" class="px-5 py-4"></div>
+  </div>
+</div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  function openBriefingModal(configId, configName) {
+    var overlay = document.getElementById('briefing-modal-overlay');
+    var title = document.getElementById('briefing-modal-title');
+    if (title) title.textContent = 'Briefing — ' + configName;
+    if (overlay) overlay.classList.remove('hidden');
+    htmx.ajax('GET', '/htmx/catchup-configs/' + configId + '/briefing', {
+      target: '#briefing-modal-content',
+      swap: 'innerHTML'
+    });
+  }
+  function closeBriefingModal() {
+    var overlay = document.getElementById('briefing-modal-overlay');
+    if (overlay) overlay.classList.add('hidden');
+  }
+  window.openBriefingModal = openBriefingModal;
+  window.closeBriefingModal = closeBriefingModal;
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeBriefingModal();
+  });
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-action="close-briefing-modal"]')) {
+      closeBriefingModal();
+      return;
+    }
+    var opener = e.target.closest('[data-action="open-briefing-modal"]');
+    if (opener) {
+      openBriefingModal(opener.dataset.configId, opener.dataset.configName);
+    }
+  });
+
+  // Event delegation for briefing modal interactive fields (loaded via HTMX)
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el.dataset.action === 'toggle-briefing-fields') {
+      var fields = document.getElementById('briefing-fields');
+      if (fields) fields.classList.toggle('hidden', !el.checked);
+    } else if (el.dataset.action === 'toggle-briefing-day') {
+      var dayRow = document.getElementById('briefing-day-row');
+      if (dayRow) dayRow.classList.toggle('hidden', el.value !== 'weekly');
+    }
+  });
+})();
+</script>
 {% endblock %}

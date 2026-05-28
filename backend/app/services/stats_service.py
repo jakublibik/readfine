@@ -765,7 +765,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
             est = _calc_cost(cu_model, est_inp, est_out)
             operation_rows.append(OperationCostRow(
                 operation=f"catch_me_up_{cu_slot}",
-                label=f"Catch me up ({cu_slot})",
+                label=f"Catch me up & Briefings ({cu_slot})",
                 slot=cu_slot,
                 count=0,
                 input_tokens=0,
@@ -777,7 +777,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         else:
             operation_rows.append(OperationCostRow(
                 operation=f"catch_me_up_{cu_slot}",
-                label=f"Catch me up ({cu_slot})",
+                label=f"Catch me up & Briefings ({cu_slot})",
                 slot=cu_slot,
                 count=cu_cnt,
                 input_tokens=cu_inp,

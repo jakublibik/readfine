@@ -1,9 +1,7 @@
 """Web routes for the main application UI."""
 import asyncio
 import html as html_module
-import mistune as _mistune_module
-
-_md_render = _mistune_module.create_markdown(escape=True)
+from app.utils.markdown import md_render as _md_render
 import json
 import logging
 import secrets
@@ -1902,6 +1900,15 @@ async def catchup_page(
 
     period_descs = {p: _period_desc(p) for p in ("today", "yesterday", "7days")}
 
+    smtp_cfg = (await db.execute(
+        select(
+            _AS.smtp_host,
+            _AS.smtp_user,
+            _AS.smtp_from_email,
+        ).where(_AS.id == 1)
+    )).one_or_none()
+    smtp_available = bool(smtp_cfg and smtp_cfg[0] and smtp_cfg[2])
+
     return templates.TemplateResponse(request, "app/catch_me_up.html", {
         "user": user,
         "catchup_available": True,
@@ -1910,6 +1917,7 @@ async def catchup_page(
         "saved_configs": saved_configs,
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
         "period_descs": period_descs,
+        "smtp_available": smtp_available,
     })
 
 
@@ -2086,13 +2094,19 @@ async def htmx_catchup_generate(
 
 async def _catchup_configs_list_html(request: Request, user_id: int, db: AsyncSession) -> HTMLResponse:
     from app.models.user import UserCatchupConfig
+    from app.models.settings import AppSettings as _AS
     configs = (await db.execute(
         select(UserCatchupConfig)
         .where(UserCatchupConfig.user_id == user_id)
         .order_by(UserCatchupConfig.name)
     )).scalars().all()
+    smtp_cfg = (await db.execute(
+        select(_AS.smtp_host, _AS.smtp_from_email).where(_AS.id == 1)
+    )).one_or_none()
+    smtp_available = bool(smtp_cfg and smtp_cfg[0] and smtp_cfg[1])
     return templates.TemplateResponse(request, "app/partials/catchup_configs_list.html", {
         "saved_configs": configs,
+        "smtp_available": smtp_available,
     })
 
 
@@ -2128,11 +2142,12 @@ async def htmx_catchup_config_create(
             '<p class="text-yellow-600 text-sm mt-1">Configuration name cannot be empty.</p>',
             status_code=200,
         )
-    # Upsert by name — update existing config with same name, otherwise create new
+    # Upsert by (name, period) — allows same name with different period
     config = (await db.execute(
         select(UserCatchupConfig).where(
             UserCatchupConfig.user_id == user.id,
             UserCatchupConfig.name == clean_name,
+            UserCatchupConfig.period == period,
         )
     )).scalar_one_or_none()
 
@@ -2218,6 +2233,33 @@ async def htmx_catchup_config_update(
     return await _catchup_configs_list_html(request, user.id, db)
 
 
+@router.put("/htmx/catchup-configs/{config_id}/rename", response_class=HTMLResponse)
+async def htmx_catchup_config_rename(
+    config_id: int,
+    request: Request,
+    name: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.user import UserCatchupConfig
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if not config:
+        return HTMLResponse("Not found", status_code=404)
+
+    clean_name = name.strip()[:100]
+    if clean_name:
+        config.name = clean_name
+        config.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+    return await _catchup_configs_list_html(request, user.id, db)
+
+
 @router.delete("/htmx/catchup-configs/{config_id}", response_class=HTMLResponse)
 async def htmx_catchup_config_delete(
     config_id: int,
@@ -2237,6 +2279,186 @@ async def htmx_catchup_config_delete(
         await db.delete(config)
         await db.commit()
     return await _catchup_configs_list_html(request, user.id, db)
+
+
+@router.get("/htmx/catchup-configs/{config_id}/briefing", response_class=HTMLResponse)
+async def htmx_briefing_modal_get(
+    config_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.user import UserCatchupConfig
+    from app.models.settings import AppSettings as _AS
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if not config:
+        return HTMLResponse("Not found", status_code=404)
+
+    smtp_cfg = (await db.execute(
+        select(_AS.smtp_host, _AS.smtp_from_email).where(_AS.id == 1)
+    )).one_or_none()
+    smtp_available = bool(smtp_cfg and smtp_cfg[0] and smtp_cfg[1])
+
+    settings = (await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )).scalar_one_or_none()
+    tz_str = (settings.timezone if settings else None) or None
+
+    return templates.TemplateResponse(request, "app/partials/briefing_modal.html", {
+        "config": config,
+        "smtp_available": smtp_available,
+        "tz_str": tz_str,
+        "is_admin": user.role == "admin",
+    })
+
+
+@router.put("/htmx/catchup-configs/{config_id}/briefing", response_class=HTMLResponse)
+async def htmx_briefing_modal_save(
+    config_id: int,
+    request: Request,
+    briefing_enabled: bool = Form(False),
+    briefing_interval: str = Form("daily"),
+    briefing_day: int | None = Form(None),
+    briefing_time: str = Form("08:00"),
+    briefing_recipients: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import json as _json
+    from app.models.user import UserCatchupConfig
+    from app.services.briefing_service import compute_next_send_at
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if not config:
+        return HTMLResponse("Not found", status_code=404)
+
+    def _validation_error(msg: str) -> HTMLResponse:
+        return HTMLResponse(
+            f'<p class="text-red-600 text-sm">{msg}</p>',
+            headers={"HX-Retarget": "#briefing-form-error", "HX-Reswap": "innerHTML"},
+        )
+
+    # Validate interval
+    if briefing_interval not in ("daily", "weekly"):
+        return _validation_error("Invalid interval.")
+
+    # Validate day
+    if briefing_interval == "weekly":
+        if briefing_day is None or not (0 <= briefing_day <= 6):
+            return _validation_error("Invalid day of week.")
+    else:
+        briefing_day = None
+
+    # Validate time HH:MM
+    try:
+        h, m = int(briefing_time[:2]), int(briefing_time[3:5])
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError
+    except (ValueError, IndexError):
+        return _validation_error("Invalid time format (use HH:MM).")
+
+    # Validate extra recipients
+    extra_emails: list[str] = []
+    if briefing_recipients:
+        raw_emails = [e.strip() for e in briefing_recipients.split(",") if e.strip()]
+        if len(raw_emails) > 5:
+            return _validation_error("Maximum 5 additional recipients.")
+        import re as _re
+        _email_re = _re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+        for addr in raw_emails:
+            if not _email_re.match(addr):
+                return _validation_error(f"Invalid email address: {html_module.escape(addr)}")
+        extra_emails = raw_emails
+
+    settings = (await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )).scalar_one_or_none()
+    tz_str = (settings.timezone if settings else None) or "UTC"
+
+    config.briefing_enabled = briefing_enabled
+    config.briefing_interval = briefing_interval
+    config.briefing_day = briefing_day
+    config.briefing_time = briefing_time
+    config.briefing_recipients = _json.dumps(extra_emails) if extra_emails else None
+
+    if briefing_enabled:
+        config.briefing_next_send_at = compute_next_send_at(
+            briefing_interval, briefing_day, briefing_time, tz_str
+        )
+        config.briefing_retry_count = 0
+        config.briefing_last_error = None
+    else:
+        config.briefing_next_send_at = None
+        config.briefing_retry_count = 0
+
+    await db.commit()
+    response = await _catchup_configs_list_html(request, user.id, db)
+    response.headers["HX-Trigger"] = "closeBriefingModal"
+    return response
+
+
+@router.post("/htmx/catchup-configs/{config_id}/briefing/test", response_class=HTMLResponse)
+@limiter.limit("1/minute")
+async def htmx_briefing_test_send(
+    config_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    import smtplib
+    from app.models.user import UserCatchupConfig, UserSettings
+    from app.models.settings import AppSettings as _AS
+    from app.services.briefing_service import send_briefing
+
+    config = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.id == config_id,
+            UserCatchupConfig.user_id == user.id,
+        )
+    )).scalar_one_or_none()
+    if not config:
+        return HTMLResponse("Not found", status_code=404)
+
+    app_settings = (await db.execute(select(_AS).where(_AS.id == 1))).scalar_one_or_none()
+    if not app_settings or not app_settings.ai_enabled:
+        return HTMLResponse(
+            '<p class="text-red-600 text-sm">AI is disabled. Enable it in admin settings.</p>'
+        )
+    if not app_settings.smtp_host or not app_settings.smtp_from_email:
+        return HTMLResponse(
+            '<p class="text-red-600 text-sm">Email sending is not configured. Set up SMTP in Admin → Settings.</p>'
+        )
+
+    user_settings = (await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )).scalar_one_or_none()
+    user.settings = user_settings
+
+    try:
+        await send_briefing(config, user, db, app_settings, test_mode=True)
+    except smtplib.SMTPException as exc:
+        return HTMLResponse(
+            f'<p class="text-red-600 text-sm">SMTP error: {html_module.escape(str(exc)[:200])}</p>'
+        )
+    except Exception as exc:
+        return HTMLResponse(
+            f'<p class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:200])}</p>'
+        )
+
+    return HTMLResponse(
+        '<p class="text-green-600 text-sm font-medium">Test briefing sent successfully.</p>'
+    )
 
 
 @router.get("/share/{token}", response_class=HTMLResponse)

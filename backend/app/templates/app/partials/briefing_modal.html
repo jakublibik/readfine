@@ -1,0 +1,132 @@
+{% if not smtp_available %}
+<div class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+  {% if is_admin %}
+  Email sending is not configured.
+  <a href="/admin/settings" class="underline font-medium">Set it up in Admin → Settings.</a>
+  {% else %}
+  Email briefings are not available. Contact your administrator to set up email sending.
+  {% endif %}
+</div>
+{% else %}
+<form
+  hx-put="/htmx/catchup-configs/{{ config.id }}/briefing"
+  hx-target="#catchup-configs-list-wrapper"
+  hx-swap="innerHTML"
+  class="space-y-4"
+  id="briefing-form"
+>
+  {# Enable toggle #}
+  <label class="flex items-center gap-2 cursor-pointer">
+    <input type="checkbox" name="briefing_enabled" value="true"
+           {% if config.briefing_enabled %}checked{% endif %}
+           class="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+           id="briefing-enabled-toggle"
+           data-action="toggle-briefing-fields">
+    <span class="text-sm font-medium text-gray-700">Enable briefing</span>
+  </label>
+
+  <div id="briefing-fields" class="space-y-3 {% if not config.briefing_enabled %}hidden{% endif %}">
+
+    {# Interval + Day row #}
+    <div class="flex gap-3 items-end">
+      <div class="flex-1">
+        <label class="block text-xs font-medium text-gray-600 mb-1">Interval</label>
+        <select name="briefing_interval" id="briefing-interval"
+                data-action="toggle-briefing-day"
+                class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+          <option value="daily" {% if config.briefing_interval == 'daily' or not config.briefing_interval %}selected{% endif %}>Daily</option>
+          <option value="weekly" {% if config.briefing_interval == 'weekly' %}selected{% endif %}>Weekly</option>
+        </select>
+      </div>
+      <div id="briefing-day-row" class="flex-1 {% if config.briefing_interval != 'weekly' %}hidden{% endif %}">
+        <label class="block text-xs font-medium text-gray-600 mb-1">Day</label>
+        <select name="briefing_day" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
+          {% set day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] %}
+          {% for day in day_names %}
+          <option value="{{ loop.index0 }}" {% if config.briefing_day == loop.index0 %}selected{% endif %}>{{ day }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    {# Time #}
+    <div>
+      <label class="block text-xs font-medium text-gray-600 mb-1">Time</label>
+      <input type="text" name="briefing_time"
+             value="{{ config.briefing_time or '08:00' }}"
+             placeholder="HH:MM"
+             pattern="[0-2][0-9]:[0-5][0-9]"
+             maxlength="5"
+             class="border border-gray-300 rounded px-2 py-1.5 text-sm w-24">
+      <p class="text-xs text-gray-400 mt-1">
+        {% if tz_str %}
+          In your timezone: {{ tz_str }}
+        {% else %}
+          UTC &mdash; <a href="/settings/preferences" class="underline">set timezone in Settings → Preferences</a>
+        {% endif %}
+      </p>
+    </div>
+
+    {# Additional recipients — collapsible #}
+    <details class="text-sm" {% if config.briefing_recipients %}open{% endif %}>
+      <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">Additional recipients</summary>
+      <div class="mt-2">
+        <input type="text" name="briefing_recipients"
+               value="{% if config.briefing_recipients %}{{ config.briefing_recipients | parse_json_list | join(', ') }}{% endif %}"
+               placeholder="email1@example.com, email2@example.com"
+               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included.</p>
+      </div>
+    </details>
+
+    {# Status info #}
+    {% if config.briefing_last_sent_at or config.briefing_last_error %}
+    <div class="text-xs text-gray-400 space-y-0.5 border-t border-gray-100 pt-2">
+      {% if config.briefing_last_sent_at %}
+      <p>Last sent: {{ config.briefing_last_sent_at.strftime('%b %-d, %Y at %H:%M UTC') }}</p>
+      {% endif %}
+      {% if config.briefing_last_error %}
+      <p class="text-red-500">Last error: {{ config.briefing_last_error }}</p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+  </div>{# /briefing-fields #}
+
+  <div id="briefing-form-error"></div>
+
+  {# Buttons #}
+  <div class="flex items-center justify-between pt-1">
+    <div class="flex gap-2">
+      <button type="button" data-action="close-briefing-modal"
+              class="px-3 py-1.5 text-sm text-gray-600 hover:text-gray-800 border border-gray-300 rounded">
+        Cancel
+      </button>
+      <button type="submit"
+              class="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded">
+        Save
+      </button>
+    </div>
+  </div>
+
+</form>
+
+{# Test send — outside form to prevent hx-on::after-request bubbling to form #}
+<div class="flex items-center gap-3 pt-2 mt-2 border-t border-gray-100">
+  <button type="button"
+          hx-post="/htmx/catchup-configs/{{ config.id }}/briefing/test"
+          hx-target="#briefing-test-result"
+          hx-swap="innerHTML"
+          hx-disabled-elt="this"
+          hx-indicator="#briefing-test-spinner"
+          class="text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-50">
+    Send test now
+  </button>
+  <svg id="briefing-test-spinner" class="htmx-indicator w-4 h-4 text-gray-400 animate-spin flex-shrink-0"
+       fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+  </svg>
+  <div id="briefing-test-result"></div>
+</div>
+{% endif %}

@@ -198,6 +198,88 @@ async def _purge_old_articles() -> None:
         await purge_old_articles(session)
 
 
+async def _send_due_briefings() -> None:
+    """Job: send scheduled briefing emails for all due configs."""
+    import smtplib
+    if db.async_session_factory is None:
+        return
+
+    from app.models.user import UserCatchupConfig, User, UserSettings
+    from app.services.briefing_service import compute_next_send_at, send_briefing
+    from app.utils.smtp import send_email
+
+    # Load app settings and due config IDs in a short-lived session
+    async with db.async_session_factory() as session:
+        app_settings_row = (await session.execute(
+            select(AppSettings).where(AppSettings.id == 1)
+        )).scalar_one_or_none()
+
+        if not app_settings_row or not app_settings_row.ai_enabled:
+            return
+
+        now = datetime.now(timezone.utc)
+        due_ids = (await session.execute(
+            select(UserCatchupConfig.id).where(
+                UserCatchupConfig.briefing_enabled.is_(True),
+                UserCatchupConfig.briefing_next_send_at <= now,
+            )
+        )).scalars().all()
+
+    # Process each config in its own isolated session
+    for config_id in due_ids:
+        async with db.async_session_factory() as session:
+            config = (await session.execute(
+                select(UserCatchupConfig).where(UserCatchupConfig.id == config_id)
+            )).scalar_one_or_none()
+            if not config or not config.briefing_enabled:
+                continue
+
+            user = (await session.execute(
+                select(User).where(User.id == config.user_id)
+            )).scalar_one_or_none()
+            if not user:
+                continue
+
+            user_settings = (await session.execute(
+                select(UserSettings).where(UserSettings.user_id == user.id)
+            )).scalar_one_or_none()
+            user.settings = user_settings
+            tz_str = (user_settings.timezone if user_settings else None) or "UTC"
+
+            try:
+                await send_briefing(config, user, session, app_settings_row)
+            except smtplib.SMTPException as exc:
+                logger.error("Briefing SMTP error for config %d: %s", config_id, exc)
+                config.briefing_enabled = False
+                config.briefing_last_error = f"SMTP error: {exc}"
+                config.briefing_next_send_at = None
+                await session.commit()
+            except Exception as exc:
+                logger.error("Briefing error for config %d: %s", config_id, exc)
+                if config.briefing_retry_count == 0:
+                    config.briefing_retry_count = 1
+                    config.briefing_last_error = str(exc)
+                    config.briefing_next_send_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+                    await session.commit()
+                else:
+                    config.briefing_retry_count = 0
+                    config.briefing_last_error = str(exc)
+                    config.briefing_next_send_at = compute_next_send_at(
+                        config.briefing_interval, config.briefing_day,
+                        config.briefing_time or "08:00", tz_str
+                    )
+                    await session.commit()
+                    try:
+                        send_email(
+                            app_settings_row,
+                            user.email,
+                            f"Briefing failed: {config.name}",
+                            f"Your briefing '{config.name}' could not be sent after 2 attempts.\n\nError: {exc}\n\nYou can check and re-enable it in Catch me up & Briefings.",
+                        )
+                    except Exception:
+                        pass
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
     scheduler.add_job(
@@ -254,5 +336,14 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _send_due_briefings,
+        trigger="interval",
+        minutes=15,
+        id="send_due_briefings",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
     return scheduler
