@@ -3,8 +3,8 @@ document.addEventListener('DOMContentLoaded', function () {
   var tabStats = document.getElementById('tab-stats');
   if (!tabFeeds || !tabStats) return;
 
-  var activeClasses = ['bg-white', 'shadow-sm', 'text-gray-900'];
-  var inactiveClasses = ['text-gray-500'];
+  var activeClasses = ['bg-white', 'dark:bg-gray-700', 'shadow-sm', 'text-gray-900', 'dark:text-gray-100'];
+  var inactiveClasses = ['text-gray-500', 'dark:text-gray-400'];
 
   tabFeeds.addEventListener('click', function () {
     tabFeeds.classList.add(...activeClasses);

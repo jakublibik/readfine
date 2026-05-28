@@ -118,12 +118,12 @@
           hx-get="/settings/feeds-list"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
-          class="px-3 py-1 text-sm rounded bg-white shadow-sm text-gray-900 font-medium">Feeds</button>
+          class="px-3 py-1 text-sm rounded bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-gray-100 font-medium">Feeds</button>
   <button id="tab-stats"
           hx-get="/settings/feeds-stats-partial"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
-          class="px-3 py-1 text-sm rounded text-gray-500 font-medium hover:bg-white hover:shadow-sm">Stats</button>
+          class="px-3 py-1 text-sm rounded text-gray-500 dark:text-gray-400 font-medium hover:bg-white dark:hover:bg-gray-700 hover:shadow-sm">Stats</button>
 </div>
 <div id="feeds-list">
   {% include "settings/partials/feeds_list.html" %}
