@@ -60,6 +60,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Briefings — interval Monthly**: přidat měsíční interval do Catch me up & Briefings — vyžaduje novou periodu `30days` v `catchup_service.py`, řešení edge cases (překrývání period, day-of-month výběr 1–28 + "Last day of month").
 - **Mazání feedu/složky — cleanup scope**: při mazání feedu nebo složky zkontrolovat použití ve filtrech, `scope_include` catchup configs a briefing scope — upozornit uživatele a vyčistit scope ze všech míst. Systémové řešení napříč celou appkou.
 - **Admin — přehled briefing chyb**: tabulka v admin sekci zobrazující konfigurace kde `briefing_last_error IS NOT NULL` — sloupce: uživatel, název konfigurace, chyba, čas posledního pokusu. Pouze read-only přehled, oprava je na uživateli.
+- **Cache-busting pro statické soubory**: přidat query param s hashem (např. `?v={hash}`) k `tailwind.css` a JS souborům v `base.html`, aby se URL při každém buildu změnila a Cloudflare/browser nikdy neservíroval zastaralou verzi. Bez toho je nutné po každém deployi ručně purgovat Cloudflare cache (CSS má `max-age=14400`, tj. 4h). Implementace: hash souboru při startu FastAPI → kontextová proměnná v Jinja2 (`{{ static_url('css/tailwind.css') }}`).
 
 ## Testování
 - Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů
