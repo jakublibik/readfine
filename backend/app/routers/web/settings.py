@@ -550,12 +550,14 @@ async def settings_scrape_ai_selector(
 
     updated_history = history + [{"selector": selector, "feedback": ""}]
     updated_history_json = _json.dumps(updated_history)
+    prompt_text = build_selector_prompt(url, html_sample, history)
 
     from fastapi.responses import HTMLResponse as _HR
     response = templates.TemplateResponse(request, "settings/partials/scrape_ai_result.html", {
         "selector": selector,
         "updated_history_json": updated_history_json,
         "html_sample": html_sample,
+        "prompt_text": prompt_text,
     })
     response.headers["HX-Trigger"] = _json.dumps({"selectorGenerated": {"selector": selector}})
     return response

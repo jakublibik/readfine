@@ -20,7 +20,7 @@
 </div>
 {% endif %}
 
-<form method="POST" action="/settings/feeds/scrape" hx-boost="true" class="space-y-5">
+<form method="POST" action="/settings/feeds/scrape" hx-boost="true" hx-indicator="#subscribe-spinner" class="space-y-5">
   <input type="hidden" name="url" value="{{ url }}">
 
   <div>
@@ -117,6 +117,10 @@
             class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
       Add feed
     </button>
+    <svg id="subscribe-spinner" class="htmx-indicator animate-spin h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+    </svg>
     <a href="/settings/feeds" class="text-sm text-gray-500 hover:underline">Cancel</a>
   </div>
 </form>
