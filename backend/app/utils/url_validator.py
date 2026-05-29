@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 _ALLOWED_SCHEMES = {"http", "https"}
-_MAX_REDIRECTS = 5
+_MAX_REDIRECTS = 10
 
 
 def validate_feed_url(url: str) -> None:

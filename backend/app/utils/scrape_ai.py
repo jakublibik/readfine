@@ -39,10 +39,9 @@ def _looks_like_article_block(tag) -> bool:
     return has_link and (has_heading or len(tag.get_text(strip=True)) > 50)
 
 
-def generate_selector_prompt(url: str, html: str) -> str:
-    """Generate a prompt for an external AI to find the CSS selector for article links."""
+def extract_article_sample(html: str) -> str:
+    """Extract representative article HTML blocks for AI analysis (~3000 chars)."""
     soup = BeautifulSoup(html, "lxml")
-
     blocks: list[str] = []
     seen: set[int] = set()
     for tag in soup.find_all(True):
@@ -54,10 +53,12 @@ def generate_selector_prompt(url: str, html: str) -> str:
         blocks.append(str(tag)[:500])
         if len(blocks) >= 5:
             break
+    return "\n\n".join(blocks)[:3000] if blocks else html[:3000]
 
-    sample = "\n\n".join(blocks)[:3000] if blocks else html[:3000]
 
-    return (
+def build_selector_prompt(url: str, sample: str, history: list[dict] | None = None) -> str:
+    """Build AI prompt from pre-extracted sample, optionally with refinement history."""
+    base = (
         f"I need to scrape article links from this webpage: {url}\n\n"
         "Below are sample HTML blocks from the page that look like article listings. "
         "Find a CSS selector that matches the repeating group of article links "
@@ -65,3 +66,16 @@ def generate_selector_prompt(url: str, html: str) -> str:
         "Return ONLY the CSS selector as plain text — no JSON, no explanation, no quotes.\n\n"
         f"HTML sample:\n{sample}"
     )
+    if history:
+        attempts = "\n".join(
+            f"Attempt {i+1}: selector `{h.get('selector', '')}` — feedback: {h.get('feedback', '')}"
+            for i, h in enumerate(history[-5:])
+        )
+        base += f"\n\nPrevious attempts:\n{attempts}\n\nProvide a corrected CSS selector."
+    return base
+
+
+def generate_selector_prompt(url: str, html: str) -> str:
+    """Generate a prompt for an external AI to find the CSS selector for article links."""
+    sample = extract_article_sample(html)
+    return build_selector_prompt(url, sample)

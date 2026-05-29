@@ -1,0 +1,15 @@
+<div class="px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700 space-y-2">
+  <p>{{ error }}</p>
+  {% if ai_explanation %}
+  <p class="text-xs text-red-600 italic">AI: {{ ai_explanation }}</p>
+  {% endif %}
+  {% if prompt_text %}
+  <div class="flex items-center gap-3">
+    <button type="button"
+            data-copy-from="scrape-gen-prompt"
+            class="copy-from-btn text-xs text-blue-600 hover:underline">Copy AI prompt</button>
+    <span class="text-xs text-gray-400">— paste into ChatGPT, Claude, Gemini…</span>
+  </div>
+  <textarea id="scrape-gen-prompt" class="sr-only" readonly>{{ prompt_text }}</textarea>
+  {% endif %}
+</div>

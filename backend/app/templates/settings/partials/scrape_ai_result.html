@@ -1,0 +1,19 @@
+<div class="space-y-2">
+  <p class="text-xs text-gray-500">Selector generated. Describe what's wrong to refine it, or accept it by clicking Add feed / Save.</p>
+  <textarea name="refinement" rows="2"
+            placeholder="e.g. it matched navigation links, not articles"
+            class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"></textarea>
+  <button type="button"
+          hx-post="/settings/feeds/scrape-ai-selector"
+          hx-include="[name='url'],[name='html_sample'],[name='conversation_history'],[name='refinement']"
+          hx-target="#ai-refinement"
+          hx-indicator="#ai-spinner"
+          class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50">
+    Regenerate
+  </button>
+</div>
+<!-- OOB: update conversation_history hidden field -->
+<input type="hidden" name="conversation_history" id="conversation-history"
+       value="{{ updated_history_json }}" hx-swap-oob="true">
+<input type="hidden" name="html_sample" id="html-sample"
+       value="{{ html_sample }}" hx-swap-oob="true">

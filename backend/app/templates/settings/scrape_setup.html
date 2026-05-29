@@ -32,12 +32,36 @@
 
   <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>
-    <div class="flex gap-2">
-      <input type="text" name="selector" id="selector-input" required
-             value="{{ selector or '' }}"
-             placeholder="e.g. article.b-item h3 a"
-             class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <input type="text" name="selector" id="selector-input" required
+           value="{{ selector or '' }}"
+           placeholder="e.g. article.b-item h3 a"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+
+    <div class="flex gap-2 mt-2">
+      {% if ai_selector_available %}
       <button type="button"
+              hx-post="/settings/feeds/scrape-ai-selector"
+              hx-include="[name='url'],[name='html_sample'],[name='conversation_history']"
+              hx-target="#ai-refinement"
+              hx-indicator="#ai-spinner"
+              class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
+        <svg id="ai-spinner" class="htmx-indicator animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
+        Generate with AI
+      </button>
+      {% else %}
+      <button type="button"
+              hx-post="/settings/feeds/scrape-show-prompt"
+              hx-include="[name='url']"
+              hx-target="#ai-prompt-area"
+              class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
+        Show AI prompt
+      </button>
+      {% endif %}
+
+      <button type="button" id="preview-btn"
               hx-post="/settings/feeds/scrape-preview"
               hx-include="[name='url'],[name='selector']"
               hx-target="#scrape-preview"
@@ -50,29 +74,21 @@
         Preview
       </button>
     </div>
-    <p class="text-xs text-gray-400 mt-1">
-      Paste the selector from the AI prompt below, or write one manually. Click Preview to test it.
-    </p>
+
+    {% if ai_selector_available %}
+    <p class="text-xs text-gray-400 mt-1">Generate a selector automatically with AI, or write one manually. Click Preview to test it.</p>
+    {% else %}
+    <p class="text-xs text-gray-400 mt-1">Write a selector manually or use the AI prompt. Click Preview to test it.</p>
+    {% endif %}
   </div>
+
+  <!-- hidden state for AI generation -->
+  <input type="hidden" name="html_sample" id="html-sample" value="{{ html_sample }}">
+  <input type="hidden" name="conversation_history" id="conversation-history" value="[]">
 
   <div id="scrape-preview"></div>
-
-  {% if prompt %}
-  <div class="pt-2 border-t border-gray-200">
-    <div class="flex items-center justify-between mb-1">
-      <label class="text-sm font-medium text-gray-700">AI prompt</label>
-      <button type="button" id="copy-prompt-btn"
-              class="text-xs text-blue-600 hover:underline">Copy</button>
-    </div>
-    <textarea id="ai-prompt" readonly rows="6"
-              class="w-full border border-gray-200 rounded px-3 py-2 text-xs font-mono bg-gray-50 text-gray-600 resize-none focus:outline-none">{{ prompt }}</textarea>
-    <p class="text-xs text-gray-400 mt-1">
-      Copy this prompt, paste it into any AI (ChatGPT, Claude, Gemini…), then paste the returned CSS selector into the field above.
-      If the preview shows too few or wrong articles, tell the AI: <em>"that selector returns wrong results, suggest an alternative"</em>.
-    </p>
-  </div>
-  <script nonce="{{ request.state.csp_nonce }}">document.getElementById('copy-prompt-btn').addEventListener('click',function(){navigator.clipboard.writeText(document.getElementById('ai-prompt').value).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',2000);});});</script>
-  {% endif %}
+  <div id="ai-refinement"></div>
+  <div id="ai-prompt-area"></div>
 
   <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">Folder</label>

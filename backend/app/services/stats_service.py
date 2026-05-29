@@ -721,6 +721,19 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         trend_pct=_trend(pref_cnt, prev_pref_cnt),
     ))
 
+    css_cnt, css_inp, css_out = await _usage_log_stats("css_selector_generation", cutoff)
+    prev_css_cnt, _, _ = await _usage_log_stats("css_selector_generation", prev_cutoff)
+    operation_rows.append(OperationCostRow(
+        operation="css_selector_generation",
+        label="CSS selector generation",
+        slot="quality",
+        count=css_cnt,
+        input_tokens=css_inp,
+        output_tokens=css_out,
+        est_cost=_calc_cost(quality_model, css_inp, css_out),
+        trend_pct=_trend(css_cnt, prev_css_cnt),
+    ))
+
     operation_rows.append(OperationCostRow(
         operation="chat",
         label="Chat",

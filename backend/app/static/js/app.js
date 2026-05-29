@@ -207,6 +207,32 @@ document.addEventListener('click', function (e) {
   });
 });
 
+// Copy-from-element for [data-copy-from] buttons — reads text from element with given ID
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('.copy-from-btn[data-copy-from]');
+  if (!btn) return;
+  var el = document.getElementById(btn.dataset.copyFrom);
+  if (!el) return;
+  var text = el.value || el.textContent || '';
+  navigator.clipboard.writeText(text).then(function () {
+    var orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('text-green-600');
+    setTimeout(function () {
+      btn.textContent = orig;
+      btn.classList.remove('text-green-600');
+    }, 2000);
+  });
+});
+
+// AI CSS selector generation — fill selector input and trigger preview after generation
+document.body.addEventListener('selectorGenerated', function (e) {
+  var input = document.getElementById('selector-input');
+  if (input) input.value = e.detail.selector || '';
+  var previewBtn = document.getElementById('preview-btn');
+  if (previewBtn) previewBtn.click();
+});
+
 // [data-menu-toggle] button opens/closes its next sibling [data-menu]; click outside closes all
 // Menu uses position:fixed — immune to parent overflow clipping
 document.addEventListener('click', function (e) {

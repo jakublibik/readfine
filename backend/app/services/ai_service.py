@@ -425,8 +425,24 @@ async def generate_css_selector(url: str, html: str, client, provider: str, mode
     """Generate a CSS selector for article links from a page."""
     from app.utils.scrape_ai import generate_selector_prompt
     prompt = generate_selector_prompt(url, html)
-    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=100)
-    return text
+    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=200)
+    return text.strip().strip('`"\'').split('\n')[0].strip()
+
+
+async def generate_css_selector_from_sample(
+    url: str,
+    sample: str,
+    history: list[dict],
+    client,
+    provider: str,
+    model: str,
+) -> tuple[str, int, int]:
+    """Generate CSS selector from pre-extracted HTML sample with optional refinement history."""
+    from app.utils.scrape_ai import build_selector_prompt
+    prompt = build_selector_prompt(url, sample, history)
+    text, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=200)
+    selector = text.strip().strip('`"\'').split('\n')[0].strip()
+    return selector, in_tok, out_tok
 
 
 async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
