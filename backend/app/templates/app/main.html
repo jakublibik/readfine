@@ -210,15 +210,10 @@
                   class="hidden text-xs text-gray-400 dark:text-gray-500 truncate"></span>
             <input type="checkbox" name="include_article" id="general-chat-include-article" class="sr-only">
           </div>
-          <button type="button" id="general-chat-tier-btn"
-                  class="w-14 text-xs font-semibold text-center text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200
-                         py-0.5 rounded border border-gray-300 dark:border-gray-600 bg-transparent cursor-pointer leading-none flex-shrink-0"
-                  title="Model: Quality — click to switch">Quality</button>
-          <input type="hidden" name="model_tier" id="general-chat-tier" value="quality">
         </div>
         <button id="general-chat-submit" class="hidden"
                 hx-post="/htmx/ai-chat"
-                hx-include="#general-chat-input,#general-chat-tier,#general-chat-include-article,#general-chat-history,#general-chat-article-id"
+                hx-include="#general-chat-input,#general-chat-include-article,#general-chat-history,#general-chat-article-id"
                 hx-target="#general-chat-area"
                 hx-swap="outerHTML"></button>
       </div>

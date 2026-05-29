@@ -348,28 +348,7 @@ class TestHtmxAiChatEndpoint:
         assert "Chat failed" in resp.text
         assert "prev" in resp.text
 
-    def test_fast_model_tier_used_when_requested(self, client, mock_db):
-        self._setup_db(mock_db,
-            scalars=[True, make_settings(), None],
-            article=make_article())
-        captured = {}
-        async def fake_get_client(user_id, tier, db):
-            captured["tier"] = tier
-            return (AsyncMock(), "anthropic", "claude-haiku-4-5")
-
-        with (
-            patch("app.services.ai_service.get_ai_client", side_effect=fake_get_client),
-            patch("app.services.ai_service.chat_with_article",
-                  new=AsyncMock(return_value="answer")),
-        ):
-            resp = client.post(
-                "/htmx/articles/10/ai-chat",
-                data={"message": "Q", "model_tier": "fast"},
-            )
-        assert resp.status_code == 200
-        assert captured["tier"] == "fast"
-
-    def test_invalid_model_tier_falls_back_to_quality(self, client, mock_db):
+    def test_always_uses_quality_tier(self, client, mock_db):
         self._setup_db(mock_db,
             scalars=[True, make_settings(), None],
             article=make_article())
@@ -385,7 +364,7 @@ class TestHtmxAiChatEndpoint:
         ):
             resp = client.post(
                 "/htmx/articles/10/ai-chat",
-                data={"message": "Q", "model_tier": "malicious_value"},
+                data={"message": "Q"},
             )
         assert resp.status_code == 200
         assert captured["tier"] == "quality"

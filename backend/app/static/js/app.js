@@ -2146,27 +2146,6 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   }
 
   // Enter submits, Shift+Enter inserts newline
-  function _syncTierBtn(btn, hiddenInput) {
-    var q = hiddenInput.value === 'quality';
-    btn.textContent = q ? 'Quality' : 'Fast';
-    btn.title = q ? 'Model: Quality — click to switch' : 'Model: Fast — click to switch';
-  }
-
-  function attachChatTierBtn(root) {
-    (root || document).querySelectorAll('[id^="chat-tier-btn-"]').forEach(function (btn) {
-      if (btn._tierBtnAttached) return;
-      btn._tierBtnAttached = true;
-      var articleId = btn.id.replace('chat-tier-btn-', '');
-      var hiddenInput = document.getElementById('chat-tier-' + articleId);
-      var textarea = document.getElementById('chat-input-' + articleId);
-      if (!hiddenInput) return;
-      btn.addEventListener('click', function () {
-        hiddenInput.value = hiddenInput.value === 'quality' ? 'fast' : 'quality';
-        _syncTierBtn(btn, hiddenInput);
-        if (textarea) textarea.focus();
-      });
-    });
-  }
 
   function attachChatAttachBtn(root) {
     (root || document).querySelectorAll('[id^="chat-attach-btn-"]').forEach(function (btn) {
@@ -2246,7 +2225,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (input) input.value = '';
     scrollChatToBottom(newArea);
     attachChatKeydown(newArea);
-    attachChatTierBtn(newArea);
+
     attachChatAttachBtn(newArea);
     attachArticlePlaceholder(newArea);
     var msgs = document.getElementById('chat-messages-' + articleId);
@@ -2318,19 +2297,6 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         btn.addEventListener('click', openGeneralChat);
       }
     });
-    var genTierBtn = document.getElementById('general-chat-tier-btn');
-    if (genTierBtn && !genTierBtn._tierBtnAttached) {
-      genTierBtn._tierBtnAttached = true;
-      var genTierInput = document.getElementById('general-chat-tier');
-      genTierBtn.addEventListener('click', function () {
-        if (genTierInput) {
-          genTierInput.value = genTierInput.value === 'quality' ? 'fast' : 'quality';
-          _syncTierBtn(genTierBtn, genTierInput);
-        }
-        var inp = document.getElementById('general-chat-input');
-        if (inp) inp.focus();
-      });
-    }
     var genAttachBtn = document.getElementById('general-chat-attach-btn');
     if (genAttachBtn && !genAttachBtn._attachBtnAttached) {
       genAttachBtn._attachBtnAttached = true;
@@ -2485,7 +2451,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.addEventListener('DOMContentLoaded', function () {
     attachChatModal();
     attachChatKeydown();
-    attachChatTierBtn();
+
     attachChatAttachBtn();
     attachArticlePlaceholder();
     scrollChatToBottom();
@@ -2495,7 +2461,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.body.addEventListener('htmx:afterSettle', function () {
     attachChatModal();
     attachChatKeydown();
-    attachChatTierBtn();
+
     attachChatAttachBtn();
     attachArticlePlaceholder();
     attachGeneralChat();

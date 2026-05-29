@@ -1255,12 +1255,10 @@ def _chat_messages_html(container_id: str, messages: list[dict]) -> str:
 def _chat_input_html(
     *,
     input_id: str,
-    tier_id: str,
     include_id: str,
     area_id: str,
     post_url: str,
     hx_include_extra: str = "",
-    model_tier: str = "quality",
     include_article: bool = True,
     placeholder: str = "Ask a question…",
     input_extra_attr: str = "",
@@ -1269,21 +1267,17 @@ def _chat_input_html(
     attach_tooltip: str = "Attach article",
     attach_title_id: str = "",
     attach_title_text: str = "",
-    tier_btn_id: str = "",
     submit_id: str = "",
     error: str = "",
 ) -> str:
     article_chk = 'checked' if include_article else ''
-    hx_include = f"#{input_id},#{tier_id},#{include_id}{hx_include_extra}"
+    hx_include = f"#{input_id},#{include_id}{hx_include_extra}"
     submit_id_attr = f'id="{submit_id}" ' if submit_id else ''
     input_extra = f' {input_extra_attr}' if input_extra_attr else ''
     attach_btn_id_attr = f'id="{attach_btn_id}" ' if attach_btn_id else ''
-    tier_btn_id_attr = f'id="{tier_btn_id}" ' if tier_btn_id else ''
     attach_title_id_attr = f'id="{attach_title_id}" ' if attach_title_id else ''
     attach_hidden_cls = '' if attach_visible else 'hidden '
     attach_color = 'text-blue-500' if include_article else 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-    tier_label = 'Quality' if model_tier == 'quality' else 'Fast'
-    tier_title = 'Model: Quality — click to switch' if model_tier == 'quality' else 'Model: Fast — click to switch'
     error_html = f'<p class="text-xs text-red-500 py-1">{html_module.escape(error)}</p>' if error else ''
     return (
         f'{error_html}'
@@ -1294,7 +1288,6 @@ def _chat_input_html(
         f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"'
         f'{input_extra}></textarea>'
         f'<div class="flex items-center pl-0.5">'
-        # Left: attach group
         f'<div class="flex items-center gap-1 min-w-0 flex-1">'
         f'<button type="button" {attach_btn_id_attr}'
         f'class="{attach_hidden_cls}w-6 h-6 flex items-center justify-center rounded {attach_color} '
@@ -1310,13 +1303,6 @@ def _chat_input_html(
         f'{html_module.escape(attach_title_text)}</span>'
         f'<input type="checkbox" name="include_article" id="{include_id}" class="sr-only" {article_chk}>'
         f'</div>'
-        # Right: model toggle
-        f'<button type="button" {tier_btn_id_attr}'
-        f'class="w-14 text-xs font-semibold text-center text-gray-500 dark:text-gray-400 hover:text-gray-700 '
-        f'dark:hover:text-gray-200 py-0.5 rounded border border-gray-300 dark:border-gray-600 '
-        f'bg-transparent cursor-pointer leading-none flex-shrink-0" '
-        f'title="{tier_title}">{tier_label}</button>'
-        f'<input type="hidden" name="model_tier" id="{tier_id}" value="{model_tier}">'
         f'<button {submit_id_attr}class="hidden" '
         f'hx-post="{post_url}" '
         f'hx-include="{hx_include}" '
@@ -1327,7 +1313,6 @@ def _chat_input_html(
 
 
 def _render_chat_area(article_id: int, messages: list[dict],
-                      model_tier: str = "quality",
                       include_article: bool = True,
                       error: str = "",
                       article_title: str = "") -> str:
@@ -1338,11 +1323,9 @@ def _render_chat_area(article_id: int, messages: list[dict],
         + _chat_messages_html(f"chat-messages-{article_id}", messages)
         + _chat_input_html(
             input_id=f"chat-input-{article_id}",
-            tier_id=f"chat-tier-{article_id}",
             include_id=f"chat-article-{article_id}",
             area_id=f"chat-area-{article_id}",
             post_url=f"/htmx/articles/{article_id}/ai-chat",
-            model_tier=model_tier,
             include_article=include_article,
             placeholder="Ask a question about this article…",
             input_extra_attr=f'data-chat-input-id="{article_id}"',
@@ -1351,7 +1334,6 @@ def _render_chat_area(article_id: int, messages: list[dict],
             attach_tooltip="Attach article",
             attach_title_id=f"chat-attach-title-{article_id}",
             attach_title_text=short,
-            tier_btn_id=f"chat-tier-btn-{article_id}",
             error=error,
         )
         + '</div>'
@@ -1555,8 +1537,7 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
-def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
-                               error: str = "") -> str:
+def _render_general_chat_area(messages: list[dict], error: str = "") -> str:
     history_json = html_module.escape(json.dumps(messages, ensure_ascii=False))
     extra_inputs = (
         f'<input type="hidden" id="general-chat-history" name="history" value="{history_json}">'
@@ -1569,12 +1550,10 @@ def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
         + _chat_messages_html("general-chat-messages", messages)
         + _chat_input_html(
             input_id="general-chat-input",
-            tier_id="general-chat-tier",
             include_id="general-chat-include-article",
             area_id="general-chat-area",
             post_url="/htmx/ai-chat",
             hx_include_extra=",#general-chat-history,#general-chat-article-id",
-            model_tier=model_tier,
             include_article=False,
             placeholder="Ask a question…",
             input_extra_attr="data-general-chat-input",
@@ -1583,7 +1562,6 @@ def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
             attach_tooltip="Attach article",
             attach_title_id="general-chat-attach-title",
             attach_title_text="",
-            tier_btn_id="general-chat-tier-btn",
             submit_id="general-chat-submit",
             error=error,
         )
@@ -1596,7 +1574,6 @@ def _render_general_chat_area(messages: list[dict], model_tier: str = "quality",
 async def htmx_general_ai_chat(
     request: Request,
     message: str = Form(...),
-    model_tier: str = Form("quality"),
     include_article: str = Form(""),
     history: str = Form("[]"),
     article_id: str = Form(""),
@@ -1637,7 +1614,7 @@ async def htmx_general_ai_chat(
     if len(current_messages) > _CHAT_MAX_MESSAGES:
         current_messages = current_messages[-_CHAT_MAX_MESSAGES:]
 
-    tier = model_tier if model_tier in ("quality", "fast") else "quality"
+    tier = "quality"
     use_article = (include_article == "on")
 
     article_ctx = None
@@ -1659,8 +1636,8 @@ async def htmx_general_ai_chat(
     if client is None:
         return HTMLResponse(
             _render_general_chat_area(
-                current_messages[:-1], tier,
-                error=f"{tier.capitalize()} AI model not configured.",
+                current_messages[:-1],
+                error="Quality AI model not configured.",
             )
         )
 
@@ -1678,7 +1655,7 @@ async def htmx_general_ai_chat(
         else:
             err_msg = "Chat failed — please try again."
         return HTMLResponse(
-            _render_general_chat_area(current_messages[:-1], tier, error=err_msg)
+            _render_general_chat_area(current_messages[:-1], error=err_msg)
         )
 
     current_messages.append({"role": "assistant", "content": response_text})
@@ -1709,7 +1686,7 @@ async def htmx_general_ai_chat(
         db.add(GeneralChatLog(user_id=user.id, input_tokens=in_tok, output_tokens=out_tok))
     await db.commit()
 
-    return HTMLResponse(_render_general_chat_area(current_messages, tier))
+    return HTMLResponse(_render_general_chat_area(current_messages))
 
 
 @router.delete("/htmx/ai-chat", response_class=HTMLResponse)
@@ -1725,8 +1702,7 @@ async def htmx_ai_chat(
     article_id: int,
     request: Request,
     message: str = Form(...),
-    model_tier: str = Form("quality"),
-    include_article: str = Form(""),   # checkbox: "on" when checked, absent (→ "") when not
+    include_article: str = Form(""),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1770,7 +1746,7 @@ async def htmx_ai_chat(
     current_messages: list[dict] = list(chat.messages or [])
     current_messages.append({"role": "user", "content": msg_text})
 
-    tier = model_tier if model_tier in ("quality", "fast") else "quality"
+    tier = "quality"
     use_article = (include_article == "on")
 
     article_ctx = None
@@ -1783,8 +1759,8 @@ async def htmx_ai_chat(
     title = article.title or ""
     if client is None:
         return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], tier, use_article,
-            error=f"{tier.capitalize()} AI model not configured.",
+            article_id, current_messages[:-1], use_article,
+            error="Quality AI model not configured.",
             article_title=title,
         ))
 
@@ -1802,7 +1778,7 @@ async def htmx_ai_chat(
         else:
             err_msg = "Chat failed — please try again."
         return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], tier, use_article,
+            article_id, current_messages[:-1], use_article,
             error=err_msg, article_title=title,
         ))
 
@@ -1815,7 +1791,7 @@ async def htmx_ai_chat(
     chat.updated_at = datetime.now(timezone.utc)
     await db.commit()
 
-    return HTMLResponse(_render_chat_area(article_id, current_messages, tier, use_article,
+    return HTMLResponse(_render_chat_area(article_id, current_messages, use_article,
                                           article_title=title))
 
 

@@ -22,7 +22,14 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Git workflow**: `dev` = vývoj (výchozí větev), `master` = produkce/release; merge do master jen při vydání verze
 
 ## Stav implementace
-- MVP dokončeno, post-MVP fáze
+- Core implementace dokončena (MVP + post-MVP + AI). Připravujeme veřejné nasazení.
+
+### Kroky pro veřejné uveřejnění (open-source + hostovaná instance)
+1. **Email verifikace při registraci** — bez toho je veřejná registrace otevřená spamu; `is_active` pole existuje, chybí ověřovací email + flow
+2. **Landing page** — `/` teď redirectuje na `/login`; potřeba úvodní stránka s popisem a odkazem na registraci
+3. **JWT refresh tokeny** — access token 15 min + dlouhodobý refresh token (HttpOnly cookie); důležité pro bezpečnost s více uživateli
+4. **Cache-busting pro statické soubory** — viz TODO; bez toho nutný ruční Cloudflare purge po každém deployi
+5. **README a deploy dokumentace** — open-source projekt bez how-to-deploy docs nikdo nenainstaluje; základní README pro GitHub + Docker Compose instrukce
 
 ### Hotovo (Fáze 1–7 + post-MVP)
 - Fáze 1: struktura projektu, config, Docker, Alembic migrace
@@ -50,6 +57,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Catch me up — global default prompt**: globální výchozí prompt pro catch me up v Settings → AI (stejný vzor jako Summary prompt / Context prompt) — přepíše vestavěný default, ale per-config custom_prompt má přednost. Pole `ai_catchup_prompt` v `user_settings`.
 - **Catch me up — user profile v promptu**: přidat volitelný checkbox "Use my reading profile" do catch me up formuláře — pokud `ai_preference_text` existuje, přidat ho do systémového promptu pro framing digestu. Výchozí vypnuté, zobrazovat jen pokud profil existuje. Poznámka: scoring + scope selector už pre-filtrují dle preferencí, profil přidá spíš framing než selekci.
 - **htmldate pro published_at**: integrovat `htmldate.find_date()` do `readable_service.py` — po úspěšné readable extraction spustit na stránce článku a aktualizovat `published_at`, pokud dosud nebylo nastaveno z listingu. Pomůže webům bez `<time datetime>` v kartičkách (Aktuálně, Respekt, Deník…). Nevyřeší weby se zakázaným readable. Závislost htmldate je tranzitivní přes trafilatura (uv add htmldate).
+- **Scraping — Prozkoumat**: headless prohlížeč (Playwright, Puppeteer) pro fetch JS-rendered stránek a stránek vyžadujících přihlášení. Řešení by bylo použít headless prohlížeč pro fetch — ale to je výrazně složitější infrastruktura a mimo scope aktuálního scraping setupu.
 - **robots.txt pro scrape feedy**: před scrapingem zkontrolovat robots.txt cílového webu (urllib.robotparser). Zvážit: snížení úspěšnosti vs. férovost vůči serverům. Readable extraction je jako browser reader mode — robots.txt typicky neřeší.
 - **Filter akce `archive`**: přidat jako akci filtru (vedle label, mark_read, star) — nastaví `is_archived = true` na `user_article_states`. Schéma, service i šablona filter_edit.
 - **Streaming summary/context**: on-demand generování summary a context streamovat místo čekání na celou odpověď — uživatel vidí text jak se generuje. FastAPI `StreamingResponse` + SSE nebo chunked transfer + JS/HTMX update na frontendu. Zvážit také snížení `_CONTENT_MAX_CHARS` pro summary z 12 000 na ~5 000 znaků.
@@ -60,6 +68,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Briefings — interval Monthly**: přidat měsíční interval do Catch me up & Briefings — vyžaduje novou periodu `30days` v `catchup_service.py`, řešení edge cases (překrývání period, day-of-month výběr 1–28 + "Last day of month").
 - **Mazání feedu/složky — cleanup scope**: při mazání feedu nebo složky zkontrolovat použití ve filtrech, `scope_include` catchup configs a briefing scope — upozornit uživatele a vyčistit scope ze všech míst. Systémové řešení napříč celou appkou.
 - **Admin — přehled briefing chyb**: tabulka v admin sekci zobrazující konfigurace kde `briefing_last_error IS NOT NULL` — sloupce: uživatel, název konfigurace, chyba, čas posledního pokusu. Pouze read-only přehled, oprava je na uživateli.
+- **YouTube feed type — vylepšení**: `youtube` je rezervováno v DB, ale nemá vlastní fetcher. Implementovat: embed videa v article detailu (YouTube iframe/thumbnail místo odkazu), thumbnail jako cover image, případně délka videa v metadatech. Fetch zůstane přes standardní RSS (`youtube.com/feeds/videos.xml?channel_id=...`). Detect pro `@handle` URL funguje přes HTML fallback (`<link rel="alternate">`).
 - **Cache-busting pro statické soubory**: přidat query param s hashem (např. `?v={hash}`) k `tailwind.css` a JS souborům v `base.html`, aby se URL při každém buildu změnila a Cloudflare/browser nikdy neservíroval zastaralou verzi. Bez toho je nutné po každém deployi ručně purgovat Cloudflare cache (CSS má `max-age=14400`, tj. 4h). Implementace: hash souboru při startu FastAPI → kontextová proměnná v Jinja2 (`{{ static_url('css/tailwind.css') }}`).
 
 ## Testování
