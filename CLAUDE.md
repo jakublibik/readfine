@@ -23,13 +23,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 
 ## Stav implementace
 - Core implementace dokončena (MVP + post-MVP + AI). Připravujeme veřejné nasazení.
-
-### Kroky pro veřejné uveřejnění (open-source + hostovaná instance)
-1. **Email verifikace při registraci** — bez toho je veřejná registrace otevřená spamu; `is_active` pole existuje, chybí ověřovací email + flow
-2. **Landing page** — `/` teď redirectuje na `/login`; potřeba úvodní stránka s popisem a odkazem na registraci
-3. **JWT refresh tokeny** — access token 15 min + dlouhodobý refresh token (HttpOnly cookie); důležité pro bezpečnost s více uživateli
-4. **Cache-busting pro statické soubory** — viz TODO; bez toho nutný ruční Cloudflare purge po každém deployi
-5. **README a deploy dokumentace** — open-source projekt bez how-to-deploy docs nikdo nenainstaluje; základní README pro GitHub + Docker Compose instrukce
+- Plán zveřejnění: `../plans/GoPublicPlan.md`
 
 ### Hotovo (Fáze 1–7 + post-MVP)
 - Fáze 1: struktura projektu, config, Docker, Alembic migrace
