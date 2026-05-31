@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal_column, select, update
+from sqlalchemy import func, literal, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,15 +20,14 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _SNIPPET_LEN = 200
 
 
-async def _recalculate_unread_counts(
-    user_id: int, article_ids: list[int], db: AsyncSession
-) -> None:
-    """Recalculate unread_count for all UserFeeds affected by the given article IDs.
+async def _recalc_unread_for_feeds(user_id: int, feed_ids, db: AsyncSession) -> None:
+    """Recalculate unread_count for the given feeds in one statement.
 
+    `feed_ids` may be a list of ints or a single-column subquery (SELECT feed_id …).
     Uses a correlated subquery so the update is a single SQL statement regardless
     of how many feeds are affected.
     """
-    if not article_ids:
+    if isinstance(feed_ids, (list, tuple, set)) and not feed_ids:
         return
     unread_subq = (
         select(func.count())
@@ -45,14 +44,24 @@ async def _recalculate_unread_counts(
         .correlate(UserFeed)
         .scalar_subquery()
     )
-    affected_feed_ids_subq = select(Article.feed_id.distinct()).where(
-        Article.id.in_(article_ids)
-    )
     await db.execute(
         update(UserFeed)
-        .where(UserFeed.user_id == user_id, UserFeed.feed_id.in_(affected_feed_ids_subq))
+        .where(UserFeed.user_id == user_id, UserFeed.feed_id.in_(feed_ids))
         .values(unread_count=unread_subq)
     )
+
+
+async def _recalculate_unread_counts(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> None:
+    """Recalculate unread_count for feeds touched by the given article IDs.
+
+    For small, already-materialized batches (e.g. scroll-based mark-read).
+    """
+    if not article_ids:
+        return
+    affected_feed_ids = select(Article.feed_id.distinct()).where(Article.id.in_(article_ids))
+    await _recalc_unread_for_feeds(user_id, affected_feed_ids, db)
 
 
 def _make_snippet(summary: str | None, content: str | None) -> str | None:
@@ -347,81 +356,79 @@ async def mark_scope_read(
 
     if starred_only or archived_only:
         # Articles in these views already have a state row by definition – plain UPDATE suffices.
+        # Drive the UPDATE from a subquery so we never materialize IDs into Python
+        # (which previously blew past asyncpg's 32767-parameter limit on large feeds).
         filter_cond = (
             UserArticleState.is_starred == True
             if starred_only
             else UserArticleState.is_archived == True
         )
-        article_ids = (await db.execute(
-            select(UserArticleState.article_id)
-            .join(Article, Article.id == UserArticleState.article_id)
-            .where(UserArticleState.user_id == user.id, Article.fetched_at <= before, filter_cond)
-        )).scalars().all()
-        if not article_ids:
-            return
+        scope_articles = (
+            select(Article.id)
+            .join(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
+            .where(Article.fetched_at <= before, filter_cond)
+        )
         await db.execute(
             update(UserArticleState)
             .where(
                 UserArticleState.user_id == user.id,
-                UserArticleState.article_id.in_(article_ids),
+                UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
             .values(is_read=True, read_at=now)
         )
-        await _recalculate_unread_counts(user.id, list(article_ids), db)
+        affected_feeds = select(Article.feed_id.distinct()).where(Article.id.in_(scope_articles))
+        await _recalc_unread_for_feeds(user.id, affected_feeds, db)
         await db.commit()
         return
 
     # All other scopes: user must be subscribed; upsert to handle missing state rows.
-    subq = (
-        select(Article.id)
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.fetched_at <= before)
+    # A single INSERT … SELECT … ON CONFLICT keeps everything server-side — no IDs
+    # round-trip through Python, so feed size is irrelevant.
+    def scoped_select(*cols):
+        q = (
+            select(*cols)
+            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+            .where(Article.fetched_at <= before)
+        )
+        if feed_id is not None:
+            q = q.where(Article.feed_id == feed_id)
+        elif folder_id is not None:
+            q = q.where(UserFeed.folder_id.is_(None) if folder_id == 0 else UserFeed.folder_id == folder_id)
+        elif label_id is not None:
+            q = q.join(
+                ArticleLabel,
+                (ArticleLabel.article_id == Article.id)
+                & (ArticleLabel.user_id == user.id)
+                & (ArticleLabel.label_id == label_id),
+            )
+        elif labeled_only:
+            q = q.where(
+                select(ArticleLabel.article_id)
+                .where((ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
+                .exists()
+            )
+        # else: no extra filter → all subscribed articles
+        return q
+
+    insert_select = scoped_select(
+        literal(user.id), Article.id,
+        literal(True), literal(False), literal(False), literal(False), literal(now),
     )
-    if feed_id is not None:
-        subq = subq.where(Article.feed_id == feed_id)
-    elif folder_id is not None:
-        if folder_id == 0:
-            subq = subq.where(UserFeed.folder_id.is_(None))
-        else:
-            subq = subq.where(UserFeed.folder_id == folder_id)
-    elif label_id is not None:
-        subq = subq.join(
-            ArticleLabel,
-            (ArticleLabel.article_id == Article.id)
-            & (ArticleLabel.user_id == user.id)
-            & (ArticleLabel.label_id == label_id),
-        )
-    elif labeled_only:
-        subq = subq.where(
-            select(ArticleLabel.article_id)
-            .where((ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
-            .exists()
-        )
-    # else: no extra filter → all subscribed articles
-
-    article_ids = (await db.execute(subq)).scalars().all()
-    if not article_ids:
-        return
-
-    stmt = pg_insert(UserArticleState).values([
-        {
-            "user_id": user.id,
-            "article_id": aid,
-            "is_read": True,
-            "is_starred": False,
-            "is_archived": False,
-            "is_hidden": False,
-            "read_at": now,
-        }
-        for aid in article_ids
-    ]).on_conflict_do_update(
+    stmt = pg_insert(UserArticleState).from_select(
+        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "is_hidden", "read_at"],
+        insert_select,
+    ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
         set_={"is_read": True, "read_at": now},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
-    await _recalculate_unread_counts(user.id, list(article_ids), db)
+    await _recalc_unread_for_feeds(user.id, scoped_select(Article.feed_id).distinct(), db)
     await db.commit()
 
 

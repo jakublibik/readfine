@@ -1047,13 +1047,13 @@ async def settings_filter_apply(
     form = await request.form()
     # Whitelist mode; fall back to the conservative "skip" (no scoring) on anything else.
     enqueue_scoring = form.get("mode") == "score"
-    matched, changed = await apply_filter_retroactively(
+    matched, changed, scoring_queued = await apply_filter_retroactively(
         user.id, filter_id, db, enqueue_scoring=enqueue_scoring
     )
     return templates.TemplateResponse(request, "settings/partials/filter_apply_result.html", {
         "matched": matched,
         "changed": changed,
-        "scored": enqueue_scoring,
+        "scoring_queued": scoring_queued,
     })
 
 

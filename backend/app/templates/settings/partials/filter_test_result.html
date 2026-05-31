@@ -1,6 +1,6 @@
 <div class="text-xs text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 mt-1">
   Matched <strong>{{ result.matched_count }}</strong> article{% if result.matched_count != 1 %}s{% endif %}
-  <span class="text-gray-400">(sample: last 500)</span>
+  {% if result.samples %}<span class="text-gray-400">(showing {{ result.samples | length }})</span>{% endif %}
   {% if result.samples %}
     <ul class="mt-1 space-y-0.5">
       {% for s in result.samples %}

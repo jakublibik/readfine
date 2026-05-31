@@ -618,15 +618,21 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     )
     user_feeds_map = {uf.feed_id: uf for uf in user_feeds_result.scalars()}
 
-    articles_result = await db.execute(
+    # Narrow the scan to the filter's scope when possible — keeps the full,
+    # unlimited match count accurate without loading the whole archive.
+    scope_feed_ids = _scope_feed_ids(f, user_feeds_map)
+    articles_q = (
         select(Article, Feed.title.label("feed_title"))
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .join(Feed, Feed.id == Article.feed_id)
         .where(UserFeed.user_id == user_id)
         .order_by(Article.published_at.desc())
-        .limit(500)
     )
-    rows = articles_result.all()
+    if scope_feed_ids is not None:
+        if not scope_feed_ids:
+            return FilterTestResult(matched_count=0, samples=[])
+        articles_q = articles_q.where(Article.feed_id.in_(scope_feed_ids))
+    rows = (await db.execute(articles_q)).all()
 
     states_map: dict[int, "UserArticleState"] = {}
     if is_ai_filter(f):
@@ -842,10 +848,11 @@ async def apply_filter_retroactively(
     """
     plan = await _plan_retroactive_apply(user_id, filter_id, db)
     if plan is None:
-        return 0, 0
+        return 0, 0, 0
 
     f = plan.f
     changed = 0
+    scoring_queued = 0
     scoring_pairs: list[tuple[int, int]] = []
     for i, item in enumerate(plan.items):
         if await _execute_actions(f, item.article, user_id, item.uf, db):
@@ -861,7 +868,9 @@ async def apply_filter_retroactively(
     if enqueue_scoring and scoring_pairs:
         from app.services.ai_scoring_service import bulk_create_scoring_jobs
         for start in range(0, len(scoring_pairs), _RETRO_SCORING_CHUNK):
-            await bulk_create_scoring_jobs(scoring_pairs[start:start + _RETRO_SCORING_CHUNK], db)
+            scoring_queued += await bulk_create_scoring_jobs(
+                scoring_pairs[start:start + _RETRO_SCORING_CHUNK], db
+            )
 
     await db.commit()
-    return len(plan.items), changed
+    return len(plan.items), changed, scoring_queued
