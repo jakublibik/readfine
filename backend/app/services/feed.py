@@ -373,6 +373,59 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
     await db.commit()
 
 
+async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
+    """Clean up all feed subscriptions for a user being deleted (no commit).
+
+    For each subscription: removes UserArticleState rows, decrements subscriber_count,
+    and deletes the feed + its articles if no subscribers remain.
+    Called by admin delete_user before the user row is deleted.
+    """
+    user_feeds_result = await db.execute(
+        select(UserFeed).where(UserFeed.user_id == user_id)
+    )
+    user_feeds = user_feeds_result.scalars().all()
+
+    starred_or_archived_subq = (
+        select(UserArticleState.article_id)
+        .where(
+            UserArticleState.article_id == Article.id,
+            (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
+        )
+        .correlate(Article)
+        .exists()
+    )
+
+    for uf in user_feeds:
+        feed_id = uf.feed_id
+        article_ids_subq = select(Article.id).where(Article.feed_id == feed_id).scalar_subquery()
+
+        await db.execute(
+            delete(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id.in_(article_ids_subq),
+                UserArticleState.is_starred == False,
+                UserArticleState.is_archived == False,
+            )
+        )
+        await db.delete(uf)
+        await db.execute(
+            update(Feed)
+            .where(Feed.id == feed_id)
+            .values(subscriber_count=func.greatest(Feed.subscriber_count - 1, 0))
+        )
+        feed = await db.scalar(select(Feed).where(Feed.id == feed_id))
+        if feed and feed.subscriber_count == 0:
+            await db.execute(
+                update(Article)
+                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .values(feed_id=None)
+            )
+            await db.execute(
+                delete(Article).where(Article.feed_id == feed_id, ~starred_or_archived_subq)
+            )
+            await db.delete(feed)
+
+
 async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
     """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical)."""
     result = await db.execute(

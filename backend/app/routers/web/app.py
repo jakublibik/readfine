@@ -628,6 +628,14 @@ async def htmx_article_list(
             user.id, [a.id for a in articles], db
         )
 
+    if not articles and offset == 0:
+        feed_count = await db.scalar(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        extra_ctx["has_feeds"] = bool(feed_count)
+    else:
+        extra_ctx["has_feeds"] = True
+
     list_html = templates.env.get_template("app/partials/article_list.html").render(
         request=request,
         articles=articles,

@@ -15,6 +15,7 @@ from app.services.admin_service import (
     clear_feed_error,
     create_invitation,
     delete_feed,
+    delete_user,
     get_app_settings,
     get_dashboard_stats,
     get_feed,
@@ -84,6 +85,23 @@ async def admin_toggle_active(
     if target:
         action = "user_activate" if target.is_active else "user_deactivate"
         await log_audit(db, user.id, action, target_type="user", target_id=target.id)
+    users = await list_users(db)
+    return templates.TemplateResponse(request, "admin/partials/users_table.html", {
+        "users": users,
+        "current_user": user,
+    })
+
+
+@router.delete("/users/{user_id}", response_class=HTMLResponse)
+async def admin_delete_user(
+    user_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    deleted = await delete_user(db, user_id, admin_id=user.id)
+    if deleted:
+        await log_audit(db, user.id, "user_delete", target_type="user", target_id=user_id)
     users = await list_users(db)
     return templates.TemplateResponse(request, "admin/partials/users_table.html", {
         "users": users,

@@ -17,6 +17,9 @@ class User(Base):
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
     password_reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    email_verification_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    email_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

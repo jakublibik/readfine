@@ -28,7 +28,9 @@
         {% endif %}
       </td>
       <td class="px-4 py-2">
-        {% if u.is_active %}
+        {% if not u.email_verified %}
+          <span class="px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-700">unverified</span>
+        {% elif u.is_active %}
           <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
         {% else %}
           <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">inactive</span>
@@ -59,12 +61,23 @@
       </td>
       <td class="px-4 py-2 text-right">
         {% if u.id != current_user.id %}
-          <button hx-post="/admin/users/{{ u.id }}/activate"
-                  hx-target="#users-table"
-                  hx-swap="innerHTML"
-                  class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-gray-600">
-            {{ "Deactivate" if u.is_active else "Activate" }}
-          </button>
+          <div class="inline-flex gap-1">
+            <button hx-post="/admin/users/{{ u.id }}/activate"
+                    hx-target="#users-table"
+                    hx-swap="innerHTML"
+                    class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-gray-600">
+              {{ "Deactivate" if u.is_active else "Activate" }}
+            </button>
+            {% if not u.is_active or not u.email_verified %}
+            <button type="button"
+                    class="swap-confirm text-xs px-2 py-1 rounded border border-gray-200 hover:bg-red-50 text-red-500"
+                    data-confirm-text="Confirm delete"
+                    data-confirm-class="text-xs px-2 py-1 rounded border border-red-500 font-medium text-white bg-red-600 hover:bg-red-700"
+                    hx-delete="/admin/users/{{ u.id }}"
+                    hx-target="#users-table"
+                    hx-swap="innerHTML">Delete</button>
+            {% endif %}
+          </div>
         {% endif %}
       </td>
     </tr>

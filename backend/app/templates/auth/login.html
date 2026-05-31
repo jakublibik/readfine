@@ -2,13 +2,24 @@
 {% block title %}Sign in – Readfine{% endblock %}
 
 {% block content %}
-<div class="min-h-screen flex items-center justify-center">
+<div class="min-h-screen flex items-start sm:items-center justify-center pt-12 pb-8 sm:py-8">
     <div class="w-full max-w-sm">
         <h1 class="text-2xl font-semibold text-center mb-6">Readfine</h1>
+
+        {% if request.query_params.get("verified") %}
+        <div class="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded text-sm">
+            Email verified. You can now sign in.
+        </div>
+        {% endif %}
 
         {% if error %}
         <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
             {{ error }}
+            {% if show_resend %}
+            <div class="mt-1">
+                <a href="/register/check-email?email={{ email | urlencode }}" class="text-red-600 underline hover:text-red-800">Resend verification email</a>
+            </div>
+            {% endif %}
             {% if show_reset %}
             <div class="mt-1">
                 <a href="/reset-password" class="text-red-600 underline hover:text-red-800">Forgot password?</a>

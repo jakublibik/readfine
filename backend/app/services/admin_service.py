@@ -81,6 +81,19 @@ async def toggle_user_active(db: AsyncSession, user_id: int, admin_id: int) -> U
     return user
 
 
+async def delete_user(db: AsyncSession, user_id: int, admin_id: int) -> bool:
+    """Delete a user and all their data. Cannot delete yourself."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or user.id == admin_id:
+        return False
+    from app.services.feed import cleanup_user_feeds
+    await cleanup_user_feeds(user_id, db)
+    await db.delete(user)
+    await db.commit()
+    return True
+
+
 async def list_invitations(db: AsyncSession) -> list[Invitation]:
     result = await db.execute(
         select(Invitation)

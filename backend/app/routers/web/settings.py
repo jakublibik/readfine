@@ -205,6 +205,8 @@ async def settings_feeds_test(
 ):
     """Test a feed URL without saving. Returns title + entry count or error."""
     url = url.strip()
+    if url and "://" not in url:
+        url = "https://" + url
     if not url:
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": "Please enter a URL."})
@@ -301,6 +303,8 @@ async def settings_feeds_subscribe(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
     folder_id = safe_int(folder_id_raw)
@@ -431,6 +435,8 @@ async def settings_scrape_preview(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
     selector = (form.get("selector") or form.get("article_links_selector") or "").strip()
 
     if not url or not selector:
@@ -471,6 +477,8 @@ async def settings_scrape_ai_selector(
 
     form = await request.form()
     url = (form.get("url") or "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
     html_sample = (form.get("html_sample") or "").strip()
     history_raw = (form.get("conversation_history") or "[]").strip()
 
@@ -572,6 +580,8 @@ async def settings_scrape_show_prompt(
 ):
     form = await request.form()
     url = (form.get("url") or "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")
@@ -599,6 +609,8 @@ async def settings_scrape_subscribe(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
+    if url and "://" not in url:
+        url = "https://" + url
     selector = form.get("selector", "").strip()
     title = form.get("title", "").strip() or url
     folder_id = safe_int(form.get("folder_id"))

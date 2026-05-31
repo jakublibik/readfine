@@ -198,6 +198,25 @@ async def _purge_old_articles() -> None:
         await purge_old_articles(session)
 
 
+async def _cleanup_unverified_users() -> None:
+    """Job: delete unverified user accounts older than 7 days."""
+    if db.async_session_factory is None:
+        return
+    from sqlalchemy import delete
+    from app.models.user import User
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    async with db.async_session_factory() as session:
+        result = await session.execute(
+            delete(User).where(
+                User.email_verified.is_(False),
+                User.created_at < cutoff,
+            )
+        )
+        if result.rowcount:
+            logger.info("Deleted %d unverified user accounts older than 7 days", result.rowcount)
+        await session.commit()
+
+
 async def _send_due_briefings() -> None:
     """Job: send scheduled briefing emails for all due configs."""
     import smtplib
@@ -345,5 +364,15 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _cleanup_unverified_users,
+        trigger="cron",
+        hour=4,
+        minute=0,
+        id="cleanup_unverified_users",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     return scheduler

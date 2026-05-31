@@ -83,6 +83,7 @@ def create_app() -> FastAPI:
             re.compile(r"^/logout$"),
             re.compile(r"^/register$"),
             re.compile(r"^/reset-password"),
+            re.compile(r"^/resend-verification$"),
         ],
         sensitive_cookies={"session"},
     )

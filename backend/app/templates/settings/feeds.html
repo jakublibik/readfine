@@ -13,11 +13,17 @@
 
 <!-- Subscribe form -->
 <div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded">
-  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Subscribe to a feed</h2>
+  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Subscribe to a feed</h2>
+  <p class="text-xs text-gray-400 mb-3">Accepts RSS/Atom URL or website URL (auto-detection).</p>
   <form id="feed-subscribe-form" method="POST" action="/settings/feeds" class="space-y-2">
     <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
       <input id="feed-url-input" type="url" name="url" placeholder="https://example.com/feed.xml" required
              value="{{ subscribe_url or '' }}"
+             hx-post="/settings/feeds/test"
+             hx-include="#feed-subscribe-form"
+             hx-target="#feed-test-result"
+             hx-indicator="#feed-test-spinner"
+             hx-trigger="keydown[key=='Enter']"
              class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       <div class="flex gap-2">
         <button type="button"
@@ -41,7 +47,7 @@
           Subscribe
         </button>
       </div>
-      <div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
+<div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
       <input type="text" name="custom_title" placeholder="Custom title (optional)"
              class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       <select name="folder_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">

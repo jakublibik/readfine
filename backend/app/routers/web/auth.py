@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 
 from app.auth.security import hash_password, verify_password
+from app.utils.smtp import send_email
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.rate_limit import limiter
@@ -66,24 +68,29 @@ async def login(
     password: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    app_settings = await _get_app_settings(db)
+    smtp_configured = bool(app_settings and app_settings.smtp_host)
+    registration_open = not app_settings or app_settings.registration_enabled
+
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
-    if not user or not verify_password(password, user.password_hash):
-        app_settings = await _get_app_settings(db)
-        smtp_configured = bool(app_settings and app_settings.smtp_host)
+    def _login_err(msg: str, http_status: int, **extra):
         return templates.TemplateResponse(
             request, "auth/login.html",
-            {"error": "Invalid email or password", "email": email, "show_reset": smtp_configured},
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            {"error": msg, "email": email, "registration_open": registration_open, **extra},
+            status_code=http_status,
         )
 
+    if not user or not verify_password(password, user.password_hash):
+        return _login_err("Invalid email or password", status.HTTP_401_UNAUTHORIZED,
+                          show_reset=smtp_configured)
+
     if not user.is_active:
-        return templates.TemplateResponse(
-            request, "auth/login.html",
-            {"error": "Account is disabled", "email": email},
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
+        return _login_err("Account is disabled", status.HTTP_403_FORBIDDEN)
+
+    if not user.email_verified:
+        return _login_err("Email not verified.", status.HTTP_403_FORBIDDEN, show_resend=True)
 
     user.last_active_at = datetime.now(timezone.utc)
     await db.commit()
@@ -124,6 +131,7 @@ async def register(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    confirm_password: str = Form(...),
     display_name: str = Form(...),
     invite_token: str = Form(""),
     db: AsyncSession = Depends(get_db),
@@ -131,55 +139,56 @@ async def register(
     app_settings = await _get_app_settings(db)
     registration_open = not app_settings or app_settings.registration_enabled
 
+    def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_ENTITY, **extra):
+        ctx = {"error": msg, "invite_token": invite_token,
+               "prefill_email": email, "prefill_display_name": display_name, **extra}
+        return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
+
     # Validate invite token if provided or required
     inv = None
     if invite_token:
         inv = await _get_valid_invitation(db, invite_token)
         if not inv:
-            return templates.TemplateResponse(
-                request, "auth/register.html",
-                {"error": "This invitation link is invalid or has already been used.", "invite_token": invite_token},
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+            return _err("This invitation link is invalid or has already been used.",
+                        http_status=status.HTTP_400_BAD_REQUEST)
         # If invite is locked to specific email, enforce it
         if inv.email and inv.email.lower() != email.lower():
-            return templates.TemplateResponse(
-                request, "auth/register.html",
-                {"error": "This invitation is for a different email address.",
-                 "invite_token": invite_token, "prefill_email": inv.email, "email_locked": True},
-                status_code=status.HTTP_400_BAD_REQUEST,
-            )
+            return _err("This invitation is for a different email address.",
+                        http_status=status.HTTP_400_BAD_REQUEST,
+                        prefill_email=inv.email, email_locked=True)
     elif not registration_open:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Registration disabled")
 
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
-        return templates.TemplateResponse(
-            request, "auth/register.html",
-            {"error": "This email is already registered", "invite_token": invite_token},
-            status_code=status.HTTP_409_CONFLICT,
-        )
+        return _err("This email is already registered.", http_status=status.HTTP_409_CONFLICT)
 
     if len(password) < 8:
-        return templates.TemplateResponse(
-            request, "auth/register.html",
-            {"error": "Password must be at least 8 characters", "invite_token": invite_token},
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
+        return _err("Password must be at least 8 characters.")
+
+    if password != confirm_password:
+        return _err("Passwords do not match.")
 
     display_name = display_name.strip()
     if not display_name:
-        return templates.TemplateResponse(
-            request, "auth/register.html",
-            {"error": "Display name cannot be empty", "invite_token": invite_token},
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
+        return _err("Display name cannot be empty.")
+
+    smtp_configured = bool(app_settings and app_settings.smtp_host)
+    # Invite with locked email = admin-verified address; no SMTP = skip verification
+    needs_verification = smtp_configured and not (inv and inv.email)
+
+    token = None
+    if needs_verification:
+        token = secrets.token_urlsafe(32)
 
     user = User(
         email=email,
         password_hash=hash_password(password),
         display_name=display_name,
         role="user",
+        email_verified=not needs_verification,
+        email_verification_token_hash=hashlib.sha256(token.encode()).hexdigest() if token else None,
+        email_verification_expires_at=datetime.now(timezone.utc) + timedelta(hours=24) if token else None,
     )
     db.add(user)
     await db.flush()
@@ -200,6 +209,20 @@ async def register(
             status_code=status.HTTP_409_CONFLICT,
         )
 
+    if needs_verification:
+        verify_url = str(request.base_url) + f"verify-email?token={token}"
+        try:
+            await asyncio.to_thread(
+                send_email,
+                app_settings,
+                email,
+                "Readfine – Verify your email address",
+                f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not create a Readfine account, you can safely ignore this email.",
+            )
+        except Exception as e:
+            logger.error("Failed to send verification email to %s: %s", email, e)
+        return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1", status_code=302)
+
     request.session["user_id"] = user.id
     return RedirectResponse("/app", status_code=302)
 
@@ -208,6 +231,67 @@ async def register(
 async def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=302)
+
+
+# ── Email verification ─────────────────────────────────────────────────────────
+
+@router.get("/register/check-email", response_class=HTMLResponse)
+async def check_email_page(request: Request, email: str = ""):
+    return templates.TemplateResponse(request, "auth/check_email.html", {"email": email})
+
+
+@router.get("/verify-email", response_class=HTMLResponse)
+async def verify_email(request: Request, token: str = "", db: AsyncSession = Depends(get_db)):
+    if not token:
+        return templates.TemplateResponse(request, "auth/check_email.html",
+                                          {"verify_error": True, "email": ""})
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    result = await db.execute(select(User).where(User.email_verification_token_hash == token_hash))
+    user = result.scalar_one_or_none()
+    if not user or not user.email_verification_expires_at:
+        return templates.TemplateResponse(request, "auth/check_email.html",
+                                          {"verify_error": True, "email": ""})
+    if user.email_verification_expires_at < datetime.now(timezone.utc):
+        return templates.TemplateResponse(request, "auth/check_email.html",
+                                          {"verify_error": True, "email": user.email})
+    if not user.is_active:
+        return templates.TemplateResponse(request, "auth/check_email.html",
+                                          {"verify_error": True, "email": ""})
+    user.email_verified = True
+    user.email_verification_token_hash = None
+    user.email_verification_expires_at = None
+    await db.commit()
+    return RedirectResponse("/login?verified=1", status_code=302)
+
+
+@router.post("/resend-verification", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_reset_password)
+async def resend_verification(
+    request: Request,
+    email: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    app_settings = await _get_app_settings(db)
+    if app_settings and app_settings.smtp_host:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        if user and not user.email_verified:
+            token = secrets.token_urlsafe(32)
+            user.email_verification_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            user.email_verification_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+            await db.commit()
+            verify_url = str(request.base_url) + f"verify-email?token={token}"
+            try:
+                await asyncio.to_thread(
+                    send_email,
+                    app_settings,
+                    email,
+                    "Readfine – Verify your email address",
+                    f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not create a Readfine account, you can safely ignore this email.",
+                )
+            except Exception as e:
+                logger.error("Failed to resend verification email to %s: %s", email, e)
+    return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&resent=1", status_code=302)
 
 
 # ── Password reset ─────────────────────────────────────────────────────────────
