@@ -46,6 +46,7 @@ from app.services.filter_service import (
     delete_filter,
     get_filter,
     list_filters,
+    preview_filter_retroactive,
     test_filter,
     update_filter,
 )
@@ -1020,6 +1021,22 @@ async def settings_filter_test(
     })
 
 
+@router.post("/filters/{filter_id}/apply/preview", response_class=HTMLResponse)
+async def settings_filter_apply_preview(
+    filter_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    preview = await preview_filter_retroactive(user.id, filter_id, db)
+    if preview is None:
+        return HTMLResponse("<p class='text-red-500'>Filter not found.</p>", status_code=404)
+    return templates.TemplateResponse(request, "settings/partials/filter_apply_preview.html", {
+        "filter_id": filter_id,
+        **preview,
+    })
+
+
 @router.post("/filters/{filter_id}/apply", response_class=HTMLResponse)
 async def settings_filter_apply(
     filter_id: int,
@@ -1027,10 +1044,16 @@ async def settings_filter_apply(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    matched, changed = await apply_filter_retroactively(user.id, filter_id, db)
+    form = await request.form()
+    # Whitelist mode; fall back to the conservative "skip" (no scoring) on anything else.
+    enqueue_scoring = form.get("mode") == "score"
+    matched, changed = await apply_filter_retroactively(
+        user.id, filter_id, db, enqueue_scoring=enqueue_scoring
+    )
     return templates.TemplateResponse(request, "settings/partials/filter_apply_result.html", {
         "matched": matched,
         "changed": changed,
+        "scored": enqueue_scoring,
     })
 
 

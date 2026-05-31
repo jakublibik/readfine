@@ -2,13 +2,14 @@
 import json
 import logging
 import re
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.article import Article, UserArticleState
+from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
@@ -22,6 +23,11 @@ _AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 _REGEX_MAX_LEN = 200
 # Patterns that commonly cause catastrophic backtracking
 _REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w\+\)\{)")
+
+# Retroactive apply: commit every N articles to keep transactions short; chunk
+# bulk scoring inserts to keep statements bounded.
+_RETRO_COMMIT_BATCH = 200
+_RETRO_SCORING_CHUNK = 500
 
 
 def is_ai_filter(f: "Filter") -> bool:
@@ -649,15 +655,68 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     )
 
 
-async def apply_filter_retroactively(
-    user_id: int, filter_id: int, db: AsyncSession
-) -> tuple[int, int]:
-    """Apply an existing filter to all user's articles.
+@dataclass
+class _RetroItem:
+    """One matched article and the scoring decisions for it."""
+    article: Article
+    uf: "UserFeed | None"
+    readable_pending: bool   # apply: flip readable_status → "pending" (eventual scoring)
+    direct_enqueue: bool     # apply: insert a scoring job immediately
+    will_score: bool         # preview: this article will be scored (direct or via readable)
 
-    Returns (matched_count, changed_count):
-      matched_count — articles where filter conditions evaluated to True
-      changed_count — articles where at least one action actually modified DB state
+
+@dataclass
+class RetroApplyPlan:
+    """Result of a single scan: what a retroactive apply would do."""
+    f: Filter
+    is_ai: bool              # filter has an ai_score condition
+    has_label_action: bool
+    items: "list[_RetroItem]"
+    scoring_count: int       # matched articles that will be queued for AI scoring
+
+
+def _scope_feed_ids(f: Filter, user_feeds_map: "dict[int, UserFeed]") -> "set[int] | None":
+    """Resolve the feed_ids a filter's scope_include limits to, for SQL narrowing.
+
+    Returns None when the scope spans all feeds (no narrowing possible),
+    an empty set when scope is corrupt (fail-closed, matches _scope_matches).
     """
+    include = _parse_scope_list(f.scope_include)
+    if include is None:
+        return set()        # corrupt → fail-closed
+    if not include:
+        return None         # [] → all feeds
+    feed_ids: set[int] = set()
+    for item in include:
+        if item.startswith("feed:"):
+            try:
+                feed_ids.add(int(item[5:]))
+            except ValueError:
+                pass
+        elif item.startswith("folder:"):
+            try:
+                folder_val = int(item[7:])
+            except ValueError:
+                continue
+            for uf in user_feeds_map.values():
+                if folder_val == 0 and uf.folder_id is None:
+                    feed_ids.add(uf.feed_id)
+                elif uf.folder_id == folder_val:
+                    feed_ids.add(uf.feed_id)
+        else:
+            return None     # unknown token → don't narrow (be safe)
+    return feed_ids
+
+
+async def _plan_retroactive_apply(
+    user_id: int, filter_id: int, db: AsyncSession
+) -> "RetroApplyPlan | None":
+    """Single scan that both preview and apply consume — guarantees the previewed
+    scoring count matches what apply actually enqueues."""
+    from app.models.settings import AppSettings
+    from app.models.user import UserSettings
+    from app.services.ai_scoring_service import scoring_eligible
+
     result = await db.execute(
         select(Filter)
         .where(Filter.id == filter_id, Filter.user_id == user_id)
@@ -665,47 +724,144 @@ async def apply_filter_retroactively(
     )
     f = result.scalar_one_or_none()
     if not f:
-        return 0, 0
+        return None
+
+    action_types = {a.action_type for a in f.actions}
+    has_label = "label" in action_types
+    has_star_or_label = bool(action_types & {"star", "label"})
+    is_ai = is_ai_filter(f)
 
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
     )
     user_feeds_map = {uf.feed_id: uf for uf in user_feeds_result.scalars()}
 
-    articles_result = await db.execute(
+    # Narrow the article scan to the filter's scope when possible (avoids loading
+    # the user's entire article table just to count).
+    scope_feed_ids = _scope_feed_ids(f, user_feeds_map)
+    if scope_feed_ids is not None and not scope_feed_ids:
+        return RetroApplyPlan(f=f, is_ai=is_ai, has_label_action=has_label,
+                              items=[], scoring_count=0)
+
+    articles_q = (
         select(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user_id)
     )
-    articles = articles_result.scalars().all()
+    if scope_feed_ids is not None:
+        articles_q = articles_q.where(Article.feed_id.in_(scope_feed_ids))
+    articles = (await db.execute(articles_q)).scalars().all()
 
-    states_map: dict[int, "UserArticleState"] = {}
-    if is_ai_filter(f):
-        from app.models.article import UserArticleState
-        article_ids = [a.id for a in articles]
-        if article_ids:
-            states_result = await db.execute(
-                select(UserArticleState).where(
-                    UserArticleState.user_id == user_id,
-                    UserArticleState.article_id.in_(article_ids),
-                )
+    states_map: dict[int, UserArticleState] = {}
+    if is_ai and articles:
+        states_result = await db.execute(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id.in_([a.id for a in articles]),
             )
-            states_map = {s.article_id: s for s in states_result.scalars()}
+        )
+        states_map = {s.article_id: s for s in states_result.scalars()}
 
-    action_types = {a.action_type for a in f.actions}
-    triggers_readable = bool(action_types & {"star", "label"})
+    matched = [
+        a for a in articles
+        if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+    ]
 
-    matched = 0
+    # Scoring prerequisites loaded once. Settings-level eligibility (uf=None) gates
+    # the whole batch; a per-feed override can only turn scoring *off* per article.
+    ai_on = bool(await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1)))
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+    scoring_possible = has_label and ai_on and scoring_eligible(settings, None)
+
+    existing_jobs: set[int] = set()
+    if scoring_possible and matched:
+        existing_jobs = set(await db.scalars(
+            select(ArticleAiJob.article_id).where(
+                ArticleAiJob.user_id == user_id,
+                ArticleAiJob.operation == "scoring",
+                ArticleAiJob.article_id.in_([a.id for a in matched]),
+            )
+        ))
+
+    items: list[_RetroItem] = []
+    scoring_count = 0
+    for a in matched:
+        uf = user_feeds_map.get(a.feed_id)
+        extract = bool(uf and uf.extract_readable)
+        status = a.readable_status
+        eligible = (
+            scoring_possible
+            and a.id not in existing_jobs
+            and scoring_eligible(settings, uf)  # re-check per-feed override
+        )
+        direct_path = (not extract) or status == "success"
+        via_readable = extract and status == "skipped"
+        readable_pending = has_star_or_label and extract and status == "skipped"
+        direct_enqueue = eligible and direct_path
+        will_score = eligible and (direct_path or via_readable)
+        if will_score:
+            scoring_count += 1
+        items.append(_RetroItem(
+            article=a, uf=uf,
+            readable_pending=readable_pending,
+            direct_enqueue=direct_enqueue,
+            will_score=will_score,
+        ))
+
+    return RetroApplyPlan(f=f, is_ai=is_ai, has_label_action=has_label,
+                          items=items, scoring_count=scoring_count)
+
+
+async def preview_filter_retroactive(
+    user_id: int, filter_id: int, db: AsyncSession
+) -> "dict | None":
+    """Count what a retroactive apply would do, without writing anything."""
+    plan = await _plan_retroactive_apply(user_id, filter_id, db)
+    if plan is None:
+        return None
+    return {
+        "matched": len(plan.items),
+        "scoring_count": plan.scoring_count,
+        "is_ai_filter": plan.is_ai,
+        "has_label_action": plan.has_label_action,
+    }
+
+
+async def apply_filter_retroactively(
+    user_id: int, filter_id: int, db: AsyncSession, enqueue_scoring: bool = True
+) -> tuple[int, int]:
+    """Apply an existing filter to the user's articles.
+
+    With enqueue_scoring=False ("skip" mode), filter actions still run (label,
+    mark_read, …) but no AI scoring is triggered — neither direct enqueue nor the
+    readable→scoring path.
+
+    Returns (matched_count, changed_count):
+      matched_count — articles where filter conditions evaluated to True
+      changed_count — articles where at least one action actually modified DB state
+    """
+    plan = await _plan_retroactive_apply(user_id, filter_id, db)
+    if plan is None:
+        return 0, 0
+
+    f = plan.f
     changed = 0
-    for article in articles:
-        uf = user_feeds_map.get(article.feed_id)
-        if evaluate_filter(f, article, uf, states_map.get(article.id)):
-            matched += 1
-            action_changed = await _execute_actions(f, article, user_id, uf, db)
-            if action_changed:
-                changed += 1
-                if triggers_readable and uf and uf.extract_readable and article.readable_status == "skipped":
-                    article.readable_status = "pending"
+    scoring_pairs: list[tuple[int, int]] = []
+    for i, item in enumerate(plan.items):
+        if await _execute_actions(f, item.article, user_id, item.uf, db):
+            changed += 1
+        if enqueue_scoring:
+            if item.readable_pending:
+                item.article.readable_status = "pending"
+            if item.direct_enqueue:
+                scoring_pairs.append((item.article.id, user_id))
+        if (i + 1) % _RETRO_COMMIT_BATCH == 0:
+            await db.commit()
+
+    if enqueue_scoring and scoring_pairs:
+        from app.services.ai_scoring_service import bulk_create_scoring_jobs
+        for start in range(0, len(scoring_pairs), _RETRO_SCORING_CHUNK):
+            await bulk_create_scoring_jobs(scoring_pairs[start:start + _RETRO_SCORING_CHUNK], db)
 
     await db.commit()
-    return matched, changed
+    return len(plan.items), changed

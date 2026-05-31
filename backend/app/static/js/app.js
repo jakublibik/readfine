@@ -1541,6 +1541,14 @@ document.addEventListener('click', function (e) {
   setTimeout(function () { document.addEventListener('click', outside, true); }, 0);
 }, true);
 
+// ── Dismiss apply-preview: remove the inline preview block ─────────────────
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest('.apply-cancel');
+  if (!btn) return;
+  var preview = btn.closest('.apply-preview');
+  if (preview) preview.remove();
+});
+
 // ── Color swatches (label color picker) ───────────────────────────────────
 document.addEventListener('click', function (e) {
   var swatch = e.target.closest('.color-swatch');

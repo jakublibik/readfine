@@ -38,6 +38,47 @@ async def _ai_enabled_globally(db: AsyncSession) -> bool:
     return bool(row)
 
 
+def scoring_eligible(s: "UserSettings | None", uf: "UserFeed | None") -> bool:
+    """Pure per-user/per-feed scoring eligibility (excludes the global ai_enabled
+    kill-switch and the idempotency check, which the caller handles).
+
+    Eligible only if:
+    - user scoring enabled (ai_scoring_enabled_default on)
+    - scoring not explicitly disabled for this feed (per-feed override)
+    - preference text set
+    - a fast AI slot is configured
+    """
+    if s is None or not s.ai_scoring_enabled_default:
+        return False
+    if uf is not None and uf.ai_scoring_enabled is False:
+        return False
+    if not s.ai_preference_text or not s.ai_preference_text.strip():
+        return False
+    if not s.ai_fast_provider or not s.ai_fast_model:
+        return False
+    return True
+
+
+async def bulk_create_scoring_jobs(pairs: "list[tuple[int, int]]", db: AsyncSession) -> int:
+    """Insert pending scoring jobs for the given (article_id, user_id) pairs in one
+    statement. Idempotent — existing jobs are left untouched. Returns rows inserted.
+
+    Callers are responsible for eligibility filtering; this only writes rows.
+    """
+    if not pairs:
+        return 0
+    rows = [
+        {"article_id": aid, "user_id": uid, "operation": "scoring", "status": "pending"}
+        for aid, uid in pairs
+    ]
+    result = await db.execute(
+        pg_insert(ArticleAiJob)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["article_id", "user_id", "operation"])
+    )
+    return result.rowcount or 0
+
+
 async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) -> bool:
     """
     Create a pending scoring job for the given article + user if eligible.
@@ -54,10 +95,11 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
         return False
 
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+    # Early-exit on the cheapest disqualifier before loading the per-feed override.
     if s is None or not s.ai_scoring_enabled_default:
         return False
 
-    # Per-feed override: check if scoring is explicitly disabled for this feed
+    uf = None
     if article.feed_id is not None:
         from app.models.feed import UserFeed
         uf = await db.scalar(
@@ -66,13 +108,8 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
                 UserFeed.feed_id == article.feed_id,
             )
         )
-        if uf is not None and uf.ai_scoring_enabled is False:
-            return False
 
-    if not s.ai_preference_text or not s.ai_preference_text.strip():
-        return False
-
-    if not s.ai_fast_provider or not s.ai_fast_model:
+    if not scoring_eligible(s, uf):
         return False
 
     # Idempotent: skip if any job already exists for this article/user/operation

@@ -146,36 +146,34 @@
   });
 
   // ── scope_include: "All feeds" mutual exclusivity ────────────────────────────
+  // Clicking a specific feed directly overrides "All feeds" (same UX as catch me up
+  // scope selector): items are dimmed when "All" is active but remain clickable.
   var scopeAll = document.getElementById('scope-all');
   if (scopeAll) {
     var scopeItems = document.querySelectorAll('#scope-include-list input[name="scope_include"]');
 
     function setScopeAllMode(allChecked) {
       scopeItems.forEach(function (cb) {
-        cb.disabled = allChecked;
+        cb.style.opacity = allChecked ? '0.35' : '';
         if (allChecked) cb.checked = false;
       });
     }
 
-    // Initial state is already set by server-rendered HTML (disabled attr).
-    // Wire up interactions:
+    // Apply initial dimming state from server-rendered checked state.
+    setScopeAllMode(scopeAll.checked);
+
     scopeAll.addEventListener('change', function () {
-      if (this.checked) {
-        setScopeAllMode(true);
-      } else {
-        // User unchecked "All" — enable items but don't select any
-        scopeItems.forEach(function (cb) { cb.disabled = false; });
-      }
+      setScopeAllMode(this.checked);
     });
 
     scopeItems.forEach(function (cb) {
       cb.addEventListener('change', function () {
         if (this.checked) {
-          // Deselect "All feeds" when any specific item is picked
+          // Clicking a feed directly overrides "All feeds"
           scopeAll.checked = false;
-          scopeItems.forEach(function (c) { c.disabled = false; });
+          scopeItems.forEach(function (c) { c.style.opacity = ''; });
         } else {
-          // If nothing else is checked, revert to "All feeds"
+          // Last item unchecked → revert to "All feeds"
           var anyChecked = Array.from(scopeItems).some(function (c) { return c.checked; });
           if (!anyChecked) {
             scopeAll.checked = true;

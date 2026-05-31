@@ -55,12 +55,10 @@
             <!-- Edit -->
             <a href="/settings/filters/{{ f.id }}/edit"
                class="text-xs text-blue-600 hover:underline">Edit</a>
-            <!-- Apply -->
+            <!-- Apply (shows a preview with scoring impact before committing) -->
             <button type="button"
-                    class="swap-confirm text-xs text-green-600 hover:text-green-800"
-                    data-confirm-text="Apply to all"
-                    data-confirm-class="text-xs text-green-600 font-medium hover:text-green-800"
-                    hx-post="/settings/filters/{{ f.id }}/apply"
+                    class="text-xs text-green-600 hover:text-green-800"
+                    hx-post="/settings/filters/{{ f.id }}/apply/preview"
                     hx-target="#test-result-{{ f.id }}"
                     hx-swap="innerHTML">Apply</button>
             <!-- Delete -->
