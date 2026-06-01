@@ -13,7 +13,6 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
 from starlette_csrf import CSRFMiddleware
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from sqlalchemy import select
@@ -89,8 +88,15 @@ def create_app() -> FastAPI:
     )
 
     # Rate limiting
+    from app.templating import templates as _templates
+
+    async def _html_rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Response:
+        return _templates.TemplateResponse(
+            request, "errors/429.html", {}, status_code=429
+        )
+
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_exception_handler(RateLimitExceeded, _html_rate_limit_handler)
 
     # Security headers
     @app.middleware("http")

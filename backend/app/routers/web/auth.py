@@ -16,7 +16,7 @@ from app.auth.security import hash_password, verify_password
 from app.utils.smtp import send_email
 from app.config import settings as app_settings_config
 from app.database import get_db
-from app.rate_limit import limiter
+from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
 from app.models.settings import AppSettings
@@ -72,8 +72,7 @@ async def login(
     smtp_configured = bool(app_settings and app_settings.smtp_host)
     registration_open = not app_settings or app_settings.registration_enabled
 
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+    ip = get_client_ip(request)
 
     def _login_err(msg: str, http_status: int, **extra):
         return templates.TemplateResponse(
@@ -82,7 +81,14 @@ async def login(
             status_code=http_status,
         )
 
+    if check_login_lockout(ip, email):
+        return _login_err("Too many failed attempts. Try again in 15 minutes.", status.HTTP_429_TOO_MANY_REQUESTS)
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+
     if not user or not verify_password(password, user.password_hash):
+        record_failed_login(ip, email)
         return _login_err("Invalid email or password", status.HTTP_401_UNAUTHORIZED,
                           show_reset=smtp_configured)
 
@@ -92,6 +98,7 @@ async def login(
     if not user.email_verified:
         return _login_err("Email not verified.", status.HTTP_403_FORBIDDEN, show_resend=True)
 
+    clear_failed_logins(ip, email)
     user.last_active_at = datetime.now(timezone.utc)
     await db.commit()
 

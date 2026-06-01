@@ -45,6 +45,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - limit na počet článků při prvním stažení
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
+- **Rate limiting — DB lockout**: `failed_login_attempts` + `locked_until` v tabulce `users`; persistentní, funguje při multi-process deployi; vyžaduje DB migraci + cleanup job. Aktuálně řešeno in-memory counterem (resetuje se při restartu).
 - Filter scope S2: scope_include/scope_except → JSONB
 - **OPML export scrape feedů**: OPML standard CSS selektory nepodporuje — zvážit vlastní rozšíření formátu pro round-trip export/import scrape feedů
 - **AI integrace**: fáze — shrnutí, kategorizace, doporučení článků
