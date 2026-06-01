@@ -143,13 +143,25 @@ def create_app() -> FastAPI:
     app.include_router(api_labels_router, prefix="/api/v1")
     app.include_router(api_filters_router, prefix="/api/v1")
 
-    @app.exception_handler(HTTPException)
-    async def auth_redirect_handler(request: Request, exc: HTTPException):
-        if exc.status_code == 401 and not request.url.path.startswith("/api/"):
+    from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+    async def auth_redirect_handler(request: Request, exc: _StarletteHTTPException):
+        is_api = request.url.path.startswith("/api/")
+        if exc.status_code == 401 and not is_api:
             if request.headers.get("HX-Request"):
                 return Response(status_code=200, headers={"HX-Redirect": "/login"})
             return RedirectResponse("/login", status_code=302)
+        if exc.status_code == 404 and not is_api:
+            return _templates.TemplateResponse(request, "errors/404.html", {}, status_code=404)
         return await _default_http_exception_handler(request, exc)
+
+    app.add_exception_handler(_StarletteHTTPException, auth_redirect_handler)
+
+    @app.exception_handler(Exception)
+    async def server_error_handler(request: Request, exc: Exception):
+        import logging
+        logging.getLogger(__name__).exception("Unhandled exception: %s", exc)
+        return _templates.TemplateResponse(request, "errors/500.html", {}, status_code=500)
 
     return app
 
