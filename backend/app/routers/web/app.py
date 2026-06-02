@@ -1927,7 +1927,7 @@ async def htmx_catchup_count(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
         filter_status=filter_status, filter_labeled=filter_labeled,
-        filter_score_min=filter_score_min,
+        filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     count = len(articles)
     if count > article_limit:
@@ -1965,7 +1965,7 @@ async def htmx_catchup_cost(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
         filter_status=filter_status, filter_labeled=filter_labeled,
-        filter_score_min=filter_score_min,
+        filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     effective_count = min(len(articles), article_limit)
 
@@ -2027,7 +2027,7 @@ async def htmx_catchup_generate(
             user_id=user.id, tz_str=tz_str, db=db,
             period=period, scope_include=scope_include,
             filter_status=filter_status, filter_labeled=filter_labeled,
-            filter_score_min=filter_score_min,
+            filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
         )
     except Exception as exc:
         logger.exception("catchup: fetch failed for user %d", user.id)
@@ -2135,12 +2135,13 @@ async def htmx_catchup_config_create(
         )
     )).scalar_one_or_none()
 
+    score_min_stored = filter_score_min / 100 if filter_score_min is not None else None
     if config:
         config.scope_include = scope_include
         config.period = period
         config.filter_status = filter_status
         config.filter_labeled = filter_labeled
-        config.filter_score_min = filter_score_min
+        config.filter_score_min = score_min_stored
         config.article_limit = article_limit
         config.model_slot = model_slot
         config.custom_prompt = custom_prompt
@@ -2154,7 +2155,7 @@ async def htmx_catchup_config_create(
             period=period,
             filter_status=filter_status,
             filter_labeled=filter_labeled,
-            filter_score_min=filter_score_min,
+            filter_score_min=score_min_stored,
             article_limit=article_limit,
             model_slot=model_slot,
             custom_prompt=custom_prompt,
@@ -2207,7 +2208,7 @@ async def htmx_catchup_config_update(
     config.period = period
     config.filter_status = filter_status
     config.filter_labeled = filter_labeled
-    config.filter_score_min = filter_score_min
+    config.filter_score_min = filter_score_min / 100 if filter_score_min is not None else None
     config.article_limit = article_limit
     config.model_slot = model_slot
     config.custom_prompt = custom_prompt

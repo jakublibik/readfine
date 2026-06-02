@@ -138,7 +138,7 @@
                 ≥
               </label>
               <input type="number" name="filter_score_min" id="score-filter-value"
-                     min="0" max="1" step="0.05" value="0.5"
+                     min="0" max="100" step="1" value="50"
                      class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs disabled:opacity-40"
                      disabled>
             </div>
@@ -432,7 +432,7 @@
       scoreToggle.checked = hasScore;
       scoreInput.disabled = !hasScore;
       if (hasScore) {
-        scoreInput.value = cfg.filter_score_min;
+        scoreInput.value = Math.round(cfg.filter_score_min * 100);
         scoreInput.setAttribute('name', 'filter_score_min');
       } else {
         scoreInput.removeAttribute('name');
