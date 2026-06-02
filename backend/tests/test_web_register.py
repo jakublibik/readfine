@@ -134,6 +134,32 @@ class TestWebRegisterSuccess:
         assert r.status_code == 302
         assert r.headers["location"] == "/app"
 
+    def _added_settings_timezone(self, mock_db):
+        from app.models.user import UserSettings
+        for call in mock_db.add.call_args_list:
+            obj = call.args[0]
+            if isinstance(obj, UserSettings):
+                return obj.timezone
+        return None
+
+    def test_browser_timezone_stored_on_registration(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            web_client.post("/register", data={**VALID_FORM, "timezone": "Europe/Prague"})
+        assert self._added_settings_timezone(mock_db) == "Europe/Prague"
+
+    def test_invalid_timezone_falls_back_to_utc(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            web_client.post("/register", data={**VALID_FORM, "timezone": "Mars/Olympus"})
+        assert self._added_settings_timezone(mock_db) == "UTC"
+
+    def test_missing_timezone_defaults_to_utc(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            web_client.post("/register", data=VALID_FORM)
+        assert self._added_settings_timezone(mock_db) == "UTC"
+
     def test_smtp_configured_sends_email_and_redirects_to_check_email(self, web_client, mock_db):
         mock_db.execute = AsyncMock(side_effect=[
             _scalar(_make_app_settings(smtp_host="smtp.test.com")),

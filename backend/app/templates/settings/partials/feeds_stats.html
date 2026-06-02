@@ -18,7 +18,7 @@
       {% for fs in feed_stats %}
       <tr>
         <td class="pr-2 py-2 font-medium text-gray-900">
-          <span class="block truncate">{{ fs.feed_title }}</span>
+          <span class="block truncate max-w-[28rem]" title="{{ fs.feed_title }}">{{ fs.feed_title }}</span>
         </td>
         <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.total_articles }}</td>
         <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.read_pct }}%</td>

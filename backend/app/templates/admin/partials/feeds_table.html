@@ -44,7 +44,7 @@
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
         {% if f.last_fetched_at %}
-          <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at.strftime("%b %d, %H:%M") }}</time>
+          <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at | localtime('short') }}</time>
           {% if f.last_fetch_duration_ms is not none %}
           <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
           {% endif %}
@@ -52,7 +52,7 @@
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
         {% if f.last_published_at %}
-          <time datetime="{{ f.last_published_at.isoformat() }}">{{ f.last_published_at.strftime("%b %d, %H:%M") }}</time>
+          <time datetime="{{ f.last_published_at.isoformat() }}">{{ f.last_published_at | localtime('short') }}</time>
         {% else %}<span class="text-gray-300">—</span>{% endif %}
       </td>
       <td class="px-2 py-2 text-right">

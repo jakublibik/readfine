@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.auth.security import hash_password, verify_password
 from app.utils.smtp import send_email
+from app.utils.datetime_format import is_valid_timezone
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
@@ -141,6 +142,7 @@ async def register(
     confirm_password: str = Form(...),
     display_name: str = Form(...),
     invite_token: str = Form(""),
+    tz: str = Form("", alias="timezone"),
     db: AsyncSession = Depends(get_db),
 ):
     app_settings = await _get_app_settings(db)
@@ -200,7 +202,8 @@ async def register(
     db.add(user)
     await db.flush()
 
-    db.add(UserSettings(user_id=user.id))
+    user_tz = tz.strip() if is_valid_timezone(tz.strip()) else "UTC"
+    db.add(UserSettings(user_id=user.id, timezone=user_tz))
 
     if inv:
         inv.used_at = datetime.now(timezone.utc)

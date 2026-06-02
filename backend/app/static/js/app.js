@@ -150,45 +150,8 @@ function hideDuplicateH1() {
 document.addEventListener('DOMContentLoaded', hideDuplicateH1);
 document.body.addEventListener('htmx:afterSettle', hideDuplicateH1);
 
-// Local time formatting for <time datetime="..."> elements
-function _formatLocalTime(isoStr, format) {
-  var dt = new Date(isoStr);
-  if (isNaN(dt.getTime())) return null;
-  var timeOpts = { hour: '2-digit', minute: '2-digit', hour12: false };
-  if (format === 'long') {
-    var pad = function(n) { return String(n).padStart(2, '0'); };
-    var time = dt.toLocaleTimeString(undefined, timeOpts);
-    return dt.getDate() + '. ' + (dt.getMonth() + 1) + '. ' + dt.getFullYear() + ' ' + time;
-  }
-  if (format === 'date') {
-    return dt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-  }
-  // short: today → HH:MM, this year → "DD.MM. HH:MM", older → "DD.MM.YYYY HH:MM"
-  var now = new Date();
-  var isToday = dt.toDateString() === now.toDateString();
-  if (isToday) {
-    return dt.toLocaleTimeString(undefined, timeOpts);
-  }
-  var pad = function(n) { return String(n).padStart(2, '0'); };
-  var day = pad(dt.getDate());
-  var month = pad(dt.getMonth() + 1);
-  var time = dt.toLocaleTimeString(undefined, timeOpts);
-  if (dt.getFullYear() === now.getFullYear()) {
-    return day + '.' + month + '. ' + time;
-  }
-  return day + '.' + month + '.' + dt.getFullYear() + ' ' + time;
-}
-
-function localizeAllTimes() {
-  document.querySelectorAll('time[datetime]').forEach(function (el) {
-    var localized = _formatLocalTime(el.getAttribute('datetime'), el.dataset.format || 'short');
-    if (localized) el.textContent = localized;
-    el.style.removeProperty('visibility');
-  });
-}
-
-document.addEventListener('DOMContentLoaded', localizeAllTimes);
-document.body.addEventListener('htmx:afterSwap', localizeAllTimes);
+// Dates are formatted server-side (Jinja `localtime`/`utctime` filters using the
+// user's stored timezone), so no client-side localization is needed.
 
 // Copy-to-clipboard for [data-copy] buttons
 document.addEventListener('click', function (e) {

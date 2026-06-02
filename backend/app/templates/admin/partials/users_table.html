@@ -40,7 +40,7 @@
       <td class="px-4 py-2 text-right text-gray-600">{{ item.article_count }}</td>
       <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
         {% if u.last_active_at %}
-          <time datetime="{{ u.last_active_at.isoformat() }}">{{ u.last_active_at.strftime("%b %d, %H:%M") }}</time>
+          <time datetime="{{ u.last_active_at.isoformat() }}">{{ u.last_active_at | localtime('short') }}</time>
         {% else %}—{% endif %}
       </td>
       <td class="px-4 py-2 text-right whitespace-nowrap">
@@ -57,7 +57,7 @@
         {% endif %}
       </td>
       <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-        <time datetime="{{ u.created_at.isoformat() }}" data-format="date">{{ u.created_at.strftime("%b %d, %Y") }}</time>
+        <time datetime="{{ u.created_at.isoformat() }}">{{ u.created_at | localtime('date') }}</time>
       </td>
       <td class="px-4 py-2 text-right">
         {% if u.id != current_user.id %}

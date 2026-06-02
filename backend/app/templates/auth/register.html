@@ -14,6 +14,7 @@
 
         <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
             <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+            <input type="hidden" name="timezone" id="tz-field">
             {% if invite_token %}
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
@@ -46,7 +47,13 @@
                 Create account
             </button>
         </form>
-        <script>
+        <script nonce="{{ request.state.csp_nonce }}">
+        // Prefill the user's timezone from the browser so new accounts get it right.
+        try {
+            document.getElementById('tz-field').value =
+                Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        } catch (e) { /* leave empty → server defaults to UTC */ }
+
         document.querySelector('form').addEventListener('submit', function() {
             var btn = document.getElementById('submit-btn');
             btn.disabled = true;

@@ -3,10 +3,30 @@ from markupsafe import Markup
 from fastapi.templating import Jinja2Templates
 
 from app.utils.markdown import md_render
+from app.utils.datetime_format import (
+    format_local,
+    current_viewer_tz,
+    timezone_groups,
+    is_common_timezone,
+)
 
 templates = Jinja2Templates(directory="app/templates")
 
 templates.env.filters["markdown"] = lambda text: Markup(md_render(text or ""))
+
+
+def _localtime(dt, fmt: str = "short") -> str:
+    """Format a datetime in the current request's viewer timezone."""
+    return format_local(dt, current_viewer_tz.get(), fmt)
+
+
+def _utctime(dt, fmt: str = "short") -> str:
+    """Format a datetime in UTC (operational/admin logs)."""
+    return format_local(dt, "UTC", fmt)
+
+
+templates.env.filters["localtime"] = _localtime
+templates.env.filters["utctime"] = _utctime
 
 
 def _catchup_config_json(cfg) -> str:
@@ -55,3 +75,5 @@ def set_ai_enabled(value: bool) -> None:
 
 
 templates.env.globals["app_ai_enabled"] = get_ai_enabled
+templates.env.globals["timezone_groups"] = timezone_groups
+templates.env.globals["is_common_timezone"] = is_common_timezone

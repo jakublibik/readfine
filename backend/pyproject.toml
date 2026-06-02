@@ -47,6 +47,7 @@ dependencies = [
     "google-genai>=1.0.0",
     "mistune>=3.2.1",
     "css-inline>=0.20.2",
+    "tzdata>=2025.3",
 ]
 
 [project.optional-dependencies]

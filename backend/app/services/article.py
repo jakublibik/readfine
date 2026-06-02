@@ -12,6 +12,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.utils.datetime_format import current_viewer_tz, format_local
 
 logger = logging.getLogger(__name__)
 
@@ -77,17 +78,8 @@ def _make_snippet(summary: str | None, content: str | None) -> str | None:
 
 
 def _format_date(dt: datetime | None) -> str:
-    if dt is None:
-        return ""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    today = datetime.now(timezone.utc).date()
-    if dt.date() == today:
-        return dt.strftime("%H:%M")
-    pad = lambda n: str(n).zfill(2)
-    if dt.year == datetime.now(timezone.utc).year:
-        return pad(dt.day) + "." + pad(dt.month) + ". " + dt.strftime("%H:%M")
-    return pad(dt.day) + "." + pad(dt.month) + "." + str(dt.year) + " " + dt.strftime("%H:%M")
+    # Uses the per-request viewer timezone (set in the auth dependency).
+    return format_local(dt, current_viewer_tz.get(), "short")
 
 
 _FTS_VECTOR = (

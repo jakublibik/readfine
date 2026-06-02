@@ -22,6 +22,7 @@ from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
 from app.utils.parsing import safe_int
+from app.utils.datetime_format import is_valid_timezone
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
@@ -36,7 +37,8 @@ from app.models.article import Article
 from app.models.feed import Folder, UserFeed
 from app.models.label import Label
 from app.models.settings import AppSettings
-from app.models.user import User, UserSettings
+from app.models.user import User, UserSettings, UserCatchupConfig
+from app.services.briefing_service import compute_next_send_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
 from app.services.feed import list_user_feeds, subscribe, subscribe_scrape, unsubscribe
@@ -1300,6 +1302,21 @@ async def _get_or_create_settings(user: User, db: AsyncSession) -> UserSettings:
     return s
 
 
+async def _reschedule_briefings(user_id: int, tz_str: str, db: AsyncSession) -> None:
+    """Recompute next-send time for the user's active briefings after a tz change."""
+    configs = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user_id,
+            UserCatchupConfig.briefing_enabled == True,
+        )
+    )).scalars().all()
+    for cfg in configs:
+        if cfg.briefing_interval and cfg.briefing_time:
+            cfg.briefing_next_send_at = compute_next_send_at(
+                cfg.briefing_interval, cfg.briefing_day, cfg.briefing_time, tz_str
+            )
+
+
 @router.get("/preferences", response_class=HTMLResponse)
 async def settings_preferences(
     request: Request,
@@ -1367,6 +1384,11 @@ async def settings_preferences_save(
     if font_family not in _FONT_FAMILY_VALUES:
         font_family = "sans"
     s.reading_font_family = font_family
+
+    tz_value = (form.get("timezone") or "").strip()
+    if is_valid_timezone(tz_value) and tz_value != s.timezone:
+        s.timezone = tz_value
+        await _reschedule_briefings(user.id, tz_value, db)
 
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {

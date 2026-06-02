@@ -28,7 +28,7 @@
         </td>
         <td class="px-4 py-2 text-gray-400 text-xs max-w-xs truncate">{{ log.detail | tojson if log.detail else "—" }}</td>
         <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          <time datetime="{{ log.created_at.isoformat() }}">{{ log.created_at.strftime("%b %d, %H:%M") }}</time>
+          <time datetime="{{ log.created_at.isoformat() }}">{{ log.created_at | utctime('short') }}</time>
         </td>
       </tr>
       {% endfor %}

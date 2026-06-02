@@ -12,6 +12,28 @@
 <form method="POST" action="/settings/preferences" hx-boost="true" class="space-y-6">
 
   <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Date &amp; time</h2>
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Timezone</label>
+        <p class="text-xs text-gray-500 mt-0.5">Used to display dates and to schedule briefing emails</p>
+      </div>
+      <select name="timezone" class="border border-gray-300 rounded px-2 py-1.5 text-sm max-w-[16rem]">
+        {% if not is_common_timezone(s.timezone) %}
+        <option value="{{ s.timezone }}" selected>{{ s.timezone }}</option>
+        {% endif %}
+        {% for region, zones in timezone_groups() %}
+        <optgroup label="{{ region }}">
+          {% for tz in zones %}
+          <option value="{{ tz }}" {% if tz == s.timezone %}selected{% endif %}>{{ tz }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </div>
+  </section>
+
+  <section>
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Article list</h2>
     <div class="space-y-4">
 

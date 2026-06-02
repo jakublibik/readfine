@@ -20,7 +20,7 @@
 {% endif %}
 <div class="min-h-screen bg-gray-50 flex flex-col sm:flex-row">
   {{ side_nav(settings_nav_items, title="Settings", back_url="/app", back_label="Back to reader") }}
-  <main class="flex-1 px-4 sm:px-8 pt-3 pb-6 max-w-3xl">
+  <main class="flex-1 px-4 sm:px-8 pt-3 pb-6 {% block settings_main_width %}max-w-3xl{% endblock %}">
     {% block settings_content %}{% endblock %}
   </main>
 </div>

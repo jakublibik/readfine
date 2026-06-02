@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.security import decode_access_token, hash_token
@@ -10,13 +11,23 @@ from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
 from app.models.settings import AppSettings
+from app.utils.datetime_format import current_viewer_tz
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def _get_user_by_id(user_id: int, db: AsyncSession) -> User | None:
-    result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
-    return result.scalar_one_or_none()
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.settings))
+        .where(User.id == user_id, User.is_active == True)
+    )
+    user = result.scalar_one_or_none()
+    if user is not None:
+        # Carry the viewer's timezone for server-side date formatting.
+        tz = user.settings.timezone if user.settings else None
+        current_viewer_tz.set(tz or "UTC")
+    return user
 
 
 async def get_current_user(

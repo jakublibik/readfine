@@ -1487,6 +1487,7 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "starlette-csrf" },
     { name = "trafilatura" },
+    { name = "tzdata" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1537,6 +1538,7 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "starlette-csrf", specifier = ">=3.0.0" },
     { name = "trafilatura", specifier = ">=1.12.0" },
+    { name = "tzdata", specifier = ">=2025.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["dev"]
