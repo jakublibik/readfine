@@ -43,12 +43,19 @@
       Email address updated.
     </div>
     {% endif %}
+    {% if email_pending %}
+    <div class="mb-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+      A confirmation link was sent to <strong>{{ email_pending }}</strong>. Your email will change once you confirm it.
+    </div>
+    {% endif %}
     {% if email_error %}
     <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
       {{ email_error }}
     </div>
     {% endif %}
-    <form method="POST" action="/settings/profile/email" hx-boost="true" class="space-y-3 max-w-sm">
+    <form method="POST" action="/settings/profile/email" hx-boost="true"
+          hx-indicator="#email-spinner" hx-disabled-elt="find button[type=submit]"
+          class="space-y-3 max-w-sm">
       <div>
         <label class="block text-sm text-gray-600 mb-1">New email</label>
         <input type="email" name="email" value="{{ user.email }}" required autocomplete="email"
@@ -59,11 +66,17 @@
         <input type="password" name="current_password" required autocomplete="current-password"
                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
-      <div>
+      <div class="flex items-center gap-2">
         <button type="submit"
-                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed">
           Update email
         </button>
+        <svg id="email-spinner"
+             class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
+             xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
       </div>
     </form>
   </section>

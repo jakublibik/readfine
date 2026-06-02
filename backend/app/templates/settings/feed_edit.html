@@ -118,18 +118,20 @@
 
     <div class="flex gap-2 mt-2">
       {% if ai_selector_available %}
-      <button type="button"
-              hx-post="/settings/feeds/scrape-ai-selector"
-              hx-include="[name='url'],[name='html_sample'],[name='conversation_history']"
-              hx-target="#ai-refinement"
-              hx-indicator="#ai-spinner"
-              class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
-        <svg id="ai-spinner" class="htmx-indicator animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+      <span class="inline-flex items-center gap-1.5">
+        <button type="button"
+                hx-post="/settings/feeds/scrape-ai-selector"
+                hx-include="[name='url'],[name='html_sample'],[name='conversation_history']"
+                hx-target="#ai-refinement"
+                hx-indicator="#ai-spinner"
+                class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
+          Generate with AI
+        </button>
+        <svg id="ai-spinner" class="htmx-indicator animate-spin h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
         </svg>
-        Generate with AI
-      </button>
+      </span>
       {% else %}
       <button type="button"
               hx-post="/settings/feeds/scrape-show-prompt"
@@ -140,18 +142,20 @@
       </button>
       {% endif %}
 
-      <button type="button" id="preview-btn"
-              hx-post="/settings/feeds/scrape-preview"
-              hx-include="[name='url'],[name='article_links_selector']"
-              hx-target="#scrape-preview"
-              hx-indicator="#preview-spinner"
-              class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
-        <svg id="preview-spinner" class="htmx-indicator animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+      <span class="inline-flex items-center gap-1.5">
+        <button type="button" id="preview-btn"
+                hx-post="/settings/feeds/scrape-preview"
+                hx-include="[name='url'],[name='article_links_selector']"
+                hx-target="#scrape-preview"
+                hx-indicator="#preview-spinner"
+                class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
+          Preview
+        </button>
+        <svg id="preview-spinner" class="htmx-indicator animate-spin h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
         </svg>
-        Preview
-      </button>
+      </span>
     </div>
 
     {% if ai_selector_available %}

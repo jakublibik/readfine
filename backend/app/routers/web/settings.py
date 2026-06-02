@@ -3,7 +3,7 @@ import html as html_module
 import logging
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncio
 import httpx
@@ -21,6 +21,7 @@ from app.auth.security import hash_password, verify_password, hash_token
 from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
+from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
@@ -1231,6 +1232,11 @@ async def settings_profile_email(
             "user": user,
             "email_error": "Current password is incorrect.",
         })
+    if email == user.email:
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_error": "This is already your email address.",
+        })
     existing = await db.execute(
         select(User).where(User.email == email, User.id != user.id)
     )
@@ -1239,11 +1245,50 @@ async def settings_profile_email(
             "user": user,
             "email_error": "This email is already in use.",
         })
-    user.email = email
+
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    smtp_configured = bool(app_s and app_s.smtp_host)
+
+    if not smtp_configured:
+        # No SMTP → reset/briefing emails don't work anyway; change immediately
+        # (current_password already protects this endpoint).
+        user.email = email
+        await db.commit()
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_saved": True,
+        })
+
+    # Pending-email flow: verify the new address before switching.
+    token = secrets.token_urlsafe(32)
+    user.pending_email = email
+    user.pending_email_token_hash = hash_token(token)
+    user.pending_email_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+    old_email = user.email
     await db.commit()
+
+    verify_url = str(request.base_url) + f"verify-email-change?token={token}"
+    try:
+        await asyncio.to_thread(
+            send_email, app_s, email,
+            "Readfine – Confirm your new email address",
+            f"Please confirm your new email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not request this change, you can safely ignore this email.",
+        )
+    except Exception as e:
+        logger.error("Failed to send email-change verification to %s: %s", email, e)
+    # Heads-up to the current address so a silent takeover is detectable.
+    try:
+        await asyncio.to_thread(
+            send_email, app_s, old_email,
+            "Readfine – Email change requested",
+            f"A request was made to change your Readfine email address to {email}.\n\nIf this was not you, please change your password immediately.",
+        )
+    except Exception as e:
+        logger.error("Failed to send email-change notice to %s: %s", old_email, e)
+
     return templates.TemplateResponse(request, "settings/profile.html", {
         "user": user,
-        "email_saved": True,
+        "email_pending": email,
     })
 
 
@@ -1277,7 +1322,10 @@ async def settings_profile_password(
     user.password_hash = hash_password(new_pw)
     user.password_reset_token_hash = None
     user.password_reset_expires_at = None
+    # Invalidate all existing sessions/JWTs, then keep the current session alive.
+    user.session_token_version += 1
     await db.commit()
+    request.session["tv"] = user.session_token_version
     return templates.TemplateResponse(request, "settings/profile.html", {
         "user": user,
         "pw_saved": True,

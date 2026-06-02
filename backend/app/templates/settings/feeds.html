@@ -26,17 +26,13 @@
              hx-indicator="#feed-test-spinner"
              hx-trigger="keydown[key=='Enter']"
              class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <div class="flex gap-2">
+      <div class="flex gap-2 items-center">
         <button type="button"
                 hx-post="/settings/feeds/test"
                 hx-include="#feed-subscribe-form"
                 hx-target="#feed-test-result"
                 hx-indicator="#feed-test-spinner"
-                class="flex-1 sm:flex-none px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center justify-center gap-1">
-          <svg id="feed-test-spinner" class="htmx-indicator animate-spin h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-          </svg>
+                class="flex-1 sm:flex-none px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
           Test
         </button>
         <button type="button"
@@ -47,6 +43,10 @@
                 class="flex-1 sm:flex-none px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
           Subscribe
         </button>
+        <svg id="feed-test-spinner" class="htmx-indicator animate-spin h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
       </div>
 <div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
       <input type="text" name="custom_title" placeholder="Custom title (optional)"

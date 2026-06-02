@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, ForeignKey, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, ForeignKey, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -20,6 +20,12 @@ class User(Base):
     email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     email_verification_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
     email_verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Pending email change (verified via token sent to the new address)
+    pending_email: Mapped[str | None] = mapped_column(String(255))
+    pending_email_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)
+    pending_email_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Bumped on password change/reset to invalidate all existing sessions and JWTs
+    session_token_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

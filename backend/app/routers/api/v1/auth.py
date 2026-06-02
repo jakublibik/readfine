@@ -20,6 +20,11 @@ async def get_token(
     payload: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    """Exchange credentials for a short-lived JWT (60 min), invalidated on password change.
+
+    For long-lived, individually revocable programmatic access, create an API token
+    in Settings → API Tokens and send it as a Bearer header instead.
+    """
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
@@ -29,7 +34,7 @@ async def get_token(
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled")
 
-    token = create_access_token(user.id, user.role)
+    token = create_access_token(user.id, user.role, user.session_token_version)
     return {"access_token": token, "token_type": "bearer"}
 
 

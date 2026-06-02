@@ -217,6 +217,28 @@ async def _cleanup_unverified_users() -> None:
         await session.commit()
 
 
+async def _cleanup_expired_pending_emails() -> None:
+    """Job: clear expired pending email-change requests."""
+    if db.async_session_factory is None:
+        return
+    from sqlalchemy import update
+    from app.models.user import User
+    now = datetime.now(timezone.utc)
+    async with db.async_session_factory() as session:
+        result = await session.execute(
+            update(User)
+            .where(User.pending_email_expires_at < now)
+            .values(
+                pending_email=None,
+                pending_email_token_hash=None,
+                pending_email_expires_at=None,
+            )
+        )
+        if result.rowcount:
+            logger.info("Cleared %d expired pending email changes", result.rowcount)
+        await session.commit()
+
+
 async def _send_due_briefings() -> None:
     """Job: send scheduled briefing emails for all due configs."""
     import smtplib
@@ -371,6 +393,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=0,
         id="cleanup_unverified_users",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _cleanup_expired_pending_emails,
+        trigger="cron",
+        hour=4,
+        minute=10,
+        id="cleanup_expired_pending_emails",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

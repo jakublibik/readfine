@@ -28,6 +28,7 @@ def _make_user(
     u.is_active = is_active
     u.email_verified = email_verified
     u.last_active_at = None
+    u.session_token_version = 0
     return u
 
 

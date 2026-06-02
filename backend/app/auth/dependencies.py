@@ -40,7 +40,7 @@ async def get_current_user(
     user_id = request.session.get("user_id")
     if user_id:
         user = await _get_user_by_id(user_id, db)
-        if user:
+        if user and request.session.get("tv", 0) == user.session_token_version:
             return user
 
     # 2. Try Bearer token (API)
@@ -51,7 +51,7 @@ async def get_current_user(
         payload = decode_access_token(token)
         if payload:
             user = await _get_user_by_id(int(payload["sub"]), db)
-            if user:
+            if user and payload.get("tv", 0) == user.session_token_version:
                 return user
 
         # Try API token (hashed lookup)
@@ -84,7 +84,7 @@ async def get_api_user(
         payload = decode_access_token(token)
         if payload:
             user = await _get_user_by_id(int(payload["sub"]), db)
-            if user:
+            if user and payload.get("tv", 0) == user.session_token_version:
                 return user
 
         token_hash = hash_token(token)

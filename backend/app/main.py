@@ -71,6 +71,7 @@ def create_app() -> FastAPI:
         secret_key=settings.secret_key,
         https_only=not settings.debug,
         same_site="lax",
+        max_age=14 * 24 * 3600,  # 14-day sliding expiry; re-stamped on each response
     )
     app.add_middleware(
         CSRFMiddleware,

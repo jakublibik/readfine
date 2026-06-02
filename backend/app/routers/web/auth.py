@@ -104,6 +104,7 @@ async def login(
     await db.commit()
 
     request.session["user_id"] = user.id
+    request.session["tv"] = user.session_token_version
     return RedirectResponse("/app", status_code=302)
 
 
@@ -232,6 +233,7 @@ async def register(
         return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1", status_code=302)
 
     request.session["user_id"] = user.id
+    request.session["tv"] = user.session_token_version
     return RedirectResponse("/app", status_code=302)
 
 
@@ -300,6 +302,48 @@ async def resend_verification(
             except Exception as e:
                 logger.error("Failed to resend verification email to %s: %s", email, e)
     return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&resent=1", status_code=302)
+
+
+@router.get("/verify-email-change", response_class=HTMLResponse)
+async def verify_email_change(request: Request, token: str = "", db: AsyncSession = Depends(get_db)):
+    def _result(ok: bool, message: str):
+        return templates.TemplateResponse(
+            request, "auth/email_change_result.html",
+            {"ok": ok, "message": message},
+            status_code=status.HTTP_200_OK if ok else status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not token:
+        return _result(False, "This confirmation link is invalid.")
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    result = await db.execute(select(User).where(User.pending_email_token_hash == token_hash))
+    user = result.scalar_one_or_none()
+    if not user or not user.pending_email or not user.pending_email_expires_at:
+        return _result(False, "This confirmation link is invalid.")
+    if user.pending_email_expires_at < datetime.now(timezone.utc):
+        return _result(False, "This confirmation link has expired. Please request the change again.")
+
+    # Re-check the target address is still free (race with another signup/change).
+    taken = await db.execute(
+        select(User).where(User.email == user.pending_email, User.id != user.id)
+    )
+    if taken.scalar_one_or_none():
+        user.pending_email = None
+        user.pending_email_token_hash = None
+        user.pending_email_expires_at = None
+        await db.commit()
+        return _result(False, "That email address is no longer available. Please choose another.")
+
+    user.email = user.pending_email
+    user.pending_email = None
+    user.pending_email_token_hash = None
+    user.pending_email_expires_at = None
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        return _result(False, "That email address is no longer available. Please choose another.")
+    return _result(True, "Your email address has been updated.")
 
 
 # ── Password reset ─────────────────────────────────────────────────────────────
@@ -383,6 +427,8 @@ async def reset_password_confirm(
     user.password_hash = hash_password(new_password)
     user.password_reset_token_hash = None
     user.password_reset_expires_at = None
+    # Invalidate all existing sessions/JWTs; user logs in again with new password.
+    user.session_token_version += 1
     await db.commit()
     return templates.TemplateResponse(request, "auth/reset_password_confirm.html", {"done": True})
 

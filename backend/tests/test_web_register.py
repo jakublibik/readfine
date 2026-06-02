@@ -24,6 +24,7 @@ def _make_user(
     u.email_verification_token_hash = token_hash
     u.email_verification_expires_at = expires_at
     u.password_hash = "hashed"
+    u.session_token_version = 0
     return u
 
 

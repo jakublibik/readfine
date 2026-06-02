@@ -12,6 +12,7 @@ def _make_db_user(active=True, password_hash="dummy"):
     user.display_name = "Test User"
     user.is_active = active
     user.password_hash = password_hash
+    user.session_token_version = 0
     user.created_at = None
     return user
 

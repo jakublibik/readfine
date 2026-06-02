@@ -52,7 +52,12 @@
   <!-- Authentication -->
   <h3 class="text-sm font-semibold text-gray-800 mb-2">Authentication</h3>
   <p class="text-sm text-gray-600 mb-2">Add the token to every request as a Bearer header:</p>
-  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">Authorization: Bearer &lt;your-token&gt;</pre>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-3 overflow-x-auto">Authorization: Bearer &lt;your-token&gt;</pre>
+  <p class="text-sm text-gray-600 mb-5">
+    For scripts and long-running integrations, use an <strong>API token</strong> created above — it does not expire and can be
+    revoked here at any time. The short-lived JWT from <code class="bg-gray-100 px-1 rounded">POST /auth/token</code> (valid 60 minutes)
+    is meant for interactive logins and is invalidated when you change your password.
+  </p>
 
   <!-- Base URL -->
   <h3 class="text-sm font-semibold text-gray-800 mb-2">Base URL</h3>
@@ -162,6 +167,11 @@
         </tr>
 
         <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Auth</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/auth/token</td>
+          <td class="px-3 py-2 text-gray-600">Exchange email/password for a short-lived JWT (60&nbsp;min). For long-lived access use an API token instead.</td>
+        </tr>
         <tr>
           <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
           <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/auth/me</td>
