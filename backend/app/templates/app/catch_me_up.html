@@ -201,6 +201,9 @@
             <textarea name="custom_prompt" id="custom-prompt"
                       rows="4" placeholder="{{ default_catchup_prompt }}"
                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono resize-y"></textarea>
+            <div class="text-right mt-1">
+              <button type="button" data-insert-default="#custom-prompt" class="text-xs text-blue-600 hover:underline bg-transparent border-0 p-0 cursor-pointer">insert default</button>
+            </div>
           </div>
         </div>
 
@@ -457,6 +460,7 @@
         promptPanel.classList.remove('hidden');
         if (promptArrow) promptArrow.classList.add('rotate-90');
       }
+      if (window._refreshInsertDefaultLabels) window._refreshInsertDefaultLabels();
     }
 
     // Scope — update hidden input and re-init checkboxes

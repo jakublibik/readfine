@@ -2452,3 +2452,69 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   })();
 })();
 
+// ── "insert default" links for prompt fields ──────────────────────────────
+// The default prompt is rendered into each textarea's placeholder. The link
+// copies it into the value so it can be used as an editable starting point.
+// Label is contextual: "insert default" when empty, "reset to default" when filled.
+(function () {
+  function refresh() {
+    document.querySelectorAll('[data-insert-default]').forEach(function (btn) {
+      var ta = document.querySelector(btn.getAttribute('data-insert-default'));
+      if (ta) btn.textContent = ta.value.trim() ? 'reset to default' : 'insert default';
+    });
+  }
+  window._refreshInsertDefaultLabels = refresh;
+
+  function disarmInsertBtn(btn) {
+    if (btn.dataset.armed !== '1') return;
+    btn.dataset.armed = '';
+    btn.className = btn.dataset.origClass || btn.className;
+    clearTimeout(Number(btn.dataset.armTimer));
+    if (window._refreshInsertDefaultLabels) window._refreshInsertDefaultLabels();
+    document.removeEventListener('click', btn._insertOutside, true);
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-insert-default]');
+    if (!btn) return;
+    var ta = document.querySelector(btn.getAttribute('data-insert-default'));
+    if (!ta) return;
+
+    if (btn.dataset.armed === '1') {
+      // Second click: clear field and disarm
+      disarmInsertBtn(btn);
+      ta.value = '';
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.focus();
+      return;
+    }
+
+    if (ta.value.trim()) {
+      // Arm for confirmation
+      btn.dataset.armed = '1';
+      btn.dataset.origText = btn.textContent;
+      btn.dataset.origClass = btn.className;
+      btn.textContent = 'Confirm reset';
+      btn.className = 'text-xs text-red-600 font-medium hover:text-red-800 bg-transparent border-0 p-0 cursor-pointer';
+      btn._insertOutside = function (ev) { if (!btn.contains(ev.target)) disarmInsertBtn(btn); };
+      btn.dataset.armTimer = setTimeout(function () { disarmInsertBtn(btn); }, 3500);
+      setTimeout(function () { document.addEventListener('click', btn._insertOutside, true); }, 0);
+    } else {
+      // Empty field: insert editable copy of the default immediately
+      ta.value = ta.placeholder;
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      ta.focus();
+    }
+  });
+
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.matches && e.target.matches('textarea[id]')) {
+      var btn = document.querySelector('[data-insert-default="#' + e.target.id + '"]');
+      if (btn) btn.textContent = e.target.value.trim() ? 'reset to default' : 'insert default';
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', refresh);
+  refresh();
+})();
+
