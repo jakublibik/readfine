@@ -43,6 +43,7 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 ## TODO
 - **Readable před filtrováním (scrape feedy)**: readable extraction synchronně při fetchi → filtry mají k dispozici plný text; kompromis: zpomalí fetch
 - limit na počet článků při prvním stažení
+- **Per-feed/per-user retention (ke zvážení)**: `UserFeed.purge_after_days` a `purge_keep_count` existují v DB, ale nemají UI. Multi-user scénář je komplikovaný — purge by musel brát nejbenevolentnější nastavení ze všech userů pro daný feed a mazat jen per-user přiřazení, ne článek samotný. Pravděpodobně zbytečná komplexita.
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
 - **Rate limiting — DB lockout**: `failed_login_attempts` + `locked_until` v tabulce `users`; persistentní, funguje při multi-process deployi; vyžaduje DB migraci + cleanup job. Aktuálně řešeno in-memory counterem (resetuje se při restartu).

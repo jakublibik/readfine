@@ -2442,7 +2442,8 @@ async def htmx_briefing_test_send(
         )
 
     return HTMLResponse(
-        '<p class="text-green-600 text-sm font-medium">Test briefing sent successfully.</p>'
+        '<p class="text-green-600 text-sm font-medium" id="briefing-test-ok">Test briefing sent successfully.</p>'
+        '<script>setTimeout(()=>document.getElementById("briefing-test-ok")?.remove(),5000)</script>'
     )
 
 

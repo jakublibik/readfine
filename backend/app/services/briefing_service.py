@@ -20,7 +20,7 @@ from app.templating import templates
 from app.utils.markdown import md_render
 from app.utils.smtp import send_html_email
 
-_inliner = css_inline.CSSInliner(keep_style_tags=False)
+_inliner = css_inline.CSSInliner(keep_style_tags=True)
 
 _PERIOD_LABELS = {
     "today": "Today",

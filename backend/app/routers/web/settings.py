@@ -184,6 +184,7 @@ async def settings_feeds(
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     return templates.TemplateResponse(request, "settings/feeds.html", {
         "user_feeds": user_feeds,
         "folders": folders,
@@ -192,6 +193,8 @@ async def settings_feeds(
         "subscribe_url": "",
         "detected_feeds": [],
         "added": added,
+        "purge_days": app_s.default_purge_after_days if app_s else None,
+        "purge_count": app_s.default_purge_keep_count if app_s else None,
     })
 
 
