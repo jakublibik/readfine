@@ -34,11 +34,11 @@
         <select name="briefing_interval" id="briefing-interval"
                 data-action="toggle-briefing-day"
                 class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
-          <option value="daily" {% if config.briefing_interval == 'daily' or not config.briefing_interval %}selected{% endif %}>Daily</option>
-          <option value="weekly" {% if config.briefing_interval == 'weekly' %}selected{% endif %}>Weekly</option>
+          <option value="daily" {% if config.briefing_interval == 'daily' %}selected{% endif %}>Daily</option>
+          <option value="weekly" {% if config.briefing_interval == 'weekly' or not config.briefing_interval %}selected{% endif %}>Weekly</option>
         </select>
       </div>
-      <div id="briefing-day-row" class="flex-1 {% if config.briefing_interval != 'weekly' %}hidden{% endif %}">
+      <div id="briefing-day-row" class="flex-1 {% if config.briefing_interval and config.briefing_interval != 'weekly' %}hidden{% endif %}">
         <label class="block text-xs font-medium text-gray-600 mb-1">Day</label>
         <select name="briefing_day" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white">
           {% set day_names = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"] %}
@@ -53,7 +53,7 @@
     <div>
       <label class="block text-xs font-medium text-gray-600 mb-1">Time</label>
       <input type="text" name="briefing_time"
-             value="{{ config.briefing_time or '08:00' }}"
+             value="{{ config.briefing_time or '00:10' }}"
              placeholder="HH:MM"
              pattern="[0-2][0-9]:[0-5][0-9]"
              maxlength="5"
