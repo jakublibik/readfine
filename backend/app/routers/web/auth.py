@@ -140,7 +140,7 @@ async def register(
     email: str = Form(...),
     password: str = Form(...),
     confirm_password: str = Form(...),
-    display_name: str = Form(...),
+    display_name: str = Form(""),
     invite_token: str = Form(""),
     tz: str = Form("", alias="timezone"),
     db: AsyncSession = Depends(get_db),
@@ -178,9 +178,7 @@ async def register(
     if password != confirm_password:
         return _err("Passwords do not match.")
 
-    display_name = display_name.strip()
-    if not display_name:
-        return _err("Display name cannot be empty.")
+    display_name = display_name.strip() or email.split("@")[0]
 
     smtp_configured = bool(app_settings and app_settings.smtp_host)
     # Invite with locked email = admin-verified address; no SMTP = skip verification

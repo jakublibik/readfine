@@ -1,0 +1,121 @@
+{% extends "legal/base.html" %}
+{% block title %}Privacy Policy – Readfine{% endblock %}
+
+{% block legal_title %}Privacy Policy{% endblock %}
+
+{% block legal_content %}
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">1. Controller</h2>
+    <p>
+      This Readfine instance is operated by <strong>{{ legal_operator_name or "[OPERATOR NAME]" }}</strong>,
+      reachable at <a href="mailto:{{ legal_contact_email or "[CONTACT EMAIL]" }}" class="text-blue-600 hover:underline">{{ legal_contact_email or "[CONTACT EMAIL]" }}</a>.
+      The operator is the data controller within the meaning of the GDPR.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">2. Data we collect</h2>
+    <div class="overflow-x-auto">
+      <table class="w-full text-xs border border-gray-200 rounded">
+        <thead class="bg-gray-50 text-gray-600">
+          <tr>
+            <th class="text-left px-3 py-2 font-medium">Data</th>
+            <th class="text-left px-3 py-2 font-medium">Purpose</th>
+            <th class="text-left px-3 py-2 font-medium whitespace-nowrap">Legal basis</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 text-gray-700">
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Email address</td>
+            <td class="px-3 py-2">Account identification, password reset, briefing emails</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(b) GDPR</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Display name</td>
+            <td class="px-3 py-2">Personalisation of the interface</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(b) GDPR</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Password (bcrypt hash)</td>
+            <td class="px-3 py-2">Authentication</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(b) GDPR</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Feed subscriptions &amp; reading history</td>
+            <td class="px-3 py-2">Providing the reader service, AI features</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(b) GDPR</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Timezone preference</td>
+            <td class="px-3 py-2">Date/time display and scheduled briefings</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(b) GDPR</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">IP address &amp; user-agent</td>
+            <td class="px-3 py-2">Security, abuse prevention (server logs)</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(f) GDPR</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="mt-2 text-xs text-gray-500">
+      We do not collect analytics, advertising data, or sell data to third parties.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">3. AI features</h2>
+    <p>
+      If you use AI-powered features (article summaries, briefings, scoring), article content
+      may be sent to a third-party AI provider (Anthropic, OpenAI, or Google). This is
+      configured by the operator. No data is used to train AI models under the standard API terms
+      of these providers. AI features are optional and can be disabled in Settings → AI.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">4. Cookies</h2>
+    <p>
+      This service uses a single session cookie to keep you signed in. This cookie is
+      strictly necessary for the service to function and does not require your consent
+      (Art. 5(3) ePrivacy Directive; GDPR Art. 6(1)(b)).
+      No tracking, analytics, or advertising cookies are used.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">5. Data retention</h2>
+    <p>
+      Your data is stored for as long as your account is active. When you delete your account,
+      all personal data (feeds, articles, labels, filters, briefing history) is permanently
+      deleted immediately. Server logs may be retained for up to 30 days for security purposes.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">6. Your rights</h2>
+    <p>Under GDPR you have the right to:</p>
+    <ul class="list-disc pl-5 space-y-1 mt-2">
+      <li><strong>Access</strong> — request a copy of your personal data.</li>
+      <li><strong>Rectification</strong> — correct inaccurate data (via Settings → Profile).</li>
+      <li><strong>Erasure</strong> — delete your account and all data (via Settings → Profile → Danger zone).</li>
+      <li><strong>Portability</strong> — export feed subscriptions via Settings → Feeds → Export OPML.</li>
+      <li><strong>Object</strong> — object to processing based on legitimate interest.</li>
+    </ul>
+    <p class="mt-2">
+      To exercise rights not available in the interface, contact
+      <a href="mailto:{{ legal_contact_email or "[CONTACT EMAIL]" }}" class="text-blue-600 hover:underline">{{ legal_contact_email or "[CONTACT EMAIL]" }}</a>.
+      You also have the right to lodge a complaint with your local supervisory authority.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">7. Contact</h2>
+    <p>
+      <strong>{{ legal_operator_name or "[OPERATOR NAME]" }}</strong><br>
+      <a href="mailto:{{ legal_contact_email or "[CONTACT EMAIL]" }}" class="text-blue-600 hover:underline">{{ legal_contact_email or "[CONTACT EMAIL]" }}</a>
+    </p>
+  </section>
+
+{% endblock %}

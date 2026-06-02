@@ -118,10 +118,12 @@ async def admin_settings(
     db: AsyncSession = Depends(get_db),
 ):
     s = await get_app_settings(db)
+    legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
     return templates.TemplateResponse(request, "admin/settings.html", {
         "s": s,
         "saved": False,
         "error": None,
+        "legal_configured": legal_configured,
     })
 
 
@@ -149,7 +151,16 @@ async def admin_settings_save(
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
+        "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
+        "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
+        "legal_jurisdiction": form.get("legal_jurisdiction", "").strip() or None,
     }
+    if (
+        data["legal_operator_name"] != s.legal_operator_name
+        or data["legal_contact_email"] != s.legal_contact_email
+        or data["legal_jurisdiction"] != s.legal_jurisdiction
+    ):
+        data["legal_last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # Only update SMTP password if a new value was provided
     if smtp_password_plain:
         data["smtp_password_encrypted"] = encrypt(smtp_password_plain)
@@ -158,17 +169,22 @@ async def admin_settings_save(
         s = await update_app_settings(db, data)
         set_ai_enabled(s.ai_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
+        legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {
             "s": s,
             "saved": True,
             "error": None,
+            "legal_configured": legal_configured,
         })
     except Exception as e:
         logger.error("Failed to save app settings: %s", e)
+        s = await get_app_settings(db)
+        legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {
             "s": s,
             "saved": False,
             "error": "Failed to save settings.",
+            "legal_configured": legal_configured,
         }, status_code=500)
 
 

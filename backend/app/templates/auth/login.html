@@ -12,6 +12,12 @@
         </div>
         {% endif %}
 
+        {% if request.query_params.get("deleted") %}
+        <div class="mb-4 p-3 bg-gray-50 border border-gray-200 text-gray-700 rounded text-sm">
+            Your account has been deleted. All your data has been permanently removed.
+        </div>
+        {% endif %}
+
         {% if error %}
         <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
             {{ error }}
@@ -50,6 +56,14 @@
         {% if registration_open %}
         <p class="text-center text-sm text-gray-500 mt-4">
             Don't have an account? <a href="/register" class="text-blue-600 hover:underline">Register</a>
+        </p>
+        {% endif %}
+
+        {% if registration_open %}
+        <p class="text-center text-xs text-gray-400 mt-6">
+            <a href="/terms" target="_blank" rel="noopener noreferrer" class="hover:underline">Terms of Service</a>
+            &nbsp;·&nbsp;
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" class="hover:underline">Privacy Policy</a>
         </p>
         {% endif %}
     </div>

@@ -106,5 +106,41 @@
     </form>
   </section>
 
+  <!-- Delete account -->
+  {% if user.role != "admin" %}
+  <section>
+    <h2 class="text-sm font-medium text-red-600 mb-3 pb-1 border-b border-red-200">Danger zone</h2>
+    {% if delete_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ delete_error }}
+    </div>
+    {% endif %}
+    <p class="text-sm text-gray-600 mb-3">
+      Permanently delete your account and all associated data (feeds, articles, labels, filters, briefings).
+      This action <strong>cannot be undone</strong>.
+    </p>
+    <form method="POST" action="/settings/profile/delete-account" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">
+          Type <code class="bg-gray-100 px-1 rounded text-xs">delete my account</code> to confirm
+        </label>
+        <input type="text" name="confirm_text" required autocomplete="off"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700">
+          Delete my account
+        </button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
 </div>
 {% endblock %}

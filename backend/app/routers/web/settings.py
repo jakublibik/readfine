@@ -41,7 +41,7 @@ from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
-from app.services.feed import list_user_feeds, subscribe, subscribe_scrape, unsubscribe
+from app.services.feed import cleanup_user_feeds, list_user_feeds, subscribe, subscribe_scrape, unsubscribe
 from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
@@ -1282,6 +1282,41 @@ async def settings_profile_password(
         "user": user,
         "pw_saved": True,
     })
+
+
+@router.post("/profile/delete-account", response_class=HTMLResponse)
+async def settings_profile_delete_account(
+    request: Request,
+    current_password: str = Form(...),
+    confirm_text: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if user.role == "admin":
+        return Response(status_code=403)
+    if confirm_text.strip().lower() != "delete my account":
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "delete_error": "Please type 'delete my account' exactly to confirm.",
+        })
+    if not verify_password(current_password, user.password_hash):
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "delete_error": "Password is incorrect.",
+        })
+    try:
+        await cleanup_user_feeds(user.id, db)
+        await db.delete(user)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        logger.exception("Failed to delete account for user %s", user.id)
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "delete_error": "Could not delete your account due to a server error. Please try again later.",
+        }, status_code=500)
+    request.session.clear()
+    return RedirectResponse("/login?deleted=1", status_code=303)
 
 
 # ── Preferences ───────────────────────────────────────────────────────────────

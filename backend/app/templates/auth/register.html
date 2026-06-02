@@ -19,9 +19,10 @@
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
             <div>
-                <label class="block text-sm font-medium mb-1" for="display_name">Display name</label>
-                <input id="display_name" name="display_name" type="text" required
+                <label class="block text-sm font-medium mb-1" for="display_name">Display name <span class="text-gray-400 font-normal">(optional)</span></label>
+                <input id="display_name" name="display_name" type="text"
                     value="{{ prefill_display_name or '' }}"
+                    placeholder="Defaults to your email username"
                     class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div>
@@ -63,6 +64,13 @@
 
         <p class="text-center text-sm text-gray-500 mt-4">
             Already have an account? <a href="/login" class="text-blue-600 hover:underline">Sign in</a>
+        </p>
+
+        <p class="text-center text-xs text-gray-400 mt-4">
+            By creating an account you agree to our
+            <a href="/terms" target="_blank" rel="noopener noreferrer" class="hover:underline">Terms of Service</a>
+            and
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" class="hover:underline">Privacy Policy</a>.
         </p>
     </div>
 </div>

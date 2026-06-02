@@ -69,7 +69,9 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - **Per-feed scoring toggle — zapojit + opravit pořadí kontrol**: pole `UserFeed.ai_scoring_enabled` (tri-state True/False/None) existuje v DB, ale žádné UI ho nenastaví → vždy `None`. Přidat per-feed přepínač (feed edit). POZOR: `scoring_eligible()` v `ai_scoring_service.py` kontroluje `ai_scoring_enabled_default` PŘED per-feed override, takže per-feed `True` dnes NEPŘEBIJE vypnutý globální default (umí jen vypnout). Komentář slibuje opak. Při zapojení UI upravit pořadí: per-feed `True` → zapnout navzdory defaultu, `False` → vypnout, `None` → řídit se defaultem.
 
 ## Testování
-- Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů
+- **Testovat**: auth flows (login, registrace, verifikace, reset hesla), správa účtu (smazání), nevratné/destruktivní operace s daty, business logic services (fetcher, filtry, AI pipeline, briefing, scoring, purge), security-critical paths (crypto, rate limiting, URL/SSRF validace)
+- **Netestovat**: CRUD routes (změna jména, emailu, hesla, nastavení), admin UI, Jinja2 šablony, jednoduché statické routes — nízké riziko, reversibilní nebo triviální
+- Nová funkce dostane test pokud: je nevratná, security-critical, nebo obsahuje netriviální business logiku
 
 ## CSS/Tailwind Conventions
 - When fixing layout bugs, find the root cause (e.g. flex/truncate parent) rather than patching symptoms

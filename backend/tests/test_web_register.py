@@ -95,10 +95,15 @@ class TestWebRegisterValidation:
         assert "new@test.com" in r.text
         assert "New User" in r.text
 
-    def test_empty_display_name_shows_error(self, web_client, mock_db):
-        r = web_client.post("/register", data={**VALID_FORM, "display_name": "   "})
-        assert r.status_code == 422
-        assert "Display name" in r.text
+    def test_empty_display_name_uses_email_prefix(self, web_client, mock_db):
+        from unittest.mock import AsyncMock, patch
+        # No SMTP → no verification email → direct redirect to /app
+        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            r = web_client.post("/register", data={**VALID_FORM, "display_name": "   "})
+        # Proceeds to /app — no "Display name" error
+        assert r.status_code == 302
+        assert "display" not in r.text.lower()
 
     def test_duplicate_email_shows_error(self, web_client, mock_db):
         mock_db.execute = AsyncMock(side_effect=[

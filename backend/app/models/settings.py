@@ -23,6 +23,10 @@ class AppSettings(Base):
     smtp_from_email: Mapped[str | None] = mapped_column(String(255))
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    legal_operator_name: Mapped[str | None] = mapped_column(String(255))
+    legal_contact_email: Mapped[str | None] = mapped_column(String(255))
+    legal_jurisdiction: Mapped[str | None] = mapped_column(String(100))
+    legal_last_updated: Mapped[str | None] = mapped_column(String(20))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
