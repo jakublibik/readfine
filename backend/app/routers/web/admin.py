@@ -59,6 +59,24 @@ async def admin_dashboard(
     return templates.TemplateResponse(request, "admin/dashboard.html", {"stats": stats})
 
 
+@router.get("/scoring-eval", response_class=HTMLResponse)
+async def admin_scoring_eval(
+    request: Request,
+    days: int | None = None,
+    user_id: str | None = None,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.ai_eval_service import get_scoring_eval
+    window = clamp(days, 7, 365, 90)
+    users = await list_users(db)
+    eval_data = await get_scoring_eval(db, days=window, user_id=safe_int(user_id))
+    return templates.TemplateResponse(request, "admin/scoring_eval.html", {
+        "eval": eval_data,
+        "users": users,
+    })
+
+
 # ── Users ─────────────────────────────────────────────────────────────────────
 
 @router.get("/users", response_class=HTMLResponse)

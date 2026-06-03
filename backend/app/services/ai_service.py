@@ -1,5 +1,6 @@
 """AI provider abstraction: client factory, verification, and core AI calls."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -462,54 +463,155 @@ async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
           AND uas.user_starred = false
           AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=90)})
+    """), {"uid": user_id, "cutoff": now - timedelta(days=120)})
     return int(g1.scalar() or 0) + int(g2.scalar() or 0)
+
+
+# ── interest profile generation ─────────────────────────────────────────────
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _normalize(s: str) -> str:
+    """Strip HTML tags and collapse whitespace."""
+    return _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", s)).strip()
+
+
+def _pref_snippet(ai_summary: str | None, readable: str | None,
+                  content: str | None, limit: int = 300) -> str:
+    """Up to `limit` chars of normalized text: ai_summary → readable_content → content."""
+    for src in (ai_summary, readable, content):
+        if src:
+            return _normalize(src)[:limit]
+    return ""
+
+
+# Section headers in prompt order; keys map to behaviour groups G1–G3, P1, N1.
+_PREF_SECTIONS = {
+    "g1": "Read and starred (strongest signal)",
+    "g2": "Read thoroughly without starring",
+    "g3": "Starred but barely read (weak signal)",
+    "p1": "Engaged despite low predicted relevance (boost these)",
+    "n1": "Predicted highly relevant but consistently skipped (narrow these, not avoid)",
+}
+
+_PREF_INSTRUCTION = (
+    "Based on the reader's recent reading behaviour below, generate a concise "
+    "interest profile for article relevance scoring.\n\n"
+    "The data is grouped by signal. Use each group as follows:\n"
+    "- \"Read and starred\" / \"Read thoroughly\": the core of the reader's interests.\n"
+    "- \"Starred but barely read\": weaker signal — the title appealed; moderate at most.\n"
+    "- \"Engaged despite low predicted relevance\": topics the reader clearly values "
+    "even though they look niche — make sure these are represented.\n"
+    "- \"Predicted highly relevant but consistently skipped\": the reader is pickier "
+    "here than the topic alone suggests. NARROW the related high-relevance topics with "
+    "specific qualifiers. Do NOT move them to Avoid.\n\n"
+    "Rules:\n"
+    "- High relevance is only for RECURRING themes seen across multiple articles. A "
+    "topic from a single article belongs in Moderate, or is omitted. Never list a niche "
+    "one-off as high relevance.\n"
+    "- Be specific where the data supports it, but prefer a slightly broader topic over "
+    "an overfit one-off.\n\n"
+    "Output exactly three lines, nothing else:\n"
+    "High relevance: [recurring core topics, with qualifiers where data shows pickiness]\n"
+    "Moderate relevance: [topics of occasional or one-off interest]\n"
+    "Avoid: [only content types the data genuinely shows disinterest in; may be empty]"
+)
+
+
+def _build_preference_prompt(groups: dict[str, list[tuple[str, str]]], feeds_str: str) -> str:
+    """Assemble the preference-generation prompt from grouped (title, snippet) rows.
+
+    Pure function (no DB/AI) so it is unit-testable. Empty groups are omitted.
+    """
+    sections: list[str] = []
+    for key, header in _PREF_SECTIONS.items():
+        rows = groups.get(key) or []
+        if not rows:
+            continue
+        lines = "\n".join(
+            f"- {title}" + (f" — {snippet}" if snippet else "")
+            for title, snippet in rows
+        )
+        sections.append(f"{header}:\n{lines}")
+    data = (feeds_str + "\n\n".join(sections)).strip() or "(no reading history yet)"
+    return f"{_PREF_INSTRUCTION}\n\n---\n{data}"
 
 
 async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
     """Generate preference text from user's reading behaviour signals."""
     from sqlalchemy import text
     now = datetime.now(timezone.utc)
-    cutoff_6m = now - timedelta(days=180)
-    cutoff_3m = now - timedelta(days=90)
-    cutoff_2m = now - timedelta(days=60)
+    cutoff_180 = now - timedelta(days=180)
+    cutoff_120 = now - timedelta(days=120)
+    cutoff_90 = now - timedelta(days=90)
 
-    # Group 1: starred + read thoroughly or opened link (strongest signal)
+    def _pairs(rows) -> list[tuple[str, str]]:
+        return [(r[0], _pref_snippet(r[1], r[2], r[3])) for r in rows]
+
+    # G1: starred + read thoroughly or opened link (strongest signal)
     g1 = await db.execute(text("""
-        SELECT a.title FROM articles a
+        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = true
           AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
-        ORDER BY uas.created_at DESC LIMIT 30
-    """), {"uid": user_id, "cutoff": cutoff_6m})
-    g1_titles = [r[0] for r in g1]
+        ORDER BY uas.created_at DESC LIMIT 50
+    """), {"uid": user_id, "cutoff": cutoff_180})
+    g1_rows = _pairs(g1)
 
-    # Group 2: read thoroughly or opened link, not starred
+    # G2: read thoroughly or opened link, not starred
     g2 = await db.execute(text("""
-        SELECT a.title FROM articles a
+        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = false
           AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
-        ORDER BY uas.created_at DESC LIMIT 50
-    """), {"uid": user_id, "cutoff": cutoff_3m})
-    g2_titles = [r[0] for r in g2]
+        ORDER BY uas.created_at DESC LIMIT 30
+    """), {"uid": user_id, "cutoff": cutoff_120})
+    g2_rows = _pairs(g2)
 
-    # Group 3: starred only (impulsive, weaker signal)
+    # G3: starred only, barely read (impulsive, weaker signal)
     g3 = await db.execute(text("""
-        SELECT a.title FROM articles a
+        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.user_starred = true AND uas.dwell_seconds < 60
           AND uas.created_at >= :cutoff
         ORDER BY uas.created_at DESC LIMIT 20
-    """), {"uid": user_id, "cutoff": cutoff_2m})
-    g3_titles = [r[0] for r in g3]
+    """), {"uid": user_id, "cutoff": cutoff_90})
+    g3_rows = _pairs(g3)
 
-    strong_count = len(g1_titles) + len(g2_titles)
+    # P1: scoring under-rated these — low score but reader engaged (boost). Most
+    # under-scored first.
+    p1 = await db.execute(text("""
+        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
+        JOIN user_article_states uas ON uas.article_id = a.id
+        WHERE uas.user_id = :uid
+          AND uas.ai_score IS NOT NULL AND uas.ai_score <= 0.4
+          AND (uas.dwell_seconds >= 60 OR uas.user_starred = true)
+          AND uas.created_at >= :cutoff
+        ORDER BY uas.ai_score ASC LIMIT 15
+    """), {"uid": user_id, "cutoff": cutoff_90})
+    p1_rows = _pairs(p1)
+
+    # N1: scoring over-rated these — high score but consistently ignored (refine).
+    # Most over-scored first.
+    n1 = await db.execute(text("""
+        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
+        JOIN user_article_states uas ON uas.article_id = a.id
+        WHERE uas.user_id = :uid
+          AND uas.ai_score IS NOT NULL AND uas.ai_score >= 0.85
+          AND uas.dwell_seconds = 0 AND uas.link_opened = false
+          AND uas.created_at >= :cutoff
+        ORDER BY uas.ai_score DESC LIMIT 15
+    """), {"uid": user_id, "cutoff": cutoff_90})
+    n1_rows = _pairs(n1)
+
+    strong_count = len(g1_rows) + len(g2_rows)
 
     # Cold start fallback: include feed titles when behavioural data is sparse
     feeds_str = ""
@@ -523,33 +625,12 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         if feed_titles:
             feeds_str = "Subscribed feeds (general context):\n" + "\n".join(f"- {t}" for t in feed_titles) + "\n\n"
 
-    def _fmt(titles: list[str], label: str) -> str:
-        if not titles:
-            return ""
-        lines = "\n".join(f"- {t}" for t in titles)
-        return f"{label}:\n{lines}\n\n"
-
-    data = (
-        feeds_str
-        + _fmt(g1_titles, "Articles starred and read thoroughly (strongest signal)")
-        + _fmt(g2_titles, "Articles read thoroughly without starring")
-        + _fmt(g3_titles, "Articles starred (title looked interesting, may not have been read fully)")
-    ).strip() or "(no reading history yet)"
-
-    prompt = (
-        f"Based on the reader's reading history below, generate a concise interest profile "
-        f"for use in article relevance scoring.\n\n"
-        f"Format the output as exactly three lines:\n"
-        f"High relevance: [topics the reader is most interested in]\n"
-        f"Moderate relevance: [topics of occasional interest]\n"
-        f"Avoid: [topics or content types the reader has no interest in]\n\n"
-        f"Be specific — use concrete topics, not vague categories. "
-        f"Output only the three lines, no explanation.\n\n"
-        f"---\n"
-        f"{data}"
+    prompt = _build_preference_prompt(
+        {"g1": g1_rows, "g2": g2_rows, "g3": g3_rows, "p1": p1_rows, "n1": n1_rows},
+        feeds_str,
     )
-    text, input_tokens, output_tokens = await _complete(prompt, client, provider, model, max_tokens=400)
-    return text, input_tokens, output_tokens
+    result_text, input_tokens, output_tokens = await _complete(prompt, client, provider, model, max_tokens=500)
+    return result_text, input_tokens, output_tokens
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
