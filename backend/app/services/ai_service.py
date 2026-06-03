@@ -505,18 +505,23 @@ _PREF_INSTRUCTION = (
     "- \"Engaged despite low predicted relevance\": topics the reader clearly values "
     "even though they look niche — make sure these are represented.\n"
     "- \"Predicted highly relevant but consistently skipped\": the reader is pickier "
-    "here than the topic alone suggests. NARROW the related high-relevance topics with "
-    "specific qualifiers. Do NOT move them to Avoid.\n\n"
+    "here than the topic alone suggests. Only titles are shown (the reader never "
+    "opened these), so judge by topic, not specifics. NARROW the related "
+    "high-relevance topics with qualifiers. Do NOT move them to Avoid.\n\n"
     "Rules:\n"
     "- High relevance is only for RECURRING themes seen across multiple articles. A "
     "topic from a single article belongs in Moderate, or is omitted. Never list a niche "
     "one-off as high relevance.\n"
+    "- Avoid lists only broad subject areas the reader is clearly not oriented toward, "
+    "inferred from the contrast with their demonstrated interests — general areas only, "
+    "never specific people, organizations, tickers, or one-off events. May be empty.\n"
     "- Be specific where the data supports it, but prefer a slightly broader topic over "
     "an overfit one-off.\n\n"
     "Output exactly three lines, nothing else:\n"
     "High relevance: [recurring core topics, with qualifiers where data shows pickiness]\n"
     "Moderate relevance: [topics of occasional or one-off interest]\n"
-    "Avoid: [only content types the data genuinely shows disinterest in; may be empty]"
+    "Avoid: [broad subject areas the reader is clearly not oriented toward, inferred "
+    "from the contrast with their interests; general areas only; may be empty]"
 )
 
 
@@ -599,9 +604,10 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
     p1_rows = _pairs(p1)
 
     # N1: scoring over-rated these — high score but consistently ignored (refine).
-    # Most over-scored first.
+    # Most over-scored first. Titles only (no snippet): the reader never opened
+    # these, so the content they didn't see must not seed overfit Avoid items.
     n1 = await db.execute(text("""
-        SELECT a.title, uas.ai_summary, a.readable_content, a.content FROM articles a
+        SELECT a.title FROM articles a
         JOIN user_article_states uas ON uas.article_id = a.id
         WHERE uas.user_id = :uid
           AND uas.ai_score IS NOT NULL AND uas.ai_score >= 0.85
@@ -609,7 +615,7 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
           AND uas.created_at >= :cutoff
         ORDER BY uas.ai_score DESC LIMIT 15
     """), {"uid": user_id, "cutoff": cutoff_90})
-    n1_rows = _pairs(n1)
+    n1_rows = [(r[0], "") for r in n1]
 
     strong_count = len(g1_rows) + len(g2_rows)
 
