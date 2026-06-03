@@ -35,11 +35,9 @@
           <label class="text-sm font-medium text-gray-700">Open registration</label>
           <p class="text-xs text-gray-400">Allow new users to register without invitation</p>
         </div>
-        <select name="registration_enabled"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <option value="true" {% if s.registration_enabled %}selected{% endif %}>Enabled</option>
-          <option value="false" {% if not s.registration_enabled %}selected{% endif %}>Disabled</option>
-        </select>
+        <input type="checkbox" name="registration_enabled" value="true"
+               {% if s.registration_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
       </div>
       <div class="flex items-center justify-between">
         <label class="text-sm font-medium text-gray-700">Max feeds per user</label>
@@ -116,11 +114,9 @@
           <label class="text-sm font-medium text-gray-700">Enable AI features</label>
           <p class="text-xs text-gray-400">AI summaries and other AI-powered features</p>
         </div>
-        <select name="ai_enabled"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <option value="true" {% if s.ai_enabled %}selected{% endif %}>Enabled</option>
-          <option value="false" {% if not s.ai_enabled %}selected{% endif %}>Disabled</option>
-        </select>
+        <input type="checkbox" name="ai_enabled" value="true"
+               {% if s.ai_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
       </div>
     </div>
   </section>
@@ -203,11 +199,9 @@
       </div>
       <div class="flex items-center justify-between gap-4">
         <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">TLS</label>
-        <select name="smtp_use_tls"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <option value="true" {% if s.smtp_use_tls %}selected{% endif %}>Enabled</option>
-          <option value="false" {% if not s.smtp_use_tls %}selected{% endif %}>Disabled</option>
-        </select>
+        <input type="checkbox" name="smtp_use_tls" value="true"
+               {% if s.smtp_use_tls %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
       </div>
       <div class="space-y-2">
         <div class="flex items-center gap-3">
@@ -237,7 +231,7 @@
 
 <script nonce="{{ request.state.csp_nonce }}">
 document.querySelector('[name="registration_enabled"]').addEventListener('change', function() {
-    var enabled = this.value === 'true';
+    var enabled = this.checked;
     document.getElementById('legal-section').classList.toggle('hidden', !enabled);
     var w = document.getElementById('legal-warning');
     if (w) w.classList.toggle('hidden', !enabled);

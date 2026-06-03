@@ -224,7 +224,7 @@ async def admin_test_smtp(
         smtp_port=safe_int(form.get("smtp_port"), saved.smtp_port or 587),
         smtp_user=form.get("smtp_user", "").strip() or saved.smtp_user,
         smtp_from_email=form.get("smtp_from_email", "").strip() or saved.smtp_from_email,
-        smtp_use_tls=form.get("smtp_use_tls") == "true" if "smtp_use_tls" in form else saved.smtp_use_tls,
+        smtp_use_tls=form.get("smtp_use_tls") == "true",
         # Use new password if provided, otherwise keep saved encrypted password
         smtp_password_encrypted=(
             encrypt(form["smtp_password"].strip())
