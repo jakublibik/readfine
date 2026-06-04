@@ -158,7 +158,7 @@ async def htmx_sidebar(
     if feed_ids:
         feed_total_counts = dict((await db.execute(
             select(Article.feed_id, func.count(Article.id))
-            .where(Article.feed_id.in_(feed_ids))
+            .where(Article.feed_id.in_(feed_ids), Article.trimmed_at.is_(None))
             .group_by(Article.feed_id)
         )).all())
         feed_unread_counts = dict((await db.execute(
@@ -169,6 +169,7 @@ async def htmx_sidebar(
             )
             .where(
                 Article.feed_id.in_(feed_ids),
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
             .group_by(Article.feed_id)
@@ -192,17 +193,24 @@ async def htmx_sidebar(
     if label_ids:
         label_counts = dict((await db.execute(
             select(ArticleLabel.label_id, func.count(ArticleLabel.article_id))
-            .where(ArticleLabel.user_id == user.id, ArticleLabel.label_id.in_(label_ids))
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(
+                ArticleLabel.user_id == user.id,
+                ArticleLabel.label_id.in_(label_ids),
+                Article.trimmed_at.is_(None),
+            )
             .group_by(ArticleLabel.label_id)
         )).all())
         label_unread_counts = dict((await db.execute(
             select(ArticleLabel.label_id, func.count(ArticleLabel.article_id))
+            .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &
                 (UserArticleState.user_id == user.id))
             .where(
                 ArticleLabel.user_id == user.id,
                 ArticleLabel.label_id.in_(label_ids),
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
             .group_by(ArticleLabel.label_id)

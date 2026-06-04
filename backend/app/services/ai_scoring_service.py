@@ -220,6 +220,10 @@ async def process_pending_scoring(db: AsyncSession) -> int:
         .where(
             ArticleAiJob.operation == "scoring",
             ArticleAiJob.status == "pending",
+            # skip jobs whose article has been retention-trimmed (body gone)
+            ~select(Article.id)
+            .where(Article.id == ArticleAiJob.article_id, Article.trimmed_at.isnot(None))
+            .exists(),
             and_(
                 ArticleAiJob.next_retry_at.is_(None)
                 | (ArticleAiJob.next_retry_at <= now)

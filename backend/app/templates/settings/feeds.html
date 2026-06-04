@@ -80,6 +80,22 @@
                class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
     </details>
+    <details class="text-sm" id="feed-import-details">
+      <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">Import scope (optional)</summary>
+      <div class="mt-2 flex flex-col sm:flex-row gap-2 sm:gap-3">
+        <select name="import_mode"
+                class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="recent" selected>Recent (within retention window)</option>
+          <option value="latest">Latest N articles</option>
+        </select>
+        <input type="number" name="import_limit" value="500" min="1"
+               class="w-28 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <p class="mt-1 text-xs text-gray-400">
+        <strong>Recent</strong> imports only articles within the retention window.
+        <strong>Latest N</strong> pulls up to N newest articles regardless of age (e.g. importing an archive feed).
+      </p>
+    </details>
   </form>
 </div>
 
@@ -111,7 +127,8 @@
   {% else %}
     No automatic article deletion is configured.
   {% endif %}
-  Starred and archived articles are never deleted.
+  Starred and archived articles are never deleted; articles you've read are kept longer
+  (without full text) to power your interest profile.
 </p>
 
 <!-- Add folder -->

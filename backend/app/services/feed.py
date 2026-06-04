@@ -1,6 +1,7 @@
 """Feed subscription service: subscribe, unsubscribe, list."""
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -32,6 +33,8 @@ async def subscribe(
     db: AsyncSession,
     is_private: bool = False,
     trigger_initial_fetch: bool = True,
+    import_mode: str = "recent",
+    import_limit: int = 500,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -147,13 +150,18 @@ async def subscribe(
 
     # Kick off initial fetch in the background (skip if already running for this feed)
     if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
-        asyncio.create_task(_initial_fetch(feed.id))
+        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit))
 
     return user_feed
 
 
-async def _initial_fetch(feed_id: int) -> None:
-    """Run an immediate fetch for a newly subscribed feed."""
+async def _initial_fetch(feed_id: int, import_mode: str = "recent", import_limit: int = 500) -> None:
+    """Run an immediate fetch for a newly subscribed feed.
+
+    import_mode "recent" (default): import only articles published within the retention
+    horizon (published_cutoff), no count limit. import_mode "latest": no time cutoff,
+    import up to import_limit newest articles (e.g. pulling a full archive feed).
+    """
     _initial_fetch_in_progress.add(feed_id)
     try:
         import app.database as db_module
@@ -166,11 +174,21 @@ async def _initial_fetch(feed_id: int) -> None:
             # Scheduler may have already fetched this feed while we were queued
             if feed.last_fetched_at is not None:
                 return
-            settings_row = await session.execute(
-                select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
+            published_cutoff = None
+            initial_limit: int | None = None
+            if import_mode == "latest":
+                initial_limit = import_limit
+            else:
+                # Recent: bound the import to the retention horizon so we don't pull
+                # (and run readable/scoring on) articles the purge would soon remove.
+                days = (await session.execute(
+                    select(AppSettings.default_purge_after_days).where(AppSettings.id == 1)
+                )).scalar_one_or_none()
+                if days:
+                    published_cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            await fetch_feed(
+                feed, session, initial_limit=initial_limit, published_cutoff=published_cutoff
             )
-            initial_limit = settings_row.scalar_one_or_none() or 500
-            await fetch_feed(feed, session, initial_limit=initial_limit)
     finally:
         _initial_fetch_in_progress.discard(feed_id)
 

@@ -216,6 +216,7 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
             JOIN article_labels al ON al.article_id = a.id AND al.user_id = :uid
             LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
             WHERE (uas.is_read IS NULL OR uas.is_read = false)
+              AND a.trimmed_at IS NULL
               AND (a.published_at IS NULL OR a.published_at >= :cutoff_90d)
         """),
         {"uid": user_id, "cutoff_90d": cutoff_90d},

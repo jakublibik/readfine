@@ -1,15 +1,28 @@
-"""Article purge service: delete old articles according to retention settings."""
+"""Article purge service: tiered age-based retention.
+
+Lifecycle of an article older than T1 (= default_purge_after_days):
+  - starred / archived by any user → kept FULL forever (never trimmed/deleted)
+  - engaged by any user (read / opened / ever-starred) → TRIMMED to a profile snippet
+    (body stripped, trimmed_at stamped, share revoked) and kept as a hidden stub until
+    T2 (= PROFILE_MAX_WINDOW_DAYS); then DELETED
+  - otherwise → DELETED immediately
+
+T1 measures article age (fetched_at); T2 measures uas.created_at (mirrors the profile
+lookback window). Invariant: admin T1 max (120) < T2 (180).
+"""
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.settings import AppSettings
 
 logger = logging.getLogger(__name__)
+
+_SNIPPET_CHARS = 300  # profile snippet length kept on trim
 
 
 # ── pure helpers (testable without DB) ───────────────────────────────────────
@@ -43,53 +56,115 @@ def ids_exceeding_count(
     return excess
 
 
-# ── DB helpers ────────────────────────────────────────────────────────────────
+# ── retention predicates (correlated EXISTS on the current Article) ───────────
 
-def _protected_subquery():
-    """Subquery returning article IDs starred or archived by any user."""
+def _fully_protected_exists():
+    """True when some user keeps this article FULL forever (starred or archived).
+    Never trimmed nor age-deleted."""
     return (
         select(UserArticleState.article_id)
         .where(
-            (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True)
+            UserArticleState.article_id == Article.id,
+            (UserArticleState.is_starred == True)  # noqa: E712
+            | (UserArticleState.is_archived == True),  # noqa: E712
         )
+        .exists()
     )
+
+
+def _engaged_exists():
+    """True when some user engaged with this article (read / opened / ever-starred).
+    Engaged articles survive the age DELETE — instead they are trimmed and kept as
+    profile-signal stubs until T2. dwell>=30 matches the stats 'read' threshold."""
+    return (
+        select(UserArticleState.article_id)
+        .where(
+            UserArticleState.article_id == Article.id,
+            (UserArticleState.dwell_seconds >= 30)
+            | (UserArticleState.link_opened == True)  # noqa: E712
+            | (UserArticleState.ever_starred == True),  # noqa: E712
+        )
+        .exists()
+    )
+
+
+# ── trim helper ───────────────────────────────────────────────────────────────
+
+async def _trim_engaged(
+    db: AsyncSession, *, feed_id: int | None, orphan: bool, cutoff: datetime, now: datetime
+) -> int:
+    """Trim engaged-but-unprotected articles older than cutoff to a profile snippet.
+
+    Strips the large body (content / readable_content) down to the first
+    _SNIPPET_CHARS normalized characters; keeps per-user ai_summary/ai_context;
+    revokes share tokens; stamps trimmed_at. Idempotent via trimmed_at IS NULL.
+    """
+    from app.services.ai_service import _normalize  # lazy: avoid heavy import at module load
+
+    feed_cond = Article.feed_id.is_(None) if orphan else (Article.feed_id == feed_id)
+    rows = (await db.execute(
+        select(Article.id, Article.content, Article.readable_content).where(
+            feed_cond,
+            Article.fetched_at < cutoff,
+            Article.trimmed_at.is_(None),
+            _engaged_exists(),
+            ~_fully_protected_exists(),
+        )
+    )).all()
+    if not rows:
+        return 0
+
+    updates: list[dict] = []
+    for aid, content, readable in rows:
+        src = readable if readable else content
+        snippet = _normalize(src)[:_SNIPPET_CHARS] if src else None
+        if readable is not None:
+            # keep the shared snippet in readable_content, drop raw content
+            updates.append({"id": aid, "content": None, "readable_content": snippet, "trimmed_at": now})
+        elif content is not None:
+            updates.append({"id": aid, "content": snippet, "readable_content": None, "trimmed_at": now})
+        else:
+            updates.append({"id": aid, "content": None, "readable_content": None, "trimmed_at": now})
+
+    await db.execute(update(Article), updates)
+    ids = [u["id"] for u in updates]
+    # share is bound to the article's lifetime — revoke on trim (old link → clean 404)
+    await db.execute(
+        update(UserArticleState)
+        .where(UserArticleState.article_id.in_(ids), UserArticleState.share_token.isnot(None))
+        .values(share_token=None)
+    )
+    return len(ids)
 
 
 # ── main purge job ────────────────────────────────────────────────────────────
 
 async def purge_old_articles(db: AsyncSession) -> int:
     """
-    Delete articles exceeding retention limits.
+    Apply tiered age-based retention. Returns total number of deleted articles.
 
-    NULL global settings mean the respective pass is disabled globally;
-    per-feed overrides still apply when set.
-
-    Pass 1 — age-based: delete articles older than effective purge_after_days.
-    Pass 2 — count-based: per feed, delete articles beyond effective purge_keep_count.
-              Uses a single SQL window-function query (no N+1).
-
-    Articles starred or archived by any user are never deleted.
-    Returns total number of deleted articles.
+    NULL global default_purge_after_days disables the age pass globally (per-feed
+    override still applies). NULL default_purge_keep_count disables the count pass
+    globally (this is the new default; per-feed override still applies).
     """
     from app.models.feed import UserFeed
+    from app.services.ai_service import PROFILE_MAX_WINDOW_DAYS
 
     result = await db.execute(
         select(AppSettings.default_purge_after_days, AppSettings.default_purge_keep_count)
         .where(AppSettings.id == 1)
     )
     row = result.one_or_none()
-    # None = admin disabled this pass globally
     global_days: int | None = row[0] if row else None
     global_count: int | None = row[1] if row else None
 
-    protected = _protected_subquery()
     now = datetime.now(timezone.utc)
     total_deleted = 0
+    total_trimmed = 0
 
-    # ── Pass 1: age-based ─────────────────────────────────────────────────────
-    # Per-feed effective_days = coalesce(feed override, global_days).
-    # If both are NULL, skip the feed entirely.
+    # ── Pass 1: age-based — DELETE unengaged, TRIM engaged ────────────────────
+    # Per-feed effective_days = MAX(coalesce(feed override, global)) across subscribers
+    # (most generous — only act once everyone is past their horizon).
     feed_days_result = await db.execute(
         select(
             UserFeed.feed_id,
@@ -103,34 +178,33 @@ async def purge_old_articles(db: AsyncSession) -> int:
             continue  # disabled for this feed
         cutoff = now - timedelta(days=r.effective_days)
         res = await db.execute(
-            delete(Article)
-            .where(
+            delete(Article).where(
                 Article.feed_id == r.feed_id,
                 Article.fetched_at < cutoff,
-                Article.id.not_in(protected),
+                ~_fully_protected_exists(),
+                ~_engaged_exists(),
             )
-            .returning(Article.id)
         )
-        age_deleted += len(res.fetchall())
+        age_deleted += res.rowcount or 0
+        total_trimmed += await _trim_engaged(db, feed_id=r.feed_id, orphan=False, cutoff=cutoff, now=now)
 
     # Orphaned articles (feed deleted) — use global default only if set
     if global_days is not None:
+        cutoff = now - timedelta(days=global_days)
         res = await db.execute(
-            delete(Article)
-            .where(
+            delete(Article).where(
                 Article.feed_id.is_(None),
-                Article.fetched_at < now - timedelta(days=global_days),
-                Article.id.not_in(protected),
+                Article.fetched_at < cutoff,
+                ~_fully_protected_exists(),
+                ~_engaged_exists(),
             )
-            .returning(Article.id)
         )
-        age_deleted += len(res.fetchall())
+        age_deleted += res.rowcount or 0
+        total_trimmed += await _trim_engaged(db, feed_id=None, orphan=True, cutoff=cutoff, now=now)
 
     total_deleted += age_deleted
 
-    # ── Pass 2: count-based (single window-function query) ────────────────────
-    # Per-feed effective_count = coalesce(feed override, global_count).
-    # If both are NULL, skip the feed.
+    # ── Pass 2: count-based (per-feed override; global NULL by default) ────────
     feed_counts_result = await db.execute(
         select(
             UserFeed.feed_id,
@@ -146,7 +220,6 @@ async def purge_old_articles(db: AsyncSession) -> int:
 
     count_deleted = 0
     if feed_counts:
-        # Rank all articles within their feed by recency in one query
         ranked = (
             select(
                 Article.id,
@@ -161,8 +234,6 @@ async def purge_old_articles(db: AsyncSession) -> int:
             .where(Article.feed_id.in_(feed_counts.keys()))
             .subquery()
         )
-
-        # Build a CASE expression for per-feed keep counts
         from sqlalchemy import case, literal
         keep_case = case(
             {feed_id: literal(keep) for feed_id, keep in feed_counts.items()},
@@ -175,19 +246,41 @@ async def purge_old_articles(db: AsyncSession) -> int:
 
         if excess_ids:
             res = await db.execute(
-                delete(Article)
-                .where(
+                delete(Article).where(
                     Article.id.in_(excess_ids),
-                    Article.id.not_in(protected),
+                    ~_fully_protected_exists(),
+                    ~_engaged_exists(),
                 )
-                .returning(Article.id)
             )
-            count_deleted += len(res.fetchall())
+            count_deleted += res.rowcount or 0
 
     total_deleted += count_deleted
+
+    # ── Pass 3: T2 — delete trimmed stubs past the profile window ─────────────
+    # Drop a stub once no engaged state references it within PROFILE_MAX_WINDOW_DAYS
+    # (mirrors the profile lookback, keyed on uas.created_at).
+    cutoff_t2 = now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
+    recent_state = (
+        select(UserArticleState.article_id)
+        .where(
+            UserArticleState.article_id == Article.id,
+            UserArticleState.created_at >= cutoff_t2,
+        )
+        .exists()
+    )
+    res = await db.execute(
+        delete(Article).where(
+            Article.trimmed_at.isnot(None),
+            ~recent_state,
+            ~_fully_protected_exists(),
+        )
+    )
+    t2_deleted = res.rowcount or 0
+    total_deleted += t2_deleted
+
     await db.commit()
     logger.info(
-        "Purge: deleted %d articles total (age: %d, count: %d)",
-        total_deleted, age_deleted, count_deleted,
+        "Purge: deleted %d (age %d, count %d, T2 %d), trimmed %d",
+        total_deleted, age_deleted, count_deleted, t2_deleted, total_trimmed,
     )
     return total_deleted

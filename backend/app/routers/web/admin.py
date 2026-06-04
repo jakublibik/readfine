@@ -156,13 +156,18 @@ async def admin_settings_save(
 
     smtp_password_plain = form.get("smtp_password", "").strip()
 
+    # Retention horizon: presets only (max 120 keeps the T1 < T2 invariant; T2 = 180).
+    # Fall back to the current value on an out-of-range / tampered POST.
+    _purge_days = safe_int(form.get("default_purge_after_days"))
+    if _purge_days not in (30, 60, 90, 120):
+        _purge_days = s.default_purge_after_days or 60
+
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
         "default_fetch_interval_min": _quantize15(safe_int(form.get("default_fetch_interval_min")), 60),
         "min_fetch_interval_min": _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
         "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
-        "default_purge_after_days": clamp(safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
-        "default_purge_keep_count": clamp(safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,
+        "default_purge_after_days": _purge_days,
         "smtp_host": form.get("smtp_host", "").strip() or None,
         "smtp_port": clamp(safe_int(form.get("smtp_port")), 1, 65535, 587),
         "smtp_user": form.get("smtp_user", "").strip() or None,

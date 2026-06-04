@@ -70,20 +70,6 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gemini-2.5-pro": 4.00,
 }
 
-# Approximate tokens per article for cost estimation
-_SCORING_TOKENS_PER_ARTICLE = 500
-_SUMMARY_TOKENS_PER_ARTICLE = 1000
-
-
-def estimate_cost_usd(model: str, tokens: int) -> float | None:
-    """Return estimated USD cost for token count, or None if model is unknown."""
-    key = _MODEL_ALIAS_MAP.get(model, model)
-    cost_per_m = _MODEL_INPUT_COST_PER_M.get(key)
-    if cost_per_m is None:
-        return None
-    return round(tokens * cost_per_m / 1_000_000, 4)
-
-
 # ── key management ────────────────────────────────────────────────────────────
 
 async def get_api_key(user_id: int, provider: str, db: AsyncSession) -> str | None:
@@ -446,6 +432,12 @@ async def generate_css_selector_from_sample(
     return selector, in_tok, out_tok
 
 
+# Longest behavioural lookback window used by the interest profile (G1). The retention
+# trim/delete (purge_service T2) keeps engaged article stubs at least this long so the
+# profile still sees their signal. Keep > the admin retention horizon max (120).
+PROFILE_MAX_WINDOW_DAYS = 180
+
+
 async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
     """Return count of strong reading signals (g1 + g2) used for preference generation."""
     from sqlalchemy import text
@@ -456,7 +448,7 @@ async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
           AND uas.user_starred = true
           AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
           AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=180)})
+    """), {"uid": user_id, "cutoff": now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)})
     g2 = await db.execute(text("""
         SELECT COUNT(*) FROM user_article_states uas
         WHERE uas.user_id = :uid
@@ -548,7 +540,7 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
     """Generate preference text from user's reading behaviour signals."""
     from sqlalchemy import text
     now = datetime.now(timezone.utc)
-    cutoff_180 = now - timedelta(days=180)
+    cutoff_180 = now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
     cutoff_120 = now - timedelta(days=120)
     cutoff_90 = now - timedelta(days=90)
 
@@ -671,86 +663,3 @@ async def _complete(
             getattr(meta, "candidates_token_count", 0) or 0,
         )
     raise ValueError(f"Unknown provider: {provider}")
-
-
-# ── cost estimation ───────────────────────────────────────────────────────────
-
-_MIN_JOBS_FOR_ACTUAL_AVG = 5
-
-
-async def estimate_monthly_cost(user_id: int, db: AsyncSession) -> dict:
-    """
-    Estimate monthly AI cost.
-    Uses actual avg tokens from article_ai_jobs (last 30 days) when enough data exists,
-    otherwise falls back to fixed constants.
-    """
-    from sqlalchemy import text
-    from datetime import timedelta
-
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-
-    # Labeled articles in last 30 days (scoring volume)
-    labeled_result = await db.execute(
-        text("""
-            SELECT COUNT(DISTINCT a.id) FROM articles a
-            JOIN article_labels al ON al.article_id = a.id
-            JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
-            WHERE a.fetched_at >= :cutoff
-        """),
-        {"uid": user_id, "cutoff": cutoff},
-    )
-    labeled_count = int(labeled_result.scalar() or 0)
-
-    # Starred articles in last 30 days (summary volume)
-    starred_result = await db.execute(
-        text("""
-            SELECT COUNT(*) FROM user_article_states
-            WHERE user_id = :uid AND is_starred = true AND created_at >= :cutoff
-        """),
-        {"uid": user_id, "cutoff": cutoff},
-    )
-    starred_count = int(starred_result.scalar() or 0)
-
-    # Actual avg tokens from completed scoring jobs
-    scoring_jobs_result = await db.execute(
-        text("""
-            SELECT COUNT(*), AVG(input_tokens + COALESCE(output_tokens, 0))
-            FROM article_ai_jobs
-            WHERE user_id = :uid AND operation = 'scoring' AND status = 'success'
-              AND processed_at >= :cutoff AND input_tokens IS NOT NULL
-        """),
-        {"uid": user_id, "cutoff": cutoff},
-    )
-    sj_row = scoring_jobs_result.one()
-    scoring_job_count = int(sj_row[0] or 0)
-    scoring_avg_tokens = float(sj_row[1] or 0)
-
-    s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
-    fast_model = s.ai_fast_model if s else None
-    quality_model = s.ai_quality_model if s else None
-
-    if scoring_job_count >= _MIN_JOBS_FOR_ACTUAL_AVG:
-        scoring_tokens = int(scoring_avg_tokens * labeled_count)
-        scoring_data_note = f"Based on {scoring_job_count} jobs in last 30 days"
-    else:
-        scoring_tokens = labeled_count * _SCORING_TOKENS_PER_ARTICLE
-        scoring_data_note = "Estimated (not enough data yet)" if scoring_job_count > 0 else "Estimated"
-
-    summary_tokens = starred_count * _SUMMARY_TOKENS_PER_ARTICLE
-
-    return {
-        "scoring": {
-            "articles": labeled_count,
-            "tokens": scoring_tokens,
-            "cost": estimate_cost_usd(fast_model, scoring_tokens) if fast_model else None,
-            "model": fast_model,
-            "data_note": scoring_data_note,
-        },
-        "summary": {
-            "articles": starred_count,
-            "tokens": summary_tokens,
-            "cost": estimate_cost_usd(quality_model, summary_tokens) if quality_model else None,
-            "model": quality_model,
-            "data_note": "Estimated",
-        },
-    }

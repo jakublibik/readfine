@@ -243,6 +243,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
         select(Article)
         .where(
             Article.readable_status == "pending",
+            # never re-extract a retention-trimmed stub — it would re-fetch the body
+            Article.trimmed_at.is_(None),
             Article.url.isnot(None),
             Article.url != "",
             and_(

@@ -40,6 +40,9 @@ class Article(Base):
     estimated_read_min: Mapped[int | None] = mapped_column(SmallInteger)
     word_count: Mapped[int | None] = mapped_column(Integer)
     image_url: Mapped[str | None] = mapped_column(String(2048))
+    # Set by the retention trim pass (#tiered retention): body stripped to a profile
+    # snippet, article hidden from listings/search/counts. NULL = not trimmed.
+    trimmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

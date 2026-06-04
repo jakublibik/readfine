@@ -40,6 +40,7 @@ async def _recalc_unread_for_feeds(user_id: int, feed_ids, db: AsyncSession) -> 
         )
         .where(
             Article.feed_id == UserFeed.feed_id,
+            Article.trimmed_at.is_(None),
             (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
         )
         .correlate(UserFeed)
@@ -146,6 +147,10 @@ async def list_articles(
                 & (UserArticleState.user_id == user.id),
             )
         )
+
+    # Retention-trimmed articles are body-stripped stubs kept only for the interest
+    # profile — never shown in the UI.
+    stmt = stmt.where(Article.trimmed_at.is_(None))
 
     if feed_id is not None:
         stmt = stmt.where(Article.feed_id == feed_id)

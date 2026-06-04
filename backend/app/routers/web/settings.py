@@ -71,7 +71,6 @@ from app.services.ai_service import (
     PROVIDER_DOCS_URLS,
     SUPPORTED_PROVIDERS,
     delete_api_key,
-    estimate_monthly_cost,
     generate_preference_text,
     generate_css_selector_from_sample,
     get_ai_client,
@@ -318,6 +317,10 @@ async def settings_feeds_subscribe(
     fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
     fetch_auth_pass = form.get("fetch_auth_pass", "") or None
     is_private = form.get("is_private") == "on"
+    # Import scope: "recent" (default) bounds to the retention horizon; "latest"
+    # imports up to import_limit newest articles regardless of age (e.g. archive import).
+    import_mode = "latest" if form.get("import_mode") == "latest" else "recent"
+    import_limit = max(1, min(safe_int(form.get("import_limit")) or 500, 100000))
 
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
@@ -325,7 +328,8 @@ async def settings_feeds_subscribe(
     try:
         uf = await subscribe(user=user, url=url, folder_id=folder_id,
                              custom_title=custom_title, fetch_auth_user=fetch_auth_user,
-                             fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db)
+                             fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db,
+                             import_mode=import_mode, import_limit=import_limit)
         from urllib.parse import quote
         redirect_url = f"/settings/feeds?added={quote(uf.feed.title)}"
         if request.headers.get("HX-Request"):

@@ -87,20 +87,18 @@
       <div class="flex items-center justify-between">
         <div>
           <label class="text-sm font-medium text-gray-700">Purge after (days)</label>
-          <p class="text-xs text-gray-400">Leave empty to disable age-based purge</p>
+          <p class="text-xs text-gray-400">Older articles are removed; ones you engaged with are kept as profile stubs</p>
         </div>
-        <input type="number" name="default_purge_after_days" min="1"
-               value="{{ s.default_purge_after_days or '' }}"
-               class="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      </div>
-      <div class="flex items-center justify-between">
-        <div>
-          <label class="text-sm font-medium text-gray-700">Keep max articles per feed</label>
-          <p class="text-xs text-gray-400">Leave empty to disable count-based purge</p>
-        </div>
-        <input type="number" name="default_purge_keep_count" min="1"
-               value="{{ s.default_purge_keep_count or '' }}"
-               class="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        {% set _purge_presets = [30, 60, 90, 120] %}
+        <select name="default_purge_after_days"
+                class="w-32 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          {% if s.default_purge_after_days and s.default_purge_after_days not in _purge_presets %}
+            <option value="{{ s.default_purge_after_days }}" selected>{{ s.default_purge_after_days }} (current)</option>
+          {% endif %}
+          {% for d in _purge_presets %}
+            <option value="{{ d }}" {% if d == s.default_purge_after_days %}selected{% endif %}>{{ d }} days</option>
+          {% endfor %}
+        </select>
       </div>
     </div>
   </section>
