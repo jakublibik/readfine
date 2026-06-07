@@ -60,7 +60,7 @@
         (reading.total_articles, "Fetched", ""),
         (reading.labeled_count, "Labeled", reading.total_articles),
         (reading.starred_count, "Starred", reading.total_articles),
-        (reading.read_count, "Read (≥30s)", reading.total_articles),
+        (reading.read_count, "Read / opened", reading.total_articles),
       ] %}
       {% for count, label, base in funnel_steps %}
       <div class="flex items-center gap-3">

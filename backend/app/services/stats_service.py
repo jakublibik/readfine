@@ -15,7 +15,7 @@ class FeedStatRow:
     user_feed_id: int
     feed_title: str
     total_articles: int
-    read_pct: float        # dwell >= 30s / total
+    read_pct: float        # (dwell >= 30s OR link opened) / total
     labeled_pct: float
     starred_pct: float     # ever_starred / total
     avg_dwell: float | None  # seconds, only articles with dwell > 0
@@ -41,7 +41,7 @@ class ReadingStats:
     backlog: int
     total_articles: int     # last 30d
     labeled_count: int
-    read_count: int         # dwell >= 30s
+    read_count: int         # dwell >= 30s OR link opened
     starred_count: int      # ever_starred
     per_day: list[DailyRead]
     active_hour: int | None      # 0-23, None if < 7 records
@@ -83,7 +83,7 @@ class LabelRow:
     color: str
     article_count: int
     star_rate: float
-    read_rate: float   # dwell >= 30s
+    read_rate: float   # dwell >= 30s OR link opened
 
 
 @dataclass
@@ -122,7 +122,7 @@ async def get_feed_stats(user_id: int, db: AsyncSession, days: int = 30) -> list
                 uf.id AS user_feed_id,
                 COALESCE(uf.custom_title, f.title) AS feed_title,
                 COUNT(DISTINCT a.id) AS total_articles,
-                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 THEN a.id END) AS read_count,
+                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 OR uas.link_opened THEN a.id END) AS read_count,
                 COUNT(DISTINCT CASE WHEN uas.ever_starred THEN a.id END) AS starred_count,
                 COUNT(DISTINCT al_sub.article_id) AS labeled_count,
                 COUNT(DISTINCT CASE WHEN uas.dwell_seconds > 0 THEN a.id END) AS opened_count,
@@ -229,7 +229,7 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
             SELECT
                 COUNT(DISTINCT a.id) AS total,
                 COUNT(DISTINCT al_sub.article_id) AS labeled,
-                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 THEN a.id END) AS read,
+                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 OR uas.link_opened THEN a.id END) AS read,
                 COUNT(DISTINCT CASE WHEN uas.ever_starred THEN a.id END) AS starred
             FROM articles a
             JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
@@ -518,7 +518,7 @@ async def get_label_stats(user_id: int, db: AsyncSession, days: int = 30) -> Lab
                 l.color,
                 COUNT(DISTINCT a.id) AS article_count,
                 COUNT(DISTINCT CASE WHEN uas.ever_starred THEN a.id END) AS starred_count,
-                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 THEN a.id END) AS read_count
+                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 OR uas.link_opened THEN a.id END) AS read_count
             FROM labels l
             JOIN article_labels al ON al.label_id = l.id AND al.user_id = :uid
             JOIN articles a ON a.id = al.article_id
