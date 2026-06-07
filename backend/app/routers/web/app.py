@@ -947,15 +947,19 @@ async def htmx_article_dwell(
     seconds = max(0, min(seconds, 1800))  # cap at 30 minutes per session
     if seconds <= 3:
         return HTMLResponse("", status_code=204)
-    state = await db.scalar(
-        select(UserArticleState).where(
-            UserArticleState.article_id == article_id,
-            UserArticleState.user_id == user.id,
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    # Upsert: an article read in the detail panel has no state row yet (mark-read
+    # fires later on scroll-off), so a plain UPDATE would silently drop the dwell.
+    stmt = (
+        pg_insert(UserArticleState)
+        .values(user_id=user.id, article_id=article_id, dwell_seconds=seconds)
+        .on_conflict_do_update(
+            index_elements=["user_id", "article_id"],
+            set_={"dwell_seconds": UserArticleState.dwell_seconds + seconds},
         )
     )
-    if state is not None:
-        state.dwell_seconds = state.dwell_seconds + seconds
-        await db.commit()
+    await db.execute(stmt)
+    await db.commit()
     return HTMLResponse("", status_code=204)
 
 

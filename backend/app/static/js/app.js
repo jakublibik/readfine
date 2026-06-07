@@ -1688,6 +1688,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // Detail back button: close fullscreen detail
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#mobile-detail-back-btn')) return;
+    // Flush dwell + stop the clock, else list-browsing time gets attributed to this article.
+    if (window._dwellSend) window._dwellSend();
     document.documentElement.classList.remove('mobile-detail-open');
     history.back();
   });

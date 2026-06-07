@@ -39,7 +39,8 @@
 
   function _onHtmxRequest(e) {
     var targetId = e.detail && e.detail.target && e.detail.target.id;
-    if (targetId === 'article-detail' || targetId === 'article-list') _send();
+    if (targetId === 'article-detail' || targetId === 'article-list'
+        || targetId === 'inline-article-detail-content') _send();
   }
 
   window._dwellSend = _send;
@@ -48,27 +49,41 @@
   window.addEventListener('beforeunload', _send);
 
   document.body.addEventListener('htmx:after-settle', function (e) {
-    if (e.detail && e.detail.target && e.detail.target.id === 'article-detail') {
-      var root = document.getElementById('article-detail-root');
-      if (root) {
-        _articleId = root.dataset.articleId || null;
-        _accumulated = 0;
-        _start = (_articleId && document.visibilityState !== 'hidden') ? Date.now() : null;
-      }
+    var targetId = e.detail && e.detail.target && e.detail.target.id;
+    // 3-panel loads into #article-detail; 2-panel expands inline into
+    // #inline-article-detail-content — track both, else dwell is never recorded.
+    var root = null;
+    if (targetId === 'article-detail') {
+      root = document.getElementById('article-detail-root');
+    } else if (targetId === 'inline-article-detail-content') {
+      root = e.detail.target.querySelector('[data-article-id]');
+    }
+    if (root) {
+      _articleId = root.dataset.articleId || null;
+      _accumulated = 0;
+      _start = (_articleId && document.visibilityState !== 'hidden') ? Date.now() : null;
     }
   });
 
+  // Re-detect the article currently on screen (used when resuming after a flush).
+  function _rearm() {
+    if (_articleId) return;
+    var el = document.querySelector('#inline-article-detail-content [data-article-id]')
+          || document.getElementById('article-detail-root');
+    if (el) { _articleId = el.dataset.articleId || null; _accumulated = 0; }
+  }
+
   document.addEventListener('visibilitychange', function () {
-    if (!_articleId) return;
+    // Flush on hide rather than just banking: beforeunload is unreliable when the
+    // page is frozen/discarded on mobile (app switch, screen lock).
     if (document.visibilityState === 'hidden') {
-      if (_start) {
-        _accumulated += Math.round((Date.now() - _start) / 1000);
-        _start = null;
-      }
+      _send();
     } else {
-      _start = Date.now();
+      _rearm();
+      if (_articleId) _start = Date.now();
     }
   });
+  window.addEventListener('pagehide', _send);
 })();
 </script>
 {% endblock %}
