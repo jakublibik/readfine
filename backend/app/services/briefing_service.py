@@ -100,7 +100,7 @@ def _build_email_html(
 
 def _compose_subject(config_name: str, period: str, now_utc: datetime) -> str:
     period_label = _PERIOD_LABELS.get(period, period)
-    date_label = f"{now_utc:%b} {now_utc.day}, {now_utc.year}"
+    date_label = f"{now_utc:%d.%m.%Y}"
     return f"{config_name} — {period_label} · {date_label}"
 
 
@@ -195,7 +195,7 @@ async def send_briefing(
         subject = f"[TEST] {subject}"
 
     period_label = _PERIOD_LABELS.get(config.period, config.period)
-    date_label = f"{now_utc:%b} {now_utc.day}, {now_utc.year}"
+    date_label = f"{now_utc:%d.%m.%Y}"
     html_body = _build_email_html(text, subject, config.name, period_label, date_label, len(sampled))
 
     extra_recipients: list[str] = []
