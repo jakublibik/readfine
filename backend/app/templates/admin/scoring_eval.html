@@ -84,15 +84,15 @@
 
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Score distribution <span class="font-normal text-gray-400">(spikes at 5-point steps = LLM self-quantization)</span></h2>
 {% set max_count = (eval.histogram | map(attribute='count') | max) or 1 %}
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+<div class="bg-white border border-gray-200 rounded-lg overflow-x-auto mb-8">
   <table class="w-full text-sm">
     <tbody class="divide-y divide-gray-100">
       {% for h in eval.histogram %}
       {% if h.count %}
       <tr>
         <td class="px-4 py-1 text-gray-500 tabular-nums whitespace-nowrap w-24">{{ (h.lo * 100) | round | int }}–{{ (h.hi * 100) | round | int }}</td>
-        <td class="px-4 py-1 font-mono text-blue-400 leading-none">{{ '▇' * ((h.count / max_count * 40) | round | int) }}</td>
         <td class="px-4 py-1 text-gray-500 text-right tabular-nums w-16">{{ h.count }}</td>
+        <td class="px-4 py-1 font-mono text-blue-400 leading-none whitespace-nowrap">{{ '▇' * ((h.count / max_count * 40) | round | int) }}</td>
       </tr>
       {% endif %}
       {% endfor %}
