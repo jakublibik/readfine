@@ -120,29 +120,41 @@
               </div>
             </div>
 
-            <!-- Labeled -->
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-500 w-14 flex-shrink-0">Labeled</span>
-              <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
-                <input type="checkbox" name="filter_labeled" value="true" class="rounded">
-                Only labeled
-              </label>
+            <!-- Relevance -->
+            <div class="flex items-start gap-3">
+              <span class="text-xs text-gray-500 w-14 flex-shrink-0 pt-1">Relevance</span>
+              <div class="flex flex-col gap-1 items-start">
+                {% set rel_opts = [("all", "All articles"), ("labeled", "Labeled only")] %}
+                {% if ai_scoring_available %}{% set rel_opts = rel_opts + [("score", "Labeled + min score")] %}{% endif %}
+                {% for val, lbl in rel_opts %}
+                <label>
+                  <input type="radio" name="relevance_mode" value="{{ val }}" class="sr-only peer relevance-radio"
+                         {% if val == "all" %}checked{% endif %}>
+                  <span class="text-xs py-1 px-2 rounded border border-gray-200 cursor-pointer whitespace-nowrap
+                               peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
+                               hover:bg-gray-100 block transition-colors">
+                    {{ lbl }}
+                  </span>
+                </label>
+                {% endfor %}
+              </div>
             </div>
 
-            <!-- Score -->
+            <!-- Score threshold (shown only when relevance_mode = score) -->
             {% if ai_scoring_available %}
-            <div class="flex items-center gap-3">
-              <span class="text-xs text-gray-500 w-14 flex-shrink-0">Score</span>
-              <label class="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
-                <input type="checkbox" id="score-filter-toggle" class="rounded">
-                ≥
+            <div class="flex items-center gap-3 hidden" id="score-value-row">
+              <span class="text-xs text-gray-500 w-14 flex-shrink-0"></span>
+              <label class="flex items-center gap-1.5 text-xs text-gray-700">
+                Score ≥
+                <input type="number" id="score-filter-value"
+                       min="0" max="100" step="1" value="50"
+                       class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs">
               </label>
-              <input type="number" name="filter_score_min" id="score-filter-value"
-                     min="0" max="100" step="1" value="50"
-                     class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs disabled:opacity-40"
-                     disabled>
             </div>
             {% endif %}
+
+            <!-- filter_labeled driven by relevance_mode -->
+            <input type="hidden" name="filter_labeled" id="filter-labeled-hidden" value="false">
 
           </div>
         </div>
@@ -291,19 +303,36 @@
     });
   }
 
-  // ── Score filter toggle ───────────────────────────────────────────────────
-  var scoreToggle = document.getElementById('score-filter-toggle');
-  var scoreInput = document.getElementById('score-filter-value');
-  if (scoreToggle && scoreInput) {
-    scoreToggle.addEventListener('change', function () {
-      scoreInput.disabled = !scoreToggle.checked;
-      if (!scoreToggle.checked) scoreInput.removeAttribute('name');
-      else scoreInput.setAttribute('name', 'filter_score_min');
+  // ── Relevance mode (All / Labeled / Labeled + score) ──────────────────────
+  // Maps a single selector onto the backend's filter_labeled + filter_score_min.
+  // 'score' ⊆ 'labeled' — scoring only runs on labeled articles, so the score
+  // tier implies labeled. Score input carries its name only in 'score' mode.
+  function applyRelevanceMode(mode) {
+    var labeledHidden = document.getElementById('filter-labeled-hidden');
+    var scoreRow = document.getElementById('score-value-row');
+    var scoreInput = document.getElementById('score-filter-value');
+    if (labeledHidden) {
+      labeledHidden.value = (mode === 'labeled' || mode === 'score') ? 'true' : 'false';
+    }
+    if (scoreRow) scoreRow.classList.toggle('hidden', mode !== 'score');
+    if (scoreInput) {
+      if (mode === 'score') scoreInput.setAttribute('name', 'filter_score_min');
+      else scoreInput.removeAttribute('name');
+    }
+  }
+
+  function currentRelevanceMode() {
+    var checked = document.querySelector('.relevance-radio:checked');
+    return checked ? checked.value : 'all';
+  }
+
+  document.querySelectorAll('.relevance-radio').forEach(function (r) {
+    r.addEventListener('change', function () {
+      applyRelevanceMode(currentRelevanceMode());
       triggerCountRefresh();
     });
-    // Init: no name attribute when disabled
-    scoreInput.removeAttribute('name');
-  }
+  });
+  applyRelevanceMode(currentRelevanceMode());
 
   // ── Custom prompt toggle ──────────────────────────────────────────────────
   var promptToggle = document.getElementById('prompt-toggle');
@@ -327,7 +356,7 @@
     var fd = new FormData(form);
     var params = new URLSearchParams();
     fd.forEach(function (val, key) {
-      if (key !== 'custom_prompt') params.append(key, val);
+      if (key !== 'custom_prompt' && key !== 'relevance_mode') params.append(key, val);
     });
     if (extra) Object.keys(extra).forEach(function (k) { params.set(k, extra[k]); });
     return params.toString();
@@ -423,24 +452,21 @@
     var statusRadio = form.querySelector('input[name="filter_status"][value="' + cfg.filter_status + '"]');
     if (statusRadio) statusRadio.checked = true;
 
-    // Filter labeled
-    var labeledCb = form.querySelector('input[name="filter_labeled"]');
-    if (labeledCb) labeledCb.checked = !!cfg.filter_labeled;
-
-    // Score filter
-    var scoreToggle = document.getElementById('score-filter-toggle');
-    var scoreInput = document.getElementById('score-filter-value');
-    if (scoreToggle && scoreInput) {
-      var hasScore = cfg.filter_score_min !== null && cfg.filter_score_min !== undefined;
-      scoreToggle.checked = hasScore;
-      scoreInput.disabled = !hasScore;
-      if (hasScore) {
-        scoreInput.value = Math.round(cfg.filter_score_min * 100);
-        scoreInput.setAttribute('name', 'filter_score_min');
-      } else {
-        scoreInput.removeAttribute('name');
-      }
+    // Relevance mode (derived from filter_labeled + filter_score_min)
+    var hasScore = cfg.filter_score_min !== null && cfg.filter_score_min !== undefined;
+    var relMode = hasScore ? 'score' : (cfg.filter_labeled ? 'labeled' : 'all');
+    var relRadio = form.querySelector('.relevance-radio[value="' + relMode + '"]');
+    // Saved 'score' config but scoring no longer available → fall back to labeled
+    if (!relRadio && relMode === 'score') {
+      relMode = 'labeled';
+      relRadio = form.querySelector('.relevance-radio[value="labeled"]');
     }
+    if (relRadio) relRadio.checked = true;
+    var scoreInput = document.getElementById('score-filter-value');
+    if (scoreInput && hasScore) {
+      scoreInput.value = Math.round(cfg.filter_score_min * 100);
+    }
+    applyRelevanceMode(relMode);
 
     // Article limit
     var limitInput = document.getElementById('article-limit');
