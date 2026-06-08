@@ -190,10 +190,14 @@
                placeholder="{% if s.smtp_password_encrypted %}Leave empty to keep current{% else %}Enter password{% endif %}"
                class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
-      <div class="flex items-center justify-between gap-4">
-        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">From email</label>
-        <input type="email" name="smtp_from_email" value="{{ s.smtp_from_email or '' }}"
-               class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <div class="flex items-start justify-between gap-4">
+        <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0 pt-1.5">From email</label>
+        <div class="flex-1">
+          <input type="text" name="smtp_from_email" value="{{ s.smtp_from_email or '' }}"
+                 placeholder="Readfine &lt;noreply@readfine.app&gt;"
+                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <p class="text-xs text-gray-500 mt-1">Plain address, or with a display name shown in inboxes: <code>Readfine &lt;noreply@readfine.app&gt;</code></p>
+        </div>
       </div>
       <div class="flex items-center justify-between gap-4">
         <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">TLS</label>

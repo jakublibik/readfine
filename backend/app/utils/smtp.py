@@ -3,6 +3,7 @@ import smtplib
 import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parseaddr
 
 from app.models.settings import AppSettings
 from app.utils.crypto import decrypt
@@ -68,6 +69,10 @@ def _smtp_send(s: AppSettings, recipients: list[str], raw_message: str) -> None:
     password = _get_password(s)
     port = s.smtp_port or 587
 
+    # smtp_from_email may carry a display name ("Readfine <noreply@readfine.app>");
+    # the envelope sender (MAIL FROM) must be the bare address only.
+    envelope_from = parseaddr(s.smtp_from_email)[1] or s.smtp_from_email
+
     if s.smtp_use_tls:
         context = ssl.create_default_context()
         with smtplib.SMTP(s.smtp_host, port, timeout=10) as conn:
@@ -75,10 +80,10 @@ def _smtp_send(s: AppSettings, recipients: list[str], raw_message: str) -> None:
             conn.starttls(context=context)
             if s.smtp_user and password:
                 conn.login(s.smtp_user, password)
-            conn.sendmail(s.smtp_from_email, recipients, raw_message)
+            conn.sendmail(envelope_from, recipients, raw_message)
     else:
         with smtplib.SMTP(s.smtp_host, port, timeout=10) as conn:
             conn.ehlo()
             if s.smtp_user and password:
                 conn.login(s.smtp_user, password)
-            conn.sendmail(s.smtp_from_email, recipients, raw_message)
+            conn.sendmail(envelope_from, recipients, raw_message)
