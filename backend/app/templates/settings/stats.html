@@ -47,7 +47,7 @@
   {% endif %}
 </div>
 
-{# ── Čtení ─────────────────────────────────────────────────────────────────── #}
+{# ── Reading ───────────────────────────────────────────────────────────────── #}
 <section class="mb-8">
   <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">Reading</h2>
 
@@ -84,8 +84,8 @@
   </div>
   {% endif %}
 
-  {# TODO: Read per day tabulka skryta — zvážit rozšíření zobrazovaných hodnot
-     (např. přečteno vs. otevřeno, dwell time, trend) než ji znovu zobrazíme. #}
+  {# TODO: Read-per-day table hidden — consider expanding the shown metrics
+     (e.g. read vs. opened, dwell time, trend) before bringing it back. #}
 
   {# 3 stat chips #}
   <div class="grid grid-cols-3 gap-6 mb-6">
@@ -187,7 +187,7 @@
     {% endif %}
   </div>
 
-  {# Přehlédnuté poklady #}
+  {# Overlooked gems #}
   <div class="mb-5">
     <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(score ≥ 0.7, never opened)</span></h3>
     {% if ai.gems %}
@@ -226,7 +226,7 @@
     {% endif %}
   </div>
 
-  {# AI se mýlilo #}
+  {# AI got it wrong #}
   <div>
     <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(score &lt; 0.3, you starred it)</span></h3>
     {% if ai.wrong %}

@@ -433,7 +433,7 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
         min_score_starred=round(float(cal.min_starred) * 100) if cal.min_starred is not None else None,
     )
 
-    # Přehlédnuté poklady — high score, never opened (dwell=0, link_opened=false)
+    # Overlooked gems — high score, never opened (dwell=0, link_opened=false)
     gems_result = await db.execute(
         text("""
             SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score, uas.is_starred
@@ -456,7 +456,7 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
         for r in gems_result.fetchall()
     ]
 
-    # AI se mýlilo — low score, ever_starred
+    # AI got it wrong — low score, ever_starred
     wrong_result = await db.execute(
         text("""
             SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score
