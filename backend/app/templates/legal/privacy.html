@@ -67,10 +67,18 @@
   <section>
     <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100">3. AI features</h2>
     <p>
-      If you use AI-powered features (article summaries, briefings, scoring), article content
-      may be sent to a third-party AI provider (Anthropic, OpenAI, or Google). This is
-      configured by the operator. No data is used to train AI models under the standard API terms
-      of these providers. AI features are optional and can be disabled in Settings → AI.
+      AI-powered features (article summaries, briefings, scoring, chat) are optional and can be
+      enabled or disabled in Settings → AI. To use them you provide your own API key for the AI
+      provider of your choice (Anthropic, OpenAI, or Google). Your key is stored encrypted, is used
+      only to make requests on your behalf, and can be deleted at any time.
+    </p>
+    <p class="mt-2">
+      When you use these features, article content (and, for chat, your messages) is sent to the AI
+      provider you configured. Under the standard <em>paid</em> API terms of Anthropic, OpenAI and
+      Google, your content is not used to train their models.
+      <strong>Exception:</strong> Google's free Gemini API tier may use your prompts and the
+      generated responses to improve Google's products. To keep your content out of training, use a
+      paid Gemini key or another provider.
     </p>
   </section>
 
