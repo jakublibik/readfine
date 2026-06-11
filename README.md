@@ -63,7 +63,9 @@ git pull
 docker compose up -d --build
 ```
 
-Migrations run automatically on startup.
+Migrations run automatically on startup. Updates never re-run `setup.sh`; the `ENCRYPTION_KEY`
+in `.env` must stay stable for the life of the install — changing it makes all stored API keys
+and feed passwords permanently unreadable.
 
 ## Useful commands
 
