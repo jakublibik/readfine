@@ -5,7 +5,8 @@ import secrets
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from jinja2 import TemplateNotFound
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,10 +47,40 @@ async def _get_valid_invitation(db: AsyncSession, token: str) -> Invitation | No
 
 
 @router.get("/")
-async def root(request: Request):
+async def root(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse(url="/app", status_code=302)
+    app_settings = await _get_app_settings(db)
+    registration_open = not app_settings or app_settings.registration_enabled
+    if registration_open:
+        # Operator-provided marketing landing (gitignored). Falls back to /login when absent
+        # (open-source default) — landing.example.html is a starter template, never rendered live.
+        try:
+            return templates.TemplateResponse(request, "landing.html", {"base_url": str(request.base_url)})
+        except TemplateNotFound:
+            pass
     return RedirectResponse(url="/login", status_code=302)
+
+
+# Crawler directives: allow public pages (/, /login, /register, /terms, /privacy),
+# keep private and token-based paths out of the index. Advisory only — not a security
+# control; those paths are protected by auth.
+_ROBOTS_TXT = """\
+User-agent: *
+Disallow: /app
+Disallow: /api
+Disallow: /admin
+Disallow: /settings
+Disallow: /share
+Disallow: /verify-email
+Disallow: /reset-password
+Disallow: /logout
+"""
+
+
+@router.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    return _ROBOTS_TXT
 
 
 @router.get("/login", response_class=HTMLResponse)

@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     # App
     debug: bool = False
     app_name: str = "Readfine"
-    base_url: str = "http://localhost:8000"
 
     # Initial admin (used only on first run)
     first_admin_email: EmailStr | None = None

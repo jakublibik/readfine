@@ -43,3 +43,6 @@ certs/
 
 # Tailwind
 node_modules/
+
+# Landing page — operator's live copy is per-instance; example template is committed
+backend/app/templates/landing.html

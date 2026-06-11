@@ -41,8 +41,8 @@ Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
 - Post-MVP: /feeds/detect — auto-detekce RSS/Atom feed URL ze zadané stránky (scrape `<link rel="alternate">` + fallback heuristika)
 
 ## TODO
+- **Cache `AppSettings` pro `/`**: route `root()` (`routers/web/auth.py`) nově dělá `SELECT` na `AppSettings` při každém odhlášeném hitu na `/` (kvůli landing page / registration_enabled). `/` je nejveřejnější endpoint (boti). Přidat in-process cache `AppSettings` (TTL nebo invalidace po admin změně), ať se neselectuje per-request. Pro launch není kritické (indexovaný select na `id=1`, za nginx+Cloudflare).
 - **Readable před filtrováním (scrape feedy)**: readable extraction synchronně při fetchi → filtry mají k dispozici plný text; kompromis: zpomalí fetch
-- limit na počet článků při prvním stažení
 - **Per-feed/per-user retention (ke zvážení)**: `UserFeed.purge_after_days` a `purge_keep_count` existují v DB, ale nemají UI. Multi-user scénář je komplikovaný — purge by musel brát nejbenevolentnější nastavení ze všech userů pro daný feed a mazat jen per-user přiřazení, ne článek samotný. Pravděpodobně zbytečná komplexita.
 - **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
 - **JWT refresh tokeny**: access token 15 min + refresh token (dlouhodobý, v HttpOnly cookie)
