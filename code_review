@@ -1,0 +1,1087 @@
+Readfine - technicke code review mimo oblast bezpecnosti
+==========================================================
+
+Datum: 2026-06-12
+Scope: backend business logika, AI pipeline, API/web routes, databaze/modely,
+frontend/templates a test/release readiness.
+Vyjmuto ze scope: security audit. Pokud je nize zminen problem, ktery by mohl
+mit i bezpecnostni presah, je zde uveden pouze kvuli bezne correctness/UX/data
+konzistenci.
+
+Shrnuti podle casti
+-------------------
+
+Backend business logika:
+- Nejvetsi runtime chyba je rozbity API endpoint pro retroaktivni aplikaci
+  filtru.
+- Filtracni akce "hide" se zapisuje do databaze, ale produkt ji nikde
+  nevyuziva.
+- Nekolik cest pro star/read/hide nema sjednocene side efekty, coz rozbiji
+  retenci, AI signaly a unread pocty.
+- Fetch/scheduler maji par race/edge-case problemu: duplicate insert race,
+  scrape retention, tiche spolknuti vyjimek ze scheduleru, nepresne intervaly.
+
+AI pipeline:
+- Catch me up/briefing pro "yesterday" bere i dnesni clanky.
+- Manualni prirazeni labelu nespousti scoring, ackoli UI/pipeline pracuje s
+  predstavou "scoring pro labelovane clanky".
+- Background readable extraction po otevreni clanku nespusti AI pipeline.
+- Gemini v obecne completion ceste ignoruje max_tokens.
+- Failed scoring job muze pipeline zaseknout natrvalo.
+
+API a web/HTMX routes:
+- API a web se misty rozchazeji v chovani a response shape.
+- Unhandled/rate-limit chyby pro API vraci HTML misto JSON.
+- Nektere HTMX state endpointy zapisujici dwell/read stav nekontroluji, zda je
+  clanek pro uzivatele vubec pristupny.
+- Sidebar/nav a detail panel maji konkretni UX nekonzistence pri deep-linku,
+  erroru a custom breakpointech.
+
+Databaze a modely:
+- ORM metadata je misty rozjete proti migracim, zejmena
+  UserCatchupConfig unique constraint.
+- Retence neni konzistentni mezi age/count passem a mezi article listingem,
+  catch-up/briefingem a denormalizovanymi pocty.
+- Nejdestruktivnejsi lifecycle flow unsubscribe/account-delete neni dost
+  testovany proti realne DB.
+
+Frontend/templates:
+- Core reader UI je promyslene, ale ma konkretni bugy v deep-linku,
+  nav/list synchronizaci, prvnim paintu breakpointu a nekterych loading/error
+  stavech.
+- Nektere standalone stranky a dark-mode tokeny nejsou sjednocene se zbytkem
+  appky.
+
+Tests/release readiness:
+- Nejvetsi release mezery: chybejici CI, produkcni docker-compose bind-mountuje
+  zdrojaky, Docker build nepouziva uv.lock, chybi migration smoke test.
+- Dokumentace lokalniho/hybrid dev setupu a spousteni testu neni dostatecna.
+- OPML import/export, purge orchestration a first-admin seed maji chybejici
+  testy.
+
+
+Prioritizovany seznam oprav
+---------------------------
+
+P0 - opravit pred public releasem / runtime blokery
+---------------------------------------------------
+
+1) Rozbity endpoint POST /api/v1/filters/{id}/apply
+   Oblast: API, filtry
+   Lokace: backend/app/routers/api/v1/filters.py:91-103,
+           backend/app/services/filter_service.py:836-876
+
+   Problem:
+   apply_filter_retroactively() vraci trojici
+   (matched_count, changed_count, scoring_queued), ale API route unpackuje jen
+   dve hodnoty:
+
+       matched, changed = await apply_filter_retroactively(...)
+
+   V realnem provozu endpoint spadne na ValueError: too many values to unpack.
+   Webova cesta uz trojici unpackuje spravne.
+
+   Dopad:
+   API retroaktivni aplikace filtru je nepouzitelna a aktualni testy to mohou
+   maskovat mockem vracejicim starou dvojici.
+
+   Navrh reseni:
+   - Unpackovat vsechny tri hodnoty.
+   - Vratit scoring_queued v JSON response.
+   - Opravit type hint a docstring apply_filter_retroactively() na
+     tuple[int, int, int].
+   - Zformatovat response schema explicitne, pokud nechceme response_model=dict.
+
+   Test:
+   - API test, ktery vola realnou service cestu nebo mockuje 3-tuple.
+   - Asertovat 200 a response: matched, changed, scoring_queued.
+
+
+2) Chybi CI pipeline
+   Oblast: release readiness
+   Lokace: root repozitare, chybi .github/workflows nebo ekvivalent
+
+   Problem:
+   Na push/PR nebezi zadny automaticky gate pro pytest, migrace, Docker build
+   ani frontend build.
+
+   Dopad:
+   Public release nema automatickou ochranu proti regresim, rozbitym migracim
+   a nefunkcnimu buildu.
+
+   Navrh reseni:
+   - Pridat GitHub Actions workflow:
+     - uv sync --group dev
+     - pytest
+     - Postgres service + alembic upgrade head
+     - docker build nebo docker compose build
+     - npm run build && git diff --exit-code pro tailwind.css
+   - Registrovat integration marker a jasne oddelit local/CI chovani.
+
+   Test/verifikace:
+   - Umyslne rozbit test v PR a overit, ze CI selze.
+   - Overit, ze cista DB projde alembic upgrade head.
+
+
+3) Produkcni docker-compose bind-mountuje zdrojaky pres image
+   Oblast: deployment
+   Lokace: docker-compose.yml:19-28
+
+   Problem:
+   App service ma:
+
+       volumes:
+         - ./backend:/app
+
+   To je vyvojovy pattern, ale v produkcnim compose prekryje obsah Docker
+   image hostitelskym checkoutem.
+
+   Dopad:
+   Build nevytvari imutabilni deploy artefakt. Server musi mit kompletni
+   checkout, image tagy jsou zavadejici a muze vznikat drift mezi image
+   zavislostmi a kodem z mountu.
+
+   Navrh reseni:
+   - V produkcnim docker-compose.yml odstranit bind mount.
+   - Vyvojovy mount presunout do docker-compose.override.yml nebo
+     docker-compose.dev.yml.
+   - V README popsat oba rezimy.
+
+   Test/verifikace:
+   - docker compose up -d --build bez hostitelskeho ./backend mountu.
+   - Overit, ze app startuje pouze z builtnuteho image.
+
+
+4) Docker build neni pinovany lockfilem
+   Oblast: packaging/deployment
+   Lokace: Dockerfile:5-10, backend/uv.lock
+
+   Problem:
+   Dockerfile kopiruje pouze backend/pyproject.toml a instaluje:
+
+       uv pip install --system -e .
+
+   Nepouziva backend/uv.lock ani --frozen.
+
+   Dopad:
+   Produkcni buildy nejsou reprodukovatelne. Stejny commit muze za par tydnu
+   vyresit jine verze zavislosti.
+
+   Navrh reseni:
+   - Kopirovat backend/pyproject.toml i backend/uv.lock.
+   - Instalovat pres uv sync --frozen --no-dev nebo ekvivalentni uv pip
+     flow s lockfilem.
+
+   Test/verifikace:
+   - Dva buildy ze stejneho commitu maji stejne pip freeze.
+   - CI kontroluje, ze lockfile je pouzit.
+
+
+5) Duplicate article race se muze vyhodnotit jako fetch failure
+   Oblast: fetcher/business logika
+   Lokace: backend/app/fetcher/rss.py, _save_articles/fetch_feed error path
+
+   Problem:
+   Pri soubeznem fetchi stejneho feedu muze INSERT narazit na unikatni
+   constraint (feed_id, guid_hash). Tato benigni duplicate race projde pres
+   obecny error path fetch_feed.
+
+   Dopad:
+   Zdravy feed muze dostat fetch_error_count, skoncit ve statusu error nebo
+   byt po opakovani disable, prestoze fetch/parsing byly v poradku.
+
+   Navrh reseni:
+   - Catchnout IntegrityError primo kolem flush/insertu.
+   - Duplicate konflikt brat jako "0 novych clanku", ne jako fetch selhani.
+   - Pripadne pouzit INSERT ON CONFLICT DO NOTHING.
+
+   Test:
+   - Soubezne dva fetch_feed pro stejny feed a prekryvajici se entries.
+   - Overit, ze feed zustane active a error_count se nezvysi.
+
+
+P1 - vysoka priorita: funkcni correctness a datova konzistence
+--------------------------------------------------------------
+
+6) Akce filtru "hide" je v produktu fakticky no-op
+   Oblast: filtry, article listing, catch-up
+   Lokace: backend/app/services/filter_service.py:440-466,
+           backend/app/services/article.py,
+           backend/app/services/catchup_service.py
+
+   Problem:
+   Filter action nastavuje UserArticleState.is_hidden = True, ale backendove
+   listingy, unread/nav pocty ani catch-up/briefing query is_hidden nefiltruji.
+   Vyhledani v backendu ukazuje jen write-side reference.
+
+   Dopad:
+   Uzivatel nastavi "hide", ale clanky zustanou viditelne v appce, searchi,
+   poctech a mohou se dostat do briefing/catch-up vystupu.
+
+   Navrh reseni:
+   - Definovat produktove pravidlo: hidden se skryva z normalnich listu a
+     catch-upu; rozhodnout, zda starred/archived pohled ma hidden prebijet.
+   - Pridat filtr na is_hidden do list_articles, nav/unread countu,
+     catchup_service a dalsich normalnich seznamu.
+   - Pripadne prejmenovat/odstranit akci, pokud ji nechceme podporovat.
+
+   Test:
+   - Filter hide -> clanek neni v default listu, unread poctu ani catch-upu.
+   - Volitelne test pro starred override podle rozhodnuteho chovani.
+
+
+7) "Yesterday" catch-up a briefing zahrnuje i dnesni clanky
+   Oblast: AI/catch-up/briefing
+   Lokace: backend/app/services/catchup_service.py:40-55, 123-159
+
+   Problem:
+   Perioda yesterday pocita start na vcerejsi 00:00, ale query nema horni
+   hranici. Podminka je jen:
+
+       coalesce(published_at, fetched_at) >= start_dt
+
+   Dopad:
+   Digest oznaceny jako "Yesterday" obsahuje i dnesni clanky, spatne pocty a
+   zavadejici briefing.
+
+   Navrh reseni:
+   - Period helper ma vracet interval (start_dt, end_dt).
+   - yesterday: [vcera 00:00, dnes 00:00)
+   - today: [dnes 00:00, now)
+   - 7days: podle zameru rolling interval nebo [start, now).
+
+   Test:
+   - Fixni cas, user timezone, clanky vcera/dnes.
+   - fetch_catchup_articles(period="yesterday") vraci pouze vcerejsi.
+   - Stejnou cestu overit pres briefing service.
+
+
+8) Manualni prirazeni labelu nespousti AI scoring
+   Oblast: labely, AI scoring
+   Lokace: backend/app/services/label_service.py:62-101,
+           backend/app/services/filter_service.py:514-517
+
+   Problem:
+   Scoring se enqueueuje pri label akci z filtru, ale assign_label() jen vlozi
+   ArticleLabel a commitne. Manualni/API label tedy nemusi nikdy dostat score.
+
+   Dopad:
+   UI i produktova logika komunikuji scoring pro labelovane clanky, ale rucne
+   labelovane clanky jsou mimo pipeline.
+
+   Navrh reseni:
+   - Po uspesnem assign_label() spustit stejnou eligibility logiku jako filtr.
+   - Pokud je readable hotovy, zalozit scoring job; pokud chybi readable,
+     nastavit pending podle existujici pipeline konvence.
+   - Zajistit idempotenci pri opakovanem labelu.
+
+   Test:
+   - Manualne priradit label k eligible clanku a overit ArticleAiJob
+     operation="scoring".
+   - Test idempotence pri existujicim jobu.
+
+
+9) Background readable extraction nespusti AI pipeline
+   Oblast: readable extraction, AI pipeline
+   Lokace: backend/app/routers/web/app.py:38-73, 772-787,
+           backend/app/services/readable_service.py
+
+   Problem:
+   On-demand readable extraction pri otevreni clanku zavola
+   apply_readable_result() a commitne, ale nevola run_pipeline_for_article_all_users().
+   Batch readable processing pipeline vola.
+
+   Dopad:
+   Labelovane clanky, ktere se doreextrahuji az pri otevreni, nemusi dostat
+   scoring, AI filtry ani auto-summary.
+
+   Navrh reseni:
+   - Po terminalnim vysledku background extraction zavolat
+     run_pipeline_for_article_all_users(article, db), stejne jako batch cesta.
+   - Zachovat chovani pro success i terminal failure podle batch pravidel.
+
+   Test:
+   - Mock labelovanych useru a article.
+   - Spustit _extract_readable_bg a overit, ze se pipeline enqueue/spusti.
+
+
+10) Gemini ignoruje max_tokens v obecne AI completion ceste
+    Oblast: AI provider abstraction
+    Lokace: backend/app/services/ai_service.py:636-664
+
+    Problem:
+    _complete() predava max_tokens Anthropic/OpenAI, ale Gemini generate_content
+    nedostava max_output_tokens/config.
+
+    Dopad:
+    Gemini muze generovat podle provider defaultu: nepredvidatelne naklady,
+    latence a truncation. Odhady costu a limity tokenu jsou mene spolehlive.
+
+    Navrh reseni:
+    - Pouzit odpovidajici Gemini GenerateContentConfig s max_output_tokens.
+    - Stejny princip aplikovat i na chat_with_article, pokud ma samostatnou
+      Gemini cestu.
+
+    Test:
+    - Mock Gemini klienta a asertovat, ze max_tokens se promita do configu.
+
+
+11) Failed scoring job muze natrvalo zablokovat pipeline
+    Oblast: AI pipeline, scoring retries
+    Lokace: backend/app/services/ai_pipeline_service.py:104-119,
+            backend/app/services/ai_scoring_service.py
+
+    Problem:
+    run_article_pipeline() pri existujicim scoring jobu pokracuje jen pokud
+    status == "success". Kdyz existuje status "failed", enqueue_scoring_job()
+    vrati false a pipeline se vrati bez retry/resetu.
+
+    Dopad:
+    Docasna chyba providera muze nechat clanek bez score a AI filtry/summary se
+    uz pri dalsim triggeru nespusti.
+
+    Navrh reseni:
+    - Pri pipeline entry povolit reset failed/skipped jobu na pending, pokud je
+      clanek stale eligible.
+    - Nebo pridat explicitni retry/requeue servisni funkci a UI/admin reset.
+    - Udrzet rozliseni permanentnich chyb, pokud provider jasne vraci invalid
+      credentials/model.
+
+    Test:
+    - Existing failed scoring job + run_article_pipeline() -> job se requeue
+      nebo retryne podle zvolene politiky.
+
+
+12) API error handlery vraci HTML pro API route
+    Oblast: API responses
+    Lokace: backend/app/main.py:94-100, 163-167
+
+    Problem:
+    RateLimitExceeded handler i catch-all Exception handler vraci HTML template
+    pro vsechny cesty, vcetne /api/*.
+
+    Dopad:
+    API klienti dostanou HTML misto JSON pri 429/500 a nemohou spolehlive
+    parsovat retry/error.
+
+    Navrh reseni:
+    - V handlerech rozlisit request.url.path.startswith("/api/").
+    - Pro API vracet JSONResponse({"detail": ...}, status_code=...).
+    - Webove HTML response ponechat.
+
+    Test:
+    - API endpoint simulujici nehandled exception -> application/json 500.
+    - Rate limit na API auth/token -> application/json 429.
+
+
+13) HTMX batch mark-read a dwell zapis nemaji dostatecny access predicate
+    Oblast: web routes, article state
+    Lokace: backend/app/routers/web/app.py:264-273, 940-963,
+            backend/app/services/article.py:432-448
+
+    Problem:
+    Batch mark-read a dwell route umi vytvorit/updatovat UserArticleState pro
+    libovolne existujici article_id, bez stejne access logiky jako get_article
+    nebo toggle state.
+
+    Dopad:
+    Stale/malformed klientsky request muze zapsat read/dwell pro clanky mimo
+    uzivateluv subscription/starred/archive kontext. To zkresluje statistiky,
+    AI preference a unread recalculation.
+
+    Navrh reseni:
+    - Pred upsertem prefiltrovat article ids pres sdileny access predicate.
+    - Pro dwell vratit 404 pri nepristupnem clanku.
+    - Pro batch mark-read nepristupne ids ignorovat nebo vratit 422 podle UX.
+
+    Test:
+    - Subscribed article projde.
+    - Nesouvisejici article_id se nezapise.
+
+
+14) Retence: mark-read neni povazovan za engaged
+    Oblast: purge/retention
+    Lokace: backend/app/services/purge_service.py:75-87
+
+    Problem:
+    Docstring rika, ze engaged zahrnuje "read", ale _engaged_exists() kontroluje
+    jen dwell_seconds >= 30, link_opened nebo ever_starred. is_read/read_at se
+    nepocita.
+
+    Dopad:
+    Clanky oznacene jako prectene hromadne, rychle prectene nebo prectene
+    filtrem mohou byt pri T1 smazany misto trim/keep chovani, ktere uzivatel
+    ocekava.
+
+    Navrh reseni:
+    - Bud pridat UserArticleState.is_read == True do _engaged_exists().
+    - Nebo upravit dokumentaci/UI, ze read bez dwell nechrani retenci.
+
+    Test:
+    - Clanek is_read=True, dwell=0 prezije age delete a projde trim/keep
+      podle retencni politiky.
+
+
+15) API PATCH star nema stejne side efekty jako toggle_article_state
+    Oblast: API article state, retention, readable/AI triggers
+    Lokace: backend/app/services/article.py update_article_state vs
+            toggle_article_state, backend/app/routers/api/v1/articles.py
+
+    Problem:
+    API update_article_state nastavuje is_starred, ale nedoplnuje vsechny side
+    efekty manualniho toggle: ever_starred, starred_at, user_starred, readable
+    pending trigger nebo unstar dwell bookkeeping.
+
+    Dopad:
+    API klienti vytvari jiny stav nez web UI. To ovlivni retenci, AI preference,
+    summary/readable trigger a statistiky.
+
+    Navrh reseni:
+    - Sjednotit star/unstar do jedne servisni funkce pouzite webem i API.
+    - Nebo explicitne zrcadlit side efekty v update_article_state.
+
+    Test:
+    - Star pres API nastavi ever_starred/starred_at/user_starred a readable
+      trigger podle stejne politiky jako web.
+
+
+16) Filter "star" action nenastavuje star metadata
+    Oblast: filtry, article state
+    Lokace: backend/app/services/filter_service.py:461-463
+
+    Problem:
+    Filter action "star" pouze nastavi is_starred=True, ale nenastavi
+    ever_starred, starred_at ani user_starred.
+
+    Dopad:
+    Retence a AI preference se chovaji jinak pro clanky starovane filtrem nez
+    pro clanky starovane uzivatelem. Po unstar muze clanek ztratit ochranu,
+    ktera je navazana na ever_starred.
+
+    Navrh reseni:
+    - Vytahnout sdileny helper pro star/unstar side efekty.
+    - Pro filter star rozhodnout, zda ma byt user_starred True nebo zvlastni
+      automated_star flag; podle toho upravit preference.
+
+    Test:
+    - Filter star -> metadata jsou konzistentni.
+    - Unstar -> retence se chova podle politiky.
+
+
+17) Scrape feeds nerespektuji retention cutoff
+    Oblast: fetcher/scrape, purge
+    Lokace: backend/app/fetcher/scheduler.py, backend/app/fetcher/scrape.py
+
+    Problem:
+    RSS fetch dostava published_cutoff, ale scrape fetch vklada vsechny linky
+    ze stranky. Po purge se stare linky mohou znovu zalozit.
+
+    Dopad:
+    Stare scrape clanky se cyklicky vraci, zvedaji unread pocty a spousti
+    downstream joby.
+
+    Navrh reseni:
+    - Stejny cutoff predat i scrape feedum.
+    - Pokud scrape nema published_at, pouzit fetch/fallback pravidlo nebo
+      skipovat podle konzervativni politiky.
+
+    Test:
+    - Purge stareho scrape clanku, refetch, overit ze se nevrati.
+
+
+18) Catch-up/briefing zahrnuje trimmed article stubs
+    Oblast: catch-up, briefing, retention consistency
+    Lokace: backend/app/services/catchup_service.py:137-196
+
+    Problem:
+    fetch_catchup_articles() nefiltruje Article.trimmed_at.is_(None), zatimco
+    reader listy trimmed clanky skryvaji.
+
+    Dopad:
+    AI digest muze pracovat s body-stripped stuby, prazdnym obsahem nebo
+    clanky, ktere uzivatel v readeru nevidi.
+
+    Navrh reseni:
+    - Pridat Article.trimmed_at.is_(None) do catch-up query a souvisejicich
+      briefing countu.
+
+    Test:
+    - Trimmed article se nedostane do fetch_catchup_articles().
+
+
+19) ORM schema drift u UserCatchupConfig unique constraint
+    Oblast: databaze/modely/migrace
+    Lokace: backend/app/models/user.py:84-87,
+            backend/alembic/versions/0061_catchup_config_unique_name_period.py
+
+    Problem:
+    Model deklaruje unique (user_id, name), ale migrace 0061 presla na
+    (user_id, name, period).
+
+    Dopad:
+    Alembic autogenerate muze navrhovat spatne migrace a kod muze mit chybne
+    predpoklady o povolene duplicite nazvu mezi periodami.
+
+    Navrh reseni:
+    - Upravit __table_args__ v modelu na
+      UniqueConstraint("user_id", "name", "period", ...).
+    - Zkontrolovat i dalsi constraints/indexy, ktere existuji jen v migracich.
+
+    Test:
+    - Stejny name + ruzna period projde.
+    - Stejny name + stejna period selze.
+
+
+20) Count-based purge netrimuje engaged clanky pres keep limit
+    Oblast: purge/retention
+    Lokace: backend/app/services/purge_service.py
+
+    Problem:
+    Age pass engaged clanky trimuje, ale count pass maze jen unengaged excess.
+    Engaged clanky pres purge_keep_count mohou zustavat plne ulozene.
+
+    Dopad:
+    Feed s nastavenym keep_count muze rust bez ocekavaneho omezeni pro
+    engaged-but-unprotected clanky.
+
+    Navrh reseni:
+    - V count passu pro engaged excess zavolat trim path, nebo dokumentovat,
+      ze keep_count je hard cap jen pro cold clanky.
+    - UI/admin copy musi odpovidat zvolene politice.
+
+    Test:
+    - Feed keep_count=3 a 4 engaged stare clanky -> nejstarsi se trimne nebo
+      smaze podle zvolene politiky.
+
+
+P2 - stredni priorita: vykon, UX a provozni spolehlivost
+-------------------------------------------------------
+
+21) Retroaktivni filter apply nacita cely archiv do pameti
+    Oblast: filtry/performance
+    Lokace: backend/app/services/filter_service.py, _plan_retroactive_apply
+
+    Problem:
+    Retro apply materializuje vsechny scoped clanky uzivatele najednou.
+
+    Dopad:
+    Velke knihovny mohou zpusobit vysoke memory usage, dlouhe transakce a
+    timeouty UI.
+
+    Navrh reseni:
+    - Keyset/chunked scan.
+    - Komitovat a enqueueovat po davkach.
+    - Preview county pocitat SQL cestou, kde to jde.
+
+    Test:
+    - Test chunking kontraktu; velky fixture bez linearnich memory spike.
+
+
+22) apply_filters_to_article skaluje jako subscribers x filter queries
+    Oblast: fetcher/filter performance
+    Lokace: backend/app/services/filter_service.py:477-517
+
+    Problem:
+    Pro kazdy novy clanek se nactou subscriberi a pro kazdeho usera samostatne
+    filtry. Na sdilenem popularnim feedu je to draha hot path.
+
+    Dopad:
+    Fetch latency a DB load rostou nasobne s poctem subscriberu a clanku.
+
+    Navrh reseni:
+    - Batch-fetch active filters pro vsechny subscriber user_id jednim dotazem.
+    - Grupovat v Pythonu podle user_id.
+    - Reuse cache v ramci jednoho fetch transaction.
+
+    Test:
+    - Mock query count nebo integration performance test pro vice useru/clanku.
+
+
+23) process_ai_filters_batch ma N+1 filter load
+    Oblast: AI filters/performance
+    Lokace: backend/app/services/filter_service.py, process_ai_filters_batch
+
+    Problem:
+    Po batch loadu states/articles se filtry nacitaji per user v loopu.
+
+    Dopad:
+    Scheduler tick s vice usery dela zbytecne mnoho DB round-tripu.
+
+    Navrh reseni:
+    - Jeden SELECT Filter WHERE user_id IN (...) AND is_active.
+    - Group by user_id v pameti.
+
+    Test:
+    - Multi-user batch asertuje jeden filter query.
+
+
+24) Scheduler spolykava vyjimky z fetch tasku
+    Oblast: scheduler/observability
+    Lokace: backend/app/fetcher/scheduler.py, asyncio.gather(return_exceptions=True)
+
+    Problem:
+    gather vraci exception objekty, ale vysledek se neinspectuje/loguje.
+
+    Dopad:
+    Programatorske chyby nebo DB problemy mohou zmizet bez logu a bez jasne
+    diagnostiky.
+
+    Navrh reseni:
+    - Po gather projit vysledky a logger.exception/error pro BaseException.
+
+    Test:
+    - Mock _fetch_one raising -> overit log.
+
+
+25) 45min fetch interval se vyhodnocuje jen v :00 slotu
+    Oblast: scheduler
+    Lokace: backend/app/fetcher/scheduler.py, _slot_matches
+
+    Problem:
+    Slot logika podporuje sub_period=45 jen nepresne; :15/:30/:45 sloty ho
+    nezahrnuji.
+
+    Dopad:
+    Feed s 45min intervalem muze bezet prakticky v 60min rytmu.
+
+    Navrh reseni:
+    - Upravit slot matching pro 45min intervaly, nebo interval nepodporovat v
+      UI/configu.
+
+    Test:
+    - Due feed v 12:45 se fetchne pri 12:45 slotu.
+
+
+26) Scoring parse fallback tise zapisuje 0.5
+    Oblast: AI scoring correctness
+    Lokace: backend/app/services/ai_service.py, score_article parsing
+
+    Problem:
+    Nenumeric model output spadne do ValueError a vrati default 0.5 bez
+    signalizace chyby.
+
+    Dopad:
+    0.5 vypada jako realne score, ale ve skutecnosti je to parse failure. AI
+    filtry a ranking pak mohou rozhodovat podle umele hodnoty.
+
+    Navrh reseni:
+    - Jednou retrynout se striktnejsim promptem.
+    - Pri dalsim selhani oznacit job jako failed/degraded a ulozit last_ai_error.
+
+    Test:
+    - Mock response "0.8 - relevant" nebo prose; overit retry/failure, ne
+      silent 0.5.
+
+
+27) Null/empty provider content muze shodit chat/completion
+    Oblast: AI provider robustness
+    Lokace: backend/app/services/ai_service.py
+
+    Problem:
+    Kod vola .strip() nad resp.content[0].text,
+    choices[0].message.content nebo resp.text bez null guardu.
+
+    Dopad:
+    Blokovane/prazdne odpovedi provideru mohou skoncit AttributeError/TypeError
+    a generickym 500 misto kontrolovane provider chyby.
+
+    Navrh reseni:
+    - Normalizovat prazdny obsah na vlastni ProviderEmptyResponse error.
+    - Chybu retryovat nebo zobrazit pratelne uzivateli.
+
+    Test:
+    - Mock null content pro Anthropic/OpenAI/Gemini.
+
+
+28) API/web behavior drift u labelu a filtru
+    Oblast: API parity
+    Lokace: backend/app/routers/api/v1/labels.py,
+            backend/app/routers/api/v1/filters.py,
+            backend/app/routers/web/settings.py
+
+    Problem:
+    Priklady:
+    - DELETE article label ignoruje bool z remove_label() a vraci 204 i kdyz
+      nebylo co smazat.
+    - API filter apply nema scoring_queued ani volbu enqueue_scoring, kterou
+      ma web.
+    - API label create muze dovolit duplicity, ktere web preventuje.
+
+    Dopad:
+    API klienti nemohou spolehlive rozlisit vysledek a chovani se lisi od UI.
+
+    Navrh reseni:
+    - Sjednotit service-level pravidla.
+    - API response pro not-found/duplicate sjednotit s ostatnimi endpointy.
+    - Pridat explicitni request/response schemata.
+
+    Test:
+    - API label remove missing -> 404.
+    - Duplicate label -> 409 podle zvolene politiky.
+    - Filter apply scoring on/off.
+
+
+29) Deep-link open_article_id muze nahrat detail do skryteho panelu
+    Oblast: frontend/reader UX
+    Lokace: backend/app/templates/app/main.html,
+            backend/app/static/js/app.js,
+            backend/app/templates/settings/stats.html
+
+    Problem:
+    /app?open_article_id=... naplni #article-detail, ale v 2-panel layoutu nebo
+    mobile inline modu muze byt tento panel skryty.
+
+    Dopad:
+    Link ze statistik vypada, ze nic neudelal.
+
+    Navrh reseni:
+    - Pri open_article_id podle bucket/layoutu otevrit inline row nebo mobile
+      fullscreen overlay.
+    - Zajistit, ze list context obsahuje dany clanek nebo ho aspon zvyrazni.
+
+    Test:
+    - Manual/integration na small, medium/2-panel a large/3-panel.
+
+
+30) Nav state se desynchronizuje pri HTMX responseError
+    Oblast: frontend/HTMX UX
+    Lokace: backend/app/static/js/app.js
+
+    Problem:
+    Klik na sidebar nav item okamzite prepne active stav a titulky. Pokud
+    HTMX request na article list skonci 4xx/5xx, stary list zustane, ale nav
+    ukazuje novy kontext.
+
+    Dopad:
+    Uzivatel vidi stary obsah s novym feed/folder titulkem.
+
+    Navrh reseni:
+    - Obslouzit htmx:responseError pro #article-list.
+    - Bud revertovat snapshot, nebo posouvat nav chrome update az po uspesnem
+      settle.
+
+    Test:
+    - Simulovat 500 na /htmx/articles?folder_id=...
+    - List zustane a nav/titulek se vrati na predchozi stav.
+
+
+31) Breakpoint first paint ignoruje user settings
+    Oblast: frontend/layout
+    Lokace: backend/app/static/js/init.js,
+            backend/app/static/js/app.js,
+            backend/app/templates/base.html,
+            backend/app/templates/app/main.html
+
+    Problem:
+    Head init.js hardcoduje breakpointy 640/1100. User custom breakpointy jsou
+    dostupne az pozdeji pres meta/script block.
+
+    Dopad:
+    Pri reloadu muze probehnout viditelny layout flash a kratce spatny
+    interaction model.
+
+    Navrh reseni:
+    - Emitovat breakpointy na <html> data attributes uz v base.html, kdyz jsou
+      dostupne.
+    - init.js je precte pred prvnim paintem.
+
+    Test:
+    - Custom breakpointy, reload na hranicni sirce, bez flash small->medium.
+
+
+32) Inline article expand nema recovery na network/error
+    Oblast: frontend/HTMX UX
+    Lokace: backend/app/static/js/app.js, inline detail load
+
+    Problem:
+    Inline detail vlozi loading shell a spusti htmx.ajax, ale nema one-shot
+    sendError/responseError recovery.
+
+    Dopad:
+    Offline/timeout muze nechat "Loading..." pod expanded radkem natrvalo.
+
+    Navrh reseni:
+    - Pro inline detail load pripojit error handler, ktery zobrazi chybu nebo
+      radek sbali.
+
+    Test:
+    - DevTools offline -> click article in 2-panel -> error UI, ne infinite
+      spinner.
+
+
+33) Denormalizovane unread/subscriber county nemaji reconciliation
+    Oblast: databaze/operacni konzistence
+    Lokace: UserFeed.unread_count, Feed.subscriber_count,
+            backend/app/services/feed.py,
+            backend/app/fetcher/rss.py
+
+    Problem:
+    unread_count a subscriber_count se udrzuji inkrementalne a ne vsude stejne
+    respektuji trim/delete edge cases. Neexistuje periodicka reconciliation.
+
+    Dopad:
+    API nebo scheduler se muze rozhodovat podle driftujicich poctu
+    (napr. subscriber_count > 0 pro scheduler).
+
+    Navrh reseni:
+    - Zavest reconciliation job/admin prikaz.
+    - Kde je correctness dulezita, pouzit COUNT subquery misto cache.
+    - Pri dedup/purge sjednotit trim predicate.
+
+    Test:
+    - Subscribe/unsubscribe/account delete cykly; count == realny COUNT.
+    - Purge/dedup neprepocita trimmed unread jako viditelny unread.
+
+
+34) OPML import pouziva vice commitu a nema testy
+    Oblast: OPML, data import, tests
+    Lokace: backend/app/services/opml.py, chybi backend/tests/test_opml*.py
+
+    Problem:
+    Import zaklada labels, feeds, prefs a filters ve vice commitech. Selhani v
+    pozdni fazi necha castecny import. Soucasne chybi testy pro parser/mapping.
+
+    Dopad:
+    Import muze bulkove vytvorit castecne nebo nekonzistentni subscription/filter
+    data a re-import pak preskakuje existujici veci.
+
+    Navrh reseni:
+    - Rozhodnout politiku: atomicky import se savepointy, nebo explicitni
+      partial-result model.
+    - Pridat unit testy mapperu a DB integration testy importu.
+
+    Test:
+    - Invalid XML.
+    - Feed limit abort.
+    - TTRSS action/condition mapping.
+    - Failure during filter import a dokumentovany stav DB.
+
+
+35) purge_old_articles orchestration nema end-to-end test
+    Oblast: purge/tests
+    Lokace: backend/app/services/purge_service.py,
+            backend/tests/test_purge_service.py,
+            backend/tests/test_purge_retention.py
+
+    Problem:
+    Existuji helper/integration testy casti retence, ale ne test celeho
+    purge_old_articles() orchestration flow.
+
+    Dopad:
+    Irreverzibilni scheduled job neni testovan jako celek: ordering passu,
+    global/per-feed null semantics, return counts a kombinace trim/delete.
+
+    Navrh reseni:
+    - DB integration test s kompletnim seedem pro vsechny vetve.
+
+    Test:
+    - purge_old_articles(session) smaze/trimuje/ponecha presne ocekavane rows.
+
+
+36) Integration testy retence se tise skipnou bez Postgresu
+    Oblast: tests/CI reliability
+    Lokace: backend/tests/test_purge_retention.py
+
+    Problem:
+    Fixture pri nedostupne DB vola pytest.skip().
+
+    Dopad:
+    CI bez Postgresu muze byt zelena, i kdyz nebela nejdulezitejsi real-DB
+    coverage pro destruktivni retenci.
+
+    Navrh reseni:
+    - V CI rezimu failovat, ne skipovat.
+    - Registrovat integration marker a v CI vzdy provisionovat Postgres.
+
+    Test/verifikace:
+    - CI log ukazuje, ze test_purge_retention.py opravdu bezi.
+
+
+P3 - nizsi priorita / cleanup pred public release
+-------------------------------------------------
+
+37) .env.example ma nefunkcni placeholder ENCRYPTION_KEY
+    Oblast: onboarding/config
+    Lokace: .env.example:4-9
+
+    Problem:
+    ENCRYPTION_KEY=change-me-32-bytes-exactly-padded neni validni runtime key
+    pro crypto helper podle aktualniho kodu.
+
+    Dopad:
+    Dev, ktery soubor zkopiruje, muze narazit na runtime crypto chyby.
+
+    Navrh reseni:
+    - Dat validni priklad nebo jasne nechat hodnotu prazdnou s generation
+      commandem.
+    - Overit, ze README/setup.sh jsou konzistentni.
+
+    Test:
+    - encrypt/decrypt round-trip s hodnotou z dokumentovaneho dev setupu.
+
+
+38) README nepopisuje plny hybrid dev/test setup
+    Oblast: dokumentace/onboarding
+    Lokace: README.md:86-115, CLAUDE.md dev env poznamka
+
+    Problem:
+    README ma npm/Tailwind cast, ale nepopisuje:
+    - cp .env.example .env
+    - docker compose up db -d
+    - DATABASE_URL na localhost DB
+    - alembic upgrade head
+    - uv run pytest / uvicorn flow
+
+    Dopad:
+    Novy contributor nebo release QA narazi na import/config/DB chyby.
+
+    Navrh reseni:
+    - Pridat "Hybrid development" a "Running tests" sekce.
+    - Pridat scripts/test.sh nebo Makefile target.
+
+    Test/verifikace:
+    - Fresh clone -> podle README projde local app start a pytest.
+
+
+39) Chybi .dockerignore
+    Oblast: Docker build hygiene
+    Lokace: root repozitare
+
+    Problem:
+    Build context je cely repozitar vcetne potencialni .git, node_modules,
+    certs, .env nebo lokalnich artefaktu.
+
+    Dopad:
+    Pomale buildy a zbytecne cache invalidace.
+
+    Navrh reseni:
+    - Pridat .dockerignore: .git, node_modules, .env, certs, __pycache__,
+      .pytest_cache, .ruff_cache, .mypy_cache, lokalni artefakty.
+
+    Test/verifikace:
+    - Docker build context size klesne a build stale projde.
+
+
+40) Verze backend/frontend nejsou sjednocene
+    Oblast: release management
+    Lokace: backend/pyproject.toml, package.json
+
+    Problem:
+    Backend uvadi 0.1.0, package.json 1.0.0.
+
+    Dopad:
+    Public release nema jasny single source of truth pro verzi.
+
+    Navrh reseni:
+    - Sjednotit verzi pred releasem.
+    - Pridat CHANGELOG.md a release/tag postup.
+
+    Test/verifikace:
+    - Release tag, pyproject a package.json odpovidaji.
+
+
+41) Slabe nebo chybejici testy v nizsim riziku
+    Oblast: test suite
+    Lokace: backend/tests
+
+    Problem:
+    Dalsi mezery:
+    - seed_first_admin() bez testu.
+    - readable trafilatura test akceptuje None i str, takze malo detekuje
+      regresi.
+    - briefing scheduler retry flow neni end-to-end.
+    - shared global app/rate-limit state muze blokovat pytest-xdist.
+
+    Dopad:
+    Mensi release/regression riziko a horsi skaling test suite.
+
+    Navrh reseni:
+    - Pridat seed_first_admin DB test.
+    - Mocknout trafilatura.extract deterministicky.
+    - Test briefing retry_count/next_send_at transitions.
+    - Centralizovat reset rate limiteru nebo zavest app factory.
+
+    Test/verifikace:
+    - Prislusne nove testy selhavaji pri regresi.
+
+
+42) Frontend mensi UX a cleanup nalezy
+    Oblast: frontend/templates/static
+    Lokace: backend/app/templates, backend/app/static/js/app.js
+
+    Problem:
+    - Clear search muze shodit q, ale neaktualizovat nav context.
+    - Feeds settings: Stats tab a Add folder target se mohou prebit.
+    - Briefing modal se otevre prazdny behem loadu.
+    - share_not_found.html pouziva CDN Tailwind misto lokalniho CSS.
+    - Dead mobile-sidebar-strip markup/handler.
+    - Comfortable/summary title muze overflowovat.
+    - Nektere dark-mode tokeny maji slaby kontrast.
+
+    Dopad:
+    Nejsou to blokery, ale jsou viditelne pred public releasem.
+
+    Navrh reseni:
+    - Sjednotit nav state po clear search.
+    - Pri create folder na Stats tabu prepnout zpet na Feeds nebo form schovat.
+    - Pridat loading state do briefing modal.
+    - share_not_found renderovat pres lokalni CSS/base.
+    - Odstranit dead strip nebo ho dodelat.
+    - Po template class zmenach spustit npm run build.
+
+    Test/verifikace:
+    - Manual UX pass pro small/medium/large layout.
+    - npm run build po class zmenach.
+
+
+Doporucene poradi implementace
+------------------------------
+
+1. Opravit P0 runtime/release blokery:
+   - API filter apply unpack + test.
+   - CI s Postgres/migrace/pytest/Docker build.
+   - Produkcni compose bez bind mountu.
+   - Docker build s uv.lock.
+   - Duplicate article race.
+
+2. Sjednotit core data semantics:
+   - hide action end-to-end.
+   - star/read side efekty a retence.
+   - scrape retention cutoff.
+   - catch-up/briefing trimmed/yesterday hranice.
+
+3. Dodelat AI pipeline konzistenci:
+   - manual label -> scoring.
+   - bg readable -> pipeline.
+   - Gemini max_tokens.
+   - failed scoring retry/reset.
+   - provider empty response handling.
+
+4. Zrychlit hot paths:
+   - retro filter apply chunking.
+   - filter preloading pro fetch.
+   - AI filter batch N+1.
+
+5. Uzavrit release readiness:
+   - OPML tests.
+   - purge_old_articles orchestration test.
+   - seed_first_admin/migration smoke.
+   - README hybrid dev/test docs, .env.example, .dockerignore, version/changelog.
+
+6. Frontend polish:
+   - open_article_id visibility.
+   - HTMX error recovery/nav sync.
+   - first-paint breakpointy.
+   - inline loading/error states a mensi UI cleanup.
+
+
+Poznamky k testovani
+--------------------
+
+- Pro destruktivni nebo datove kriticke zmeny preferovat realne PostgreSQL
+  integration testy s rollback fixturem.
+- U AI provideru pouzit mock klienty a testovat kontrakt: predane token limity,
+  null/empty odpovedi, retry/failure state.
+- Po zmene template class spustit npm run build a commitnout aktualizovany
+  backend/app/static/css/tailwind.css.
+- Po Docker/CI zmenach overit cisty build a alembic upgrade head na prazdne DB.
