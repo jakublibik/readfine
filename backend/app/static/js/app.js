@@ -1795,14 +1795,21 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }
 
-  document.addEventListener('click', function (e) {
-    var trigger = e.target.closest('#detail-topbar-share') || e.target.closest('[data-bottom-share]');
-    if (!trigger) return;
-    var picker = document.getElementById('detail-share-picker');
-    if (!picker) return;
-    var isOpen = !picker.classList.contains('hidden');
-    if (isOpen) { picker.classList.add('hidden'); e.stopPropagation(); return; }
-    picker.classList.remove('hidden');
+  function positionSharePicker(picker, trigger) {
+    picker.style.zIndex = '60';
+    picker.style.right = '';
+    picker.style.bottom = '';
+    picker.style.maxWidth = '';
+
+    if (isMobile()) {
+      picker.style.top = '';
+      picker.style.left = 'max(0.75rem, env(safe-area-inset-left))';
+      picker.style.right = 'max(0.75rem, env(safe-area-inset-right))';
+      picker.style.bottom = 'calc(0.75rem + env(safe-area-inset-bottom))';
+      picker.style.maxWidth = 'calc(100vw - 1.5rem)';
+      return;
+    }
+
     var rect = trigger.getBoundingClientRect();
     var pickerH = picker.offsetHeight;
     var pickerW = picker.offsetWidth;
@@ -1810,6 +1817,18 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var top = spaceBelow >= pickerH + 8 ? rect.bottom + 4 : Math.max(4, rect.top - pickerH - 4);
     picker.style.top = top + 'px';
     picker.style.left = Math.max(4, rect.left - pickerW + rect.width) + 'px';
+  }
+
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('#detail-topbar-share') || e.target.closest('[data-bottom-share]');
+    if (!trigger) return;
+    var picker = document.getElementById('detail-share-picker');
+    if (!picker) return;
+    var isOpen = !picker.classList.contains('hidden');
+    if (isOpen) { picker.classList.add('hidden'); e.stopPropagation(); return; }
+    document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
+    picker.classList.remove('hidden');
+    positionSharePicker(picker, trigger);
     e.stopPropagation();
   });
 
