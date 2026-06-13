@@ -133,18 +133,46 @@ function openProseLinksInNewTab(root) {
 document.addEventListener('DOMContentLoaded', function () { openProseLinksInNewTab(); });
 document.body.addEventListener('htmx:afterSettle', function () { openProseLinksInNewTab(); });
 
-// Hide duplicate h1 if it matches the article title (first 50 chars)
+// Hide duplicate headings emitted by feed/readable content when they repeat the article title.
+function normalizeArticleHeading(text) {
+  var normalized = (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (normalized.normalize) {
+    normalized = normalized.normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
+  }
+  return normalized
+    .replace(/["'`]/g, '')
+    .replace(/[.,!?;:()[\]{}]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function articleHeadingMatchesTitle(headingText, titleText) {
+  var heading = normalizeArticleHeading(headingText);
+  var title = normalizeArticleHeading(titleText);
+  if (!heading || !title) return false;
+  if (heading === title) return true;
+  if (heading.slice(0, 80) === title.slice(0, 80)) return true;
+
+  // Readable extractors often return just the article headline while feeds include
+  // a site suffix, for example "Headline - Publisher".
+  if (heading.length >= 20 && title.indexOf(heading) === 0) return true;
+  if (title.length >= 20 && heading.indexOf(title) === 0) return true;
+  return false;
+}
+
 function hideDuplicateH1() {
   var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
                    document.querySelector('#inline-article-detail-content [data-article-id]'));
   if (!articleEl) return;
-  var prose = articleEl.querySelector('.prose');
+  var content = articleEl.querySelector('#article-content-' + articleEl.dataset.articleId);
+  var prose = (content && content.querySelector('.prose')) || articleEl.querySelector('.prose');
   if (!prose) return;
-  var h1 = prose.querySelector(':scope > h1:first-child');
-  if (!h1) return;
-  var normalize = function (s) { return s.trim().toLowerCase().slice(0, 50); };
-  if (normalize(h1.textContent) === normalize(articleEl.dataset.title || '')) {
-    h1.style.display = 'none';
+  var headings = prose.querySelectorAll('h1, h2');
+  for (var i = 0; i < headings.length && i < 3; i += 1) {
+    if (articleHeadingMatchesTitle(headings[i].textContent, articleEl.dataset.title || '')) {
+      headings[i].style.display = 'none';
+      break;
+    }
   }
 }
 document.addEventListener('DOMContentLoaded', hideDuplicateH1);
