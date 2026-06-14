@@ -161,8 +161,14 @@ function articleHeadingMatchesTitle(headingText, titleText) {
 }
 
 function hideDuplicateH1() {
-  var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
-                   document.querySelector('#inline-article-detail-content [data-article-id]'));
+  // Only in the 2-panel (inline) layout: there the title is already shown in the
+  // article list beside the content, so a body heading repeating it is redundant.
+  // In single-column (mobile/standalone) and 3-panel views the heading must stay.
+  if (document.documentElement.dataset.layout !== '2') return;
+  var container = document.getElementById('inline-article-detail-content');
+  if (!container) return;
+  // data-title lives on the inner <article>, not on the outer [data-article-id] root.
+  var articleEl = container.querySelector('[data-title]');
   if (!articleEl) return;
   var content = articleEl.querySelector('#article-content-' + articleEl.dataset.articleId);
   var prose = (content && content.querySelector('.prose')) || articleEl.querySelector('.prose');
