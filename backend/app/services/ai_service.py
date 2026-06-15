@@ -352,7 +352,10 @@ async def chat_with_article(
              "parts": [{"text": m["content"]}]}
             for m in messages
         ]
-        cfg = types.GenerateContentConfig(system_instruction=system_prompt) if system_prompt else None
+        cfg = types.GenerateContentConfig(
+            max_output_tokens=600,
+            system_instruction=system_prompt,
+        )
         resp = await client.aio.models.generate_content(
             model=model, config=cfg, contents=contents)
         meta = resp.usage_metadata
@@ -652,9 +655,11 @@ async def _complete(
         )
         return resp.choices[0].message.content.strip(), resp.usage.prompt_tokens, resp.usage.completion_tokens
     elif provider == "gemini":
+        from google.genai import types
         resp = await client.aio.models.generate_content(
             model=model,
             contents=prompt,
+            config=types.GenerateContentConfig(max_output_tokens=max_tokens),
         )
         meta = resp.usage_metadata
         return (

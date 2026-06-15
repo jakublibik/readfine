@@ -161,7 +161,7 @@ class TestChatWithArticle:
         roles = [m["role"] for m in contents]
         assert roles == ["user", "model", "user"]  # assistant → model
 
-    async def test_gemini_without_article_no_config(self):
+    async def test_gemini_config_caps_output_tokens(self):
         from app.services.ai_service import chat_with_article
         client = MagicMock()
         client.aio.models.generate_content = AsyncMock(
@@ -171,8 +171,10 @@ class TestChatWithArticle:
             article_content=None,
             client=client, provider="gemini", model="gemini-2.0-flash",
         )
-        call_kwargs = client.aio.models.generate_content.call_args.kwargs
-        assert call_kwargs["config"] is None
+        cfg = client.aio.models.generate_content.call_args.kwargs["config"]
+        assert cfg is not None
+        assert cfg.max_output_tokens == 600
+        assert cfg.system_instruction is None  # no article → no system instruction
 
     async def test_unknown_provider_raises(self):
         from app.services.ai_service import chat_with_article
@@ -390,3 +392,19 @@ class TestHtmxAiChatClear:
         assert resp.status_code == 200
         assert 'id="chat-area-10"' in resp.text
         mock_db.commit.assert_not_called()
+
+
+# ── _complete: general completion path ────────────────────────────────────────
+
+class TestComplete:
+    async def test_gemini_passes_max_output_tokens(self):
+        from app.services.ai_service import _complete
+        client = MagicMock()
+        client.aio.models.generate_content = AsyncMock(
+            return_value=make_gemini_response("done"))
+        text, in_tok, out_tok = await _complete(
+            "prompt", client, "gemini", "gemini-2.0-flash", max_tokens=123)
+        cfg = client.aio.models.generate_content.call_args.kwargs["config"]
+        assert cfg.max_output_tokens == 123
+        assert text == "done"
+        assert (in_tok, out_tok) == (10, 5)

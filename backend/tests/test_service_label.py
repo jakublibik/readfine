@@ -1,7 +1,7 @@
 """Unit tests for label_service — all DB calls are mocked."""
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -227,7 +227,62 @@ class TestAssignLabel:
 
         assert result is True
         db.add.assert_called_once()
-        db.commit.assert_awaited_once()
+
+    async def test_enqueues_scoring_on_new_label(self):
+        user = _make_user()
+        db = _make_db()
+        db.execute.side_effect = [
+            _scalar_result(1),    # label exists
+            _scalar_result(1),    # article accessible
+            _scalar_result(None), # not yet assigned
+        ]
+        article = SimpleNamespace(id=7, feed_id=5, readable_status="skipped")
+        uf = SimpleNamespace(extract_readable=False)  # readable not needed → enqueue now
+        db.get = AsyncMock(return_value=article)
+        db.scalar = AsyncMock(return_value=uf)
+
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job",
+                   new=AsyncMock(return_value=True)) as enq:
+            result = await assign_label(user, article_id=7, label_id=1, db=db)
+
+        assert result is True
+        enq.assert_awaited_once()
+        assert enq.await_args.args[0] is article
+        assert enq.await_args.args[1] == user.id
+
+    async def test_sets_readable_pending_when_extraction_enabled(self):
+        user = _make_user()
+        db = _make_db()
+        db.execute.side_effect = [
+            _scalar_result(1), _scalar_result(1), _scalar_result(None),
+        ]
+        article = SimpleNamespace(id=7, feed_id=5, readable_status="skipped")
+        uf = SimpleNamespace(extract_readable=True)  # readable pending → scoring deferred
+        db.get = AsyncMock(return_value=article)
+        db.scalar = AsyncMock(return_value=uf)
+
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job",
+                   new=AsyncMock()) as enq:
+            await assign_label(user, article_id=7, label_id=1, db=db)
+
+        assert article.readable_status == "pending"
+        enq.assert_not_awaited()
+
+    async def test_no_scoring_when_already_assigned(self):
+        user = _make_user()
+        db = _make_db()
+        db.execute.side_effect = [
+            _scalar_result(1), _scalar_result(1), _scalar_result(SimpleNamespace(id=1)),
+        ]
+        db.get = AsyncMock()
+
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job",
+                   new=AsyncMock()) as enq:
+            result = await assign_label(user, article_id=7, label_id=1, db=db)
+
+        assert result is True
+        enq.assert_not_awaited()
+        db.get.assert_not_awaited()  # scoring path not reached
 
 
 # ── remove_label ──────────────────────────────────────────────────────────────

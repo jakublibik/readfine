@@ -111,7 +111,12 @@ async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession)
     if not enqueued:
         existing_status = await _get_scoring_job_status(article.id, user_id, db)
         if existing_status != "success":
-            return  # ineligible or failed — batch runner handles retries
+            # ineligible, or a job already exists. A "pending" job is retried by
+            # process_pending_scoring (transient errors back off + retry up to
+            # _MAX_RETRIES). A "failed" job is terminal — permanent 4xx or
+            # exhausted retries — and is intentionally not auto-requeued here to
+            # avoid hammering a known-bad provider/model on every pipeline trigger.
+            return
         # existing_status == "success" → score already set, continue to filters
     else:
         await _run_scoring_now(article, user_id, db)
