@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette_csrf import CSRFMiddleware
 from slowapi.errors import RateLimitExceeded
 
@@ -92,6 +92,8 @@ def create_app() -> FastAPI:
     from app.templating import templates as _templates
 
     async def _html_rate_limit_handler(request: Request, exc: RateLimitExceeded) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Rate limit exceeded"}, status_code=429)
         return _templates.TemplateResponse(
             request, "errors/429.html", {}, status_code=429
         )
@@ -164,6 +166,8 @@ def create_app() -> FastAPI:
     async def server_error_handler(request: Request, exc: Exception):
         import logging
         logging.getLogger(__name__).exception("Unhandled exception: %s", exc)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": "Internal server error"}, status_code=500)
         return _templates.TemplateResponse(request, "errors/500.html", {}, status_code=500)
 
     return app

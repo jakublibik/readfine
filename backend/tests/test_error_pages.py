@@ -55,6 +55,7 @@ class TestErrorPages500:
         assert handler is not None, "Exception handler must be registered"
 
         request = MagicMock()
+        request.url.path = "/app"  # web path → HTML branch
         request.state = State()
         request.state.csp_nonce = "test-nonce"
 
@@ -71,6 +72,7 @@ class TestErrorPages500:
 
         handler = app.exception_handlers.get(Exception)
         request = MagicMock()
+        request.url.path = "/app"  # web path → HTML branch
         request.state = State()
         request.state.csp_nonce = "test-nonce"
 
@@ -80,6 +82,58 @@ class TestErrorPages500:
         body = b"".join(response.body_iterator if hasattr(response, "body_iterator") else [response.body])
         assert b"secret internal detail" not in body
         assert b"500" in body
+
+    def test_500_handler_returns_json_for_api(self):
+        import asyncio
+        from unittest.mock import MagicMock
+        from app.main import app
+
+        handler = app.exception_handlers.get(Exception)
+        request = MagicMock()
+        request.url.path = "/api/v1/feeds"
+
+        response = asyncio.run(handler(request, RuntimeError("secret internal detail")))
+        assert response.status_code == 500
+        assert response.media_type == "application/json"
+        assert b"secret internal detail" not in response.body
+        assert b"detail" in response.body
+
+
+class TestRateLimitErrorShape:
+    def test_429_handler_returns_json_for_api(self):
+        import asyncio
+        from unittest.mock import MagicMock
+        from slowapi.errors import RateLimitExceeded
+        from app.main import app
+
+        handler = app.exception_handlers.get(RateLimitExceeded)
+        assert handler is not None, "RateLimitExceeded handler must be registered"
+
+        request = MagicMock()
+        request.url.path = "/api/v1/tokens"
+
+        # The handler ignores the exception object; only the request path matters.
+        response = asyncio.run(handler(request, MagicMock(spec=RateLimitExceeded)))
+        assert response.status_code == 429
+        assert response.media_type == "application/json"
+        assert b"detail" in response.body
+
+    def test_429_handler_returns_html_for_web(self):
+        import asyncio
+        from unittest.mock import MagicMock
+        from slowapi.errors import RateLimitExceeded
+        from starlette.datastructures import State
+        from app.main import app
+
+        handler = app.exception_handlers.get(RateLimitExceeded)
+        request = MagicMock()
+        request.url.path = "/login"
+        request.state = State()
+        request.state.csp_nonce = "test-nonce"
+
+        response = asyncio.run(handler(request, MagicMock(spec=RateLimitExceeded)))
+        assert response.status_code == 429
+        assert response.media_type != "application/json"
 
 
 class TestErrorPages401Regression:
