@@ -437,7 +437,7 @@ async def _execute_actions(
                     ))
                     changed = True
 
-            elif action.action_type in ("mark_read", "star", "hide"):
+            elif action.action_type in ("mark_read", "star"):
                 state_result = await db.execute(
                     select(UserArticleState).where(
                         UserArticleState.user_id == user_id,
@@ -459,10 +459,13 @@ async def _execute_actions(
                     )
                     changed = True
                 elif action.action_type == "star" and not state.is_starred:
+                    # Filter star sets is_starred ONLY — deliberately not the
+                    # user-intent metadata (user_starred / ever_starred / starred_at,
+                    # i.e. _apply_star_side_effects). An automated star is not a
+                    # user-interest signal: setting those would pollute the AI
+                    # preference profile, stats (starred_count, "AI got it wrong")
+                    # and retention with automation. Same principle as is_read.
                     state.is_starred = True
-                    changed = True
-                elif action.action_type == "hide" and not state.is_hidden:
-                    state.is_hidden = True
                     changed = True
             # "notify" is a no-op stub for MVP
 
@@ -835,16 +838,17 @@ async def preview_filter_retroactive(
 
 async def apply_filter_retroactively(
     user_id: int, filter_id: int, db: AsyncSession, enqueue_scoring: bool = True
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Apply an existing filter to the user's articles.
 
     With enqueue_scoring=False ("skip" mode), filter actions still run (label,
     mark_read, …) but no AI scoring is triggered — neither direct enqueue nor the
     readable→scoring path.
 
-    Returns (matched_count, changed_count):
+    Returns (matched_count, changed_count, scoring_queued):
       matched_count — articles where filter conditions evaluated to True
       changed_count — articles where at least one action actually modified DB state
+      scoring_queued — AI scoring jobs enqueued (0 when enqueue_scoring=False)
     """
     plan = await _plan_retroactive_apply(user_id, filter_id, db)
     if plan is None:

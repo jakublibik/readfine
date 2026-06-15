@@ -41,7 +41,9 @@ _TTRSS_FIELD_MAP = {
 
 _TTRSS_ACTION_MAP = {
     "2": "mark_read",
-    "3": "hide",
+    # TT-RSS "publish/hide" has no Readfine equivalent; map to the closest
+    # supported "remove from view" action so the import stays valid.
+    "3": "mark_read",
     "4": "star",
     "7": "label",
 }

@@ -155,22 +155,23 @@ class TestTestFilter:
 
 class TestApplyFilter:
     def test_returns_counts(self, client):
-        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(10, 5))):
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(10, 5, 3))):
             response = client.post("/api/v1/filters/1/apply")
         assert response.status_code == 200
         data = response.json()
         assert data["matched"] == 10
         assert data["changed"] == 5
+        assert data["scoring_queued"] == 3
 
     def test_zero_counts_with_existing_filter(self, client):
         f = _make_filter_response()
-        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0))):
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0, 0))):
             with patch("app.routers.api.v1.filters.get_filter", new=AsyncMock(return_value=f)):
                 response = client.post("/api/v1/filters/1/apply")
         assert response.status_code == 200
 
     def test_zero_counts_filter_not_found_returns_404(self, client):
-        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0))):
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0, 0))):
             with patch("app.routers.api.v1.filters.get_filter", new=AsyncMock(return_value=None)):
                 response = client.post("/api/v1/filters/99/apply")
         assert response.status_code == 404
