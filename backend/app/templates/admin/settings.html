@@ -177,6 +177,7 @@
       <div class="flex items-center justify-between gap-4">
         <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">Username</label>
         <input type="text" name="smtp_user" value="{{ s.smtp_user or '' }}"
+               autocomplete="off"
                class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
       <div class="flex items-center justify-between gap-4">
@@ -187,6 +188,7 @@
           </p>
         </div>
         <input type="password" name="smtp_password" value=""
+               autocomplete="new-password"
                placeholder="{% if s.smtp_password_encrypted %}Leave empty to keep current{% else %}Enter password{% endif %}"
                class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
