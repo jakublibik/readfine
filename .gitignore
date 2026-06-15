@@ -8,6 +8,9 @@ PLAN.md
 .env.local
 .env.*.local
 
+# Local dev Docker override (keeps prod images immutable)
+docker-compose.override.yml
+
 # Python
 __pycache__/
 *.py[cod]

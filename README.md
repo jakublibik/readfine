@@ -114,6 +114,24 @@ npm run dev
 
 Run this in a second terminal alongside `uvicorn` during development.
 
+### Running the app in Docker
+
+`docker-compose.yml` is a production setup: the `app` container runs from the
+code baked into the image at build time, so updates require a rebuild
+(`docker compose up -d --build`). There is intentionally no source bind mount.
+
+If you prefer to develop with the app inside Docker and live-reload edits
+without rebuilding, add a `docker-compose.override.yml` (gitignored, auto-loaded
+locally) with a bind mount — do **not** commit it, so production keeps building
+immutable images:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./backend:/app
+```
+
 ### Updating HTMX
 
 HTMX is self-hosted at `backend/app/static/js/htmx.min.js` (currently v2.0.4). To upgrade:

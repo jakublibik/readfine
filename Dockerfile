@@ -4,8 +4,11 @@ WORKDIR /app
 
 RUN pip install uv
 
-COPY backend/pyproject.toml .
-RUN uv pip install --system -e .
+# Install pinned dependencies from the lockfile for reproducible builds.
+# --frozen fails the build if uv.lock is stale vs pyproject.toml.
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /tmp/requirements.txt \
+    && uv pip install --system -r /tmp/requirements.txt
 
 COPY backend/ .
 
