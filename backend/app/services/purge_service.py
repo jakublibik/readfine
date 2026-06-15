@@ -73,9 +73,17 @@ def _fully_protected_exists():
 
 
 def _engaged_exists():
-    """True when some user engaged with this article (read / opened / ever-starred).
-    Engaged articles survive the age DELETE — instead they are trimmed and kept as
-    profile-signal stubs until T2. dwell>=30 matches the stats 'read' threshold."""
+    """True when some user genuinely engaged with this article.
+
+    Engagement = actually read (dwell >= 30s, the stats 'read' threshold),
+    link opened, or ever starred. Engaged articles survive the age DELETE —
+    instead they are trimmed and kept as profile-signal stubs until T2.
+
+    NOTE: the `is_read` flag is deliberately NOT an engagement signal. It is set
+    by scroll-based batch mark-read, the filter `mark_read` action, and
+    mark-all-read — i.e. mostly "dismissed without reading". Treating is_read as
+    engagement would bloat retention with articles the user never actually read
+    (and, absent other signals, often signals the opposite of interest)."""
     return (
         select(UserArticleState.article_id)
         .where(
@@ -205,6 +213,13 @@ async def purge_old_articles(db: AsyncSession) -> int:
     total_deleted += age_deleted
 
     # ── Pass 2: count-based (per-feed override; global NULL by default) ────────
+    # Policy: keep_count is a hard cap for COLD (unengaged, unprotected) articles
+    # only — excess cold articles are deleted below. Engaged excess is NOT trimmed
+    # here; engaged articles are governed by the age pass (trim) + T2 (delete), so a
+    # feed may exceed keep_count by its engaged articles until they age out. This is
+    # intentional over-retention (never deletes more than expected), not data loss.
+    # Reachable only via the per-feed API (PATCH /api/v1/feeds purge_keep_count);
+    # there is no UI to set the global default_purge_keep_count.
     feed_counts_result = await db.execute(
         select(
             UserFeed.feed_id,

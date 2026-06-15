@@ -155,7 +155,10 @@ async def fetch_catchup_articles(
             (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
         )
         .where(
-            func.coalesce(Article.published_at, Article.fetched_at) >= start_dt
+            func.coalesce(Article.published_at, Article.fetched_at) >= start_dt,
+            # Exclude retention-trimmed stubs (body stripped) — same as the reader
+            # listing; otherwise digests/counts include articles the user can't see.
+            Article.trimmed_at.is_(None),
         )
     )
 

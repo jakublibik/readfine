@@ -83,7 +83,7 @@ class UserSettings(Base):
 
 class UserCatchupConfig(Base):
     __tablename__ = "user_catchup_configs"
-    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_catchup_configs_user_name"),)
+    __table_args__ = (UniqueConstraint("user_id", "name", "period", name="uq_user_catchup_configs_user_name_period"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
