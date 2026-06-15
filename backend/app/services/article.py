@@ -429,8 +429,40 @@ async def mark_scope_read(
     await db.commit()
 
 
+async def filter_accessible_article_ids(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> list[int]:
+    """Return the subset of article_ids the user may act on.
+
+    Access mirrors get_article: the article belongs to a subscribed feed, or the
+    user has starred/archived it. Guards client-driven state writes (batch
+    mark-read, dwell) against stale/crafted ids that fall outside the user's
+    reading context and would otherwise skew their stats / AI preference.
+    """
+    if not article_ids:
+        return []
+    rows = await db.execute(
+        select(Article.id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
+        )
+        .where(
+            Article.id.in_(article_ids),
+            UserFeed.id.is_not(None)
+            | UserArticleState.is_starred.is_(True)
+            | UserArticleState.is_archived.is_(True),
+        )
+    )
+    return [r[0] for r in rows.all()]
+
+
 async def mark_articles_read_batch(user: User, article_ids: list[int], db: AsyncSession) -> None:
     """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read."""
+    if not article_ids:
+        return
+    article_ids = await filter_accessible_article_ids(user.id, article_ids, db)
     if not article_ids:
         return
     now = datetime.now(timezone.utc)
@@ -446,6 +478,26 @@ async def mark_articles_read_batch(user: User, article_ids: list[int], db: Async
     await db.execute(stmt)
     await _recalculate_unread_counts(user.id, article_ids, db)
     await db.commit()
+
+
+def _apply_star_side_effects(state, article, *, starred: bool, extract_readable: bool) -> None:
+    """Star/unstar side effects shared by toggle_article_state and update_article_state
+    so web and API star behave identically.
+
+    Starring marks user intent (user_starred — a positive AI-preference signal),
+    retention protection (ever_starred), starred_at, and triggers readable
+    extraction. Unstarring snapshots dwell and treats an unstar within 60s as an
+    accidental star (clears ever_starred)."""
+    if starred:
+        state.user_starred = True
+        state.ever_starred = True
+        state.starred_at = datetime.now(timezone.utc)
+        if extract_readable and article.readable_status == "skipped":
+            article.readable_status = "pending"
+    else:
+        state.unstar_dwell_seconds = state.dwell_seconds
+        if state.starred_at and (datetime.now(timezone.utc) - state.starred_at).total_seconds() < 60:
+            state.ever_starred = False
 
 
 async def toggle_article_state(
@@ -503,17 +555,7 @@ async def toggle_article_state(
         )
 
     if field == "is_starred":
-        if new_value:
-            state.user_starred = True
-            state.ever_starred = True
-            state.starred_at = datetime.now(timezone.utc)
-        else:
-            state.unstar_dwell_seconds = state.dwell_seconds
-            if state.starred_at and (datetime.now(timezone.utc) - state.starred_at).total_seconds() < 60:
-                state.ever_starred = False
-
-    if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
-        article.readable_status = "pending"
+        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
 
     await db.commit()
     await db.refresh(state)
@@ -559,6 +601,7 @@ async def update_article_state(
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
+            UserFeed.extract_readable,
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
@@ -578,7 +621,7 @@ async def update_article_state(
     if not row:
         return None
 
-    article, state, feed_title, custom_title = row
+    article, state, feed_title, custom_title, extract_readable = row
 
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
@@ -597,7 +640,12 @@ async def update_article_state(
             )
 
     if payload.is_starred is not None:
+        was_starred = bool(state.is_starred)
         state.is_starred = payload.is_starred
+        if payload.is_starred != was_starred:
+            _apply_star_side_effects(
+                state, article, starred=payload.is_starred, extract_readable=bool(extract_readable)
+            )
 
     if payload.is_archived is not None:
         state.is_archived = payload.is_archived

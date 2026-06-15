@@ -25,7 +25,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
-from app.services.article import get_article, list_articles, mark_articles_read_batch, mark_scope_read, toggle_article_state, update_article_state
+from app.services.article import filter_accessible_article_ids, get_article, list_articles, mark_articles_read_batch, mark_scope_read, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
@@ -69,6 +69,16 @@ async def _extract_readable_bg(
         if not article:
             return
         apply_readable_result(article, content, error, http_status)
+        # Mirror the batch readable path: once readable finishes, complete any
+        # label-deferred AI pipeline (scoring/filters/summary). run_pipeline_for_
+        # article_all_users is label-scoped — it only runs for users who labeled
+        # this article — so opening an unlabeled article never triggers scoring.
+        from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+        if content:
+            await run_pipeline_for_article_all_users(article, db)
+        elif article.readable_status == "failed":
+            # Terminal failure — score with the RSS content we already have.
+            await run_pipeline_for_article_all_users(article, db)
         await db.commit()
         logger.info("readable bg: article %d → %s", article_id, article.readable_status)
 
@@ -947,6 +957,8 @@ async def htmx_article_dwell(
     seconds = max(0, min(seconds, 1800))  # cap at 30 minutes per session
     if seconds <= 3:
         return HTMLResponse("", status_code=204)
+    if not await filter_accessible_article_ids(user.id, [article_id], db):
+        return HTMLResponse("", status_code=404)
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     # Upsert: an article read in the detail panel has no state row yet (mark-read
     # fires later on scroll-off), so a plain UPDATE would silently drop the dwell.
