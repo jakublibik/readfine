@@ -534,6 +534,45 @@ class TestFetchFeedErrorHandling:
         assert len(added.error_message) <= 500
 
 
+class TestFetchFeedDuplicateRace:
+    """fetch_feed: a concurrent-fetch IntegrityError is a benign no-op, not a failure."""
+
+    def _patch_save_raises_integrity(self):
+        from sqlalchemy.exc import IntegrityError
+        exc = IntegrityError("INSERT INTO articles ...", {}, Exception("duplicate key value"))
+        return patch("app.fetcher.rss._save_articles", side_effect=exc)
+
+    async def test_returns_zero(self):
+        feed = _make_feed()
+        session = _make_session()
+        import feedparser
+        parsed = feedparser.FeedParserDict({"bozo": False, "entries": [{}], "feed": feedparser.FeedParserDict({})})
+        with (
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+            self._patch_save_raises_integrity(),
+        ):
+            result = await fetch_feed(feed, session)
+        assert result == 0
+
+    async def test_feed_stays_active_and_error_count_unchanged(self):
+        feed = _make_feed(fetch_error_count=0, status="active")
+        session = _make_session()
+        import feedparser
+        parsed = feedparser.FeedParserDict({"bozo": False, "entries": [{}], "feed": feedparser.FeedParserDict({})})
+        with (
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+            self._patch_save_raises_integrity(),
+        ):
+            await fetch_feed(feed, session)
+        assert feed.fetch_error_count == 0
+        assert feed.status == "active"
+        # No FetchLog written for a benign race.
+        assert not session.add.called
+        session.rollback.assert_called_once()
+
+
 class TestFetchFeedSuccessReset:
     """fetch_feed: success path resets error counter and status."""
 

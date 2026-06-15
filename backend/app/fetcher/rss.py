@@ -13,6 +13,7 @@ import httpx
 import nh3
 from sqlalchemy import case, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -111,6 +112,14 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         await db.commit()
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
+
+    except IntegrityError as exc:
+        # Benign concurrent-fetch race: another worker inserted the same
+        # (feed_id, guid_hash) between our dedup SELECT and flush. Not a feed
+        # failure — roll back and let the next scheduled fetch pick them up.
+        await db.rollback()
+        logger.info("Concurrent duplicate insert for feed %d, skipping round: %s", feed_id, exc)
+        return 0
 
     except Exception as exc:
         await db.rollback()
@@ -241,7 +250,8 @@ async def _save_articles(
     if new_articles:
         # Flush to get IDs, then apply filters before the outer commit.
         # A concurrent fetch may have inserted the same article between our SELECT and now;
-        # the IntegrityError propagates to fetch_feed's except clause which handles it.
+        # the IntegrityError propagates to fetch_feed's dedicated handler, which treats
+        # this benign race as "0 new articles" rather than a fetch failure.
         await db.flush()
 
         # Increment unread_count for every subscriber of this feed.

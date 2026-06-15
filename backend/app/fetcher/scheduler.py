@@ -135,7 +135,10 @@ async def _fetch_due_feeds() -> None:
                 if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
                     if feed_in_session.feed_type == "scrape":
                         from app.fetcher.scrape import fetch_scrape_feed
-                        await fetch_scrape_feed(feed_in_session, session)
+                        await fetch_scrape_feed(
+                            feed_in_session, session,
+                            published_cutoff=cutoff_by_feed.get(feed_id),
+                        )
                     else:
                         await fetch_feed(
                             feed_in_session, session,

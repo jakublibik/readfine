@@ -167,7 +167,9 @@ def extract_article_links(
     return results
 
 
-async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
+async def fetch_scrape_feed(
+    feed: Feed, db: AsyncSession, published_cutoff: datetime | None = None
+) -> int:
     """Fetch a scrape-type feed via CSS selector. Returns number of new articles.
 
     Note: HTTP auth credentials are intentionally not supported for scrape feeds.
@@ -188,7 +190,7 @@ async def fetch_scrape_feed(feed: Feed, db: AsyncSession) -> int:
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
 
-        new_count = await _save_scrape_articles(feed, links, fetched_at, db)
+        new_count = await _save_scrape_articles(feed, links, fetched_at, db, published_cutoff)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = fetched_at
@@ -232,6 +234,7 @@ async def _save_scrape_articles(
     links: list[tuple[str, str, datetime | None, str | None]],
     fetched_at: datetime,
     db: AsyncSession,
+    published_cutoff: datetime | None = None,
 ) -> int:
     urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
@@ -260,6 +263,12 @@ async def _save_scrape_articles(
 
     new_articles: list[Article] = []
     for url, title, pub_at, excerpt in links:
+        # Skip dated links older than the purge cutoff — prevents re-inserting
+        # purgeable articles (mirrors rss.py). Undated links (pub_at is None) get
+        # fetched_at below and can't be cutoff-filtered, so they may re-cycle
+        # after purge; fully solving that would require URL tombstones.
+        if published_cutoff is not None and pub_at is not None and pub_at < published_cutoff:
+            continue
         gh = guid_hash_map[url]
         if gh in existing_hashes:
             continue

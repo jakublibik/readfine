@@ -648,3 +648,40 @@ class TestSubscribeScrape:
                     selector="article a", title="News",
                     folder_id=None, db=db,
                 )
+
+
+# ── _save_scrape_articles: retention cutoff (#17) ─────────────────────────────
+
+class TestSaveScrapeCutoff:
+    def _links(self):
+        return [
+            ("https://example.com/old", "Old", datetime(2024, 2, 1, tzinfo=timezone.utc), None),
+            ("https://example.com/new", "New", datetime(2024, 3, 10, tzinfo=timezone.utc), None),
+            ("https://example.com/nodate", "NoDate", None, None),
+        ]
+
+    async def test_skips_dated_links_before_cutoff(self):
+        from app.fetcher.scrape import _save_scrape_articles
+        session = _make_session()
+        feed = _make_scrape_feed()
+        cutoff = datetime(2024, 3, 1, tzinfo=timezone.utc)
+        fetched_at = datetime(2024, 3, 20, tzinfo=timezone.utc)
+
+        with patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+            count = await _save_scrape_articles(feed, self._links(), fetched_at, session, cutoff)
+
+        # Old (before cutoff) skipped; New (after) and NoDate (undated) kept.
+        assert count == 2
+        added_urls = {c.args[0].url for c in session.add.call_args_list}
+        assert added_urls == {"https://example.com/new", "https://example.com/nodate"}
+
+    async def test_no_cutoff_keeps_all(self):
+        from app.fetcher.scrape import _save_scrape_articles
+        session = _make_session()
+        feed = _make_scrape_feed()
+        fetched_at = datetime(2024, 3, 20, tzinfo=timezone.utc)
+
+        with patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+            count = await _save_scrape_articles(feed, self._links(), fetched_at, session, None)
+
+        assert count == 3
