@@ -72,6 +72,39 @@ def compute_next_send_at(
     return candidate.astimezone(timezone.utc)
 
 
+def apply_briefing_failure(
+    config: UserCatchupConfig, exc: Exception, *, is_smtp: bool, tz_str: str
+) -> bool:
+    """Update a config's retry/scheduling state after a failed briefing send.
+
+    Does not commit or send email — the caller owns those side effects.
+
+    - SMTP error: disable the briefing and clear the schedule (returns False).
+    - First transient failure: retry in 30 minutes (returns False).
+    - Second failure: give up this cycle, reschedule the next normal slot, and
+      return True so the caller notifies the user.
+    """
+    msg = str(exc)
+    if is_smtp:
+        config.briefing_enabled = False
+        config.briefing_last_error = f"SMTP error: {msg}"
+        config.briefing_next_send_at = None
+        return False
+
+    config.briefing_last_error = msg
+    if config.briefing_retry_count == 0:
+        config.briefing_retry_count = 1
+        config.briefing_next_send_at = datetime.now(timezone.utc) + timedelta(minutes=30)
+        return False
+
+    config.briefing_retry_count = 0
+    config.briefing_next_send_at = compute_next_send_at(
+        config.briefing_interval, config.briefing_day,
+        config.briefing_time or "08:00", tz_str,
+    )
+    return True
+
+
 _BQ_OPEN = '<div style="border-left:3px solid #e4e4e7;margin:0 0 12px 0;padding:4px 0 4px 16px;color:#71717a;">'
 _BQ_CLOSE = "</div>"
 

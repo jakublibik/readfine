@@ -1,0 +1,51 @@
+# Keep the Docker build context small and avoid copying local/dev artifacts into
+# the image (the Dockerfile does `COPY backend/ .`, so e.g. backend/.venv would
+# otherwise be baked in). Mirrors .gitignore.
+
+# Version control
+.git
+.gitignore
+
+# Python virtualenvs / caches / build output
+**/.venv
+**/venv
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+**/dist
+**/build
+**/.uv
+
+# Node / Tailwind toolchain (CSS is prebuilt and committed)
+node_modules
+
+# Secrets / local config
+.env
+.env.*
+certs/
+*.pem
+*.key
+*.crt
+
+# Local dev Docker override (keeps prod images immutable)
+docker-compose.override.yml
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Project notes not needed at runtime
+.claude/
+CLAUDE.local.md
+PLAN.md
+REVIEW_NOTES.md
+*.log

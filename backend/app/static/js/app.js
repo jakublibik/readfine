@@ -281,6 +281,12 @@ function _revertNavSnapshot() {
   _navSnapshot = null;
   _activeNavGet = snap.url;
   try { if (snap.url) localStorage.setItem('lastNavItem', snap.url); } catch (e) {}
+  // Restore the desktop sidebar active highlight to the previous nav item.
+  if (snap.url) {
+    document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
+    var prev = document.querySelector('.nav-item[hx-get="' + snap.url + '"]');
+    if (prev) prev.classList.add('active');
+  }
   var titleEl = document.getElementById('mobile-title-text');
   if (titleEl && snap.title !== null) {
     titleEl.textContent = snap.title;
@@ -318,9 +324,26 @@ document.body.addEventListener('htmx:sendError', function (e) {
   _revertNavSnapshot();
 });
 
+// Server returned 4xx/5xx for the article-list load — htmx leaves the old list in
+// place, so revert the nav chrome to match instead of showing a stale list under a
+// new title/active item.
+document.body.addEventListener('htmx:responseError', function (e) {
+  if (!e.detail.target || e.detail.target.id !== 'article-list') return;
+  if (!_navSnapshot) return;
+  _showNavErrorToast();
+  _revertNavSnapshot();
+});
+
+// A successful list load commits the new nav state — drop the snapshot so a later
+// unrelated #article-list error can't revert to a stale view.
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _navSnapshot = null;
+});
+
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');
   if (!navItem) return;
+  _saveNavSnapshot(); // capture previous nav state so a failed list load can revert
   document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
   navItem.classList.add('active');
   _activeNavGet = navItem.getAttribute('hx-get');
@@ -380,6 +403,21 @@ if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _restoreArticleFromHash);
 } else {
   _restoreArticleFromHash();
+}
+
+// On page load with a deep-link (?open_article_id=…), show the detail as a
+// fullscreen overlay in non-large layouts where #article-detail is hidden.
+// In the large/3-panel layout the panel is already visible — nothing to do.
+function _initDeeplinkDetail() {
+  // Read the URL param (not the loader element) — htmx may have already swapped it away.
+  if (!/[?&]open_article_id=/.test(window.location.search)) return;
+  if (window._getCurrentBucket() === 'large') return;
+  document.documentElement.classList.add('deeplink-detail-open');
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initDeeplinkDetail);
+} else {
+  _initDeeplinkDetail();
 }
 
 // ── Mobile title bar count badge ──────────────────────────────────────────
@@ -821,7 +859,9 @@ document.addEventListener('click', function (e) {
   if (action === 'submit-search') { submitSearch(); return; }
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
-    htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+    // Clearing search returns to the active nav category (where you were before
+    // searching), so the list matches the still-highlighted nav item.
+    htmx.ajax('GET', _activeNavGet || '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
     return;
   }
   if (action === 'toggle-config-menu') {
@@ -1258,10 +1298,50 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
 
   window._closeInlineDetail = closeInline;
 
+  // Load article content into the inline shell with one-shot error recovery.
+  function _loadInlineContent(articleId) {
+    function isContentTarget(ev) {
+      return ev.detail && ev.detail.target && ev.detail.target.id === CONTENT_ID;
+    }
+    function cleanup() {
+      document.body.removeEventListener('htmx:sendError', onError);
+      document.body.removeEventListener('htmx:responseError', onError);
+      document.body.removeEventListener('htmx:afterSettle', onSettle);
+    }
+    function onSettle(ev) { if (isContentTarget(ev)) cleanup(); }
+    function onError(ev) {
+      if (!isContentTarget(ev)) return;
+      cleanup();
+      var content = document.getElementById(CONTENT_ID);
+      if (!content) return;
+      content.innerHTML = '<div class="px-6 py-6 text-sm text-gray-400">' +
+        'Couldn’t load this article. ' +
+        '<button type="button" data-inline-retry class="text-blue-600 underline">Retry</button></div>';
+      content.querySelector('[data-inline-retry]').addEventListener('click', function () {
+        content.innerHTML = '<div class="px-6 py-6 flex items-center gap-2 text-sm text-gray-400">' +
+          '<svg class="animate-spin h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">' +
+          '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+          '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>' +
+          '</svg>Loading…</div>';
+        _loadInlineContent(articleId);
+      });
+    }
+    document.body.addEventListener('htmx:sendError', onError);
+    document.body.addEventListener('htmx:responseError', onError);
+    document.body.addEventListener('htmx:afterSettle', onSettle);
+    htmx.ajax('GET', '/htmx/articles/' + articleId, {
+      target: '#' + CONTENT_ID,
+      swap: 'innerHTML'
+    });
+  }
+
   // Intercept HTMX requests targeting #article-detail for inline expand
   document.body.addEventListener('htmx:beforeRequest', function (e) {
     if (!_shouldUseInline()) return;
     if (!e.detail.target || e.detail.target.id !== 'article-detail') return;
+    // Deep-link (?open_article_id=…) loads the detail panel directly (handled as a
+    // fullscreen overlay), bypassing inline expansion which needs an .article-row.
+    if (e.detail.elt && e.detail.elt.hasAttribute && e.detail.elt.hasAttribute('data-deeplink-open')) return;
     // Skip action buttons (star, etc.) — hx-target="#article-detail" is inherited from parent row
     if (e.detail.elt && e.detail.elt.closest('[data-stop-propagation]')) return;
 
@@ -1301,11 +1381,9 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     row.insertAdjacentElement('afterend', container);
     row.classList.add('inline-expanded');
 
-    // Load article content
-    htmx.ajax('GET', '/htmx/articles/' + articleId, {
-      target: '#' + CONTENT_ID,
-      swap: 'innerHTML'
-    });
+    // Load article content, with one-shot error recovery so a failed load doesn't
+    // leave the "Loading…" shell spinning forever.
+    _loadInlineContent(articleId);
 
     // Scroll row into view, accounting for mobile top panel if visible
     setTimeout(function () {
@@ -1661,10 +1739,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }, true);
 
-  // Strip hamburger (minimizable) and title bar hamburger (hideable)
+  // Title bar hamburger (hideable) and bottom bar hamburger
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
-    if (e.target.closest('#mobile-strip-open-btn') || e.target.closest('#mobile-titlebar-open-btn') || e.target.closest('#mobile-bottombar-open-btn')) {
+    if (e.target.closest('#mobile-titlebar-open-btn') || e.target.closest('#mobile-bottombar-open-btn')) {
       openSidebarOverlay();
     }
   });
@@ -1724,7 +1802,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!e.target.closest('#mobile-detail-back-btn')) return;
     // Flush dwell + stop the clock, else list-browsing time gets attributed to this article.
     if (window._dwellSend) window._dwellSend();
-    document.documentElement.classList.remove('mobile-detail-open');
+    document.documentElement.classList.remove('mobile-detail-open', 'deeplink-detail-open');
     history.back();
   });
 

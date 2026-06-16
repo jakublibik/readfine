@@ -1,6 +1,6 @@
 [project]
 name = "readfine"
-version = "0.1.0"
+version = "0.9.0"
 description = "Self-hosted RSS reader"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -67,6 +67,9 @@ packages = ["app"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that require a real (PostgreSQL) database",
+]
 
 [dependency-groups]
 dev = [

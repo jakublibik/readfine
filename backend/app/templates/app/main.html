@@ -89,15 +89,6 @@
 {% endblock %}
 
 {% block content %}
-<!-- Mobile sidebar strip (minimizable mode, small bucket only) -->
-<div id="mobile-sidebar-strip">
-  <button id="mobile-strip-open-btn" class="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-200" aria-label="Open feeds">
-    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
-    </svg>
-  </button>
-</div>
-
 <!-- Mobile bottom bar (hideable-up mode, small bucket only) -->
 <div id="mobile-bottom-bar">
   <button id="mobile-bottombar-open-btn" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Open feeds">
@@ -267,7 +258,8 @@
     <div hx-get="/htmx/articles/{{ open_article_id }}"
          hx-target="#article-detail"
          hx-swap="innerHTML"
-         hx-trigger="load"></div>
+         hx-trigger="load"
+         data-deeplink-open></div>
     {% else %}
     <div class="flex items-center justify-center h-full text-gray-400">
       <div class="text-center">

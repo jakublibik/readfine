@@ -31,9 +31,10 @@ async def pg():
     engine = create_async_engine(app_settings.database_url)
     try:
         conn = await engine.connect()
-    except Exception:
+    except Exception as exc:
         await engine.dispose()
-        pytest.skip("database not reachable")
+        from tests.conftest import db_unreachable
+        db_unreachable(exc)
     trans = await conn.begin()
     session = AsyncSession(bind=conn, expire_on_commit=False)
     try:
@@ -244,6 +245,83 @@ class TestT2Delete:
         res = await self._t2_delete(pg, feed.id)
         assert res.rowcount == 0
         assert await _exists(pg, a.id)
+
+
+# ── full orchestration: purge_old_articles() end-to-end ──────────────────────
+
+async def _set_globals_null(session) -> None:
+    """Disable global age/count purge so only per-feed overrides act — keeps the
+    orchestration deterministic and scoped to this test's feeds. Upserts id=1 so it
+    also works on a fresh DB."""
+    from app.models.settings import AppSettings
+    s = await session.get(AppSettings, 1)
+    if s is None:
+        s = AppSettings(id=1, default_purge_after_days=None, default_purge_keep_count=None)
+        session.add(s)
+    else:
+        s.default_purge_after_days = None
+        s.default_purge_keep_count = None
+    await session.flush()
+
+
+class TestPurgeOrchestration:
+    async def test_full_flow(self, pg):
+        from app.services.purge_service import purge_old_articles
+
+        await _set_globals_null(pg)
+
+        # Feed A: per-feed age horizon of 30 days (age pass only).
+        user, feed_a = await _setup(pg)
+        uf_a = (await pg.execute(
+            select(UserFeed).where(UserFeed.feed_id == feed_a.id, UserFeed.user_id == user.id)
+        )).scalar_one()
+        uf_a.purge_after_days = 30
+        await pg.flush()
+
+        old_unengaged = await _article(pg, feed_a, age_days=40)            # age-DELETE
+        old_engaged = await _article(pg, feed_a, age_days=40, readable="full")
+        await _state(pg, user, old_engaged, dwell=120, created_days=40)    # age-TRIM
+        recent = await _article(pg, feed_a, age_days=5)                    # KEEP
+
+        # Feed B: per-feed keep_count of 2, all recent so only the count pass acts.
+        feed_b = Feed(feed_url=f"https://ex.invalid/{uuid.uuid4().hex}.xml", title="b", subscriber_count=1)
+        pg.add(feed_b)
+        await pg.flush()
+        uf_b = UserFeed(user_id=user.id, feed_id=feed_b.id, purge_keep_count=2)
+        pg.add(uf_b)
+        await pg.flush()
+        b_newest = await _article(pg, feed_b, age_days=5)
+        b_mid = await _article(pg, feed_b, age_days=6)
+        b_oldest = await _article(pg, feed_b, age_days=7)                  # count-DELETE (rn=3)
+
+        # T2: a trimmed stub past the profile window with no recent state.
+        stub = await _article(pg, feed_a, age_days=PROFILE_MAX_WINDOW_DAYS + 30,
+                              content="snip", trimmed_at=NOW - timedelta(days=PROFILE_MAX_WINDOW_DAYS + 5))
+
+        # Monkeypatch commit→flush so the final commit doesn't break rollback isolation.
+        pg.commit = pg.flush
+
+        total = await purge_old_articles(pg)
+
+        # Age pass
+        assert not await _exists(pg, old_unengaged.id)
+        assert await _exists(pg, recent.id)
+        # Engaged old article is trimmed in place, not deleted
+        assert await _exists(pg, old_engaged.id)
+        refreshed = await pg.get(Article, old_engaged.id)
+        await pg.refresh(refreshed)
+        assert refreshed.trimmed_at is not None
+        # readable_content keeps a short snippet; raw content is dropped
+        assert refreshed.content is None
+        # Count pass: oldest excess beyond keep_count=2 deleted, the two newest kept
+        assert await _exists(pg, b_newest.id)
+        assert await _exists(pg, b_mid.id)
+        assert not await _exists(pg, b_oldest.id)
+        # T2: trimmed stub past window deleted
+        assert not await _exists(pg, stub.id)
+        # Return is total deletions; ≥3 from our fixtures (T2 may also drop other
+        # pre-existing stubs in a shared dev DB, so don't assert an exact total).
+        assert total >= 3
 
 
 # ── visibility: trimmed stubs are hidden from listings ───────────────────────

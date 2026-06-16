@@ -55,8 +55,11 @@ async def admin_dashboard(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    from app import __version__
     stats = await get_dashboard_stats(db)
-    return templates.TemplateResponse(request, "admin/dashboard.html", {"stats": stats})
+    return templates.TemplateResponse(
+        request, "admin/dashboard.html", {"stats": stats, "app_version": __version__}
+    )
 
 
 @router.get("/scoring-eval", response_class=HTMLResponse)

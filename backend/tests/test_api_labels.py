@@ -46,6 +46,18 @@ class TestCreateLabel:
         assert response.status_code == 201
         assert response.json()["name"] == "Sports"
 
+    def test_duplicate_name_returns_409(self, client):
+        from app.services.label_service import LabelAlreadyExistsError
+        with patch(
+            "app.routers.api.v1.labels.create_label",
+            new=AsyncMock(side_effect=LabelAlreadyExistsError("Sports")),
+        ):
+            response = client.post(
+                "/api/v1/labels",
+                json={"name": "Sports", "color": "#ff0000"},
+            )
+        assert response.status_code == 409
+
     def test_invalid_color_returns_422(self, client):
         response = client.post("/api/v1/labels", json={"name": "Tech", "color": "red"})
         assert response.status_code == 422
@@ -122,6 +134,11 @@ class TestRemoveLabel:
         with patch("app.routers.api.v1.labels.remove_label", new=AsyncMock(return_value=True)):
             response = client.delete("/api/v1/articles/1/labels/1")
         assert response.status_code == 204
+
+    def test_not_found_returns_404(self, client):
+        with patch("app.routers.api.v1.labels.remove_label", new=AsyncMock(return_value=False)):
+            response = client.delete("/api/v1/articles/1/labels/1")
+        assert response.status_code == 404
 
     def test_requires_auth(self, unauth_client):
         response = unauth_client.delete("/api/v1/articles/1/labels/1")

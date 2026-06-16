@@ -142,18 +142,20 @@ class TestExtractWithTrafilatura:
         result = _extract_with_trafilatura("", "http://example.com")
         assert result is None
 
-    def test_extracts_article_content(self):
-        html = """
-        <html><body>
-        <article>
-        <p>This is a long enough article to be extracted by trafilatura because it has enough text.</p>
-        <p>Second paragraph with more content to make sure trafilatura picks it up properly.</p>
-        </article>
-        </body></html>
-        """
-        result = _extract_with_trafilatura(html, "http://example.com")
-        # May be None if trafilatura decides content is too short — that's OK
-        assert result is None or isinstance(result, str)
+    def test_returns_extracted_html_deterministically(self):
+        # Mock trafilatura so the assertion doesn't depend on its heuristics.
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = "<p>Extracted body</p>"
+            result = _extract_with_trafilatura("<html><body><article>x</article></body></html>",
+                                               "http://example.com")
+        assert result == "<p>Extracted body</p>"
+        mock_extract.assert_called_once()
+
+    def test_returns_none_when_trafilatura_returns_none(self):
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = None
+            result = _extract_with_trafilatura("<html><body>x</body></html>", "http://example.com")
+        assert result is None
 
     def test_converts_graphic_to_img(self):
         # Mock trafilatura to return a graphic tag

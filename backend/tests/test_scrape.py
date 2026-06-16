@@ -381,7 +381,7 @@ class TestFetchScrapeFeedSuccess:
             AsyncMock(),              # update UserFeed unread_count
         ])
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
-             patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             count = await fetch_scrape_feed(feed, session)
         assert count == 3
 
@@ -389,7 +389,7 @@ class TestFetchScrapeFeedSuccess:
         feed = _make_scrape_feed(status="error", fetch_error_count=2)
         session = _make_session()
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
-             patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             await fetch_scrape_feed(feed, session)
         assert feed.status == "active"
         assert feed.fetch_error_count == 0
@@ -420,7 +420,7 @@ class TestFetchScrapeFeedSuccess:
             AsyncMock(),  # unread_count update
         ])
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
-             patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             await fetch_scrape_feed(feed, session)
 
         assert all(a.readable_status == "skipped" for a in saved_articles)
@@ -667,7 +667,7 @@ class TestSaveScrapeCutoff:
         cutoff = datetime(2024, 3, 1, tzinfo=timezone.utc)
         fetched_at = datetime(2024, 3, 20, tzinfo=timezone.utc)
 
-        with patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+        with patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             count = await _save_scrape_articles(feed, self._links(), fetched_at, session, cutoff)
 
         # Old (before cutoff) skipped; New (after) and NoDate (undated) kept.
@@ -681,7 +681,7 @@ class TestSaveScrapeCutoff:
         feed = _make_scrape_feed()
         fetched_at = datetime(2024, 3, 20, tzinfo=timezone.utc)
 
-        with patch("app.services.filter_service.apply_filters_to_article", new=AsyncMock()):
+        with patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             count = await _save_scrape_articles(feed, self._links(), fetched_at, session, None)
 
         assert count == 3

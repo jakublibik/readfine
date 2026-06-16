@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models.user import User
 from app.schemas.label import ArticleLabelAssign, LabelCreate, LabelResponse, LabelUpdate
 from app.services.label_service import (
+    LabelAlreadyExistsError,
     assign_label,
     create_label,
     delete_label,
@@ -31,7 +32,13 @@ async def post_label(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await create_label(user, payload, db)
+    try:
+        return await create_label(user, payload, db)
+    except LabelAlreadyExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'A label named "{payload.name}" already exists.',
+        )
 
 
 @router.patch("/labels/{label_id}", response_model=LabelResponse)
@@ -75,4 +82,7 @@ async def del_article_label(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await remove_label(user, article_id, label_id, db)
+    if not await remove_label(user, article_id, label_id, db):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Label assignment not found"
+        )

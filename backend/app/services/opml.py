@@ -264,6 +264,13 @@ async def import_opml(
     import_filters: bool,
     db: AsyncSession,
 ) -> ImportResult:
+    """Import subscriptions/labels/prefs/filters from an OPML file.
+
+    Not atomic: each pass (labels, feeds, prefs, filters) commits independently, so a
+    late failure can leave earlier passes persisted. This is intentional — the import
+    is idempotent: existing labels/feeds/folders/filters are detected and skipped, so
+    re-running after a failure converges without creating duplicates.
+    """
     result = ImportResult()
 
     try:

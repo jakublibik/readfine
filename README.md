@@ -114,6 +114,42 @@ npm run dev
 
 Run this in a second terminal alongside `uvicorn` during development.
 
+### Hybrid development (Postgres in Docker, app run locally)
+
+The recommended dev setup: run only PostgreSQL in Docker and run FastAPI locally
+via uv, so the app reloads instantly on code changes.
+
+```bash
+# 1. Create your local env file (DATABASE_URL already points at localhost:5432)
+cp .env.example .env
+
+# 2. Start only the database
+docker compose up -d db
+
+# 3. Install backend deps (includes the dev group) and apply migrations
+cd backend
+uv sync
+uv run alembic upgrade head
+
+# 4. Run the app with auto-reload
+uv run uvicorn app.main:app --reload
+```
+
+The app is then at http://localhost:8000. Build the CSS once (`npm run build`) or
+run `npm run dev` in watch mode alongside.
+
+### Running tests
+
+```bash
+cd backend
+uv run pytest
+```
+
+Most tests use mocks and need no database. The integration tests (retention,
+catch-up) require the `db` container to be running — start it with
+`docker compose up -d db` first. Without a reachable database they are skipped
+locally (and fail in CI, where Postgres is always provisioned).
+
 ### Running the app in Docker
 
 `docker-compose.yml` is a production setup: the `app` container runs from the

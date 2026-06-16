@@ -163,6 +163,20 @@ class TestApplyFilter:
         assert data["changed"] == 5
         assert data["scoring_queued"] == 3
 
+    def test_enqueue_scoring_param_passed_through(self, client):
+        mock = AsyncMock(return_value=(10, 5, 0))
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=mock):
+            response = client.post("/api/v1/filters/1/apply?enqueue_scoring=false")
+        assert response.status_code == 200
+        assert mock.await_args.kwargs["enqueue_scoring"] is False
+
+    def test_enqueue_scoring_defaults_true(self, client):
+        mock = AsyncMock(return_value=(10, 5, 3))
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=mock):
+            response = client.post("/api/v1/filters/1/apply")
+        assert response.status_code == 200
+        assert mock.await_args.kwargs["enqueue_scoring"] is True
+
     def test_zero_counts_with_existing_filter(self, client):
         f = _make_filter_response()
         with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0, 0))):

@@ -112,7 +112,7 @@
     </button>
     <a data-article-title
        {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
-       class="text-sm leading-snug text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
+       class="min-w-0 break-words text-sm leading-snug text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
   </div>
 
   <div class="flex items-center justify-between mt-1">

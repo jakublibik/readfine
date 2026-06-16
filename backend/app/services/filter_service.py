@@ -477,47 +477,73 @@ async def _execute_actions(
     return changed
 
 
-async def apply_filters_to_article(article: Article, db: AsyncSession) -> None:
-    """Apply all subscribers' active filters to a newly saved article."""
-    if article.feed_id is None:
+async def apply_filters_to_new_articles(
+    feed_id: int, articles: "list[Article]", db: AsyncSession
+) -> None:
+    """Apply all subscribers' active filters to a batch of newly saved articles.
+
+    Subscribers and their filters are loaded once for the whole fetch (all
+    articles belong to the same feed), not per article.
+    """
+    if not articles:
         return
 
     subscribers_result = await db.execute(
-        select(UserFeed).where(UserFeed.feed_id == article.feed_id)
+        select(UserFeed).where(UserFeed.feed_id == feed_id)
     )
     user_feeds = subscribers_result.scalars().all()
+    if not user_feeds:
+        return
+
+    # Batch-load every subscriber's active filters in one query, then group by
+    # user_id — avoids a per-subscriber/per-article SELECT on this fetch hot path.
+    filters_result = await db.execute(
+        select(Filter)
+        .where(
+            Filter.user_id.in_([uf.user_id for uf in user_feeds]),
+            Filter.is_active == True,
+        )
+        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+        .order_by(Filter.position)
+    )
+    filters_by_user: dict[int, list[Filter]] = {}
+    for f in filters_result.scalars():
+        filters_by_user.setdefault(f.user_id, []).append(f)
 
     for uf in user_feeds:
-        filters_result = await db.execute(
-            select(Filter)
-            .where(Filter.user_id == uf.user_id, Filter.is_active == True)
-            .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-            .order_by(Filter.position)
-        )
-        filters = filters_result.scalars().all()
+        filters = filters_by_user.get(uf.user_id, [])
+        if not filters:
+            continue
+        for article in articles:
+            await _apply_user_filters_to_article(article, uf, filters, db)
 
-        got_star_or_label = False
-        got_label = False
-        for f in filters:
-            if is_ai_filter(f):
-                continue
-            if evaluate_filter(f, article, uf):
-                action_types = {a.action_type for a in f.actions}
-                if action_types & {"star", "label"}:
-                    got_star_or_label = True
-                if "label" in action_types:
-                    got_label = True
-                await _execute_actions(f, article, uf.user_id, uf, db)
-                if f.stop_on_match:
-                    break
 
-        if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
-            article.readable_status = "pending"
+async def _apply_user_filters_to_article(
+    article: Article, uf: UserFeed, filters: "list[Filter]", db: AsyncSession
+) -> None:
+    """Run one subscriber's (non-AI) filters against a single article."""
+    got_star_or_label = False
+    got_label = False
+    for f in filters:
+        if is_ai_filter(f):
+            continue
+        if evaluate_filter(f, article, uf):
+            action_types = {a.action_type for a in f.actions}
+            if action_types & {"star", "label"}:
+                got_star_or_label = True
+            if "label" in action_types:
+                got_label = True
+            await _execute_actions(f, article, uf.user_id, uf, db)
+            if f.stop_on_match:
+                break
 
-        # Enqueue scoring for labeled articles on non-readable feeds (or feeds with readable already done)
-        if got_label and (not uf.extract_readable or article.readable_status == "success"):
-            from app.services.ai_scoring_service import enqueue_scoring_job
-            await enqueue_scoring_job(article, uf.user_id, db)
+    if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
+        article.readable_status = "pending"
+
+    # Enqueue scoring for labeled articles on non-readable feeds (or feeds with readable already done)
+    if got_label and (not uf.extract_readable or article.readable_status == "success"):
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        await enqueue_scoring_job(article, uf.user_id, db)
 
 
 # ── AI filter batch processing ────────────────────────────────────────────────
@@ -554,15 +580,17 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
         for a in (await db.scalars(select(Article).where(Article.id.in_(article_ids)))).all()
     }
 
+    # Batch-load all users' active AI filters in one query, then group by user_id.
+    filters_result = await db.execute(
+        select(Filter)
+        .where(Filter.user_id.in_(user_ids), Filter.is_active == True)  # noqa: E712
+        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+        .order_by(Filter.position)
+    )
     filters_by_user: dict[int, list[Filter]] = {}
-    for uid in user_ids:
-        result = await db.execute(
-            select(Filter)
-            .where(Filter.user_id == uid, Filter.is_active == True)  # noqa: E712
-            .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-            .order_by(Filter.position)
-        )
-        filters_by_user[uid] = [f for f in result.scalars().all() if is_ai_filter(f)]
+    for f in filters_result.scalars():
+        if is_ai_filter(f):
+            filters_by_user.setdefault(f.user_id, []).append(f)
 
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id.in_(user_ids))

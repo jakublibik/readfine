@@ -12,6 +12,33 @@ from app.utils.crypto import decrypt, encrypt
 
 logger = logging.getLogger(__name__)
 
+
+class ProviderEmptyResponse(Exception):
+    """Raised when an AI provider returns no usable text (blocked/empty/filtered),
+    so callers handle it as a controlled error instead of crashing on .strip()."""
+
+
+def _extract_text(provider: str, resp) -> str:
+    """Safely pull the text out of a provider response, raising
+    ProviderEmptyResponse when content is missing/empty."""
+    text: str | None = None
+    if provider == "anthropic":
+        blocks = getattr(resp, "content", None) or []
+        if blocks:
+            text = getattr(blocks[0], "text", None)
+    elif provider == "openai":
+        choices = getattr(resp, "choices", None) or []
+        if choices:
+            text = getattr(choices[0].message, "content", None)
+    elif provider == "gemini":
+        text = getattr(resp, "text", None)
+    else:
+        raise ValueError(f"Unknown provider: {provider}")
+    if not text or not text.strip():
+        raise ProviderEmptyResponse(f"{provider} returned no usable content")
+    return text.strip()
+
+
 # Docs URLs shown next to the model input field
 PROVIDER_DOCS_URLS: dict[str, str] = {
     "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models",
@@ -261,12 +288,14 @@ async def score_article(
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
     raw, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=10)
-    try:
-        score = float(raw.strip())
-        return max(0.0, min(1.0, score)), in_tok, out_tok
-    except ValueError:
-        logger.warning("score_article: unexpected AI response %r, defaulting to 0.5", raw)
-        return 0.5, in_tok, out_tok
+    # Extract the first decimal number — tolerates models that wrap the score in
+    # prose ("0.8 - relevant", "Score: 0.7"). A truly unparseable response raises,
+    # so the caller's retry/failure path handles it instead of silently scoring 0.5.
+    match = re.search(r"\d*\.?\d+", raw or "")
+    if match is None:
+        raise ValueError(f"score_article: no number in AI response {raw!r}")
+    score = float(match.group())
+    return max(0.0, min(1.0, score)), in_tok, out_tok
 
 
 _DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
@@ -327,7 +356,7 @@ async def chat_with_article(
             kwargs["system"] = system_prompt
         resp = await client.messages.create(**kwargs)
         return (
-            resp.content[0].text.strip(),
+            _extract_text("anthropic", resp),
             resp.usage.input_tokens,
             resp.usage.output_tokens,
         )
@@ -340,7 +369,7 @@ async def chat_with_article(
         resp = await client.chat.completions.create(
             model=model, max_tokens=600, messages=openai_msgs)
         return (
-            resp.choices[0].message.content.strip(),
+            _extract_text("openai", resp),
             resp.usage.prompt_tokens,
             resp.usage.completion_tokens,
         )
@@ -360,7 +389,7 @@ async def chat_with_article(
             model=model, config=cfg, contents=contents)
         meta = resp.usage_metadata
         return (
-            resp.text.strip(),
+            _extract_text("gemini", resp),
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0,
         )
@@ -646,14 +675,14 @@ async def _complete(
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.content[0].text.strip(), resp.usage.input_tokens, resp.usage.output_tokens
+        return _extract_text("anthropic", resp), resp.usage.input_tokens, resp.usage.output_tokens
     elif provider == "openai":
         resp = await client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return resp.choices[0].message.content.strip(), resp.usage.prompt_tokens, resp.usage.completion_tokens
+        return _extract_text("openai", resp), resp.usage.prompt_tokens, resp.usage.completion_tokens
     elif provider == "gemini":
         from google.genai import types
         resp = await client.aio.models.generate_content(
@@ -663,7 +692,7 @@ async def _complete(
         )
         meta = resp.usage_metadata
         return (
-            resp.text.strip(),
+            _extract_text("gemini", resp),
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0,
         )

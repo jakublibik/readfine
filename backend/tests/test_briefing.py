@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.briefing_service import compute_next_send_at
+from app.services.briefing_service import apply_briefing_failure, compute_next_send_at
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -68,6 +68,37 @@ def make_app_settings(**kwargs):
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
+
+
+# ── apply_briefing_failure (retry state machine) ──────────────────────────────
+
+class TestApplyBriefingFailure:
+    def test_smtp_error_disables_and_clears(self):
+        config = make_config(briefing_enabled=True, briefing_retry_count=0)
+        notify = apply_briefing_failure(config, smtplib.SMTPException("boom"), is_smtp=True, tz_str="UTC")
+        assert notify is False
+        assert config.briefing_enabled is False
+        assert config.briefing_next_send_at is None
+        assert "SMTP error" in config.briefing_last_error
+
+    def test_first_failure_retries_in_30_min(self):
+        config = make_config(briefing_retry_count=0)
+        before = datetime.now(timezone.utc)
+        notify = apply_briefing_failure(config, RuntimeError("api down"), is_smtp=False, tz_str="UTC")
+        assert notify is False
+        assert config.briefing_retry_count == 1
+        assert config.briefing_enabled is True  # still enabled, will retry
+        delta = config.briefing_next_send_at - before
+        assert timedelta(minutes=29) <= delta <= timedelta(minutes=31)
+        assert config.briefing_last_error == "api down"
+
+    def test_second_failure_resets_and_reschedules(self):
+        config = make_config(briefing_retry_count=1, briefing_interval="daily", briefing_time="08:00")
+        notify = apply_briefing_failure(config, RuntimeError("api down again"), is_smtp=False, tz_str="UTC")
+        assert notify is True  # caller should notify the user
+        assert config.briefing_retry_count == 0  # cycle reset, not another retry
+        assert config.briefing_next_send_at > datetime.now(timezone.utc)  # future normal slot
+        assert config.briefing_enabled is True
 
 
 # ── compute_next_send_at ──────────────────────────────────────────────────────

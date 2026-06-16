@@ -24,6 +24,11 @@ def _slot_matches(effective_interval_min: int, minute: int) -> bool:
       :00  — all feeds
       :15/:45 — only 15-min feeds (sub_period == 15)
       :30  — 15-min and 30-min feeds, including 90-min (sub_period in {15, 30})
+
+    Supported intervals are aligned to 15/30/60 (the UI offers
+    [15,30,60,90,120,180,360,720,1440]). A value with sub_period not in {15,30}
+    — e.g. 45 — would only be evaluated at :00; this is acceptable because such
+    intervals are not selectable in the UI.
     """
     if minute == 0:
         return True
@@ -146,7 +151,14 @@ async def _fetch_due_feeds() -> None:
                         )
 
     fetch_start = datetime.now(timezone.utc)
-    await asyncio.gather(*[_fetch_one(feed.id) for feed in feeds], return_exceptions=True)
+    results = await asyncio.gather(
+        *[_fetch_one(feed.id) for feed in feeds], return_exceptions=True
+    )
+    for feed, result in zip(feeds, results):
+        if isinstance(result, BaseException):
+            logger.error(
+                "Scheduler: unexpected error fetching feed %d", feed.id, exc_info=result
+            )
 
     # Post-gather dedup: catches race conditions where two concurrent sessions couldn't
     # see each other's uncommitted articles during per-feed _dedup_cross_feed.
@@ -249,7 +261,7 @@ async def _send_due_briefings() -> None:
         return
 
     from app.models.user import UserCatchupConfig, User, UserSettings
-    from app.services.briefing_service import compute_next_send_at, send_briefing
+    from app.services.briefing_service import apply_briefing_failure, send_briefing
     from app.utils.smtp import send_email
 
     # Load app settings and due config IDs in a short-lived session
@@ -294,25 +306,13 @@ async def _send_due_briefings() -> None:
                 await send_briefing(config, user, session, app_settings_row)
             except smtplib.SMTPException as exc:
                 logger.error("Briefing SMTP error for config %d: %s", config_id, exc)
-                config.briefing_enabled = False
-                config.briefing_last_error = f"SMTP error: {exc}"
-                config.briefing_next_send_at = None
+                apply_briefing_failure(config, exc, is_smtp=True, tz_str=tz_str)
                 await session.commit()
             except Exception as exc:
                 logger.error("Briefing error for config %d: %s", config_id, exc)
-                if config.briefing_retry_count == 0:
-                    config.briefing_retry_count = 1
-                    config.briefing_last_error = str(exc)
-                    config.briefing_next_send_at = datetime.now(timezone.utc) + timedelta(minutes=30)
-                    await session.commit()
-                else:
-                    config.briefing_retry_count = 0
-                    config.briefing_last_error = str(exc)
-                    config.briefing_next_send_at = compute_next_send_at(
-                        config.briefing_interval, config.briefing_day,
-                        config.briefing_time or "08:00", tz_str
-                    )
-                    await session.commit()
+                notify = apply_briefing_failure(config, exc, is_smtp=False, tz_str=tz_str)
+                await session.commit()
+                if notify:
                     try:
                         send_email(
                             app_settings_row,

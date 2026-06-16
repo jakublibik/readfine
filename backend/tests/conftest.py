@@ -28,6 +28,15 @@ _apply_null_lifespan()
 
 # ── Mock objects ──────────────────────────────────────────────────────────────
 
+def db_unreachable(exc: Exception) -> None:
+    """Called by integration fixtures when the test DB can't be reached. Fails in CI
+    (where Postgres is provisioned, so unreachable means a real misconfig we must not
+    hide) and skips locally for developer convenience."""
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        pytest.fail(f"Integration DB unreachable in CI: {exc}")
+    pytest.skip("database not reachable")
+
+
 def make_mock_user(id: int = 1, role: str = "user") -> SimpleNamespace:
     return SimpleNamespace(
         id=id,

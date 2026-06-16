@@ -7,6 +7,7 @@ import pytest
 
 from app.schemas.label import LabelCreate, LabelUpdate
 from app.services.label_service import (
+    LabelAlreadyExistsError,
     create_label,
     delete_label,
     list_labels,
@@ -94,6 +95,7 @@ class TestCreateLabel:
     async def test_creates_and_returns(self):
         user = _make_user()
         db = _make_db()
+        db.scalar = AsyncMock(return_value=None)
         label = _make_label(id=5, name="News")
 
         async def mock_refresh(obj):
@@ -112,6 +114,7 @@ class TestCreateLabel:
     async def test_commits_to_db(self):
         user = _make_user()
         db = _make_db()
+        db.scalar = AsyncMock(return_value=None)
 
         async def mock_refresh(obj):
             obj.id = 1
@@ -122,6 +125,16 @@ class TestCreateLabel:
         payload = LabelCreate(name="Sports")
         await create_label(user, payload, db)
         db.commit.assert_awaited_once()
+
+    async def test_duplicate_name_raises(self):
+        user = _make_user()
+        db = _make_db()
+        db.scalar = AsyncMock(return_value=_make_label(name="Sports"))
+
+        with pytest.raises(LabelAlreadyExistsError):
+            await create_label(user, LabelCreate(name="Sports"), db)
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
 
 
 # ── update_label ──────────────────────────────────────────────────────────────

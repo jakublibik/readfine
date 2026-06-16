@@ -7,7 +7,11 @@
 
   var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
   var w = window.innerWidth;
-  var bucket = w <= 640 ? 'small' : w <= 1100 ? 'medium' : 'large';
+  // Read the user's custom breakpoints from server-rendered <html> data attributes so
+  // the first-paint bucket matches what app.js computes later (no layout flash on reload).
+  var smallMax = parseInt(document.documentElement.dataset.bucketSmallMax, 10) || 640;
+  var mediumMax = parseInt(document.documentElement.dataset.bucketMediumMax, 10) || 1100;
+  var bucket = w <= smallMax ? 'small' : w <= mediumMax ? 'medium' : 'large';
   var layout;
   try { layout = localStorage.getItem('layout_' + bucket); } catch (e) {}
   document.documentElement.dataset.bucket = bucket;

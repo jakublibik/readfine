@@ -24,9 +24,10 @@ async def pg():
     engine = create_async_engine(app_settings.database_url)
     try:
         conn = await engine.connect()
-    except Exception:
+    except Exception as exc:
         await engine.dispose()
-        pytest.skip("database not reachable")
+        from tests.conftest import db_unreachable
+        db_unreachable(exc)
     trans = await conn.begin()
     session = AsyncSession(bind=conn, expire_on_commit=False)
     try:

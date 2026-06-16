@@ -262,9 +262,8 @@ async def _save_articles(
             .values(unread_count=UserFeed.unread_count + len(new_articles))
         )
 
-        from app.services.filter_service import apply_filters_to_article
-        for article in new_articles:
-            await apply_filters_to_article(article, db)
+        from app.services.filter_service import apply_filters_to_new_articles
+        await apply_filters_to_new_articles(feed.id, new_articles, db)
 
         await _dedup_cross_feed(feed.id, new_articles, db)
 

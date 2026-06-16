@@ -9,6 +9,10 @@ from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
 
 
+class LabelAlreadyExistsError(Exception):
+    """Raised when creating a label whose name already exists for the user."""
+
+
 async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
     result = await db.execute(
         select(Label)
@@ -19,6 +23,11 @@ async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
 
 
 async def create_label(user: User, payload: LabelCreate, db: AsyncSession) -> LabelResponse:
+    existing = await db.scalar(
+        select(Label).where(Label.user_id == user.id, Label.name == payload.name)
+    )
+    if existing is not None:
+        raise LabelAlreadyExistsError(payload.name)
     label = Label(
         user_id=user.id,
         name=payload.name,
@@ -105,7 +114,7 @@ async def assign_label(
 
 async def _enqueue_scoring_for_label(user_id: int, article_id: int, db: AsyncSession) -> None:
     """Trigger AI scoring for a freshly labeled article, mirroring the filter
-    label→scoring path (see filter_service.apply_filters_to_article).
+    label→scoring path (see filter_service.apply_filters_to_new_articles).
 
     Either enqueue a scoring job now (no readable needed, or readable already
     done) or flip readable to "pending" so the readable→scoring pipeline picks it
