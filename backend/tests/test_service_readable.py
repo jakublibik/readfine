@@ -10,6 +10,7 @@ from app.services.readable_service import (
     _extract_with_trafilatura,
     _extract_with_readability,
     _sanitize,
+    _drop_empty_blocks,
     _MAX_RETRIES,
     _BACKOFF_MINUTES,
 )
@@ -225,3 +226,52 @@ class TestSanitize:
         html = '<a href="http://example.com">Link</a>'
         result = _sanitize(html)
         assert "noopener" in result
+
+
+# ── _drop_empty_blocks ────────────────────────────────────────────────────────
+
+class TestDropEmptyBlocks:
+    def test_removes_empty_li(self):
+        # The real-world case: "Share:" label followed by an <li> emptied when its
+        # share-button links were stripped by the sanitizer.
+        html = "<ul><li>Share:</li><li></li></ul>"
+        result = _drop_empty_blocks(html)
+        assert result == "<ul><li>Share:</li></ul>"
+
+    def test_removes_whitespace_only_li(self):
+        html = "<ul><li>  </li><li>Real</li></ul>"
+        result = _drop_empty_blocks(html)
+        assert "Real" in result
+        assert result.count("<li>") == 1
+
+    def test_removes_empty_paragraph(self):
+        html = "<p>Text</p><p></p>"
+        result = _drop_empty_blocks(html)
+        assert result == "<p>Text</p>"
+
+    def test_keeps_li_with_text(self):
+        html = "<ul><li>Date:</li><li>June 15, 2026</li></ul>"
+        result = _drop_empty_blocks(html)
+        assert result == html
+
+    def test_keeps_li_with_image(self):
+        html = '<ul><li><img src="photo.jpg" alt="x"></li></ul>'
+        result = _drop_empty_blocks(html)
+        assert 'src="photo.jpg"' in result
+        assert "<li>" in result
+
+    def test_keeps_li_with_iframe(self):
+        html = '<li><iframe src="https://www.youtube.com/embed/x"></iframe></li>'
+        result = _drop_empty_blocks(html)
+        assert "<iframe" in result
+
+    def test_removes_nested_then_parent(self):
+        # Removing the empty inner <p> leaves the <li> empty too — both should go.
+        html = "<ul><li><p></p></li><li>Keep</li></ul>"
+        result = _drop_empty_blocks(html)
+        assert result == "<ul><li>Keep</li></ul>"
+
+    def test_leaves_non_block_tags_untouched(self):
+        html = "<p>Hello <span></span>world</p>"
+        result = _drop_empty_blocks(html)
+        assert "Hello" in result and "world" in result

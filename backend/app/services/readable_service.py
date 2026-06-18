@@ -7,6 +7,7 @@ from typing import Optional
 import httpx
 import nh3
 import trafilatura
+from bs4 import BeautifulSoup
 from readability import Document
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -170,6 +171,28 @@ def _sanitize(html: str) -> str:
                      link_rel="noopener noreferrer")
 
 
+# Block elements left empty after sanitization (e.g. an `<li>` whose only child was a
+# stripped share-button link) render as stray bullets/gaps. Media-bearing blocks are kept.
+_EMPTY_BLOCK_TAGS = ["li", "p"]
+_MEDIA_TAGS = ["img", "picture", "video", "audio", "iframe", "svg", "source"]
+
+
+def _drop_empty_blocks(html: str) -> str:
+    """Remove block elements with no text and no media, left empty by sanitization."""
+    soup = BeautifulSoup(html, "html.parser")
+    # Repeat until stable: removing an inner empty block can empty its parent.
+    while True:
+        removed = False
+        for el in soup.find_all(_EMPTY_BLOCK_TAGS):
+            if el.get_text(strip=True) or el.find(_MEDIA_TAGS):
+                continue
+            el.decompose()
+            removed = True
+        if not removed:
+            break
+    return str(soup)
+
+
 def apply_readable_result(
     article: Article,
     content: Optional[str],
@@ -229,7 +252,7 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
     if video_figures:
         content += "\n" + "\n".join(video_figures)
     from app.utils.parsing import rewrite_relative_urls
-    return rewrite_relative_urls(_sanitize(content), url), None, None
+    return rewrite_relative_urls(_drop_empty_blocks(_sanitize(content)), url), None, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
