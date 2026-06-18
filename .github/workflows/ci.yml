@@ -25,7 +25,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql+asyncpg://readfine:readfine@localhost:5432/readfine_test
-      SECRET_KEY: ci-test-secret-key
+      SECRET_KEY: ci-test-secret-key-0123456789abcdef
       ENCRYPTION_KEY: ci0123456789abcdef0123456789abcd
     defaults:
       run:
