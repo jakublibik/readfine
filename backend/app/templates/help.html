@@ -130,6 +130,42 @@
               <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a>.</p>
           </div>
 
+          <div id="regex" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I use regex in a filter?</h3>
+            <p>When a condition's operator is <strong>regex</strong>, the value is treated as a regular
+              expression (Python syntax). The pattern is matched <strong>anywhere in the field</strong> and is
+              <strong>case-insensitive</strong>, so <code class="font-mono">einstein</code> also matches “Einstein”.
+              Use it on text fields (title, content, author, URL) when plain <em>contains</em> isn't enough.</p>
+            <ul class="list-disc ml-5 mt-2 space-y-1">
+              <li><code class="font-mono">(apple|pear|fig)</code> — matches any of several terms (OR).</li>
+              <li><code class="font-mono">\bAI\b</code> — the whole word “AI” only (not “rain” or “maintain”);
+                <code class="font-mono">\b</code> is a word boundary.</li>
+              <li><code class="font-mono">^Breaking</code> — the field <em>starts</em> with “Breaking”
+                (<code class="font-mono">^</code> = start, <code class="font-mono">$</code> = end).</li>
+              <li><code class="font-mono">colou?r</code> — optional character: matches “color” and “colour”
+                (<code class="font-mono">?</code> = the previous item zero or one time).</li>
+              <li><code class="font-mono">\d{4}</code> — exactly four digits, e.g. a year like “2026”
+                (<code class="font-mono">\d</code> = a digit, <code class="font-mono">{4}</code> = four times).</li>
+            </ul>
+            <p class="mt-2">Building blocks you can combine:
+              <code class="font-mono">.</code> any character,
+              <code class="font-mono">\d</code> digit,
+              <code class="font-mono">\w</code> letter/number,
+              <code class="font-mono">\s</code> space,
+              <code class="font-mono">*</code> zero or more,
+              <code class="font-mono">+</code> one or more,
+              <code class="font-mono">[a-z]</code> a range. Special characters
+              (<code class="font-mono">. $ ^ ( ) [ ] * + ?</code>) must be escaped with a backslash to match
+              them literally — e.g. <code class="font-mono">\$\d+</code> matches a price like “$50”.</p>
+            <p class="mt-2 text-gray-500 dark:text-gray-400">Patterns are limited to 200 characters, and a few
+              constructs prone to catastrophic backtracking (nested quantifiers like
+              <code class="font-mono">(\w+)+</code>) are rejected when you save. An invalid pattern is reported
+              on save, so nothing breaks silently.</p>
+            <p class="mt-2">New to regex? Build and test patterns interactively at
+              <a href="https://regex101.com/?flavor=python" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">regex101.com</a>
+              — pick the <strong>Python</strong> flavor to match how Readfine evaluates them.</p>
+          </div>
+
           <div id="layout" class="py-5 first:pt-0 last:pb-0">
             <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I customize the layout?</h3>
             <p>Open <a href="/settings/preferences" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Preferences</a>

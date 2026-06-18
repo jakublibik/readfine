@@ -44,6 +44,7 @@
     if (ops.indexOf(currentOp) === -1) opSel.value = ops[0];
     if (valInput) valInput.placeholder = getPlaceholderForField(field);
     updateAiFilterUI();
+    updateRegexHintUI();
   }
 
   function updateAiFilterUI() {
@@ -70,6 +71,21 @@
     if (notice) notice.classList.toggle('hidden', !hasAi);
   }
 
+  function updateRegexHintUI() {
+    var hint = document.getElementById('regex-hint');
+    if (!hint) return;
+    var hasRegex = false;
+    document.querySelectorAll('.condition-row [name="cond_operator"]').forEach(function (op) {
+      if (op.value === 'regex') hasRegex = true;
+    });
+    hint.classList.toggle('hidden', !hasRegex);
+  }
+
+  function wireOperatorHint(row) {
+    var op = row.querySelector('[name="cond_operator"]');
+    if (op) op.addEventListener('change', updateRegexHintUI);
+  }
+
   document.getElementById('add-condition').addEventListener('click', function () {
     var row = document.createElement('div');
     row.className = 'flex flex-wrap items-center gap-2 condition-row';
@@ -85,11 +101,14 @@
       '</div>' +
       '<input type="text" name="cond_value" required class="flex-1 min-w-32 border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="value">' +
       '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row shrink-0">✕</button>';
-    row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); updateAiFilterUI(); });
+    row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); updateAiFilterUI(); updateRegexHintUI(); });
     var fieldSel = row.querySelector('[name="cond_field"]');
     fieldSel.addEventListener('change', function () { updateConditionRow(row); });
+    wireOperatorHint(row);
     document.getElementById('conditions').appendChild(row);
-    updateAiFilterUI();
+    // Filter the operator list to the default field's allowed operators
+    // (also refreshes the AI-filter and regex-hint UI).
+    updateConditionRow(row);
   });
 
   document.getElementById('add-action').addEventListener('click', function () {
@@ -113,7 +132,7 @@
 
   // Attach remove handlers to pre-rendered rows (from server)
   document.querySelectorAll('.condition-row .remove-row').forEach(function (btn) {
-    btn.addEventListener('click', function () { btn.closest('.condition-row').remove(); updateAiFilterUI(); });
+    btn.addEventListener('click', function () { btn.closest('.condition-row').remove(); updateAiFilterUI(); updateRegexHintUI(); });
   });
   document.querySelectorAll('.action-row .remove-row').forEach(function (btn) {
     btn.addEventListener('click', function () { btn.closest('.action-row').remove(); });
@@ -126,8 +145,10 @@
       fieldSel.addEventListener('change', function () { updateConditionRow(row); });
       updateConditionRow(row);
     }
+    wireOperatorHint(row);
   });
   updateAiFilterUI();
+  updateRegexHintUI();
 
   window.toggleActionValue = function (select) {
     var labelSelect = select.closest('.action-row').querySelector('.label-select');

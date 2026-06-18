@@ -174,6 +174,22 @@
     </div>
     <button type="button" id="add-condition"
             class="mt-2 text-sm text-blue-600 hover:underline">+ Add condition</button>
+    <div id="regex-hint" class="hidden mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800 space-y-1">
+      <p><strong>Regex tips</strong> — patterns match anywhere in the field and are case-insensitive (Python syntax):</p>
+      <ul class="space-y-0.5 ml-1">
+        <li><code class="font-mono">\bword\b</code> — whole word only</li>
+        <li><code class="font-mono">(apple|pear|fig)</code> — any of several terms</li>
+        <li><code class="font-mono">^Breaking</code> — at the start of the field</li>
+      </ul>
+      <p>Blocks:
+        <code class="font-mono">.</code> any character,
+        <code class="font-mono">\d</code> digit,
+        <code class="font-mono">\w</code> letter/number,
+        <code class="font-mono">*</code> zero or more,
+        <code class="font-mono">+</code> one or more,
+        <code class="font-mono">[a-z]</code> a range.</p>
+      <p><a href="/help#regex" target="_blank" rel="noopener noreferrer" class="underline">Full regex guide &rarr;</a></p>
+    </div>
   </div>
 
   <!-- Actions -->
