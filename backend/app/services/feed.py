@@ -444,8 +444,18 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
             await db.delete(feed)
 
 
-async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
-    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical)."""
+async def list_user_feeds(
+    user: User, db: AsyncSession, include_unread: bool = False
+) -> list[UserFeed]:
+    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical).
+
+    With ``include_unread=True`` each returned object's ``unread_count`` is replaced
+    with a value computed fresh from the DB (excluding retention-trimmed stubs),
+    matching what the web UI shows. The cached ``UserFeed.unread_count`` column can
+    drift (the fetcher and retention don't recompute it consistently), so API
+    callers that surface the number should opt in. Off by default so web callers,
+    which compute their own counts, don't pay for a redundant query.
+    """
     result = await db.execute(
         select(UserFeed)
         .join(Feed, Feed.id == UserFeed.feed_id)
@@ -457,4 +467,27 @@ async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
             func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
         )
     )
-    return result.scalars().all()
+    user_feeds = result.scalars().all()
+
+    if include_unread and user_feeds:
+        feed_ids = [uf.feed_id for uf in user_feeds]
+        fresh = dict((await db.execute(
+            select(Article.feed_id, func.count(Article.id))
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
+            .where(
+                Article.feed_id.in_(feed_ids),
+                Article.trimmed_at.is_(None),
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
+            .group_by(Article.feed_id)
+        )).all())
+        # Plain attribute write: the GET path never commits (get_db only rolls
+        # back on close) and no query runs after this, so it never persists.
+        for uf in user_feeds:
+            uf.unread_count = fresh.get(uf.feed_id, 0)
+
+    return user_feeds

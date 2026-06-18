@@ -19,7 +19,7 @@ async def get_feeds(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_user_feeds(user, db)
+    return await list_user_feeds(user, db, include_unread=True)
 
 
 @router.post("", response_model=UserFeedResponse, status_code=status.HTTP_201_CREATED)

@@ -467,7 +467,6 @@ async def _execute_actions(
                     # and retention with automation. Same principle as is_read.
                     state.is_starred = True
                     changed = True
-            # "notify" is a no-op stub for MVP
 
         except Exception as exc:
             logger.warning(

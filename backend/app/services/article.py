@@ -414,10 +414,10 @@ async def mark_scope_read(
 
     insert_select = scoped_select(
         literal(user.id), Article.id,
-        literal(True), literal(False), literal(False), literal(False), literal(now),
+        literal(True), literal(False), literal(False), literal(now),
     )
     stmt = pg_insert(UserArticleState).from_select(
-        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "is_hidden", "read_at"],
+        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at"],
         insert_select,
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
@@ -468,7 +468,7 @@ async def mark_articles_read_batch(user: User, article_ids: list[int], db: Async
     now = datetime.now(timezone.utc)
     stmt = pg_insert(UserArticleState).values([
         {"user_id": user.id, "article_id": aid, "is_read": True,
-         "is_starred": False, "is_archived": False, "is_hidden": False, "read_at": now}
+         "is_starred": False, "is_archived": False, "read_at": now}
         for aid in article_ids
     ]).on_conflict_do_update(
         index_elements=["user_id", "article_id"],

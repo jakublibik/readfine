@@ -66,6 +66,53 @@ class TestListFeeds:
         assert response.status_code == 401
 
 
+class TestListUserFeedsIncludeUnread:
+    """list_user_feeds(include_unread=True) must override the cached unread_count
+    with a value computed fresh from the DB, falling back to 0 for feeds with no
+    matching unread rows. Guards against the cached-column drift the API used to
+    expose (web computes fresh, API trusted the stale column)."""
+
+    @pytest.mark.asyncio
+    async def test_overrides_cached_unread_count(self):
+        from app.services.feed import list_user_feeds
+
+        # Cached column is deliberately wrong (stale) to prove it's replaced.
+        uf1 = _make_user_feed(id=1, feed_id=10, unread_count=999)
+        uf2 = _make_user_feed(id=2, feed_id=20, unread_count=999)
+
+        feeds_result = MagicMock()
+        feeds_result.scalars.return_value.all.return_value = [uf1, uf2]
+        counts_result = MagicMock()
+        counts_result.all.return_value = [(10, 5)]  # feed 20 absent → 0
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[feeds_result, counts_result])
+        user = SimpleNamespace(id=1)
+
+        feeds = await list_user_feeds(user, db, include_unread=True)
+
+        assert feeds[0].unread_count == 5
+        assert feeds[1].unread_count == 0
+
+    @pytest.mark.asyncio
+    async def test_default_skips_fresh_count_query(self):
+        from app.services.feed import list_user_feeds
+
+        uf = _make_user_feed(id=1, feed_id=10, unread_count=999)
+        feeds_result = MagicMock()
+        feeds_result.scalars.return_value.all.return_value = [uf]
+
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=feeds_result)
+        user = SimpleNamespace(id=1)
+
+        feeds = await list_user_feeds(user, db)
+
+        # No second query, cached value left untouched.
+        assert db.execute.await_count == 1
+        assert feeds[0].unread_count == 999
+
+
 class TestSubscribeFeed:
     def test_valid_url_returns_201(self, client, mock_db):
         user_feed = _make_user_feed()
