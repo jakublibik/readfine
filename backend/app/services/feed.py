@@ -148,8 +148,13 @@ async def subscribe(
     await db.refresh(user_feed)
     user_feed.feed = feed
 
-    # Kick off initial fetch in the background (skip if already running for this feed)
+    # Kick off initial fetch in the background (skip if already running for this feed).
+    # Mark in-progress synchronously here, before spawning the task: if .add() lived
+    # inside _initial_fetch it would only run once the task is scheduled, so two
+    # concurrent subscribes to the same new feed could both pass the guard and fetch
+    # it twice. (Downstream dedup makes that safe, just wasteful.)
     if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
+        _initial_fetch_in_progress.add(feed.id)
         asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit))
 
     return user_feed
@@ -161,8 +166,10 @@ async def _initial_fetch(feed_id: int, import_mode: str = "recent", import_limit
     import_mode "recent" (default): import only articles published within the retention
     horizon (published_cutoff), no count limit. import_mode "latest": no time cutoff,
     import up to import_limit newest articles (e.g. pulling a full archive feed).
+
+    The caller (subscribe) already added feed_id to _initial_fetch_in_progress;
+    this only owns the discard.
     """
-    _initial_fetch_in_progress.add(feed_id)
     try:
         import app.database as db_module
         if db_module.async_session_factory is None:
@@ -296,15 +303,20 @@ async def subscribe_scrape(
         raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
     await db.refresh(user_feed)
 
+    # Mark in-progress synchronously before spawning (see subscribe() for why).
     if is_new_feed and feed.id not in _initial_fetch_in_progress:
+        _initial_fetch_in_progress.add(feed.id)
         asyncio.create_task(_initial_fetch_scrape(feed.id))
 
     return user_feed
 
 
 async def _initial_fetch_scrape(feed_id: int) -> None:
-    """Run an immediate scrape for a newly subscribed scrape feed."""
-    _initial_fetch_in_progress.add(feed_id)
+    """Run an immediate scrape for a newly subscribed scrape feed.
+
+    The caller (subscribe_scrape) already added feed_id to
+    _initial_fetch_in_progress; this only owns the discard.
+    """
     try:
         import app.database as db_module
         from app.fetcher.scrape import fetch_scrape_feed

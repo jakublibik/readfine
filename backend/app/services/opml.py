@@ -398,11 +398,15 @@ async def import_opml(
                 user, filters_el, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db
             )
 
-    # Kick off initial fetches after all filters are in DB
+    # Kick off initial fetches after all filters are in DB. Mark in-progress
+    # synchronously before spawning (the task no longer self-marks — see subscribe()).
     import app.database as db_module
-    from app.services.feed import _initial_fetch
+    from app.services.feed import _initial_fetch, _initial_fetch_in_progress
     if new_feed_ids and db_module.async_session_factory is not None:
         for feed_id in new_feed_ids:
+            if feed_id in _initial_fetch_in_progress:
+                continue
+            _initial_fetch_in_progress.add(feed_id)
             asyncio.create_task(_initial_fetch(feed_id))
 
     return result
