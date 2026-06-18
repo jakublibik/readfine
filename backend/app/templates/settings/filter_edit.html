@@ -226,4 +226,4 @@
 
 <script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if ai_score_available %},"ai_score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"aiScoreOperators":["equals","gt","lt"],"aiScoreAvailable":{{ 'true' if ai_score_available else 'false' }},"actionTypes":["label","mark_read","star"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
 {% endblock %}
-{% block scripts %}<script src="/static/js/filter-edit.js"></script>{% endblock %}
+{% block scripts %}<script src="{{ static_url('js/filter-edit.js') }}"></script>{% endblock %}

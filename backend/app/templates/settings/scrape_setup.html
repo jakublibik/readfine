@@ -4,8 +4,13 @@
 
 {% block settings_content %}
 <h1 class="text-xl font-semibold text-gray-900 mb-1">Add web scraping feed</h1>
-<p class="text-sm text-gray-500 mb-6 font-mono break-all">
+<p class="text-sm text-gray-500 mb-3 font-mono break-all">
   <a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 underline">{{ url }}</a>
+</p>
+<p class="text-sm text-gray-500 mb-6">
+  This site has no RSS feed, so Readfine will read it directly. Give a CSS selector that matches the
+  article links on the page and it will be checked on a schedule, like a normal feed.
+  <a href="/help#scrape" class="text-blue-600 hover:underline">Learn more</a>.
 </p>
 
 {% if fetch_error %}

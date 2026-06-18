@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Help – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen py-12 px-4 dark:bg-gray-950">
+  <div class="max-w-3xl mx-auto">
+
+    <div class="mb-4">
+      <a href="/app" class="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        Back to reader
+      </a>
+    </div>
+
+    <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
+
+      <div class="mb-8">
+        <h1 class="text-xl font-semibold text-gray-900 mb-1 dark:text-gray-100">Help &amp; getting started</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400">A quick guide to Readfine. The reading view is meant to be
+          self-explanatory — this page covers setup and the less obvious features.</p>
+      </div>
+
+      {# ── Getting started ─────────────────────────────────────────────────── #}
+      <section class="mb-10">
+        <h2 class="text-base font-semibold text-gray-900 mb-4 dark:text-gray-100">Getting started</h2>
+        <ol class="space-y-5 text-sm text-gray-700 dark:text-gray-300">
+
+          <li>
+            <div class="flex items-baseline gap-2 mb-1">
+              <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-semibold flex items-center justify-center">1</span>
+              <h3 class="font-medium text-gray-900 dark:text-gray-100">Add your first feed</h3>
+            </div>
+            <div class="ml-8 space-y-1">
+              <p>Paste an RSS/Atom feed URL in <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>.
+                Readfine can also <strong>scrape a website that has no RSS</strong> — see
+                <a href="#scrape" class="text-blue-600 hover:underline dark:text-blue-400">What's a scrape feed?</a> below.</p>
+              <p class="text-gray-500 dark:text-gray-400">Coming from another reader? Import your subscriptions via
+                <a href="/settings/opml" class="text-blue-600 hover:underline dark:text-blue-400">OPML</a>.</p>
+            </div>
+          </li>
+
+          <li>
+            <div class="flex items-baseline gap-2 mb-1">
+              <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-semibold flex items-center justify-center">2</span>
+              <h3 class="font-medium text-gray-900 dark:text-gray-100">Read &amp; organize</h3>
+            </div>
+            <div class="ml-8 space-y-1">
+              <p>Articles open in a clean reading view. Mark them <strong>read</strong>, <strong>star</strong>
+                favourites, or <strong>archive</strong> what you want to keep out of the way.</p>
+              <p><strong>Labels</strong> are your own colour-coded tags for sorting articles by hand —
+                create them in <a href="/settings/labels" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Labels</a>.</p>
+              <p><strong>Filters</strong> do the tagging for you: each new article is checked against your
+                rules and, when the conditions match, actions are applied automatically (add a label, mark as
+                read, star). Set them up in
+                <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a> — see
+                <a href="#filters" class="text-blue-600 hover:underline dark:text-blue-400">How do filters work?</a></p>
+              <p class="text-gray-500 dark:text-gray-400">That's everything you need for day-to-day reading.</p>
+            </div>
+          </li>
+
+          <li>
+            <div class="flex items-baseline gap-2 mb-1">
+              <span class="flex-shrink-0 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-semibold flex items-center justify-center">3</span>
+              <h3 class="font-medium text-gray-900 dark:text-gray-100">Turn on AI (optional)</h3>
+            </div>
+            <div class="ml-8 space-y-1">
+              <p>AI features are an optional layer. They use <strong>your own API key</strong> (Anthropic,
+                OpenAI or Google) — add one in <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>.
+                See <a href="#ai-key" class="text-blue-600 hover:underline dark:text-blue-400">Where do I get an AI key?</a></p>
+              <p>Once enabled you get:</p>
+              <ul class="list-disc ml-5 space-y-1">
+                <li><strong>Relevance scoring</strong> — each article gets a score based on your interests.
+                  A handy trick: add a <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">filter</a>
+                  that <em>marks low-score articles as read</em>, so the noise quietly disappears.</li>
+                <li><strong>Summaries</strong> and <strong>chat</strong> over any article.</li>
+                <li><strong>Catch me up &amp; briefings</strong> — a digest of what you missed over a period,
+                  on demand or scheduled to your inbox.</li>
+              </ul>
+            </div>
+          </li>
+
+        </ol>
+      </section>
+
+      {# ── Suggested workflow ──────────────────────────────────────────────── #}
+      <section class="mb-10">
+        <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-gray-700 dark:bg-blue-950/40 dark:border-blue-900 dark:text-gray-300">
+          <h2 class="text-base font-semibold text-gray-900 mb-2 dark:text-gray-100">A workflow that works well</h2>
+          <p class="mb-2">There's no single right way to use Readfine, but here's one that scales nicely
+            once you follow a lot of feeds:</p>
+          <ul class="list-disc ml-5 space-y-1.5">
+            <li>Let <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">filters</a> (and, with AI,
+              <a href="#scoring" class="text-blue-600 hover:underline dark:text-blue-400">scoring</a>) do the triage — auto-label
+              what matters and mark the noise as read — then <strong>browse your labeled articles</strong> instead of
+              wading through one long unread list.</li>
+            <li>Treat the <strong>star</strong> as a <em>read-later</em> queue: star anything worth a proper
+              read, then come back to your starred list when you have time, rather than reading everything
+              the moment it arrives.</li>
+          </ul>
+        </div>
+      </section>
+
+      {# ── FAQ ─────────────────────────────────────────────────────────────── #}
+      <section>
+        <h2 class="text-base font-semibold text-gray-900 mb-4 dark:text-gray-100">FAQ</h2>
+        <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
+
+          <div id="import" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I import from another reader?</h3>
+            <p>Yes — export an OPML file from your current reader and import it in
+              <a href="/settings/opml" class="text-blue-600 hover:underline dark:text-blue-400">Settings → OPML</a>. You can also
+              export your Readfine subscriptions there.</p>
+          </div>
+
+          <div id="scrape" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What's a scrape feed?</h3>
+            <p>When a website has no RSS feed, Readfine can read its listing page directly. You point it at
+              the page and give a <strong>CSS selector</strong> that matches the article links; Readfine then
+              checks that page on a schedule, just like an RSS feed. If you have an AI key, it can suggest the
+              selector for you. Start by pasting the site URL in
+              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>.</p>
+          </div>
+
+          <div id="filters" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do filters work?</h3>
+            <p>A filter is a set of <strong>conditions</strong> (match on title, content, author, score… with
+              AND/OR and optional regex) plus <strong>actions</strong> that run when an article matches: add a
+              label, mark as read, or star. You can scope a filter to specific feeds or folders. Filters run on
+              new articles as they arrive. Manage them in
+              <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a>.</p>
+          </div>
+
+          <div id="layout" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I customize the layout?</h3>
+            <p>Open <a href="/settings/preferences" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Preferences</a>
+              to choose a <strong>2- or 3-panel</strong> layout (separately for medium and large screens),
+              the <strong>list density</strong> (compact, comfortable or summary — separately for desktop and
+              mobile), <strong>dark mode</strong>, and whether articles are <strong>marked read as you
+              scroll</strong>. You can also choose how the sidebar behaves on small screens
+              (collapsible or hideable).</p>
+          </div>
+
+          <div id="ai-key" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I get an AI key?</h3>
+            <p>Readfine is bring-your-own-key: you create a key with one of the providers and paste it into
+              <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>. It's stored
+              encrypted and used only for your own requests.</p>
+            <ul class="list-disc ml-5 mt-1 space-y-0.5">
+              <li>Anthropic — <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">console.anthropic.com</a></li>
+              <li>OpenAI — <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">platform.openai.com</a></li>
+              <li>Google — <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">aistudio.google.com</a></li>
+            </ul>
+          </div>
+
+          <div id="scoring" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is relevance scoring?</h3>
+            <p>With an AI key, Readfine scores incoming articles against your <strong>interest profile</strong> —
+              a short description of what you care about, which you write yourself or have the AI generate from
+              the articles you've read, in
+              <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>. Combine scoring
+              with a filter — e.g. mark anything below a threshold as read — to keep your list focused.</p>
+          </div>
+
+          <div id="catchup" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do Catch me up &amp; briefings work?</h3>
+            <p><strong>Catch me up</strong> generates an on-demand digest of articles from a period and scope
+              you choose. A <strong>briefing</strong> is the same thing on a schedule, delivered to your inbox.
+              Both need an AI key. Set them up under Catch me up &amp; briefings in the reader.</p>
+          </div>
+
+          <div id="privacy" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is my data private?</h3>
+            <p>Your account, feeds and API keys are yours alone; keys are stored encrypted. See the
+              <a href="/privacy" class="text-blue-600 hover:underline dark:text-blue-400">Privacy Policy</a> for details on what
+              data is held and your rights.</p>
+          </div>
+
+        </div>
+      </section>
+
+    </div>
+
+    <div class="text-center mt-6 text-xs text-gray-400 space-x-3">
+      <a href="/terms" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Terms of Service</a>
+      <span>·</span>
+      <a href="/privacy" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Privacy Policy</a>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

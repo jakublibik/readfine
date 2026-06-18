@@ -62,6 +62,12 @@
     <span class="text-amber-600">Note: Google's free Gemini tier may use your prompts and responses
     to train its models — use a paid Gemini key to opt out.</span>
   </p>
+  <p class="text-xs text-gray-500 mt-1">
+    Get an API key:
+    <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">Anthropic</a> ·
+    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">OpenAI</a> ·
+    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">Google</a>
+  </p>
 </section>
 
 {# ── Model Slots ───────────────────────────────────────────────────────────── #}
@@ -253,5 +259,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/ai-settings.js"></script>
+<script src="{{ static_url('js/ai-settings.js') }}"></script>
 {% endblock %}

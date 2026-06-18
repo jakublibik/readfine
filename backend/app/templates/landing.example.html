@@ -29,7 +29,7 @@
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
     <meta name="theme-color" content="#030712" media="(prefers-color-scheme: dark)">
-    <link rel="stylesheet" href="/static/css/tailwind.css">
+    <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
 
     <!-- Dark mode before first paint (mirrors init.js logic; follows OS preference for new visitors) -->
     <script nonce="{{ request.state.csp_nonce }}">
@@ -223,6 +223,8 @@
       <a href="/terms" class="hover:underline">Terms of Service</a>
       <span>·</span>
       <a href="/privacy" class="hover:underline">Privacy Policy</a>
+      <span>·</span>
+      <a href="/help" class="hover:underline">Help</a>
       <span>·</span>
       <a href="/login" class="hover:underline">Sign in</a>
     </div>

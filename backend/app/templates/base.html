@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Readfine{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/css/tailwind.css">
+    <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
     <style>
       .prose h1 { font-size: 1.3em !important; }
       .prose h2 { font-size: 1.15em !important; margin-top: 1.4em; margin-bottom: 0.5em; }
@@ -245,11 +245,11 @@
       html.dark.deeplink-detail-open #mobile-detail-back-bar { background: #141414 !important; border-color: #2a2a2a !important; }
     </style>
     <meta name="csp-nonce" content="{{ request.state.csp_nonce | default('') }}">
-    <script src="/static/js/init.js"></script>
-    <script src="/static/js/htmx.min.js"></script>
+    <script src="{{ static_url('js/init.js') }}"></script>
+    <script src="{{ static_url('js/htmx.min.js') }}"></script>
     <script nonce="{{ request.state.csp_nonce }}">htmx.config.inlineScriptNonce = document.querySelector('meta[name="csp-nonce"]').content;</script>
-    <script src="/static/js/csrf.js"></script>
-    <script src="/static/js/app.js" defer></script>
+    <script src="{{ static_url('js/csrf.js') }}"></script>
+    <script src="{{ static_url('js/app.js') }}" defer></script>
 </head>
 <body class="bg-gray-50 text-gray-900">
     {% block content %}{% endblock %}

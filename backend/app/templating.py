@@ -3,6 +3,7 @@ from markupsafe import Markup
 from fastapi.templating import Jinja2Templates
 
 from app.utils.markdown import md_render
+from app.utils.static import static_url
 from app.utils.datetime_format import (
     format_local,
     current_viewer_tz,
@@ -74,6 +75,7 @@ def set_ai_enabled(value: bool) -> None:
     _ai_enabled = value
 
 
+templates.env.globals["static_url"] = static_url
 templates.env.globals["app_ai_enabled"] = get_ai_enabled
 templates.env.globals["timezone_groups"] = timezone_groups
 templates.env.globals["is_common_timezone"] = is_common_timezone

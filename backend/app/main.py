@@ -145,6 +145,7 @@ def create_app() -> FastAPI:
     from app.routers.web.settings import router as web_settings_router
     from app.routers.web.admin import router as web_admin_router
     from app.routers.web.legal import router as web_legal_router
+    from app.routers.web.help import router as web_help_router
     from app.routers.api.v1.auth import router as api_auth_router
     from app.routers.api.v1.folders import router as api_folders_router
     from app.routers.api.v1.feeds import router as api_feeds_router
@@ -157,6 +158,7 @@ def create_app() -> FastAPI:
     app.include_router(web_settings_router)
     app.include_router(web_admin_router)
     app.include_router(web_legal_router)
+    app.include_router(web_help_router)
     app.include_router(api_auth_router, prefix="/api/v1")
     app.include_router(api_folders_router, prefix="/api/v1")
     app.include_router(api_feeds_router, prefix="/api/v1")
