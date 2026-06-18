@@ -1206,7 +1206,9 @@ async def htmx_extract_readable(
         try:
             auth_pass = decrypt(auth_pass_enc)
         except Exception:
-            pass
+            # Matches the background path: a decrypt failure signals ENCRYPTION_KEY
+            # drift / corruption, so log it rather than silently fetch without auth.
+            logger.warning("readable: decrypt failed for article %d", article.id)
 
     loop = asyncio.get_running_loop()
     content, error, http_status = await loop.run_in_executor(
