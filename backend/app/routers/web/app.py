@@ -136,7 +136,7 @@ async def htmx_sidebar(
     nav_total = (await db.execute(
         select(func.count()).select_from(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .where(UserFeed.user_id == user.id)
+        .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
     uas_row = (await db.execute(
         select(
@@ -152,16 +152,20 @@ async def htmx_sidebar(
     nav_archived = uas_row.archived or 0
     nav_unread_archived = uas_row.unread_archived or 0
     nav_labeled = (await db.execute(
-        select(func.count()).select_from(
-            select(ArticleLabel.article_id).where(ArticleLabel.user_id == user.id).distinct().subquery()
-        )
+        select(func.count(func.distinct(ArticleLabel.article_id)))
+        .select_from(ArticleLabel)
+        .join(Article, Article.id == ArticleLabel.article_id)
+        .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
     nav_unread_labeled = (await db.execute(
         select(func.count(Article.id.distinct()))
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+        .where(
+            Article.trimmed_at.is_(None),
+            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+        )
     )).scalar() or 0
 
     # Feed total + unread counts (batch, computed from DB — not cached unread_count)
