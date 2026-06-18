@@ -118,6 +118,12 @@ Migrations run automatically on startup. Updates never re-run `setup.sh`; the `E
 in `.env` must stay stable for the life of the install — changing it makes all stored API keys
 and feed passwords permanently unreadable.
 
+> **Run a single worker.** Rate limiting and the login brute-force lockout are
+> kept in process memory, so they only work correctly with **one** Uvicorn worker
+> (the shipped `docker-compose.yml` does this). Adding workers silently splits the
+> counters per worker and weakens those protections. Horizontal scaling would need
+> a shared (DB/Redis) backend for the lockout — not yet implemented.
+
 ## Useful commands
 
 ```bash

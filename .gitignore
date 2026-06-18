@@ -42,6 +42,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Office docs — internal notes/references, never part of the public repo
+*.docx
+
 # Docker
 *.log
 

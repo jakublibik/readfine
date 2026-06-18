@@ -20,6 +20,9 @@ services:
     build: .
     # uvicorn must NOT rewrite client.host from X-Forwarded-* — the app resolves
     # the real client itself (TRUSTED_PROXY_COUNT / TRUST_CLOUDFLARE in .env).
+    # Keep --workers 1: rate limiting and the login lockout are in-memory and
+    # only correct with a single worker (see README). More workers split the
+    # counters per worker and weaken brute-force protection.
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
     env_file: .env
     restart: unless-stopped

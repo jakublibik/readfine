@@ -25,6 +25,13 @@ import app.database as db
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    if settings.debug:
+        import logging
+        logging.getLogger(__name__).warning(
+            "DEBUG mode is ON — development profile active: session cookies are "
+            "NOT marked Secure, /docs is exposed, and the insecure-config guard "
+            "is bypassed. Never run with DEBUG=true in production."
+        )
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=20))
     db.engine = db.create_engine(settings.database_url)
     db.async_session_factory = db.create_session_factory(db.engine)
@@ -110,22 +117,23 @@ def create_app() -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        if not settings.debug:
-            # 'unsafe-eval' is intentionally retained: HTMX evaluates several
-            # template-authored expressions via the Function constructor —
-            # hx-on::*, hx-vals="js:…", and hx-trigger event filters (e.g.
-            # click[…], keydown[key=='Enter']). All are developer-authored, not
-            # user input, so this is not an active injection vector; the primary
-            # XSS defense is the nonce on script-src (injected inline scripts
-            # can't run). Removing it requires migrating those usages to external
-            # JS first — tracked as a post-launch hardening task (review M3).
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'self'; "
-                f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
-                "img-src * data:; "
-                "style-src 'self' 'unsafe-inline'; "
-                "connect-src 'self';"
-            )
+        # CSP is sent in every environment (it does not depend on HTTPS and the
+        # templates render identically in dev and prod), so XSS protection is
+        # never silently dropped by DEBUG. 'unsafe-eval' is intentionally
+        # retained: HTMX evaluates several template-authored expressions via the
+        # Function constructor — hx-on::*, hx-vals="js:…", and hx-trigger event
+        # filters (e.g. click[…], keydown[key=='Enter']). All are developer-
+        # authored, not user input, so this is not an active injection vector;
+        # the primary XSS defense is the nonce on script-src (injected inline
+        # scripts can't run). Removing it requires migrating those usages to
+        # external JS first — tracked as a post-launch hardening task (review M3).
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
+            "img-src * data:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "connect-src 'self';"
+        )
         return response
 
     # Static files

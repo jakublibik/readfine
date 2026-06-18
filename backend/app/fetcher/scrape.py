@@ -17,7 +17,7 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
-from app.utils.url_validator import fetch_url_with_ssrf_check
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,10 @@ async def fetch_scrape_feed(
     fetched_at = datetime.now(timezone.utc)
 
     try:
+        # Re-validate the stored URL on every fetch (matches the RSS fetcher):
+        # a hostname that resolved publicly at feed creation could later point
+        # at an internal/metadata address.
+        await async_validate_feed_url(feed_url)
         loop = asyncio.get_running_loop()
         html = await loop.run_in_executor(
             None, fetch_url_with_ssrf_check, feed_url, None, _TIMEOUT, _HEADERS
