@@ -209,6 +209,15 @@ class TestApplyCatchupLimit:
         result = apply_catchup_limit(articles, 100, scoring_available=True)
         assert len(result) <= 100
 
+    def test_result_capped_when_active_days_exceed_limit(self):
+        """Per-day pass takes >=1 article per active day; with more active days
+        than the limit that alone would exceed it. Result must still be capped."""
+        all_articles = []
+        for d in range(10):  # 10 active days, 1 article each
+            all_articles += articles_on_day(d, 1, id_start=d * 100)
+        result = apply_catchup_limit(all_articles, 5, scoring_available=True)
+        assert len(result) == 5
+
     def test_no_undercount_with_uneven_days(self):
         """Day 1 has only 5 articles, days 2-7 have 100 each. Result should be close to limit."""
         day1 = articles_on_day(0, 5, id_start=1)

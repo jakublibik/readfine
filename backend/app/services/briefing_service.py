@@ -15,6 +15,7 @@ from app.services.catchup_service import (
     apply_catchup_limit,
     build_articles_meta,
     fetch_catchup_articles,
+    populate_snippet_sources,
 )
 from app.templating import templates
 from app.utils.markdown import md_render
@@ -24,7 +25,7 @@ _inliner = css_inline.CSSInliner(keep_style_tags=True)
 
 _PERIOD_LABELS = {
     "today": "Today",
-    "yesterday": "Yesterday",
+    "yesterday": "Since yesterday",
     "7days": "Last 7 days",
 }
 
@@ -212,6 +213,8 @@ async def send_briefing(
     ) if user.settings else False
 
     sampled = apply_catchup_limit(articles, config.article_limit, scoring_available)
+    if config.include_snippet:
+        await populate_snippet_sources(sampled, user.id, db)
     articles_meta = build_articles_meta(sampled, include_snippet=config.include_snippet)
 
     text, input_tokens, output_tokens = await catch_me_up(

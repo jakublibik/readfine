@@ -2036,7 +2036,8 @@ async def htmx_catchup_generate(
     from app.models.user import CatchupLog
     from app.services.ai_service import catch_me_up, get_ai_client
     from app.services.catchup_service import (
-        apply_catchup_limit, build_articles_meta, fetch_catchup_articles, validate_scope
+        apply_catchup_limit, build_articles_meta, fetch_catchup_articles,
+        populate_snippet_sources, validate_scope,
     )
 
     ai_on = bool(await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1)))
@@ -2069,6 +2070,8 @@ async def htmx_catchup_generate(
         return HTMLResponse('<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>')
 
     sampled = apply_catchup_limit(articles, article_limit, scoring_available)
+    if include_snippet_bool:
+        await populate_snippet_sources(sampled, user.id, db)
     articles_meta = build_articles_meta(sampled, include_snippet_bool)
 
     try:

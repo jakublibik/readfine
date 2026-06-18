@@ -38,7 +38,15 @@ class CatchupArticle:
 # ── Period helpers ────────────────────────────────────────────────────────────
 
 def _period_to_start_dt(period: str, tz_str: str | None) -> datetime:
-    """Convert a named period to a UTC start datetime, respecting user timezone."""
+    """Convert a named period to a UTC *start* datetime, respecting user timezone.
+
+    Only a lower bound is returned — callers filter `>= start_dt` with no upper
+    bound. So every period means "since X, up to now":
+      today      → since today 00:00
+      yesterday  → since yesterday 00:00 (intentionally includes today so far;
+                   the UI labels this "Since yesterday")
+      7days      → rolling last 7 days
+    """
     try:
         tz = ZoneInfo(tz_str or "UTC")
     except ZoneInfoNotFoundError:
@@ -134,6 +142,12 @@ async def fetch_catchup_articles(
     start_dt = _period_to_start_dt(period, tz_str)
     feed_ids, folder_ids = _parse_scope(scope_include)
 
+    # Lightweight projection: bodies (content / readable_content / ai_summary) are
+    # NOT selected here — they're only needed to build snippets for the <=limit
+    # articles that survive sampling, and only when include_snippet is on. Pulling
+    # full bodies for the whole period window would transfer megabytes the count /
+    # cost routes never read and generate mostly discards. populate_snippet_sources
+    # loads them for the sampled subset.
     stmt = (
         select(
             Article.id,
@@ -142,11 +156,7 @@ async def fetch_catchup_articles(
             Article.published_at,
             Article.fetched_at,
             UserFeed.folder_id,
-            Article.readable_content,
-            Article.content,
-            UserArticleState.dwell_seconds,
             UserArticleState.ai_score,
-            UserArticleState.ai_summary,
         )
         .join(Feed, Article.feed_id == Feed.id)
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
@@ -206,12 +216,48 @@ async def fetch_catchup_articles(
             fetched_at=r.fetched_at,
             folder_id=r.folder_id,
             ai_score=r.ai_score,
-            ai_summary=r.ai_summary,
-            readable_content=r.readable_content,
-            content=r.content,
+            ai_summary=None,
+            readable_content=None,
+            content=None,
         )
         for r in rows
     ]
+
+
+async def populate_snippet_sources(
+    articles: list[CatchupArticle], user_id: int, db: AsyncSession
+) -> None:
+    """Load ai_summary / readable_content / content onto the given (already
+    sampled) articles so build_articles_meta can produce snippets.
+
+    Called after apply_catchup_limit so full bodies are fetched only for the
+    <=limit articles that end up in the digest, not every article in the window.
+    Mutates the passed CatchupArticle instances in place.
+    """
+    if not articles:
+        return
+    ids = [a.id for a in articles]
+    rows = (await db.execute(
+        select(
+            Article.id,
+            Article.readable_content,
+            Article.content,
+            UserArticleState.ai_summary,
+        )
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == user_id),
+        )
+        .where(Article.id.in_(ids))
+    )).all()
+    by_id = {r.id: r for r in rows}
+    for a in articles:
+        r = by_id.get(a.id)
+        if r is not None:
+            a.ai_summary = r.ai_summary
+            a.readable_content = r.readable_content
+            a.content = r.content
 
 
 # ── Sampling ──────────────────────────────────────────────────────────────────
@@ -275,7 +321,10 @@ def apply_catchup_limit(
         )
         result.extend(pool[:remaining])
 
-    return sorted(result, key=_ts, reverse=True)
+    # Pass 1 takes >=1 article per active day; when there are more active days
+    # than `limit` (small limit over a wide window) that alone can exceed limit,
+    # so cap the final result.
+    return sorted(result, key=_ts, reverse=True)[:limit]
 
 
 # ── Metadata builder ──────────────────────────────────────────────────────────
