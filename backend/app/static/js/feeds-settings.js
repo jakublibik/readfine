@@ -18,6 +18,18 @@ document.addEventListener('DOMContentLoaded', function () {
   tabFeeds.addEventListener('click', function () { activate('feeds'); });
   tabStats.addEventListener('click', function () { activate('stats'); });
 
+  // Detected-feed "Select RSS" buttons are injected via HTMX into the feed test
+  // result. Delegated click so it works on swapped-in content (and because the
+  // nonce-based CSP blocks the inline onclick these buttons used to carry).
+  document.body.addEventListener('click', function (evt) {
+    var btn = evt.target.closest('[data-select-detected-feed]');
+    if (!btn) return;
+    var input = document.getElementById('feed-url-input');
+    if (!input) return;
+    input.value = btn.dataset.url || '';
+    input.focus();
+  });
+
   // Creating a folder re-renders the Feeds list into #feeds-list. If the Stats tab was
   // active, sync the highlight back to Feeds so it can't show "Stats" over a feeds list.
   document.body.addEventListener('htmx:afterSwap', function (evt) {

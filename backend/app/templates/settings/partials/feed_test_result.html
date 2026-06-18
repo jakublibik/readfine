@@ -12,7 +12,7 @@
       <li class="flex {{ 'items-start' if feed.title else 'items-center' }} gap-2">
         <button type="button"
                 data-url="{{ feed.url }}"
-                onclick="document.getElementById('feed-url-input').value = this.dataset.url; document.getElementById('feed-url-input').focus();"
+                data-select-detected-feed
                 class="shrink-0 {{ 'mt-0.5' if feed.title else '' }} px-2 py-0.5 text-xs font-medium bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 rounded whitespace-nowrap">
           Select RSS
         </button>

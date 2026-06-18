@@ -46,7 +46,7 @@
                 </button>
             </form>
         </div>
-        <script>
+        <script nonce="{{ request.state.csp_nonce }}">
         document.querySelector('form').addEventListener('submit', function() {
             var btn = document.getElementById('resend-btn');
             btn.disabled = true;
