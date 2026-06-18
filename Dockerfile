@@ -12,6 +12,11 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
 
 COPY backend/ .
 
+# Install the project itself (metadata only, deps already installed above) so
+# importlib.metadata.version("readfine") resolves at runtime instead of falling
+# back to "0.0.0+unknown" (see app/__init__.py).
+RUN uv pip install --system --no-deps .
+
 EXPOSE 8000
 # NOTE: forwarded headers are resolved by the app (TRUSTED_PROXY_COUNT /
 # TRUST_CLOUDFLARE), not uvicorn — so uvicorn must NOT rewrite client.host from
