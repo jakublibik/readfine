@@ -1,18 +1,71 @@
 # Readfine
 
-Self-hosted RSS reader. Supports folders, labels, filters, readable extraction, web scraping, and AI summaries.
+A self-hosted web RSS reader (inspired by Tiny Tiny RSS) with web scraping, filters,
+readable extraction, and optional AI summaries, scoring, and briefings.
+
+**Try the hosted instance:** [readfine.app](https://readfine.app) — or self-host with the steps below.
+
+![Readfine reading view](backend/app/static/images/landing/desktop_reading.png)
+
+## Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
+- [Updating](#updating)
+- [Useful commands](#useful-commands)
+- [Development](#development)
+- [Stack](#stack)
+- [License](#license)
+
+## Features
+
+- **Feeds** — RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
+- **Reading** — 3-panel desktop / responsive mobile UI (HTMX + Tailwind), readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode
+- **Filters** — conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
+- **AI (bring-your-own-key)** — summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
+- **Accounts** — per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
+- **Import/export** — OPML (incl. Tiny Tiny RSS compatibility)
+
+<p>
+  <img src="backend/app/static/images/landing/mobile_summary.png" width="30%" alt="AI summary" />
+  <img src="backend/app/static/images/landing/mobile_filters.png" width="30%" alt="Filters" />
+  <img src="backend/app/static/images/landing/mobile_catchmeup.png" width="30%" alt="Catch me up" />
+</p>
 
 ## Requirements
 
 - Docker + Docker Compose plugin
 - A server with ports 80 and 443 open (or just 80 for IP-only installs)
+- A Unix shell to run `setup.sh` (Linux or macOS)
+
+> **On Windows?** The app itself is OS-agnostic (it runs in Docker), but `setup.sh` is a
+> bash script. Run it inside **WSL2** — which Docker Desktop already uses on Windows anyway.
+> Install [WSL2](https://learn.microsoft.com/windows/wsl/install) + Docker Desktop, then
+> clone/unzip Readfine inside your WSL home and run `bash setup.sh` there. (`ssl.sh` for
+> Let's Encrypt is Debian/Ubuntu-only; on other setups provide your own certificate.)
 
 ## Installation
 
-### 1. Clone the repository
+### 1. Get the code
+
+**Option A — download the latest release** (no git needed):
+download the source `.zip` from the [latest release](https://github.com/jakublibik/readfine/releases/latest),
+unzip it, and rename the folder to `readfine`. Using a **stable folder name** matters: Docker
+Compose names your data volume after the folder, so keeping it consistent across updates is
+what lets your database survive (otherwise an update looks like a fresh, empty install).
 
 ```bash
-git clone https://github.com/your-username/readfine.git
+unzip readfine-*.zip
+mv readfine-* readfine
+cd readfine
+```
+
+**Option B — clone with git** (easier to update later):
+
+```bash
+git clone https://github.com/jakublibik/readfine.git
 cd readfine
 ```
 
@@ -53,6 +106,11 @@ It will then generate the configuration, build and start all containers, and run
 ### 4. Log in
 
 Open your browser at the URL shown at the end of setup and log in with the admin credentials you provided.
+
+> **AI keys and SMTP are configured in the app, not in `.env`.** AI is bring-your-own-key
+> and set per user under Settings → AI; SMTP (for verification/reset emails) is set by an
+> admin in the admin panel. The only secrets in `.env` are the database, `SECRET_KEY`, and
+> `ENCRYPTION_KEY`.
 
 ---
 
@@ -109,11 +167,24 @@ that's `1`; add `1` more for each extra proxy you put in front.
 
 ## Updating
 
+**If you cloned with git:**
+
 ```bash
 git pull
 docker compose up -d --build
 ```
 
+**If you downloaded the release zip:** download the new release and unzip it. Copy your
+existing `.env`, `certs/`, and `nginx.conf` into it, then rename it to the **same folder name
+as before** (`readfine`) — replacing the old folder. Keeping the folder name identical is what
+makes Docker reuse the same data volume. From that folder:
+
+```bash
+docker compose up -d --build
+```
+
+Your data lives in a Docker volume, not in the project folder, so it survives updates **as
+long as the project folder keeps the same name** (see above).
 Migrations run automatically on startup. Updates never re-run `setup.sh`; the `ENCRYPTION_KEY`
 in `.env` must stay stable for the life of the install — changing it makes all stored API keys
 and feed passwords permanently unreadable.
@@ -251,3 +322,14 @@ chmod +x .git/hooks/pre-commit
 - **Frontend:** HTMX + Jinja2 + Tailwind CSS
 - **Task queue:** APScheduler
 - **Proxy:** nginx
+
+---
+
+## License
+
+Copyright © Jakub Libík. Licensed under the **GNU Affero General Public License v3.0 or
+later** (AGPL-3.0-or-later) — see [LICENSE](LICENSE).
+
+The AGPL's network clause (§13) means that if you run a modified version of Readfine as a
+network service, you must offer its users the corresponding source — for example by linking
+back to your fork from within the running app.
