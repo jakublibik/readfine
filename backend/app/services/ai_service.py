@@ -25,6 +25,9 @@ def _extract_text(provider: str, resp) -> str:
     if provider == "anthropic":
         blocks = getattr(resp, "content", None) or []
         if blocks:
+            # Assumes the first block is the text block. Holds for plain
+            # completions; would need to scan for the text block if an
+            # extended-thinking model is ever used (block[0] = thinking).
             text = getattr(blocks[0], "text", None)
     elif provider == "openai":
         choices = getattr(resp, "choices", None) or []
