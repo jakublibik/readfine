@@ -76,37 +76,84 @@ def login_client(mock_db):
 
 # ── Unit: get_client_ip ───────────────────────────────────────────────────────
 
+def _patch_proxy(trusted_proxy_count=0, trust_cloudflare=False):
+    """Patch the proxy-trust config that get_client_ip reads."""
+    from app.config import settings
+    return patch.multiple(
+        settings,
+        trusted_proxy_count=trusted_proxy_count,
+        trust_cloudflare=trust_cloudflare,
+    )
+
+
 class TestGetClientIp:
-    def test_cf_connecting_ip_takes_priority(self):
+    # Default deployment: no proxy in front → forwarding headers are
+    # attacker-controlled and MUST be ignored in favour of the real peer.
+    def test_default_ignores_cf_connecting_ip(self):
         from app.rate_limit import get_client_ip
         req = _make_request({"CF-Connecting-IP": "10.0.0.1", "X-Forwarded-For": "10.0.0.2"})
-        assert get_client_ip(req) == "10.0.0.1"
+        with _patch_proxy():
+            assert get_client_ip(req) == "1.2.3.4"
 
-    def test_cf_connecting_ip_is_stripped(self):
-        from app.rate_limit import get_client_ip
-        req = _make_request({"CF-Connecting-IP": "  10.0.0.1  "})
-        assert get_client_ip(req) == "10.0.0.1"
-
-    def test_x_forwarded_for_used_when_no_cf(self):
+    def test_default_ignores_x_forwarded_for(self):
         from app.rate_limit import get_client_ip
         req = _make_request({"X-Forwarded-For": "10.0.0.5, 192.168.1.1"})
-        assert get_client_ip(req) == "10.0.0.5"
-
-    def test_x_forwarded_for_first_entry_only(self):
-        from app.rate_limit import get_client_ip
-        req = _make_request({"X-Forwarded-For": "10.0.0.5, 10.0.0.6, 10.0.0.7"})
-        assert get_client_ip(req) == "10.0.0.5"
-
-    def test_remote_addr_fallback(self):
-        from app.rate_limit import get_client_ip
-        req = _make_request({})
-        assert get_client_ip(req) == "1.2.3.4"
+        with _patch_proxy():
+            assert get_client_ip(req) == "1.2.3.4"
 
     def test_no_client_returns_unknown(self):
         from app.rate_limit import get_client_ip
         req = _make_request({})
         req.client = None
-        assert get_client_ip(req) == "unknown"
+        with _patch_proxy():
+            assert get_client_ip(req) == "unknown"
+
+    # Cloudflare mode (firewall restricts origin to CF ranges).
+    def test_cloudflare_uses_cf_connecting_ip(self):
+        from app.rate_limit import get_client_ip
+        req = _make_request({"CF-Connecting-IP": "  10.0.0.1  ", "X-Forwarded-For": "9.9.9.9"})
+        with _patch_proxy(trust_cloudflare=True):
+            assert get_client_ip(req) == "10.0.0.1"
+
+    def test_cloudflare_falls_back_to_peer_when_header_missing(self):
+        from app.rate_limit import get_client_ip
+        req = _make_request({"X-Forwarded-For": "9.9.9.9"})
+        with _patch_proxy(trust_cloudflare=True):
+            assert get_client_ip(req) == "1.2.3.4"
+
+    # Reverse-proxy mode: read X-Forwarded-For from the RIGHT, never leftmost.
+    def test_one_proxy_takes_rightmost_entry(self):
+        from app.rate_limit import get_client_ip
+        # spoofed, real-client, (proxy appends its peer = real client at -1)
+        req = _make_request({"X-Forwarded-For": "spoofed, 203.0.113.7"})
+        with _patch_proxy(trusted_proxy_count=1):
+            assert get_client_ip(req) == "203.0.113.7"
+
+    def test_two_proxies_skip_two_hops_from_right(self):
+        from app.rate_limit import get_client_ip
+        req = _make_request({"X-Forwarded-For": "203.0.113.7, 172.16.0.1, 172.16.0.2"})
+        with _patch_proxy(trusted_proxy_count=2):
+            assert get_client_ip(req) == "172.16.0.1"
+
+    def test_spoofed_leftmost_is_ignored(self):
+        from app.rate_limit import get_client_ip
+        # Attacker prepends a fake entry; with 1 trusted proxy it never wins.
+        req = _make_request({"X-Forwarded-For": "1.1.1.1, 203.0.113.7"})
+        with _patch_proxy(trusted_proxy_count=1):
+            assert get_client_ip(req) != "1.1.1.1"
+
+    def test_short_chain_falls_back_to_peer(self):
+        from app.rate_limit import get_client_ip
+        # Expect 2 hops but only 1 entry present → don't trust, use peer.
+        req = _make_request({"X-Forwarded-For": "203.0.113.7"})
+        with _patch_proxy(trusted_proxy_count=2):
+            assert get_client_ip(req) == "1.2.3.4"
+
+    def test_missing_xff_falls_back_to_peer(self):
+        from app.rate_limit import get_client_ip
+        req = _make_request({})
+        with _patch_proxy(trusted_proxy_count=1):
+            assert get_client_ip(req) == "1.2.3.4"
 
 
 # ── Unit: brute-force tracker ─────────────────────────────────────────────────
@@ -201,6 +248,27 @@ class TestLoginLockout:
         r = self._bad_login(login_client, mock_db)
         assert r.status_code == 401
         assert "Invalid email or password" in r.text
+
+    def test_unknown_user_runs_dummy_verify(self, login_client, mock_db):
+        # Constant-time: unknown email must still trigger a bcrypt verify.
+        mock_db.execute = AsyncMock(side_effect=[
+            _scalar(_make_app_settings()),
+            _scalar(None),  # user not found
+        ])
+        with patch("app.routers.web.auth.dummy_verify_password") as dummy:
+            login_client.post("/login", data={"email": "ghost@test.com", "password": "x"})
+        dummy.assert_called_once()
+
+    def test_known_user_skips_dummy_verify(self, login_client, mock_db):
+        # Real user → real verify_password runs, dummy is not needed.
+        mock_db.execute = AsyncMock(side_effect=[
+            _scalar(_make_app_settings()),
+            _scalar(_make_user()),
+        ])
+        with patch("app.routers.web.auth.dummy_verify_password") as dummy, \
+             patch("app.routers.web.auth.verify_password", return_value=False):
+            login_client.post("/login", data={"email": "victim@test.com", "password": "x"})
+        dummy.assert_not_called()
 
     def test_lockout_after_threshold_attempts(self, login_client, mock_db):
         from app.rate_limit import _failed_attempts, _LOCKOUT_THRESHOLD

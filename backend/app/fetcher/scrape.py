@@ -1,6 +1,7 @@
 """Web scrape fetcher: CSS selector → article URLs → readable extraction pipeline."""
 import asyncio
 import hashlib
+import html
 import logging
 import re
 import time
@@ -122,6 +123,19 @@ def _extract_excerpt(elem, title_text: str) -> str | None:
             continue
         return text[:500]
     return None
+
+
+def _excerpt_to_content_html(excerpt: str | None) -> str | None:
+    """Wrap a scraped excerpt as stored content HTML.
+
+    `excerpt` is decoded plain text (BeautifulSoup get_text), so it must be
+    HTML-escaped before wrapping — otherwise injected markup is stored verbatim
+    and rendered `| safe` at read time (stored XSS). Mirrors the RSS path's nh3
+    sanitize.
+    """
+    if not excerpt:
+        return None
+    return f"<p>{html.escape(excerpt)}</p>"
 
 
 _CONTAINER_TAGS = {"article", "li", "div", "section"}
@@ -279,7 +293,7 @@ async def _save_scrape_articles(
         if nu:
             existing_normalized.add(nu)
 
-        content_html = f"<p>{excerpt}</p>" if excerpt else None
+        content_html = _excerpt_to_content_html(excerpt)
         new_articles.append(Article(
             feed_id=feed.id,
             guid=url[:2048],

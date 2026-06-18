@@ -149,6 +149,27 @@ class TestSettingsProfileEmailPending:
         assert self.user.pending_email_token_hash is not None
         mock_db.commit.assert_called()
 
+    def test_malformed_email_rejected(self, auth_client, mock_db):
+        resp = auth_client.post("/settings/profile/email", data={
+            "email": "notanemail",
+            "current_password": "pw",
+        })
+        assert resp.status_code == 200
+        assert "valid email" in resp.text
+        assert self.user.email == "old@test.com"      # unchanged
+        assert self.user.pending_email is None
+
+    def test_email_with_newline_rejected(self, auth_client, mock_db):
+        # SMTP header injection attempt — the new address is sent as a To: header.
+        resp = auth_client.post("/settings/profile/email", data={
+            "email": "a@b.com\nBcc: evil@x.com",
+            "current_password": "pw",
+        })
+        assert resp.status_code == 200
+        assert "valid email" in resp.text
+        assert self.user.email == "old@test.com"
+        assert self.user.pending_email is None
+
     def test_no_smtp_changes_email_immediately(self, auth_client, mock_db):
         mock_db.execute.return_value = _scalar(None)
         mock_db.scalar = AsyncMock(return_value=_make_app_settings(smtp_host=None))

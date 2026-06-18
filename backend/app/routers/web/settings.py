@@ -17,10 +17,11 @@ import feedparser
 from bs4 import BeautifulSoup
 from sqlalchemy import func, select
 
-from app.auth.security import hash_password, verify_password, hash_token
+from app.auth.security import hash_password, password_within_limit, verify_password, hash_token
 from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
+from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import is_valid_timezone
@@ -1231,6 +1232,11 @@ async def settings_profile_email(
             "user": user,
             "email_error": "Email cannot be empty.",
         })
+    if not is_valid_email(email):
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "email_error": "Please enter a valid email address.",
+        })
     if not verify_password(current_password, user.password_hash):
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
@@ -1316,6 +1322,11 @@ async def settings_profile_password(
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
             "pw_error": "New password must be at least 8 characters.",
+        })
+    if not password_within_limit(new_pw):
+        return templates.TemplateResponse(request, "settings/profile.html", {
+            "user": user,
+            "pw_error": "New password is too long (max 72 characters).",
         })
     if new_pw != confirm:
         return templates.TemplateResponse(request, "settings/profile.html", {

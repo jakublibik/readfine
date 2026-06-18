@@ -56,6 +56,57 @@ Open your browser at the URL shown at the end of setup and log in with the admin
 
 ---
 
+## Client IP setting (login lockout)
+
+The login lockout keys on the visitor's IP. The bundled `docker-compose.yml` always runs
+**nginx in front of the app**, so a Docker deployment always has at least one proxy. Tell
+the app how many proxies sit in front so it can find the real visitor IP — otherwise an
+attacker could spoof headers and dodge the lockout.
+
+**Pick one line and set it in `.env`:**
+
+| How you run it | `.env` |
+|---|---|
+| Docker **+ Cloudflare** in front | `TRUST_CLOUDFLARE=true` |
+| Docker, **no Cloudflare** | `TRUSTED_PROXY_COUNT=1` |
+| App started manually without nginx (local dev) | leave default `TRUSTED_PROXY_COUNT=0` |
+
+That's all most deployments need. The two settings are explained below.
+
+### If you use Cloudflare: lock the origin down
+
+`TRUST_CLOUDFLARE=true` trusts Cloudflare's `CF-Connecting-IP` header. That's only safe if
+your server **cannot** be reached except through Cloudflare — otherwise someone could hit
+it directly with a forged header. Restrict inbound 80/443 to Cloudflare's IP ranges, e.g.
+with UFW:
+
+```bash
+for cidr in $(curl -s https://www.cloudflare.com/ips-v4) $(curl -s https://www.cloudflare.com/ips-v6); do
+  sudo ufw allow from "$cidr" to any port 80,443 proto tcp
+done
+sudo ufw deny 80/tcp
+sudo ufw deny 443/tcp
+```
+
+### How `TRUSTED_PROXY_COUNT` works
+
+`TRUSTED_PROXY_COUNT=N` reads the visitor IP from the `X-Forwarded-For` header counting `N`
+entries from the **right** — those are the hops your own proxies added. Anything further
+left is supplied by the client and ignored, so it can't be spoofed. With the bundled nginx
+that's `1`; add `1` more for each extra proxy you put in front.
+
+> **Optional (nicer logs, not required):** to make the visitor IP correct in nginx's own
+> access logs behind Cloudflare, add the real_ip module to your nginx config (replace
+> `<CF range>` with each range from https://www.cloudflare.com/ips/). The login lockout
+> works without this.
+>
+> ```nginx
+> set_real_ip_from <CF range>;   # repeat for every Cloudflare range
+> real_ip_header CF-Connecting-IP;
+> ```
+
+---
+
 ## Updating
 
 ```bash

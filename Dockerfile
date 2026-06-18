@@ -13,4 +13,7 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
 COPY backend/ .
 
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--forwarded-allow-ips", "*"]
+# NOTE: forwarded headers are resolved by the app (TRUSTED_PROXY_COUNT /
+# TRUST_CLOUDFLARE), not uvicorn — so uvicorn must NOT rewrite client.host from
+# X-Forwarded-* (default forwarded-allow-ips=127.0.0.1 keeps client.host = real peer).
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

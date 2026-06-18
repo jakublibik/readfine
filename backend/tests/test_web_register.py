@@ -128,6 +128,30 @@ class TestWebRegisterValidation:
         r = web_client.post("/register", data=VALID_FORM)
         assert r.status_code == 403
 
+    def test_too_long_password_rejected(self, web_client, mock_db):
+        r = web_client.post("/register", data={
+            **VALID_FORM, "password": "a" * 73, "confirm_password": "a" * 73})
+        assert r.status_code == 422
+        assert "too long" in r.text
+
+    def test_malformed_email_rejected(self, web_client, mock_db):
+        r = web_client.post("/register", data={**VALID_FORM, "email": "notanemail"})
+        assert r.status_code == 422
+        assert "valid email" in r.text
+
+    def test_email_with_newline_rejected(self, web_client, mock_db):
+        # SMTP header injection attempt — must never reach the To: header.
+        r = web_client.post("/register", data={**VALID_FORM, "email": "a@b.com\nBcc: evil@x.com"})
+        assert r.status_code == 422
+        assert "valid email" in r.text
+
+    def test_email_is_stripped_before_use(self, web_client, mock_db):
+        # Surrounding whitespace must not block an otherwise-valid address.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            r = web_client.post("/register", data={**VALID_FORM, "email": "  new@test.com  "})
+        assert r.status_code == 302
+
 
 # ── Registration — success flows ──────────────────────────────────────────────
 

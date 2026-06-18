@@ -323,8 +323,12 @@ async def htmx_mark_feed_read(
     except ValueError:
         return HTMLResponse("", status_code=400)
     await mark_scope_read(user, db, before=before_dt, feed_id=feed_id)
+    # Scope the count to the user's own subscription — otherwise it leaks the
+    # article count of any feed_id (mark_scope_read itself is already scoped).
     total = (await db.execute(
-        select(func.count(Article.id)).where(Article.feed_id == feed_id)
+        select(func.count(Article.id))
+        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(Article.feed_id == feed_id)
     )).scalar() or 0
     resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"

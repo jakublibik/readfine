@@ -5,15 +5,40 @@ from threading import Lock
 from slowapi import Limiter
 from starlette.requests import Request
 
+from app.config import settings
+
 
 def get_client_ip(request: Request) -> str:
-    """Extract real client IP: CF-Connecting-IP → X-Forwarded-For → REMOTE_ADDR."""
-    cf_ip = request.headers.get("CF-Connecting-IP")
-    if cf_ip:
-        return cf_ip.strip()
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
+    """Resolve the client IP for rate limiting / login lockout.
+
+    Client-supplied forwarding headers (CF-Connecting-IP, X-Forwarded-For) are
+    trusted only as far as the deployment's proxy configuration allows; anything
+    beyond that is attacker-controlled and ignored. Otherwise the real TCP peer
+    is used. See TRUSTED_PROXY_COUNT / TRUST_CLOUDFLARE in config.
+    """
+    # Cloudflare: trust CF-Connecting-IP only when explicitly enabled. The
+    # deployment MUST restrict the origin to Cloudflare IP ranges (firewall),
+    # so any request reaching us provably passed through Cloudflare.
+    if settings.trust_cloudflare:
+        cf_ip = request.headers.get("CF-Connecting-IP")
+        if cf_ip:
+            return cf_ip.strip()
+
+    # Reverse proxy: take the entry our own proxy wrote, counting from the
+    # RIGHT. With N trusted proxies the real client sits at xff[-N]; everything
+    # to its left is client-supplied and ignored. Never the leftmost entry.
+    n = settings.trusted_proxy_count
+    if n > 0:
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            parts = [p.strip() for p in forwarded_for.split(",") if p.strip()]
+            if len(parts) >= n:
+                return parts[-n]
+        # Header missing or shorter than the expected proxy chain → the request
+        # did not traverse all trusted hops; fall through to the peer instead.
+
+    # No trusted proxy (default) → real TCP peer. Requires uvicorn NOT to
+    # rewrite client.host from forwarded headers (see deploy docs).
     return request.client.host if request.client else "unknown"
 
 

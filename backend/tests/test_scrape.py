@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.fetcher.scrape import (
+    _excerpt_to_content_html,
     _extract_excerpt,
     _extract_published_at,
     _metadata_context,
@@ -166,6 +167,31 @@ class TestExtractExcerpt:
         result = _extract_excerpt(elem, "")
         assert result is not None
         assert len(result) <= 500
+
+
+# ── _excerpt_to_content_html (stored XSS guard) ────────────────────────────────
+
+class TestExcerptToContentHtml:
+    def test_none_excerpt_returns_none(self):
+        assert _excerpt_to_content_html(None) is None
+
+    def test_empty_excerpt_returns_none(self):
+        assert _excerpt_to_content_html("") is None
+
+    def test_plain_text_wrapped_in_paragraph(self):
+        assert _excerpt_to_content_html("Hello world") == "<p>Hello world</p>"
+
+    def test_script_tag_is_escaped(self):
+        # A scraped page can yield decoded markup as excerpt text — it must be
+        # escaped, never stored as live HTML (rendered `| safe` at read time).
+        result = _excerpt_to_content_html('<script>alert(1)</script>')
+        assert "<script>" not in result
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in result
+
+    def test_angle_brackets_and_quotes_escaped(self):
+        result = _excerpt_to_content_html('<img src=x onerror="alert(1)">')
+        assert "<img" not in result
+        assert "&lt;img" in result
 
 
 # ── _metadata_context ─────────────────────────────────────────────────────────

@@ -111,6 +111,14 @@ def create_app() -> FastAPI:
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         if not settings.debug:
+            # 'unsafe-eval' is intentionally retained: HTMX evaluates several
+            # template-authored expressions via the Function constructor —
+            # hx-on::*, hx-vals="js:…", and hx-trigger event filters (e.g.
+            # click[…], keydown[key=='Enter']). All are developer-authored, not
+            # user input, so this is not an active injection vector; the primary
+            # XSS defense is the nonce on script-src (injected inline scripts
+            # can't run). Removing it requires migrating those usages to external
+            # JS first — tracked as a post-launch hardening task (review M3).
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
                 f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "

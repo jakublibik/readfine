@@ -20,6 +20,16 @@ class Settings(BaseSettings):
     encryption_key: str
     allowed_hosts: list[str] = ["localhost", "127.0.0.1"]
 
+    # Proxy / client IP resolution (rate limiting & login lockout)
+    # 0 = no proxy in front: use the real TCP peer, ignore forwarding headers.
+    # N = number of trusted reverse proxies in front; the client IP is read from
+    #     X-Forwarded-For counting N entries from the right (never the leftmost,
+    #     attacker-controlled entry).
+    trusted_proxy_count: int = 0
+    # Trust Cloudflare's CF-Connecting-IP header. Enable ONLY when the origin is
+    # firewalled to Cloudflare IP ranges — otherwise the header is spoofable.
+    trust_cloudflare: bool = False
+
     # App
     debug: bool = False
     app_name: str = "Readfine"

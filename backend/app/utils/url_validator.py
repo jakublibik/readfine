@@ -17,6 +17,12 @@ def validate_feed_url(url: str) -> None:
     Raises ValueError if:
     - scheme is not http/https
     - hostname resolves to a private/loopback/link-local address
+
+    Known limitation (DNS rebinding / TOCTOU): this resolves DNS to check the
+    IP, but httpx re-resolves at connect time, so a hostname whose DNS flips
+    between calls could pass validation yet connect to a private/metadata IP.
+    Low severity (needs attacker-controlled authoritative DNS + race). Deferred
+    hardening (review M4): pin the validated IP and connect to it directly.
     """
     parsed = urlparse(url)
 

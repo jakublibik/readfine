@@ -13,7 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, timedelta, timezone
 
-from app.auth.security import hash_password, verify_password
+from app.auth.security import dummy_verify_password, hash_password, password_within_limit, verify_password
+from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
 from app.config import settings as app_settings_config
@@ -33,6 +34,8 @@ router = APIRouter(tags=["web-auth"])
 async def _get_app_settings(db: AsyncSession) -> AppSettings | None:
     result = await db.execute(select(AppSettings).where(AppSettings.id == 1))
     return result.scalar_one_or_none()
+
+
 
 
 async def _get_valid_invitation(db: AsyncSession, token: str) -> Invitation | None:
@@ -119,6 +122,8 @@ async def login(
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
+    if not user:
+        dummy_verify_password()  # constant-time: don't leak existence via timing
     if not user or not verify_password(password, user.password_hash):
         record_failed_login(ip, email)
         return _login_err("Invalid email or password", status.HTTP_401_UNAUTHORIZED,
@@ -180,10 +185,15 @@ async def register(
     app_settings = await _get_app_settings(db)
     registration_open = not app_settings or app_settings.registration_enabled
 
+    email = email.strip()
+
     def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_ENTITY, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
                "prefill_email": email, "prefill_display_name": display_name, **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
+
+    if not is_valid_email(email):
+        return _err("Please enter a valid email address.")
 
     # Validate invite token if provided or required
     inv = None
@@ -206,6 +216,9 @@ async def register(
 
     if len(password) < 8:
         return _err("Password must be at least 8 characters.")
+
+    if not password_within_limit(password):
+        return _err("Password is too long (max 72 characters).")
 
     if password != confirm_password:
         return _err("Passwords do not match.")
@@ -326,12 +339,12 @@ async def resend_verification(
                 await asyncio.to_thread(
                     send_email,
                     app_settings,
-                    email,
+                    user.email,  # stored (validated) address, never the raw form input
                     "Readfine – Verify your email address",
                     f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not create a Readfine account, you can safely ignore this email.",
                 )
             except Exception as e:
-                logger.error("Failed to resend verification email to %s: %s", email, e)
+                logger.error("Failed to resend verification email to %s: %s", user.email, e)
     return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&resent=1", status_code=302)
 
 
@@ -451,6 +464,9 @@ async def reset_password_confirm(
     if len(new_password) < 8:
         return templates.TemplateResponse(request, "auth/reset_password_confirm.html",
                                           {"token": token, "error": "Password must be at least 8 characters."})
+    if not password_within_limit(new_password):
+        return templates.TemplateResponse(request, "auth/reset_password_confirm.html",
+                                          {"token": token, "error": "Password is too long (max 72 characters)."})
     if new_password != confirm_password:
         return templates.TemplateResponse(request, "auth/reset_password_confirm.html",
                                           {"token": token, "error": "Passwords do not match."})

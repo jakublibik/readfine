@@ -18,7 +18,9 @@ services:
 
   app:
     build: .
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --forwarded-allow-ips '*'"
+    # uvicorn must NOT rewrite client.host from X-Forwarded-* — the app resolves
+    # the real client itself (TRUSTED_PROXY_COUNT / TRUST_CLOUDFLARE in .env).
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
     env_file: .env
     restart: unless-stopped
     depends_on:
