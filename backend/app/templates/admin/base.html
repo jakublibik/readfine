@@ -3,16 +3,17 @@
 {% from "partials/side_nav.html" import side_nav %}
 {% set admin_nav_items = [
   {"label": "Dashboard",   "url": "/admin",             "active": active == "dashboard"},
-  {"label": "Users",       "url": "/admin/users",        "active": active == "users"},
   {"label": "Feeds",       "url": "/admin/feeds",        "active": active == "feeds"},
+  {"label": "Fetch logs",  "url": "/admin/fetch-logs",   "active": active == "fetch_logs"},
+  {"label": "Users",       "url": "/admin/users",        "active": active == "users"},
+  {"label": "Settings",    "url": "/admin/settings",     "active": active == "settings"},
   {"label": "Scoring eval","url": "/admin/scoring-eval",  "active": active == "scoring_eval"},
   {"label": "Invitations", "url": "/admin/invitations",  "active": active == "invitations"},
-  {"label": "Settings",    "url": "/admin/settings",     "active": active == "settings"},
-  {"label": "Fetch logs",  "url": "/admin/fetch-logs",   "active": active == "fetch_logs"},
   {"label": "Audit log",   "url": "/admin/audit-log",    "active": active == "audit_log"},
 ] %}
 <div class="min-h-screen bg-gray-50 flex flex-col sm:flex-row">
-  {{ side_nav(admin_nav_items, title="Admin", back_url="/app", back_label="Back to app") }}
+  {{ side_nav(admin_nav_items, title="Admin", back_url="/app", back_label="Back to app",
+              cross_url="/settings", cross_label="Settings") }}
   <main class="flex-1 px-4 sm:px-8 pt-3 pb-6 max-w-5xl">
     {% block admin_content %}{% endblock %}
   </main>
