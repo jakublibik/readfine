@@ -25,7 +25,7 @@ from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import is_valid_timezone
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
 from app.fetcher.scrape import extract_article_links
@@ -372,7 +372,7 @@ async def settings_feeds_subscribe(
         except Exception:
             pass
     except Exception as e:
-        logger.error("Unexpected error during feed subscribe (url=%s): %s", url, e)
+        logger.error("Unexpected error during feed subscribe (url=%s): %s", redact_url(url), e)
         error = "Could not subscribe to feed. Please check the URL and try again."
 
     is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse", "404", "403", "HTTP error"))

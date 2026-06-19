@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import patch
 
-from app.utils.url_validator import validate_feed_url
+from app.utils.url_validator import redact_url, validate_feed_url
 
 
 class TestSchemeValidation:
@@ -84,3 +84,32 @@ class TestHostnameValidation:
         with patch("socket.getaddrinfo", side_effect=socket.gaierror("NXDOMAIN")):
             with pytest.raises(ValueError, match="resolve"):
                 validate_feed_url("http://nonexistent.invalid/feed")
+
+
+class TestRedactUrl:
+    def test_strips_query_string(self):
+        assert redact_url("https://example.com/feed?api_key=secret123") == (
+            "https://example.com/feed?<redacted>"
+        )
+
+    def test_strips_userinfo_credentials(self):
+        # user:pass@host must not survive into logs
+        out = redact_url("https://user:p4ss@example.com/feed.xml")
+        assert "p4ss" not in out
+        assert "user" not in out
+        assert out == "https://example.com/feed.xml"
+
+    def test_preserves_host_port_and_path(self):
+        assert redact_url("http://example.com:8080/a/b/c") == "http://example.com:8080/a/b/c"
+
+    def test_plain_url_without_query_unchanged(self):
+        assert redact_url("https://example.com/feed.xml") == "https://example.com/feed.xml"
+
+    def test_non_url_returned_as_is(self):
+        assert redact_url("not a url") == "not a url"
+
+    def test_strips_both_userinfo_and_query(self):
+        out = redact_url("https://user:secret@example.com/feed?token=abc")
+        assert "secret" not in out
+        assert "token=abc" not in out
+        assert out == "https://example.com/feed?<redacted>"

@@ -1,7 +1,16 @@
+# Cap container log size so the json-file driver can't fill the host disk.
+# Covers app + nginx (nginx:alpine symlinks its access/error logs to stdout/stderr).
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: ${DB_NAME:-readfine}
       POSTGRES_USER: ${DB_USER:-readfine}
@@ -23,9 +32,13 @@ services:
     # Keep --workers 1: rate limiting and the login lockout are in-memory and
     # only correct with a single worker (see README). More workers split the
     # counters per worker and weaken brute-force protection.
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    # --no-access-log: nginx fronts every request and already access-logs; the
+    # uvicorn access log would be a duplicate copy of each request line,
+    # including one-time tokens in verify-email / reset-password URLs.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log"
     env_file: .env
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         condition: service_healthy
@@ -33,6 +46,7 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "80:80"
       - "443:443"

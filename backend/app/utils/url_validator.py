@@ -10,6 +10,29 @@ _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 10
 
 
+def redact_url(url: str) -> str:
+    """Strip credentials and query string from a URL for safe logging.
+
+    Feed/scrape URLs may carry secrets in the query string (e.g. ``?api_key=...``)
+    or HTTP credentials in the netloc (``user:pass@host``). Keep scheme, host,
+    port and path; replace any query with a redaction marker. Returns the input
+    unchanged if it doesn't look like a URL, or a marker if it can't be parsed.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "<unparseable-url>"
+    if not parsed.scheme and not parsed.netloc:
+        return url
+    host = parsed.hostname or ""
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    cleaned = f"{parsed.scheme}://{host}{parsed.path}" if parsed.scheme else f"{host}{parsed.path}"
+    if parsed.query:
+        cleaned += "?<redacted>"
+    return cleaned
+
+
 def validate_feed_url(url: str) -> None:
     """
     Validate a feed URL for use in server-side HTTP requests.

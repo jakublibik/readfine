@@ -17,7 +17,7 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,7 @@ async def fetch_scrape_feed(
 
     except Exception as exc:
         await db.rollback()
-        logger.error("Error scraping feed %d (%s): %s", feed_id, feed_url, exc)
+        logger.error("Error scraping feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
         is_4xx = http_status is not None and 400 <= http_status < 500
         db.add(FetchLog(
