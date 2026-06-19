@@ -56,7 +56,7 @@ command -v docker >/dev/null 2>&1 || die "docker not installed"
 # ── Temp workspace (always cleaned up) ────────────────────────────────────────
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-DUMP="$WORK/readfine.sql"   # stable name → consistent path across snapshots
+DUMP="$WORK/readfine.sql"   # verified on disk, then streamed into restic by name
 
 # ── 1. Initialize the restic repo on first run ────────────────────────────────
 if ! restic cat config >/dev/null 2>&1; then
@@ -74,8 +74,11 @@ fi
 log "dump OK ($(du -h "$DUMP" | cut -f1))"
 
 # ── 3. Back up to restic (encrypted + deduplicated off-site) ──────────────────
+# Stream the (already verified) dump via stdin so every snapshot stores it under
+# a stable path "/readfine.sql" — not the random mktemp dir — which keeps restore
+# (`restic dump latest /readfine.sql`) predictable.
 log "uploading to restic repo"
-restic backup --tag readfine "$DUMP"
+restic backup --tag readfine --stdin --stdin-filename readfine.sql < "$DUMP"
 
 # ── 4. Apply retention and prune unreferenced data ────────────────────────────
 log "applying retention (daily=$KEEP_DAILY weekly=$KEEP_WEEKLY monthly=$KEEP_MONTHLY)"

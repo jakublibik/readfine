@@ -251,7 +251,7 @@ crontab -e
 set -a; . backup.env; set +a
 
 restic snapshots                                   # list available backups
-restic dump latest readfine.sql > restore.sql      # extract the newest dump
+restic dump latest /readfine.sql > restore.sql     # extract the newest dump
 docker compose exec -T db psql -U readfine -d readfine < restore.sql
 ```
 
