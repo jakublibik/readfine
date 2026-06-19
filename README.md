@@ -5,6 +5,13 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 
 **Try the hosted instance:** [readfine.app](https://readfine.app) — or self-host with the steps below.
 
+> [!NOTE]
+> **Built with AI.** Readfine is primarily AI-written (with Claude Code), with
+> limited line-by-line human review. It's a real, working app that I use daily —
+> but if you self-host it, treat it accordingly: review the code, and audit the
+> security-sensitive parts (auth, key storage, SSRF protection) before trusting
+> it with anything sensitive. No warranty — see [License](#license).
+
 ![Readfine reading view](backend/app/static/images/landing/desktop_reading.png)
 
 ## Contents
@@ -22,7 +29,8 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 ## Features
 
 - **Feeds** — RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
-- **Reading** — 3-panel desktop / responsive mobile UI (HTMX + Tailwind), readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode
+- **Reading** — readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind)
+- **Adaptive layout** — pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) — more than mobile-friendly, not a squeezed-down desktop
 - **Filters** — conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
 - **AI (bring-your-own-key)** — summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
 - **Accounts** — per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
