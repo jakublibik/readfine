@@ -34,6 +34,15 @@ set -a; . "$BACKUP_ENV_FILE"; set +a
 
 COMPOSE_DIR="${COMPOSE_DIR:-$SCRIPT_DIR}"
 DB_SERVICE="${DB_SERVICE:-db}"
+
+# DB user/name default to the app's .env — the same file docker-compose reads via
+# ${DB_USER:-readfine} — so the backup matches the deployment without duplicating
+# config. backup.env can still override them; if neither is set, fall back to readfine.
+APP_ENV="${APP_ENV:-$COMPOSE_DIR/.env}"
+if [ -f "$APP_ENV" ]; then
+  [ -z "${DB_USER:-}" ] && DB_USER="$(grep -E '^DB_USER=' "$APP_ENV" | tail -n1 | cut -d= -f2-)"
+  [ -z "${DB_NAME:-}" ] && DB_NAME="$(grep -E '^DB_NAME=' "$APP_ENV" | tail -n1 | cut -d= -f2-)"
+fi
 DB_USER="${DB_USER:-readfine}"
 DB_NAME="${DB_NAME:-readfine}"
 KEEP_DAILY="${KEEP_DAILY:-7}"
