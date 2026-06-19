@@ -245,6 +245,11 @@ crontab -e
 **Restore**
 
 ```bash
+# Load the repo location and credentials into your shell first (any manual
+# restic command needs them; backup.sh sources this file itself). Don't use
+# sudo — it drops the environment.
+set -a; . backup.env; set +a
+
 restic snapshots                                   # list available backups
 restic dump latest readfine.sql > restore.sql      # extract the newest dump
 docker compose exec -T db psql -U readfine -d readfine < restore.sql
