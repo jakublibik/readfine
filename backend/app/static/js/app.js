@@ -162,12 +162,14 @@ function articleHeadingMatchesTitle(headingText, titleText) {
 
 function hideDuplicateH1() {
   // The article title is always shown outside the body — in the article list beside
-  // the content (2-panel inline view) or in the detail header (single-column + 3-panel) —
+  // the content (inline view) or in the detail header (single-column + 3-panel) —
   // so a body heading repeating it is redundant in every layout. The content lives in
-  // a different container per layout: the inline row in 2-panel, the right panel otherwise.
-  var container = document.documentElement.dataset.layout === '2'
-    ? document.getElementById('inline-article-detail-content')
-    : document.getElementById('article-detail');
+  // a different container depending on how the article was opened: the inline shell when
+  // expanded in the list (medium 2-panel AND small/mobile inline mode), the right panel
+  // otherwise. Detect by presence of the inline shell rather than by layout alone, since
+  // the small bucket uses inline expansion driven by detail_mode_small, not layout==='2'.
+  var container = document.getElementById('inline-article-detail-content')
+    || document.getElementById('article-detail');
   if (!container) return;
   // data-title lives on the inner <article>, not on the outer [data-article-id] root.
   var articleEl = container.querySelector('[data-title]');
