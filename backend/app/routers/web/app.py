@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sqlalchemy import select, func, update as sa_update
+from sqlalchemy import select, func, update as sa_update, delete as sa_delete
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +81,37 @@ async def _extract_readable_bg(
             await run_pipeline_for_article_all_users(article, db)
         await db.commit()
         logger.info("readable bg: article %d → %s", article_id, article.readable_status)
+
+
+# Grace period after starring before the summary is processed immediately, so a
+# quick unstar (mis-click) cancels it instead of spending tokens. The 5-minute
+# batch worker still backstops anything left pending.
+_STAR_SUMMARY_DEBOUNCE_S = 5.0
+
+
+async def _summary_after_star_bg(article_id: int, user_id: int) -> None:
+    """Wait out the debounce, then process the pending summary job immediately
+    (instead of waiting for the batch) — unless the star was removed meanwhile."""
+    await asyncio.sleep(_STAR_SUMMARY_DEBOUNCE_S)
+    from app.database import async_session_factory
+    from app.services.ai_pipeline_service import _run_summary_now
+
+    async with async_session_factory() as db:
+        state = await db.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id == article_id,
+            )
+        )
+        # Unstarred during the debounce, or summary already produced → skip.
+        if state is None or not state.is_starred or state.ai_summary:
+            return
+        article = await db.scalar(select(Article).where(Article.id == article_id))
+        if article is None:
+            return
+        await _run_summary_now(article, user_id, db)
+        await db.commit()
+        logger.info("star summary: article=%d user=%d processed", article_id, user_id)
 
 
 @router.get("/app", response_class=HTMLResponse)
@@ -1018,8 +1049,22 @@ async def htmx_toggle_star(
             article_obj = await db.scalar(select(Article).where(Article.id == article_id))
             if article_obj is not None:
                 from app.services.ai_summary_service import enqueue_summary_job
-                await enqueue_summary_job(article_obj, user.id, db)
+                enqueued = await enqueue_summary_job(article_obj, user.id, db)
                 await db.commit()
+                if enqueued:
+                    asyncio.create_task(_summary_after_star_bg(article_id, user.id))
+    else:
+        # Unstarred — cancel a not-yet-run summary job so a mis-click doesn't
+        # produce (and bill) a summary via the debounce task or the batch worker.
+        await db.execute(
+            sa_delete(ArticleAiJob).where(
+                ArticleAiJob.article_id == article_id,
+                ArticleAiJob.user_id == user.id,
+                ArticleAiJob.operation == "summary",
+                ArticleAiJob.status == "pending",
+            )
+        )
+        await db.commit()
 
     return _star_response(request, article)
 
