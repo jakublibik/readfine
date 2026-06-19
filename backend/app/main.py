@@ -139,7 +139,9 @@ def create_app() -> FastAPI:
     # Health check — dedicated endpoint for uptime/monitoring probes. Unauthenticated
     # and minimal on purpose (no version/internals leaked); does a lightweight DB ping
     # so a probe can distinguish "process up" from "database reachable".
-    @app.get("/healthz", include_in_schema=False)
+    # GET + HEAD: many uptime monitors (e.g. UptimeRobot) default to HEAD, and FastAPI
+    # routes — unlike plain Starlette routes — don't auto-add HEAD for GET (would 405).
+    @app.api_route("/healthz", methods=["GET", "HEAD"], include_in_schema=False)
     async def healthz() -> JSONResponse:
         try:
             async with db.async_session_factory() as session:
