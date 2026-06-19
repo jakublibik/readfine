@@ -8,6 +8,9 @@ PLAN.md
 .env.local
 .env.*.local
 
+# Backup config — holds restic/R2 secrets; example template is committed
+backup.env
+
 # Local dev Docker override (keeps prod images immutable)
 docker-compose.override.yml
 

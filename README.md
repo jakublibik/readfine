@@ -21,6 +21,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - [Installation](#installation)
 - [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
 - [Updating](#updating)
+- [Backups](#backups)
 - [Useful commands](#useful-commands)
 - [Development](#development)
 - [Stack](#stack)
@@ -202,6 +203,55 @@ and feed passwords permanently unreadable.
 > (the shipped `docker-compose.yml` does this). Adding workers silently splits the
 > counters per worker and weakens those protections. Horizontal scaling would need
 > a shared (DB/Redis) backend for the lockout — not yet implemented.
+
+## Backups
+
+Your data lives in the `postgres_data` Docker volume. Back it up somewhere **off
+the server** so you can recover from disk loss, a bad migration, or accidental
+`docker compose down -v`.
+
+The repo ships `backup.sh`: it runs `pg_dump` inside the database container and
+stores the dump in a [restic](https://restic.net) repository (encrypted,
+deduplicated, with retention). The example config targets Cloudflare R2
+(S3-compatible, generous free tier, no egress fees), but any restic backend works
+(Backblaze B2, S3, an SFTP/storage box, etc.).
+
+**Setup**
+
+```bash
+# 1. Install restic on the host (Debian/Ubuntu)
+sudo apt-get install -y restic
+
+# 2. Create an off-site bucket + API token (e.g. a Cloudflare R2 bucket and an
+#    R2 API token with Object Read & Write), then configure the backup:
+cp backup.env.example backup.env
+chmod 600 backup.env
+$EDITOR backup.env          # fill in repo URL, restic password, and S3 keys
+
+# 3. Run it once to initialize the repo and take the first backup
+./backup.sh
+
+# 4. Schedule it nightly via cron (logs to a file you can inspect)
+crontab -e
+# 0 3 * * *  cd /opt/readfine && ./backup.sh >> /var/log/readfine-backup.log 2>&1
+```
+
+> **Store the secrets safely.** Keep the `RESTIC_PASSWORD` somewhere separate from
+> the backups (a password manager) — without it the backups cannot be restored.
+> Also back up your `.env` `ENCRYPTION_KEY` and `SECRET_KEY`: a restored database
+> is useless without the original `ENCRYPTION_KEY` (stored API keys and feed
+> passwords become permanently unreadable).
+
+**Restore**
+
+```bash
+restic snapshots                                   # list available backups
+restic dump latest readfine.sql > restore.sql      # extract the newest dump
+docker compose exec -T db psql -U readfine -d readfine < restore.sql
+```
+
+Test a restore into a throwaway database at least once — an untested backup is not
+a backup.
 
 ## Useful commands
 

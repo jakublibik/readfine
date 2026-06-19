@@ -9,6 +9,11 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- `backup.sh` — off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
+  deduplicated, retention), with a Cloudflare R2 example config. See README → Backups.
+
 ## [0.9.0] - 2026-06-16
 
 First public release. Self-hosted RSS reader with:
