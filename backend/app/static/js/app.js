@@ -1911,28 +1911,24 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }
 
-  function positionSharePicker(picker, trigger) {
+  // Place the picker so its bottom sits at the click point (grows upward from where
+  // the user tapped), aligning its right edge to the anchor and clamping into the
+  // viewport. Drops below only when there isn't room above.
+  function positionSharePicker(picker, rect) {
     picker.style.zIndex = '60';
     picker.style.right = '';
     picker.style.bottom = '';
     picker.style.maxWidth = '';
 
-    if (isMobile()) {
-      picker.style.top = '';
-      picker.style.left = 'max(0.75rem, env(safe-area-inset-left))';
-      picker.style.right = 'max(0.75rem, env(safe-area-inset-right))';
-      picker.style.bottom = 'calc(0.75rem + env(safe-area-inset-bottom))';
-      picker.style.maxWidth = 'calc(100vw - 1.5rem)';
-      return;
-    }
-
-    var rect = trigger.getBoundingClientRect();
+    var margin = 8;
     var pickerH = picker.offsetHeight;
     var pickerW = picker.offsetWidth;
-    var spaceBelow = window.innerHeight - rect.bottom;
-    var top = spaceBelow >= pickerH + 8 ? rect.bottom + 4 : Math.max(4, rect.top - pickerH - 4);
+    var aboveTop = rect.bottom - pickerH;
+    var top = aboveTop >= margin ? aboveTop : rect.bottom + 4;
+    var left = Math.min(rect.right - pickerW, window.innerWidth - pickerW - margin);
+    left = Math.max(margin, left);
     picker.style.top = top + 'px';
-    picker.style.left = Math.max(4, rect.left - pickerW + rect.width) + 'px';
+    picker.style.left = left + 'px';
   }
 
   document.addEventListener('click', function (e) {
@@ -1942,9 +1938,12 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!picker) return;
     var isOpen = !picker.classList.contains('hidden');
     if (isOpen) { picker.classList.add('hidden'); e.stopPropagation(); return; }
+    // Measure the actual clicked button before the menu (and this trigger) is hidden,
+    // so the picker appears right where the user tapped.
+    var anchorRect = trigger.getBoundingClientRect();
     document.querySelectorAll('[data-menu]').forEach(function (m) { m.classList.add('hidden'); });
     picker.classList.remove('hidden');
-    positionSharePicker(picker, trigger);
+    positionSharePicker(picker, anchorRect);
     e.stopPropagation();
   });
 
