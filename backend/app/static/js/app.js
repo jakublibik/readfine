@@ -357,6 +357,12 @@ document.addEventListener('click', function (e) {
 
 document.body.addEventListener('htmx:beforeSwap', function (evt) {
   if (evt.detail.target.id !== 'sidebar') return;
+  // Preserve scroll: the feed list scrolls inside #sidebar-scroll, which lives
+  // inside the swapped innerHTML and is destroyed/recreated on every refresh —
+  // resetting scrollTop to 0 and jumping the list up on background refreshes
+  // (e.g. the mark-as-read sidebarRefresh after opening an article).
+  var oldScroll = evt.detail.target.querySelector('#sidebar-scroll');
+  window._sidebarScroll = oldScroll ? oldScroll.scrollTop : 0;
   var navGet = _activeNavGet || '/htmx/articles';
   var temp = document.createElement('div');
   temp.innerHTML = evt.detail.serverResponse;
@@ -1453,7 +1459,14 @@ document.addEventListener('click', function (e) {
 
 // afterSwap fires before the browser paints — prevents collapsed-section flash on load.
 document.body.addEventListener('htmx:afterSwap', function (e) {
-  if (e.detail.target && e.detail.target.id === 'sidebar') restoreSidebarCollapse(false);
+  if (!(e.detail.target && e.detail.target.id === 'sidebar')) return;
+  restoreSidebarCollapse(false);
+  // Restore here (before paint) to avoid a visible scroll-to-top flash;
+  // afterSettle restores again in case settle re-applies server classes.
+  if (window._sidebarScroll) {
+    var ns = e.detail.target.querySelector('#sidebar-scroll');
+    if (ns) ns.scrollTop = window._sidebarScroll;
+  }
 });
 
 // HTMX settle can re-apply server classes and drop client-added "collapsed".
@@ -1462,6 +1475,10 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   if (!(e.detail.target && e.detail.target.id === 'sidebar')) return;
   restoreSidebarCollapse(false);
   var sb = e.detail.target;
+  if (window._sidebarScroll) {
+    var newScroll = sb.querySelector('#sidebar-scroll');
+    if (newScroll) newScroll.scrollTop = window._sidebarScroll;
+  }
   if (sb.style.opacity === '0') {
     sb.style.transition = 'opacity 150ms ease';
     sb.style.opacity = '1';
