@@ -21,10 +21,8 @@ First public release. Self-hosted RSS reader with:
   (Anthropic / OpenAI / Gemini, bring-your-own-key)
 - Per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
 - OPML import/export (incl. Tiny Tiny RSS compatibility)
+- `/healthz` endpoint (lightweight DB ping) for uptime/monitoring probes
 
 ### Release process
 
-1. Update the version in `backend/pyproject.toml` and `package.json` (keep them in sync).
-2. Move `Unreleased` notes into a new dated version section here.
-3. Commit, then tag the release: `git tag vX.Y.Z && git push --tags`.
-4. Merge `dev` → `master` for production.
+See [`RELEASING.md`](RELEASING.md) for versioning rules and the full pre-release checklist.

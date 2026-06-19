@@ -15,7 +15,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette_csrf import CSRFMiddleware
 from slowapi.errors import RateLimitExceeded
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.config import settings
 from app.rate_limit import limiter
@@ -135,6 +135,18 @@ def create_app() -> FastAPI:
             "connect-src 'self';"
         )
         return response
+
+    # Health check — dedicated endpoint for uptime/monitoring probes. Unauthenticated
+    # and minimal on purpose (no version/internals leaked); does a lightweight DB ping
+    # so a probe can distinguish "process up" from "database reachable".
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz() -> JSONResponse:
+        try:
+            async with db.async_session_factory() as session:
+                await session.execute(text("SELECT 1"))
+        except Exception:
+            return JSONResponse({"status": "degraded"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     # Static files
     app.mount("/static", StaticFiles(directory="app/static"), name="static")
