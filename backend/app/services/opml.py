@@ -20,6 +20,7 @@ from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.feed import subscribe
 from app.services.filter_service import create_filter
+from app.utils.datetime_format import is_valid_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +51,24 @@ _TTRSS_ACTION_MAP = {
 
 _REGEX_SPECIAL = re.compile(r"[.*+?^${}()|[\]\\]")
 
+_TRUTHY = {"1", "t", "true", "yes", "on"}
+
 
 def _looks_like_regex(value: str) -> bool:
     return bool(_REGEX_SPECIAL.search(value))
+
+
+def _truthy(value: Any) -> bool:
+    """Normalize a JSON-ish boolean. TTRSS exports raw DB values, so a flag may
+    arrive as a real bool, an int (1/0), or a Postgres string ("t"/"f"). Plain
+    bool() is wrong here: bool("f") is True."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
@@ -383,8 +399,13 @@ async def import_opml(
                 key = outline.get("pref-name") or outline.get("text", "")
                 value = outline.get("value", "")
                 if key == "USER_TIMEZONE" and value:
-                    us.timezone = value[:50]
-                    result.prefs_updated += 1
+                    # TTRSS allows "Automatic" and other non-IANA values; only accept
+                    # names zoneinfo can resolve, otherwise downstream tz math breaks.
+                    if is_valid_timezone(value):
+                        us.timezone = value[:50]
+                        result.prefs_updated += 1
+                    else:
+                        result.warnings.append(f"Ignored unsupported timezone '{value}'")
                 elif key == "PURGE_OLD_DAYS" and value.isdigit():
                     # No global purge setting in our model — skip
                     pass
@@ -689,12 +710,14 @@ def _parse_ttrss_filter(
     result: ImportResult,
 ) -> FilterCreate | None:
     """Parse TTRSS OPML filter format (best-effort)."""
-    match_operator = "OR" if fd.get("match_any_rule") else "AND"
+    match_operator = "OR" if _truthy(fd.get("match_any_rule")) else "AND"
 
     conditions = []
     for rule in fd.get("rules", []):
+        # TTRSS exports raw DB values without casting, so filter_type may be an
+        # int (1) or a string ("1"); our map is keyed by string.
         filter_type = rule.get("filter_type")
-        our_field = _TTRSS_FIELD_MAP.get(filter_type)
+        our_field = _TTRSS_FIELD_MAP.get(str(filter_type)) if filter_type is not None else None
         if our_field is None:
             result.warnings.append(
                 f"Filter '{fd.get('name')}': unknown filter_type {filter_type}, rule skipped"
@@ -705,7 +728,7 @@ def _parse_ttrss_filter(
         if not value:
             continue
 
-        inverse = bool(rule.get("inverse"))
+        inverse = _truthy(rule.get("inverse"))
         if inverse:
             operator = "not_contains"
         elif _looks_like_regex(value):
@@ -721,7 +744,7 @@ def _parse_ttrss_filter(
     actions = []
     for action in fd.get("actions", []):
         action_id = action.get("action_id")
-        our_action = _TTRSS_ACTION_MAP.get(action_id)
+        our_action = _TTRSS_ACTION_MAP.get(str(action_id)) if action_id is not None else None
         if our_action is None:
             continue
         action_value = None
@@ -738,15 +761,22 @@ def _parse_ttrss_filter(
             action_value = str(label_id)
         actions.append(FilterActionCreate(action_type=our_action, action_value=action_value))
 
-    # TTRSS scope is per-ID and doesn't transfer — import as global
-    if fd.get("cat_filter") or any(r.get("feed_id") or r.get("cat_id") for r in fd.get("rules", [])):
+    # TTRSS scope is per-rule (feed/category) and doesn't transfer — import as global.
+    # Older exports use feed_id/cat_id; current exports resolve to a "match" array or
+    # a "feed" title string per rule.
+    def _rule_has_scope(r: dict) -> bool:
+        return bool(
+            r.get("feed_id") or r.get("cat_id") or r.get("match") or r.get("feed")
+        )
+
+    if fd.get("cat_filter") or any(_rule_has_scope(r) for r in fd.get("rules", [])):
         result.warnings.append(
             f"Filter '{fd.get('name')}': scope (feed/category) not imported (TTRSS IDs don't transfer)"
         )
 
     return FilterCreate(
         name="",
-        is_active=bool(fd.get("enabled", True)),
+        is_active=_truthy(fd.get("enabled", True)),
         match_operator=match_operator,
         conditions=conditions,
         actions=actions,

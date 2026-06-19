@@ -165,6 +165,48 @@ class TestParseTtrssFilter:
         _parse_ttrss_filter(fd, {}, res)
         assert any("scope" in w.lower() for w in res.warnings)
 
+    def test_integer_filter_type_and_action_id(self):
+        # Current TTRSS exports raw DB values without (int) cast on some backends,
+        # so filter_type / action_id can arrive as JSON numbers, not strings.
+        fd = {
+            "name": "F",
+            "rules": [{"filter_type": 1, "reg_exp": "spam"}],
+            "actions": [{"action_id": 2}],
+        }
+        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        assert payload is not None
+        assert payload.conditions[0].field == "title"
+        assert payload.actions[0].action_type == "mark_read"
+
+    def test_postgres_bool_strings_for_flags(self):
+        # Postgres via PDO serializes booleans as "t"/"f"; plain bool("f") is True,
+        # so these flags must be normalized, not truthiness-tested.
+        fd = {
+            "rules": [{"filter_type": "1", "reg_exp": "x", "inverse": "f"}],
+            "match_any_rule": "f",
+            "enabled": "f",
+            "actions": [{"action_id": "2"}],
+        }
+        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        assert payload.match_operator == "AND"
+        assert payload.is_active is False
+        assert payload.conditions[0].operator == "contains"  # inverse "f" => not inverted
+
+    def test_inverse_true_string_inverts(self):
+        fd = {"rules": [{"filter_type": "1", "reg_exp": "x", "inverse": "t"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        assert payload.conditions[0].operator == "not_contains"
+
+    def test_modern_match_scope_warns(self):
+        res = ImportResult()
+        fd = {"name": "F",
+              "rules": [{"filter_type": "1", "reg_exp": "x",
+                         "match": [["Tech", False, False]]}],
+              "actions": [{"action_id": "2"}]}
+        _parse_ttrss_filter(fd, {}, res)
+        assert any("scope" in w.lower() for w in res.warnings)
+
 
 # ── _parse_readfine_filter ────────────────────────────────────────────────────
 
