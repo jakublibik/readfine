@@ -10,7 +10,7 @@ class AppSettings(Base):
     __tablename__ = "app_settings"
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
-    registration_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    registration_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     default_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=60)
     min_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=15)
     max_feeds_per_user: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=200)

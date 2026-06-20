@@ -53,8 +53,8 @@ def web_client(mock_db):
     # at import time, so we must clear its MemoryStorage rather than replace app.state.limiter
     _rate_limiter._storage.reset()
 
-    # Safe default: no app settings (registration open, no SMTP)
-    mock_db.execute.return_value = _scalar(None)
+    # Safe default: registration open, no SMTP
+    mock_db.execute.return_value = _scalar(_make_app_settings())
 
     async def override_get_db():
         yield mock_db
@@ -77,21 +77,27 @@ VALID_FORM = {
 
 class TestWebRegisterValidation:
     def test_password_too_short_shows_error(self, web_client, mock_db):
+        # Open registration + no existing user, so the request reaches password validation.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         r = web_client.post("/register", data={**VALID_FORM, "password": "short", "confirm_password": "short"})
         assert r.status_code == 422
         assert "8 characters" in r.text
 
     def test_password_too_short_preserves_email_and_name(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         r = web_client.post("/register", data={**VALID_FORM, "password": "x", "confirm_password": "x"})
         assert "new@test.com" in r.text
         assert "New User" in r.text
 
     def test_passwords_do_not_match_shows_error(self, web_client, mock_db):
+        # Open registration + no existing user, so the request reaches password validation.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         r = web_client.post("/register", data={**VALID_FORM, "confirm_password": "different"})
         assert r.status_code == 422
         assert "do not match" in r.text
 
     def test_passwords_do_not_match_preserves_form_data(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         r = web_client.post("/register", data={**VALID_FORM, "confirm_password": "different"})
         assert "new@test.com" in r.text
         assert "New User" in r.text
@@ -99,7 +105,7 @@ class TestWebRegisterValidation:
     def test_empty_display_name_uses_email_prefix(self, web_client, mock_db):
         from unittest.mock import AsyncMock, patch
         # No SMTP → no verification email → direct redirect to /app
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             r = web_client.post("/register", data={**VALID_FORM, "display_name": "   "})
         # Proceeds to /app — no "Display name" error
@@ -108,8 +114,8 @@ class TestWebRegisterValidation:
 
     def test_duplicate_email_shows_error(self, web_client, mock_db):
         mock_db.execute = AsyncMock(side_effect=[
-            _scalar(None),          # AppSettings (no SMTP, registration open)
-            _scalar(_make_user()),  # duplicate email check → user found
+            _scalar(_make_app_settings()),  # AppSettings (no SMTP, registration open)
+            _scalar(_make_user()),          # duplicate email check → user found
         ])
         r = web_client.post("/register", data=VALID_FORM)
         assert r.status_code == 409
@@ -117,7 +123,7 @@ class TestWebRegisterValidation:
 
     def test_duplicate_email_preserves_email(self, web_client, mock_db):
         mock_db.execute = AsyncMock(side_effect=[
-            _scalar(None),
+            _scalar(_make_app_settings()),
             _scalar(_make_user()),
         ])
         r = web_client.post("/register", data=VALID_FORM)
@@ -129,6 +135,8 @@ class TestWebRegisterValidation:
         assert r.status_code == 403
 
     def test_too_long_password_rejected(self, web_client, mock_db):
+        # Open registration + no existing user, so the request reaches password validation.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         r = web_client.post("/register", data={
             **VALID_FORM, "password": "a" * 73, "confirm_password": "a" * 73})
         assert r.status_code == 422
@@ -147,7 +155,7 @@ class TestWebRegisterValidation:
 
     def test_email_is_stripped_before_use(self, web_client, mock_db):
         # Surrounding whitespace must not block an otherwise-valid address.
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             r = web_client.post("/register", data={**VALID_FORM, "email": "  new@test.com  "})
         assert r.status_code == 302
@@ -158,7 +166,7 @@ class TestWebRegisterValidation:
 class TestWebRegisterSuccess:
     def test_no_smtp_sets_session_and_redirects_to_app(self, web_client, mock_db):
         # AppSettings (no SMTP), no existing user
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             r = web_client.post("/register", data=VALID_FORM)
         assert r.status_code == 302
@@ -173,19 +181,19 @@ class TestWebRegisterSuccess:
         return None
 
     def test_browser_timezone_stored_on_registration(self, web_client, mock_db):
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             web_client.post("/register", data={**VALID_FORM, "timezone": "Europe/Prague"})
         assert self._added_settings_timezone(mock_db) == "Europe/Prague"
 
     def test_invalid_timezone_falls_back_to_utc(self, web_client, mock_db):
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             web_client.post("/register", data={**VALID_FORM, "timezone": "Mars/Olympus"})
         assert self._added_settings_timezone(mock_db) == "UTC"
 
     def test_missing_timezone_defaults_to_utc(self, web_client, mock_db):
-        mock_db.execute = AsyncMock(side_effect=[_scalar(None), _scalar(None)])
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
         with patch("app.auth.security.hash_password", return_value="hashed"):
             web_client.post("/register", data=VALID_FORM)
         assert self._added_settings_timezone(mock_db) == "UTC"

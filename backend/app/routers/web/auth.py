@@ -54,7 +54,7 @@ async def root(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse(url="/app", status_code=302)
     app_settings = await _get_app_settings(db)
-    registration_open = not app_settings or app_settings.registration_enabled
+    registration_open = bool(app_settings) and app_settings.registration_enabled
     if registration_open:
         # Operator-provided marketing landing (gitignored). Falls back to /login when absent
         # (open-source default) — landing.example.html is a starter template, never rendered live.
@@ -91,7 +91,7 @@ async def login_page(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
     app_settings = await _get_app_settings(db)
-    registration_open = not app_settings or app_settings.registration_enabled
+    registration_open = bool(app_settings) and app_settings.registration_enabled
     return templates.TemplateResponse(request, "auth/login.html", {"registration_open": registration_open})
 
 
@@ -105,7 +105,7 @@ async def login(
 ):
     app_settings = await _get_app_settings(db)
     smtp_configured = bool(app_settings and app_settings.smtp_host)
-    registration_open = not app_settings or app_settings.registration_enabled
+    registration_open = bool(app_settings) and app_settings.registration_enabled
 
     ip = get_client_ip(request)
 
@@ -149,7 +149,7 @@ async def register_page(request: Request, invite: str | None = None, db: AsyncSe
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
     app_settings = await _get_app_settings(db)
-    registration_open = not app_settings or app_settings.registration_enabled
+    registration_open = bool(app_settings) and app_settings.registration_enabled
 
     if invite:
         inv = await _get_valid_invitation(db, invite)
@@ -183,7 +183,7 @@ async def register(
     db: AsyncSession = Depends(get_db),
 ):
     app_settings = await _get_app_settings(db)
-    registration_open = not app_settings or app_settings.registration_enabled
+    registration_open = bool(app_settings) and app_settings.registration_enabled
 
     email = email.strip()
 
