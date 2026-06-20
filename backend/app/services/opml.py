@@ -18,7 +18,7 @@ from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
-from app.services.feed import subscribe
+from app.services.feed import subscribe, subscribe_scrape
 from app.services.filter_service import create_filter
 from app.utils.datetime_format import is_valid_timezone
 
@@ -218,11 +218,20 @@ def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
     attrs: dict[str, str] = {
         "text": title,
         "title": title,
+        # Kept as "rss" so other OPML readers still treat the outline as a feed;
+        # Readfine's own import keys on the "feed-type" attribute below, not "type".
         "type": "rss",
         "xmlUrl": feed.feed_url,
     }
     if feed.site_url:
         attrs["htmlUrl"] = feed.site_url
+    # Scrape feeds carry their CSS selector in custom attributes so a Readfine
+    # export round-trips back into Readfine (OPML has no native scrape support).
+    if feed.feed_type == "scrape":
+        selector = (feed.type_config or {}).get("article_links_selector")
+        if selector:
+            attrs["feed-type"] = "scrape"
+            attrs["article-links-selector"] = selector
     SubElement(parent, "outline", **attrs)
 
 
@@ -347,7 +356,10 @@ async def import_opml(
                 break
             if added_id and xml_url:
                 feed_url_to_id[xml_url] = added_id
-                new_feed_ids.append(added_id)
+                # Scrape feeds already trigger their own background fetch in
+                # subscribe_scrape; don't queue them for the RSS _initial_fetch.
+                if (outline.get("feed-type") or "").strip().lower() != "scrape":
+                    new_feed_ids.append(added_id)
 
         # Refresh existing subscriptions into lookup map
         existing_uf_result = await db.execute(
@@ -523,8 +535,32 @@ async def _import_feed(
         return None
 
     title = (outline.get("text") or outline.get("title") or "").strip() or None
+    feed_type = (outline.get("feed-type") or "").strip().lower()
 
     try:
+        if feed_type == "scrape":
+            selector = (outline.get("article-links-selector") or "").strip()
+            if not selector:
+                result.feeds_failed += 1
+                result.warnings.append(
+                    f"Failed to import {xml_url}: scrape feed is missing its CSS selector"
+                )
+                return None
+            # Trust the backup: skip live selector validation (the page may be
+            # temporarily down or changed). subscribe_scrape still kicks off the
+            # first scrape on a background task, like a normal scrape subscribe.
+            uf = await subscribe_scrape(
+                user=user,
+                url=xml_url,
+                selector=selector,
+                title=title or xml_url,
+                folder_id=folder_id,
+                db=db,
+                validate_selector=False,
+            )
+            result.feeds_added += 1
+            return uf.feed_id
+
         uf = await subscribe(
             user=user,
             url=xml_url,

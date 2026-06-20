@@ -3,7 +3,9 @@ import_opml input validation. The DB-driven import paths are covered indirectly;
 here we lock down the TTRSS↔Readfine mapping and structural parsing.
 """
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from xml.etree.ElementTree import Element
 
 import defusedxml.ElementTree as ET
 import pytest
@@ -11,7 +13,9 @@ import pytest
 from app.services.opml import (
     ImportResult,
     _collect_feed_outlines,
+    _feed_outline,
     _find_section,
+    _import_feed,
     _looks_like_regex,
     _parse_readfine_filter,
     _parse_ttrss_filter,
@@ -298,3 +302,103 @@ class TestImportValidation:
                 import_feeds=True, import_labels=True, import_prefs=True,
                 import_filters=True, db=AsyncMock(),
             )
+
+
+# ── Scrape-feed OPML round-trip (export attrs ↔ import routing) ────────────────
+
+class TestScrapeFeedRoundTrip:
+    def test_export_emits_scrape_attrs(self):
+        parent = Element("body")
+        feed = SimpleNamespace(
+            title="Forbes News",
+            feed_url="https://www.forbes.com/news/",
+            site_url="https://www.forbes.com/",
+            feed_type="scrape",
+            type_config={"article_links_selector": "a.headline"},
+        )
+        _feed_outline(parent, SimpleNamespace(custom_title=None), feed)
+
+        outline = list(parent)[0]
+        assert outline.get("feed-type") == "scrape"
+        assert outline.get("article-links-selector") == "a.headline"
+        assert outline.get("xmlUrl") == "https://www.forbes.com/news/"
+        assert outline.get("htmlUrl") == "https://www.forbes.com/"
+
+    def test_export_rss_feed_has_no_scrape_attrs(self):
+        parent = Element("body")
+        feed = SimpleNamespace(
+            title="Example",
+            feed_url="https://example.com/rss",
+            site_url=None,
+            feed_type="rss",
+            type_config=None,
+        )
+        _feed_outline(parent, SimpleNamespace(custom_title=None), feed)
+
+        outline = list(parent)[0]
+        assert outline.get("feed-type") is None
+        assert outline.get("article-links-selector") is None
+        assert outline.get("xmlUrl") == "https://example.com/rss"
+
+    async def test_import_routes_scrape_to_subscribe_scrape(self, monkeypatch):
+        captured: dict = {}
+
+        async def fake_scrape(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(feed_id=42)
+
+        async def fake_subscribe(**kwargs):
+            raise AssertionError("RSS subscribe must not be called for a scrape feed")
+
+        monkeypatch.setattr("app.services.opml.subscribe_scrape", fake_scrape)
+        monkeypatch.setattr("app.services.opml.subscribe", fake_subscribe)
+
+        outline = Element("outline", {
+            "xmlUrl": "https://www.forbes.com/news/",
+            "text": "Forbes News",
+            "feed-type": "scrape",
+            "article-links-selector": "a.headline",
+        })
+        result = ImportResult()
+        feed_id = await _import_feed(SimpleNamespace(), outline, None, result, db=None)
+
+        assert feed_id == 42
+        assert result.feeds_added == 1
+        assert captured["url"] == "https://www.forbes.com/news/"
+        assert captured["selector"] == "a.headline"
+        # Variant 1: trust the backup, no live validation on restore.
+        assert captured["validate_selector"] is False
+
+    async def test_import_scrape_missing_selector_fails(self, monkeypatch):
+        async def fake_scrape(**kwargs):
+            raise AssertionError("subscribe_scrape must not run without a selector")
+
+        monkeypatch.setattr("app.services.opml.subscribe_scrape", fake_scrape)
+
+        outline = Element("outline", {
+            "xmlUrl": "https://www.forbes.com/news/",
+            "text": "Forbes News",
+            "feed-type": "scrape",
+        })
+        result = ImportResult()
+        feed_id = await _import_feed(SimpleNamespace(), outline, None, result, db=None)
+
+        assert feed_id is None
+        assert result.feeds_failed == 1
+
+    async def test_import_routes_rss_to_subscribe(self, monkeypatch):
+        async def fake_subscribe(**kwargs):
+            return SimpleNamespace(feed_id=7)
+
+        async def fake_scrape(**kwargs):
+            raise AssertionError("scrape subscribe must not be called for an RSS feed")
+
+        monkeypatch.setattr("app.services.opml.subscribe", fake_subscribe)
+        monkeypatch.setattr("app.services.opml.subscribe_scrape", fake_scrape)
+
+        outline = Element("outline", {"xmlUrl": "https://example.com/rss", "text": "Example"})
+        result = ImportResult()
+        feed_id = await _import_feed(SimpleNamespace(), outline, None, result, db=None)
+
+        assert feed_id == 7
+        assert result.feeds_added == 1
