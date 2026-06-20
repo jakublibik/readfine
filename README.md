@@ -116,6 +116,11 @@ It will then generate the configuration, build and start all containers, and run
 
 Open your browser at the URL shown at the end of setup and log in with the admin credentials you provided.
 
+> **Registration is closed by default.** A fresh install starts with sign-ups disabled —
+> only your admin account exists. To let other people register, enable it in the admin
+> panel (configure SMTP first if you want email verification). Leaving it closed keeps the
+> instance private / invite-only.
+
 > **AI keys and SMTP are configured in the app, not in `.env`.** AI is bring-your-own-key
 > and set per user under Settings → AI; SMTP (for verification/reset emails) is set by an
 > admin in the admin panel. The only secrets in `.env` are the database, `SECRET_KEY`, and
