@@ -1,0 +1,73 @@
+{% extends "legal/base.html" %}
+{% block title %}Terms of Service – Readfine{% endblock %}
+
+{% block legal_title %}Terms of Service{% endblock %}
+
+{% block legal_content %}
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">1. Service</h2>
+    <p>
+      Readfine is a self-hosted RSS/Atom feed reader. This instance is operated by
+      <strong>{{ legal_operator_name or "[OPERATOR NAME]" }}</strong>,
+      <a href="mailto:{{ legal_contact_email or "[CONTACT EMAIL]" }}" class="text-blue-600 hover:underline dark:text-blue-400">{{ legal_contact_email or "[CONTACT EMAIL]" }}</a>.
+    </p>
+    <p class="mt-2">
+      By creating an account you agree to these terms. The operator may modify these terms at any time;
+      continued use constitutes acceptance of the revised terms.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">2. Account</h2>
+    <ul class="list-disc pl-5 space-y-1">
+      <li>You are responsible for keeping your credentials secure.</li>
+      <li>One account per person. Sharing accounts is not permitted.</li>
+      <li>You may delete your account at any time from Settings → Profile.</li>
+      <li>The operator may suspend or delete accounts that violate these terms.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">3. Acceptable use</h2>
+    <p>You agree not to use this service to:</p>
+    <ul class="list-disc pl-5 space-y-1 mt-2">
+      <li>Violate any applicable laws or regulations.</li>
+      <li>Scrape or overload third-party websites beyond normal RSS reader usage.</li>
+      <li>Circumvent any rate limits or security controls of the service.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">4. Content</h2>
+    <p>
+      This service fetches publicly available RSS/Atom feeds from third-party sources.
+      The operator does not control, endorse, or take responsibility for third-party content.
+      You are responsible for the feeds you subscribe to.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">5. Availability</h2>
+    <p>
+      The service is provided on an "as is" and "as available" basis. The operator does not
+      guarantee uptime, data retention, or continuity of the service.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">6. Limitation of liability</h2>
+    <p>
+      To the maximum extent permitted by law, the operator shall not be liable for any
+      indirect, incidental, or consequential damages arising from use of the service.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="text-sm font-semibold text-gray-900 mb-2 pb-1 border-b border-gray-100 dark:text-gray-100 dark:border-gray-700">7. Governing law</h2>
+    <p>
+      These terms are governed by the laws of <strong>{{ legal_jurisdiction or "[COUNTRY/JURISDICTION]" }}</strong>.
+    </p>
+  </section>
+
+{% endblock %}

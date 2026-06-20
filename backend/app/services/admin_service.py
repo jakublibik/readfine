@@ -1,9 +1,9 @@
 """Admin service: user management, app settings, invitations, audit log."""
 import logging
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -79,6 +79,19 @@ async def toggle_user_active(db: AsyncSession, user_id: int, admin_id: int) -> U
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def delete_user(db: AsyncSession, user_id: int, admin_id: int) -> bool:
+    """Delete a user and all their data. Cannot delete yourself."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or user.id == admin_id:
+        return False
+    from app.services.feed import cleanup_user_feeds
+    await cleanup_user_feeds(user_id, db)
+    await db.delete(user)
+    await db.commit()
+    return True
 
 
 async def list_invitations(db: AsyncSession) -> list[Invitation]:
@@ -176,6 +189,7 @@ async def clear_feed_error(db: AsyncSession, feed_id: int) -> Feed | None:
         return None
     feed.status = "active"
     feed.last_error = None
+    feed.fetch_error_count = 0
     await db.commit()
     await db.refresh(feed)
     return feed
@@ -185,6 +199,7 @@ async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     feed = await db.get(Feed, feed_id)
     if not feed or feed.subscriber_count > 0:
         return False
+    await db.execute(delete(Article).where(Article.feed_id == feed_id))
     await db.delete(feed)
     await db.commit()
     return True
@@ -205,6 +220,7 @@ async def list_feeds_with_stats(db: AsyncSession) -> list[dict]:
 
 
 async def get_dashboard_stats(db: AsyncSession) -> dict:
+    since = datetime.now(timezone.utc) - timedelta(days=30)
     user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
     active_user_count = (await db.execute(
         select(func.count(User.id)).where(User.is_active == True)
@@ -217,6 +233,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     recent_errors = (await db.execute(
         select(FetchLog)
         .options(selectinload(FetchLog.feed))
+        .where(FetchLog.failed_at >= since)
         .order_by(FetchLog.failed_at.desc())
         .limit(5)
     )).scalars().all()
@@ -237,7 +254,8 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         select(Article)
         .options(selectinload(Article.feed))
         .where(Article.readable_status == "failed")
-        .order_by(Article.id.desc())
+        .where(Article.readable_failed_at >= since)
+        .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
     return {

@@ -6,7 +6,6 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
@@ -16,6 +15,7 @@ from app.services.admin_service import (
     clear_feed_error,
     create_invitation,
     delete_feed,
+    delete_user,
     get_app_settings,
     get_dashboard_stats,
     get_feed,
@@ -36,8 +36,15 @@ from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
 
+from app.templating import templates, set_ai_enabled
+
 router = APIRouter(prefix="/admin", tags=["admin"])
-templates = Jinja2Templates(directory="app/templates")
+
+
+def _quantize15(val: int | None, default: int) -> int:
+    """Round val to the nearest multiple of 15, clamped to [15, 1440]."""
+    v = val if val is not None else default
+    return max(15, min(1440, round(v / 15) * 15))
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -48,8 +55,29 @@ async def admin_dashboard(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
+    from app import __version__
     stats = await get_dashboard_stats(db)
-    return templates.TemplateResponse(request, "admin/dashboard.html", {"stats": stats})
+    return templates.TemplateResponse(
+        request, "admin/dashboard.html", {"stats": stats, "app_version": __version__}
+    )
+
+
+@router.get("/scoring-eval", response_class=HTMLResponse)
+async def admin_scoring_eval(
+    request: Request,
+    days: int | None = None,
+    user_id: str | None = None,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.services.ai_eval_service import get_scoring_eval
+    window = clamp(days, 7, 365, 90)
+    users = await list_users(db)
+    eval_data = await get_scoring_eval(db, days=window, user_id=safe_int(user_id))
+    return templates.TemplateResponse(request, "admin/scoring_eval.html", {
+        "eval": eval_data,
+        "users": users,
+    })
 
 
 # ── Users ─────────────────────────────────────────────────────────────────────
@@ -85,6 +113,23 @@ async def admin_toggle_active(
     })
 
 
+@router.delete("/users/{user_id}", response_class=HTMLResponse)
+async def admin_delete_user(
+    user_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    deleted = await delete_user(db, user_id, admin_id=user.id)
+    if deleted:
+        await log_audit(db, user.id, "user_delete", target_type="user", target_id=user_id)
+    users = await list_users(db)
+    return templates.TemplateResponse(request, "admin/partials/users_table.html", {
+        "users": users,
+        "current_user": user,
+    })
+
+
 # ── App Settings ──────────────────────────────────────────────────────────────
 
 @router.get("/settings", response_class=HTMLResponse)
@@ -94,10 +139,12 @@ async def admin_settings(
     db: AsyncSession = Depends(get_db),
 ):
     s = await get_app_settings(db)
+    legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
     return templates.TemplateResponse(request, "admin/settings.html", {
         "s": s,
         "saved": False,
         "error": None,
+        "legal_configured": legal_configured,
     })
 
 
@@ -112,39 +159,58 @@ async def admin_settings_save(
 
     smtp_password_plain = form.get("smtp_password", "").strip()
 
+    # Retention horizon: presets only (max 120 keeps the T1 < T2 invariant; T2 = 180).
+    # Fall back to the current value on an out-of-range / tampered POST.
+    _purge_days = safe_int(form.get("default_purge_after_days"))
+    if _purge_days not in (30, 60, 90, 120):
+        _purge_days = s.default_purge_after_days or 60
+
     data = {
         "registration_enabled": form.get("registration_enabled") == "true",
-        "default_fetch_interval_min": clamp(safe_int(form.get("default_fetch_interval_min")), 5, 1440, 60),
-        "min_fetch_interval_min": clamp(safe_int(form.get("min_fetch_interval_min")), 1, 1440, 15),
+        "default_fetch_interval_min": _quantize15(safe_int(form.get("default_fetch_interval_min")), 60),
+        "min_fetch_interval_min": _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
         "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
-        "default_purge_after_days": clamp(safe_int(form.get("default_purge_after_days")), 1, 3650, None) if form.get("default_purge_after_days") else None,
-        "default_purge_keep_count": clamp(safe_int(form.get("default_purge_keep_count")), 1, 100000, None) if form.get("default_purge_keep_count") else None,
+        "default_purge_after_days": _purge_days,
         "smtp_host": form.get("smtp_host", "").strip() or None,
         "smtp_port": clamp(safe_int(form.get("smtp_port")), 1, 65535, 587),
         "smtp_user": form.get("smtp_user", "").strip() or None,
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
-        "ai_require_user_keys": form.get("ai_require_user_keys") == "true",
+        "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
+        "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
+        "legal_jurisdiction": form.get("legal_jurisdiction", "").strip() or None,
     }
+    if (
+        data["legal_operator_name"] != s.legal_operator_name
+        or data["legal_contact_email"] != s.legal_contact_email
+        or data["legal_jurisdiction"] != s.legal_jurisdiction
+    ):
+        data["legal_last_updated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     # Only update SMTP password if a new value was provided
     if smtp_password_plain:
         data["smtp_password_encrypted"] = encrypt(smtp_password_plain)
 
     try:
         s = await update_app_settings(db, data)
+        set_ai_enabled(s.ai_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
+        legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {
             "s": s,
             "saved": True,
             "error": None,
+            "legal_configured": legal_configured,
         })
     except Exception as e:
         logger.error("Failed to save app settings: %s", e)
+        s = await get_app_settings(db)
+        legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {
             "s": s,
             "saved": False,
             "error": "Failed to save settings.",
+            "legal_configured": legal_configured,
         }, status_code=500)
 
 
@@ -166,7 +232,7 @@ async def admin_test_smtp(
         smtp_port=safe_int(form.get("smtp_port"), saved.smtp_port or 587),
         smtp_user=form.get("smtp_user", "").strip() or saved.smtp_user,
         smtp_from_email=form.get("smtp_from_email", "").strip() or saved.smtp_from_email,
-        smtp_use_tls=form.get("smtp_use_tls") == "true" if "smtp_use_tls" in form else saved.smtp_use_tls,
+        smtp_use_tls=form.get("smtp_use_tls") == "true",
         # Use new password if provided, otherwise keep saved encrypted password
         smtp_password_encrypted=(
             encrypt(form["smtp_password"].strip())
@@ -320,10 +386,14 @@ async def admin_force_fetch(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.fetcher.rss import fetch_feed
     feed = await get_feed(db, feed_id)
     if feed:
-        await fetch_feed(feed, db)
+        if feed.feed_type == "scrape":
+            from app.fetcher.scrape import fetch_scrape_feed
+            await fetch_scrape_feed(feed, db)
+        else:
+            from app.fetcher.rss import fetch_feed
+            await fetch_feed(feed, db)
         await log_audit(db, user.id, "feed_force_fetch", target_type="feed", target_id=feed_id)
     return await _feeds_response(request, db, user)
 

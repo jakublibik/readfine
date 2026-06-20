@@ -1,0 +1,263 @@
+{% extends "settings/base.html" %}
+{% set active = "ai" %}
+{% block title %}AI – Readfine{% endblock %}
+
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">AI</h1>
+
+{% if s.last_ai_error and s.last_ai_error_at %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+  <span class="font-medium">Last AI error</span>
+  ({{ s.last_ai_error_at.strftime("%Y-%m-%d %H:%M") }} UTC):
+  {{ s.last_ai_error }}
+</div>
+{% endif %}
+
+{% if keys_saved %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">API key for {{ keys_saved }} saved.</div>
+{% elif keys_deleted %}
+<div class="mb-4 px-4 py-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-700">API key for {{ keys_deleted }} removed.</div>
+{% elif keys_error %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ keys_error }}</div>
+{% elif prefs_saved and content_limit_reset %}
+<div class="mb-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">AI settings saved. Content limit was invalid — reset to 20 000. Must be between 1 000 and 100 000.</div>
+{% elif prefs_saved %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">AI settings saved.</div>
+{% elif prefs_error %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ prefs_error }}</div>
+{% endif %}
+
+{# ── API Keys ──────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">API Keys</h2>
+  <div class="space-y-3">
+    {% for provider in providers %}
+    <form method="POST" action="/settings/ai/keys" hx-boost="true" hx-push-url="/settings/ai"
+          class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <input type="hidden" name="provider" value="{{ provider }}">
+      <div class="flex items-center gap-3">
+        <span class="w-24 text-sm text-gray-700 capitalize">{{ provider }}</span>
+        {% if keys[provider] %}
+          <span class="text-xs text-green-600">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
+        {% endif %}
+      </div>
+      {% if keys[provider] %}
+        <input type="text" name="api_key" autocomplete="off" placeholder="Replace key…"
+               class="w-full sm:flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono min-w-0">
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 sm:flex-none px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Update</button>
+          <button type="submit" formaction="/settings/ai/keys" data-clear-key
+                  class="flex-1 sm:flex-none px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
+        </div>
+      {% else %}
+        <input type="text" name="api_key" autocomplete="off" placeholder="Paste API key…"
+               class="w-full sm:flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono min-w-0">
+        <button type="submit" class="sm:self-auto px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
+      {% endif %}
+    </form>
+    {% endfor %}
+  </div>
+  <p class="text-xs text-gray-500 mt-3">
+    Your key is stored encrypted and used only for your own requests.
+    <span class="text-amber-600">Note: Google's free Gemini tier may use your prompts and responses
+    to train its models — use a paid Gemini key to opt out.</span>
+  </p>
+  <p class="text-xs text-gray-500 mt-1">
+    Get an API key:
+    <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">Anthropic</a> ·
+    <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">OpenAI</a> ·
+    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline">Google</a>
+  </p>
+</section>
+
+{# ── Model Slots ───────────────────────────────────────────────────────────── #}
+<form method="POST" action="/settings/ai/preferences" hx-boost="true" hx-push-url="/settings/ai">
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Models</h2>
+  <p class="text-xs text-gray-500 mb-1">
+    Fast model is used for article scoring. Quality model is used for summaries, chat, interest profile generation, and catch me up & briefings (unless overridden per-run).
+  </p>
+  <p class="text-xs text-gray-500 mb-4">
+    Enter a model alias (e.g. <code class="font-mono">claude-haiku-4-5</code>) or a specific version ID. Aliases always resolve to the latest version.
+  </p>
+
+  {% for slot, slot_label, provider_val, model_val in [
+    ("fast",    "Fast",    s.ai_fast_provider,    s.ai_fast_model),
+    ("quality", "Quality", s.ai_quality_provider, s.ai_quality_model),
+  ] %}
+  <div class="mb-5">
+    <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-1">
+      <div class="flex items-center gap-3">
+        <span class="w-16 text-sm font-medium text-gray-700">{{ slot_label }}</span>
+        <select name="ai_{{ slot }}_provider"
+                data-slot="{{ slot }}"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
+          <option value="">— provider —</option>
+          {% for p in providers %}
+          <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ p }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex items-center gap-2 sm:gap-3 sm:flex-1">
+        <input type="text" name="ai_{{ slot }}_model"
+               value="{{ model_val or '' }}"
+               placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
+               class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
+        <button type="button"
+                hx-post="/settings/ai/verify/{{ slot }}"
+                hx-target="#verify-{{ slot }}"
+                hx-swap="innerHTML"
+                hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model']"
+                data-loading-target="verify-{{ slot }}" data-loading-text="Verifying…"
+                class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 whitespace-nowrap">
+          Verify
+        </button>
+      </div>
+    </div>
+    <div class="flex items-center gap-3 mt-0.5">
+      <span class="w-16 hidden sm:block"></span>
+      <span id="verify-{{ slot }}" class="text-sm text-gray-400"></span>
+      <a id="models-link-{{ slot }}"
+         href="{{ provider_docs[provider_val] if provider_val else '#' }}"
+         target="_blank" rel="noopener"
+         data-anthropic="https://docs.anthropic.com/en/docs/about-claude/models"
+         data-openai="https://platform.openai.com/docs/models"
+         data-gemini="https://ai.google.dev/gemini-api/docs/models/gemini"
+         class="text-xs text-blue-500 hover:underline {% if not provider_val %}hidden{% endif %}">Available models →</a>
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="space-y-4 mt-4">
+    <div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_scoring_enabled_default" id="ai_scoring_enabled_default"
+               {% if s.ai_scoring_enabled_default %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300"
+               id="chk-scoring-enabled">
+        <label for="ai_scoring_enabled_default" class="text-sm font-medium text-gray-700">
+          Enable article scoring
+        </label>
+      </div>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+      {% if s.ai_scoring_enabled_default and not s.ai_preference_text %}
+      <p class="text-xs text-amber-600 mt-1 ml-6">Scoring is enabled but no interest profile is set — articles will not be scored until you fill in the profile below.</p>
+      {% endif %}
+    </div>
+    <div class="ml-6">
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
+               {% if s.ai_score_show_in_list %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        <label for="ai_score_show_in_list" class="text-sm text-gray-700">
+          Show score in article list
+        </label>
+      </div>
+    </div>
+    <div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_summary_enabled_default" id="ai_summary_enabled_default"
+               {% if s.ai_summary_enabled_default %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        <label for="ai_summary_enabled_default" class="text-sm font-medium text-gray-700">
+          Auto-summarize starred articles
+        </label>
+      </div>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the quality model. Per-feed override available in feed settings.</p>
+      <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
+    </div>
+    <div>
+      <div class="flex items-center gap-2">
+        <input type="checkbox" name="ai_chat_enabled" id="ai_chat_enabled"
+               {% if s.ai_chat_enabled %}checked{% endif %}
+               class="w-4 h-4 text-purple-600 rounded border-gray-300">
+        <label for="ai_chat_enabled" class="text-sm font-medium text-gray-700">
+          Enable chat
+        </label>
+      </div>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat — accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
+    </div>
+    <div>
+      <label for="ai_content_limit" class="text-sm font-medium text-gray-700">Article content limit</label>
+      <div class="flex items-center gap-2 mt-1">
+        <input type="text" inputmode="numeric" name="ai_content_limit" id="ai_content_limit"
+               value="{{ '{:,}'.format(s.ai_content_limit).replace(',', ' ') }}"
+               class="w-28 border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <span class="text-xs text-gray-500">characters</span>
+      </div>
+      <p class="text-xs text-gray-500 mt-1">Maximum characters of normalized article text (HTML stripped, whitespace collapsed) sent to AI for summaries, context, and chat. Higher values improve quality for long articles at the cost of more tokens. Default: 20 000.</p>
+    </div>
+    <div>
+      <label for="ai_summary_prompt" class="text-xs font-medium text-gray-600 block mb-1">Summary prompt <span class="font-normal text-gray-400">(leave blank for default)</span> · <button type="button" data-insert-default="#ai_summary_prompt" class="font-normal text-blue-600 hover:underline bg-transparent border-0 p-0 cursor-pointer">insert default</button></label>
+      <textarea name="ai_summary_prompt" id="ai_summary_prompt" rows="3"
+                placeholder="{{ default_summary_prompt }}"
+                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_summary_prompt or '' }}</textarea>
+    </div>
+    <div>
+      <label for="ai_context_prompt" class="text-xs font-medium text-gray-600 block mb-1">Context prompt <span class="font-normal text-gray-400">(leave blank for default)</span> · <button type="button" data-insert-default="#ai_context_prompt" class="font-normal text-blue-600 hover:underline bg-transparent border-0 p-0 cursor-pointer">insert default</button></label>
+      <textarea name="ai_context_prompt" id="ai_context_prompt" rows="3"
+                placeholder="{{ default_context_prompt }}"
+                class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_context_prompt or '' }}</textarea>
+      <p class="text-xs text-gray-400 mt-1">Users can add a per-article focus when generating context.</p>
+    </div>
+    {% if summary_banner_html is defined %}
+    {{ summary_banner_html | safe }}
+    {% else %}
+    <div id="ai-summary-banner"></div>
+    {% endif %}
+  </div>
+</section>
+
+{# ── Preference Text ───────────────────────────────────────────────────────── #}
+<section id="preference-section" class="mb-8 {% if not s.ai_scoring_enabled_default %}opacity-50{% endif %}">
+  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Interest profile</h2>
+  <p class="text-xs text-gray-500 mb-3">Used by scoring to rate article relevance. The more specific, the better.</p>
+
+  <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
+            placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Low relevance: sports, lifestyle&#10;No relevance: celebrity news, entertainment gossip"
+            {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
+  <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
+
+  <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles — <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
+  <div id="pref-cold-start-warning">
+    {% if pref_strong_count < 20 %}
+    <p class="text-xs text-amber-600 mt-1 mb-1">
+      Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far — profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
+    </p>
+    {% endif %}
+  </div>
+  <div class="flex items-center gap-3">
+    <button type="button" id="btn-generate-preference"
+            hx-post="/settings/ai/generate-preference"
+            hx-target="#preference-message"
+            hx-swap="innerHTML"
+            data-loading-target="preference-message" data-loading-text="Generating…"
+            {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+            class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
+      ✨ Generate from reading history
+    </button>
+    <span id="preference-message" class="text-sm"></span>
+  </div>
+</section>
+
+<div class="mb-6">
+  <button type="submit"
+          class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+    Save AI settings
+  </button>
+</div>
+</form>
+
+{# ── Cost Estimate ─────────────────────────────────────────────────────────── #}
+<section>
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Usage &amp; cost estimate</h2>
+  <p class="text-xs text-gray-500 mb-3">Actual token counts from processed jobs. Cost estimates only — output tokens priced ~4–5× input.</p>
+  {% include "settings/partials/ai_cost_table.html" %}
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('js/ai-settings.js') }}"></script>
+{% endblock %}

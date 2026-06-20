@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="min-h-screen py-12 px-4 dark:bg-gray-950">
+  <div class="max-w-3xl mx-auto">
+
+    <div class="text-center mb-8">
+      <a href="/login" class="text-2xl font-semibold text-gray-900 hover:text-gray-700 dark:text-gray-100 dark:hover:text-gray-300">Readfine</a>
+    </div>
+
+    <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
+
+      <div class="mb-8">
+        <h1 class="text-xl font-semibold text-gray-900 mb-1 dark:text-gray-100">{% block legal_title %}{% endblock %}</h1>
+        {% if legal_last_updated %}
+        <p class="text-xs text-gray-400 dark:text-gray-500">Last updated: {{ legal_last_updated }}</p>
+        {% endif %}
+      </div>
+
+      <div class="space-y-8 text-sm text-gray-700 dark:text-gray-300">
+        {% block legal_content %}{% endblock %}
+      </div>
+
+    </div>
+
+    <div class="text-center mt-6 text-xs text-gray-400 space-x-3">
+      <a href="/terms" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Terms of Service</a>
+      <span>·</span>
+      <a href="/privacy" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Privacy Policy</a>
+      <span>·</span>
+      <a href="/help" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Help</a>
+      <span>·</span>
+      <a href="/login" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Sign in</a>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

@@ -4,9 +4,138 @@
 
 {% block scripts %}
 <meta name="app-buckets" data-small="{{ bucket_small_max }}" data-medium="{{ bucket_medium_max }}">
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var _articleId = null;
+  var _start = null;       // Date.now() when current visible period started, null when tab hidden
+  var _accumulated = 0;   // seconds accumulated during previous visible periods
+
+  function _csrf() {
+    var c = document.cookie.split('; ').find(function(r) { return r.startsWith('csrftoken='); });
+    return c ? c.split('=')[1] : '';
+  }
+
+  function _elapsed() {
+    var vis = _start ? Math.round((Date.now() - _start) / 1000) : 0;
+    return _accumulated + vis;
+  }
+
+  function _send() {
+    if (!_articleId) return;
+    var seconds = _elapsed();
+    var id = _articleId;
+    _articleId = null;
+    _start = null;
+    _accumulated = 0;
+    if (seconds <= 3) return;
+    fetch('/htmx/articles/' + id + '/dwell', {
+      method: 'POST',
+      keepalive: true,
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-csrftoken': _csrf() },
+      body: 'seconds=' + seconds,
+    });
+  }
+
+  function _onHtmxRequest(e) {
+    var targetId = e.detail && e.detail.target && e.detail.target.id;
+    if (targetId === 'article-detail' || targetId === 'article-list'
+        || targetId === 'inline-article-detail-content') _send();
+  }
+
+  window._dwellSend = _send;
+
+  document.body.addEventListener('htmx:before-request', _onHtmxRequest);
+  window.addEventListener('beforeunload', _send);
+
+  document.body.addEventListener('htmx:after-settle', function (e) {
+    var targetId = e.detail && e.detail.target && e.detail.target.id;
+    // 3-panel loads into #article-detail; 2-panel expands inline into
+    // #inline-article-detail-content — track both, else dwell is never recorded.
+    var root = null;
+    if (targetId === 'article-detail') {
+      root = document.getElementById('article-detail-root');
+    } else if (targetId === 'inline-article-detail-content') {
+      root = e.detail.target.querySelector('[data-article-id]');
+    }
+    if (root) {
+      _articleId = root.dataset.articleId || null;
+      _accumulated = 0;
+      _start = (_articleId && document.visibilityState !== 'hidden') ? Date.now() : null;
+    }
+  });
+
+  // Re-detect the article currently on screen (used when resuming after a flush).
+  function _rearm() {
+    if (_articleId) return;
+    var el = document.querySelector('#inline-article-detail-content [data-article-id]')
+          || document.getElementById('article-detail-root');
+    if (el) { _articleId = el.dataset.articleId || null; _accumulated = 0; }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    // Flush on hide rather than just banking: beforeunload is unreliable when the
+    // page is frozen/discarded on mobile (app switch, screen lock).
+    if (document.visibilityState === 'hidden') {
+      _send();
+    } else {
+      _rearm();
+      if (_articleId) _start = Date.now();
+    }
+  });
+  window.addEventListener('pagehide', _send);
+})();
+</script>
 {% endblock %}
 
 {% block content %}
+<!-- Mobile bottom bar (hideable-up mode, small bucket only) -->
+<div id="mobile-bottom-bar">
+  <button id="mobile-bottombar-open-btn" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Open feeds">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+  {% if chat_available %}
+  <button id="mobile-bottom-chat-btn" type="button"
+          class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100"
+          aria-label="AI Chat">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+    </svg>
+  </button>
+  {% endif %}
+  <div class="flex-1"></div>
+  <button id="mobile-bottom-refresh-btn" type="button"
+          class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Refresh">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+    </svg>
+  </button>
+  <button id="mobile-bottom-quicklink" type="button"
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+</div>
+
+<!-- Mobile title bar (hideable mode, small bucket only) -->
+<div id="mobile-title-bar">
+  <button id="mobile-titlebar-open-btn" class="flex-shrink-0 w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100" aria-label="Open feeds">
+    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+    </svg>
+  </button>
+  <div class="flex-1 flex items-center gap-1.5 min-w-0">
+    <span id="mobile-title-text" class="truncate text-sm font-medium text-gray-700"></span>
+    <span id="mobile-title-count" class="hidden"></span>
+  </div>
+  <button id="mobile-title-quicklink" type="button"
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+</div>
+
+<!-- Mobile sidebar backdrop -->
+<div id="mobile-sidebar-backdrop"></div>
+
 <!-- Search modal overlay -->
 <div id="search-modal-overlay"
      class="hidden fixed inset-0 z-50 flex items-center justify-center">
@@ -18,15 +147,95 @@
 
 <!-- Global label picker popover -->
 <div id="label-picker"
-     class="hidden fixed z-40 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[220px] max-h-64 overflow-y-auto"></div>
+     class="hidden fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[220px] max-h-64 overflow-y-auto"></div>
 
-<div class="flex h-screen overflow-hidden">
+<!-- Detail share picker (mobile) -->
+<div id="detail-share-picker" class="hidden fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px]">
+  <button id="detail-share-pick-original" class="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+    </svg>
+    Original article
+  </button>
+  <button id="detail-share-pick-readfine" class="w-full text-left flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+    <svg class="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+    </svg>
+    Readfine link
+  </button>
+</div>
+
+{% if chat_available %}
+<!-- General AI Chat Modal -->
+<div id="general-chat-modal"
+     class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center pt-12 sm:p-8">
+  <div id="general-chat-backdrop" class="absolute inset-0 bg-black/50 dark:bg-black/70"></div>
+  <div class="relative z-10 w-full max-w-3xl max-h-full sm:max-h-[80vh]
+              flex flex-col bg-white dark:bg-gray-900 rounded-xl shadow-xl">
+    <!-- Header -->
+    <div class="flex items-center justify-between px-2 sm:px-4 py-3
+                border-b border-gray-100 dark:border-gray-700 flex-shrink-0">
+      <div class="flex items-center gap-3">
+        <span class="text-sm font-semibold text-gray-700 dark:text-gray-200">Quick Chat</span>
+        <button hx-delete="/htmx/ai-chat"
+                hx-target="#general-chat-area"
+                hx-swap="outerHTML"
+                class="text-xs text-gray-400 hover:text-red-500 mt-px">Clear</button>
+      </div>
+      <button id="general-chat-close-btn"
+              class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <!-- Chat area (swapped by HTMX) -->
+    <div id="general-chat-area"
+         class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
+      <input type="hidden" id="general-chat-history" name="history" value="[]">
+      <input type="hidden" id="general-chat-article-id" name="article_id" value="">
+      <div id="general-chat-messages"
+           class="flex-1 overflow-y-auto overscroll-contain space-y-3 mb-3 min-h-0"></div>
+      <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
+        <textarea id="general-chat-input" name="message" rows="3"
+                  placeholder="Ask a question…"
+                  class="w-full text-sm border border-gray-200 dark:border-gray-600
+                         dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
+                  data-general-chat-input></textarea>
+        <div class="flex items-center pl-0.5">
+          <div class="flex items-center gap-1 min-w-0 flex-1">
+            <button type="button" id="general-chat-attach-btn"
+                    class="hidden w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 bg-transparent border-0 cursor-pointer flex-shrink-0"
+                    title="Attach article">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+              </svg>
+            </button>
+            <span id="general-chat-attach-title"
+                  class="hidden text-xs text-gray-400 dark:text-gray-500 truncate"></span>
+            <input type="checkbox" name="include_article" id="general-chat-include-article" class="sr-only">
+          </div>
+        </div>
+        <button id="general-chat-submit" class="hidden"
+                hx-post="/htmx/ai-chat"
+                hx-include="#general-chat-input,#general-chat-include-article,#general-chat-history,#general-chat-article-id"
+                hx-target="#general-chat-area"
+                hx-swap="outerHTML"></button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="flex h-screen overflow-hidden bg-gray-50">
 
   <!-- Left panel: sidebar -->
   <aside id="sidebar"
-         class="w-56 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
+         class="w-60 flex-shrink-0 border-r border-gray-200 bg-gray-50 overflow-y-auto transition-[width] duration-200"
          hx-get="/htmx/sidebar"
-         hx-trigger="load, sidebarRefresh from:body, every 60s"
+         hx-trigger="load, sidebarRefresh from:body, every 300s"
+         hx-sync="this:abort"
          hx-vals="{}"
          hx-swap="innerHTML">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
@@ -35,10 +244,7 @@
   <!-- Middle panel: article list -->
   <section id="article-list"
            class="flex-shrink-0 border-gray-200 bg-white overflow-y-auto"
-           style="width:28rem"
-           hx-get="/htmx/articles"
-           hx-trigger="load"
-           hx-swap="innerHTML">
+           style="width:28rem">
     <div class="p-4 text-gray-400 text-sm">Loading…</div>
   </section>
 
@@ -48,6 +254,13 @@
 
   <!-- Right panel: article detail -->
   <main id="article-detail" class="flex-1 overflow-y-auto bg-white">
+    {% if open_article_id %}
+    <div hx-get="/htmx/articles/{{ open_article_id }}"
+         hx-target="#article-detail"
+         hx-swap="innerHTML"
+         hx-trigger="load"
+         data-deeplink-open></div>
+    {% else %}
     <div class="flex items-center justify-center h-full text-gray-400">
       <div class="text-center">
         <svg class="mx-auto mb-3 h-10 w-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -57,6 +270,7 @@
         <p class="text-sm">Select an article to read</p>
       </div>
     </div>
+    {% endif %}
   </main>
 
 </div>

@@ -1,55 +1,187 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "tokens" %}
 {% block title %}API Tokens – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-2xl mx-auto px-4 py-8">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-      <h1 class="text-xl font-semibold text-gray-900">API Tokens</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
-      <a href="/settings/feeds" class="text-sm text-blue-600 hover:underline">Feeds</a>
-      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
-      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
-    </div>
-  </div>
 
-  <p class="text-sm text-gray-500 mb-6">
-    API tokens allow external apps to access Readfine on your behalf.
-    A token is shown only once when created — store it somewhere safe.
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">API Tokens</h1>
+
+<p class="text-sm text-gray-500 mb-6">
+  API tokens allow external apps to access Readfine on your behalf.
+  A token is shown only once when created — store it somewhere safe.
+</p>
+
+{% if new_token %}
+<div class="mb-6 p-4 bg-green-50 border border-green-200 rounded">
+  <p class="text-sm font-medium text-green-800 mb-2">Token "<strong>{{ new_token_name }}</strong>" created — copy it now, it won't be shown again:</p>
+  <code class="block bg-white border border-green-300 rounded px-3 py-2 text-sm font-mono break-all text-gray-900 select-all">{{ new_token }}</code>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+{% endif %}
+
+<!-- Create new token -->
+<form method="POST" action="/settings/tokens" class="mb-8 flex gap-2 items-end">
+  <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+  <div class="flex-1">
+    <label class="block text-sm font-medium text-gray-700 mb-1">New token name</label>
+    <input type="text" name="name" required maxlength="100" placeholder="e.g. My script"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+  </div>
+  <button type="submit"
+          class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
+    Generate token
+  </button>
+</form>
+
+<!-- Token list -->
+<div id="tokens-list">
+  {% include "settings/partials/tokens_list.html" %}
+</div>
+
+<!-- API Documentation -->
+<div class="mt-10 pt-8 border-t border-gray-200">
+  <h2 class="text-base font-semibold text-gray-900 mb-1">API Documentation</h2>
+  <p class="text-sm text-gray-500 mb-5">
+    Use your token to access the REST API from scripts, clients, or external tools.
+    Machine-readable spec: <a href="/openapi.json" target="_blank" class="text-blue-600 hover:underline font-mono text-xs">/openapi.json</a>
+    (import into Postman, Insomnia, etc.)
   </p>
 
-  {% if new_token %}
-  <div class="mb-6 p-4 bg-green-50 border border-green-200 rounded">
-    <p class="text-sm font-medium text-green-800 mb-2">Token "<strong>{{ new_token_name }}</strong>" created — copy it now, it won't be shown again:</p>
-    <code class="block bg-white border border-green-300 rounded px-3 py-2 text-sm font-mono break-all text-gray-900 select-all">{{ new_token }}</code>
+  <!-- Authentication -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Authentication</h3>
+  <p class="text-sm text-gray-600 mb-2">Add the token to every request as a Bearer header:</p>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-3 overflow-x-auto">Authorization: Bearer &lt;your-token&gt;</pre>
+  <p class="text-sm text-gray-600 mb-5">
+    For scripts and long-running integrations, use an <strong>API token</strong> created above — it does not expire and can be
+    revoked here at any time. The short-lived JWT from <code class="bg-gray-100 px-1 rounded">POST /auth/token</code> (valid 60 minutes)
+    is meant for interactive logins and is invalidated when you change your password.
+  </p>
+
+  <!-- Base URL -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Base URL</h3>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">{{ request.base_url }}api/v1</pre>
+
+  <!-- Quick example -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-2">Example</h3>
+  <pre class="bg-gray-50 border border-gray-200 rounded px-4 py-3 text-xs font-mono text-gray-800 mb-5 overflow-x-auto">curl -H "Authorization: Bearer &lt;token&gt;" \
+     {{ request.base_url }}api/v1/articles?unread_only=true</pre>
+
+  <!-- Endpoint reference -->
+  <h3 class="text-sm font-semibold text-gray-800 mb-3">Endpoints</h3>
+  <div class="overflow-x-auto">
+    <table class="w-full text-xs border-collapse">
+      <thead>
+        <tr class="bg-gray-50 border border-gray-200">
+          <th class="text-left px-3 py-2 font-semibold text-gray-700 border-r border-gray-200 w-16">Method</th>
+          <th class="text-left px-3 py-2 font-semibold text-gray-700 border-r border-gray-200">Path</th>
+          <th class="text-left px-3 py-2 font-semibold text-gray-700">Description</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100 border border-gray-200 border-t-0">
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Articles</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles</td>
+          <td class="px-3 py-2 text-gray-600">List articles. Params: <code class="bg-gray-100 px-1 rounded">feed_id</code> <code class="bg-gray-100 px-1 rounded">folder_id</code> <code class="bg-gray-100 px-1 rounded">unread_only</code> <code class="bg-gray-100 px-1 rounded">starred_only</code> <code class="bg-gray-100 px-1 rounded">archived_only</code> <code class="bg-gray-100 px-1 rounded">q</code> <code class="bg-gray-100 px-1 rounded">limit</code> <code class="bg-gray-100 px-1 rounded">offset</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Get article detail (includes readable content)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Update state. Body: <code class="bg-gray-100 px-1 rounded">{"is_read": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_starred": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_archived": true}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}/labels</td>
+          <td class="px-3 py-2 text-gray-600">Assign label. Body: <code class="bg-gray-100 px-1 rounded">{"label_id": 1}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}/labels/{label_id}</td>
+          <td class="px-3 py-2 text-gray-600">Remove label from article</td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Feeds</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds</td>
+          <td class="px-3 py-2 text-gray-600">List subscribed feeds</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds</td>
+          <td class="px-3 py-2 text-gray-600">Subscribe. Body: <code class="bg-gray-100 px-1 rounded">{"url": "...", "folder_id": null}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Get feed details</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Update feed (title, folder, readable extraction, purge settings)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/feeds/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Unsubscribe from feed</td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Folders &amp; Labels</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders</td>
+          <td class="px-3 py-2 text-gray-600">List folders</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders</td>
+          <td class="px-3 py-2 text-gray-600">Create folder. Body: <code class="bg-gray-100 px-1 rounded">{"name": "..."}</code></td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Rename folder</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-red-700 border-r border-gray-100">DELETE</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/folders/{id}</td>
+          <td class="px-3 py-2 text-gray-600">Delete folder (feeds moved to uncategorized)</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/labels</td>
+          <td class="px-3 py-2 text-gray-600">List labels</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/labels</td>
+          <td class="px-3 py-2 text-gray-600">Create label. Body: <code class="bg-gray-100 px-1 rounded">{"name": "...", "color": "#3b82f6"}</code></td>
+        </tr>
+
+        <tr class="bg-gray-50/50"><td colspan="3" class="px-3 py-1.5 font-semibold text-gray-500 text-xs uppercase tracking-wide">Auth</td></tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/auth/token</td>
+          <td class="px-3 py-2 text-gray-600">Exchange email/password for a short-lived JWT (60&nbsp;min). For long-lived access use an API token instead.</td>
+        </tr>
+        <tr>
+          <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/auth/me</td>
+          <td class="px-3 py-2 text-gray-600">Verify token and return current user info</td>
+        </tr>
+      </tbody>
+    </table>
   </div>
-  {% endif %}
 
-  {% if error %}
-  <div class="mb-4 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
-  {% endif %}
-
-  <!-- Create new token -->
-  <form method="POST" action="/settings/tokens" class="mb-8 flex gap-2 items-end">
-    <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
-    <div class="flex-1">
-      <label class="block text-sm font-medium text-gray-700 mb-1">New token name</label>
-      <input type="text" name="name" required maxlength="100" placeholder="e.g. My script"
-             class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-    </div>
-    <button type="submit"
-            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
-      Generate token
-    </button>
-  </form>
-
-  <!-- Token list -->
-  <div id="tokens-list">
-    {% include "settings/partials/tokens_list.html" %}
-  </div>
-
-
+  <p class="text-xs text-gray-400 mt-4">All endpoints return JSON. Errors follow <code class="bg-gray-100 px-1 rounded">{"detail": "..."}</code> format. 401 = invalid/revoked token.</p>
 </div>
+
 {% endblock %}

@@ -19,7 +19,7 @@ async def get_feeds(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_user_feeds(user, db)
+    return await list_user_feeds(user, db, include_unread=True)
 
 
 @router.post("", response_model=UserFeedResponse, status_code=status.HTTP_201_CREATED)
@@ -110,12 +110,27 @@ async def update_feed(
     auth_fields = {"fetch_auth_user", "fetch_auth_pass"} & payload.model_fields_set
     if auth_fields:
         feed = user_feed.feed
-        if feed.is_private:
-            if "fetch_auth_user" in payload.model_fields_set and not payload.fetch_auth_user:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_user cannot be empty for a private feed")
-            if "fetch_auth_pass" in payload.model_fields_set and not payload.fetch_auth_pass:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_pass cannot be empty for a private feed")
+        if feed.status == "disabled":
+            feed.status = "active"
+        feed.fetch_error_count = 0
+        if not feed.is_private:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="HTTP auth credentials can only be set on private feeds",
+            )
+        # Count current subscribers to prevent one user from overwriting shared private feed auth
+        sub_count_result = await db.execute(
+            select(UserFeed).where(UserFeed.feed_id == feed.id)
+        )
+        subscriber_count = len(sub_count_result.scalars().all())
+        if subscriber_count > 1:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="HTTP auth credentials cannot be changed while multiple users are subscribed to this feed",
+            )
         if "fetch_auth_user" in payload.model_fields_set:
+            if not payload.fetch_auth_user:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_user cannot be empty")
             feed.fetch_auth_user = payload.fetch_auth_user
         if "fetch_auth_pass" in payload.model_fields_set and payload.fetch_auth_pass:
             feed.fetch_auth_pass_encrypted = encrypt(payload.fetch_auth_pass.get_secret_value())

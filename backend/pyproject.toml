@@ -1,7 +1,8 @@
 [project]
 name = "readfine"
-version = "0.1.0"
+version = "0.9.0"
 description = "Self-hosted RSS reader"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 dependencies = [
     # Web framework
@@ -28,6 +29,8 @@ dependencies = [
     # Readable extraction
     "trafilatura>=1.12.0",
     "readability-lxml>=0.8.1",
+    # Web scraping
+    "beautifulsoup4>=4.12.0",
     # HTML sanitization
     "nh3>=0.2.17",
     # Safe XML parsing
@@ -38,6 +41,14 @@ dependencies = [
     "aiosmtplib>=3.0.0",
     # Encryption
     "cryptography>=42.0.0",
+    "htmldate>=1.9.4",
+    # AI providers
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "google-genai>=1.0.0",
+    "mistune>=3.2.1",
+    "css-inline>=0.20.2",
+    "tzdata>=2025.3",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +64,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests that require a real (PostgreSQL) database",
+]
 
 [dependency-groups]
 dev = [

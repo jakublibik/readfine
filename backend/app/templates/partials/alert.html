@@ -1,0 +1,9 @@
+{% macro alert(type, message) %}
+{% if type == "success" %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">{{ message }}</div>
+{% elif type == "error" %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ message }}</div>
+{% elif type == "info" %}
+<div class="mb-4 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">{{ message }}</div>
+{% endif %}
+{% endmacro %}

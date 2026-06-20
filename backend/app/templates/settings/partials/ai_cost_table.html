@@ -1,0 +1,88 @@
+<div id="ai-cost-table">
+  <div class="flex items-center gap-1 mb-3">
+    <button hx-get="/settings/ai/cost-partial?days=30"
+            hx-target="#ai-cost-table"
+            hx-swap="outerHTML"
+            class="px-3 py-1 text-sm rounded {% if active_days == 30 %}bg-white shadow-sm text-gray-900 font-medium{% else %}text-gray-500 hover:bg-white hover:shadow-sm{% endif %}">30d</button>
+    <button hx-get="/settings/ai/cost-partial?days=7"
+            hx-target="#ai-cost-table"
+            hx-swap="outerHTML"
+            class="px-3 py-1 text-sm rounded {% if active_days == 7 %}bg-white shadow-sm text-gray-900 font-medium{% else %}text-gray-500 hover:bg-white hover:shadow-sm{% endif %}">7d</button>
+  </div>
+  <div class="overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0">
+  <table class="w-full text-sm min-w-[32rem]">
+    <thead>
+      <tr class="text-left text-xs text-gray-500 border-b border-gray-200">
+        <th class="pb-1 font-medium">Operation</th>
+        <th class="pb-1 font-medium text-right">Count</th>
+        <th class="pb-1 font-medium text-right">Input tok.</th>
+        <th class="pb-1 font-medium text-right">Output tok.</th>
+        <th class="pb-1 font-medium text-right">Est. cost</th>
+        <th class="pb-1 font-medium text-right">Trend</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for op in cost_stats.operations %}
+      {% if op.row_type in ("subtotal", "total") %}
+      <tr class="{% if op.operation in ('_total_fast', '_total_all') %}border-t !border-gray-300{% elif op.operation == '_total_quality' %}border-t{% endif %} {% if op.row_type == 'total' %}font-semibold{% else %}text-gray-500{% endif %}">
+        <td class="py-1 {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ op.label }}</td>
+        <td class="py-1"></td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.input_tokens) }}</td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.output_tokens) }}</td>
+        <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">
+          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% else %}<span class="text-gray-400 text-xs">—</span>{% endif %}
+        </td>
+        <td class="py-1"></td>
+      </tr>
+      {% else %}
+      <tr {% if op.is_placeholder %}class="opacity-40"{% endif %}>
+        <td class="py-2 text-gray-700">
+          {{ op.label }}
+          {% if op.slot and not op.operation.startswith("catch_me_up") %}<span class="text-xs text-gray-400">({{ op.slot }})</span>{% endif %}
+        </td>
+        {% if op.is_placeholder %}
+        <td class="py-2 text-right text-gray-400 text-xs" colspan="3">no runs yet</td>
+        <td class="py-2 text-right text-gray-400 text-xs">
+          {% if op.est_cost is not none %}~${{ "%.4f"|format(op.est_cost) }}<span class="text-[10px] ml-0.5">est.</span>
+          {% else %}—{% endif %}
+        </td>
+        <td></td>
+        {% elif op.operation == "chat" %}
+        <td class="py-2 text-right text-gray-600">{{ op.count }} msg</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.output_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">
+          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% else %}<span class="text-gray-400 text-xs">unknown model</span>{% endif %}
+        </td>
+        <td class="py-2 text-right">
+          {% if op.trend_pct is not none %}
+            {% if op.trend_pct > 5 %}<span class="text-red-500 text-xs">↑{{ op.trend_pct|abs }}%</span>
+            {% elif op.trend_pct < -5 %}<span class="text-green-600 text-xs">↓{{ op.trend_pct|abs }}%</span>
+            {% else %}<span class="text-gray-400 text-xs">→</span>{% endif %}
+          {% else %}<span class="text-gray-300 text-xs">—</span>{% endif %}
+        </td>
+        {% else %}
+        <td class="py-2 text-right text-gray-600">{{ op.count }}</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.output_tokens) }}</td>
+        <td class="py-2 text-right text-gray-600">
+          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% else %}<span class="text-gray-400 text-xs">unknown model</span>{% endif %}
+        </td>
+        <td class="py-2 text-right">
+          {% if op.trend_pct is not none %}
+            {% if op.trend_pct > 5 %}<span class="text-red-500 text-xs">↑{{ op.trend_pct|abs }}%</span>
+            {% elif op.trend_pct < -5 %}<span class="text-green-600 text-xs">↓{{ op.trend_pct|abs }}%</span>
+            {% else %}<span class="text-gray-400 text-xs">→</span>{% endif %}
+          {% else %}<span class="text-gray-300 text-xs">—</span>{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>

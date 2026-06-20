@@ -1,11 +1,18 @@
 # Claude Code
 .claude/
 REVIEW_NOTES.md
+PLAN.md
 
 # Environment
 .env
 .env.local
 .env.*.local
+
+# Backup config — holds restic/R2 secrets; example template is committed
+backup.env
+
+# Local dev Docker override (keeps prod images immutable)
+docker-compose.override.yml
 
 # Python
 __pycache__/
@@ -21,6 +28,13 @@ build/
 # Alembic
 alembic/versions/*.pyc
 
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
 # IDE
 .vscode/
 .idea/
@@ -30,6 +44,9 @@ alembic/versions/*.pyc
 # OS
 .DS_Store
 Thumbs.db
+
+# Office docs — internal notes/references, never part of the public repo
+*.docx
 
 # Docker
 *.log
@@ -42,4 +59,9 @@ certs/
 
 # Tailwind
 node_modules/
-frontend/node_modules/
+
+# Landing page — operator's live copy is per-instance; example template is committed
+backend/app/templates/landing.html
+
+# Personal Claude Code notes (symlinked to a synced location); not part of the public repo
+CLAUDE.local.md

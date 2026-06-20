@@ -1,244 +1,303 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "preferences" %}
 {% block title %}Preferences – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-2xl mx-auto px-4 py-8">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-      <h1 class="text-xl font-semibold text-gray-900">Preferences</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <a href="/settings/feeds" class="text-sm text-blue-600 hover:underline">Feeds</a>
-      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
-      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
-      <a href="/settings/tokens" class="text-sm text-blue-600 hover:underline">API Tokens</a>
-    </div>
-  </div>
 
-  {% if saved %}
-    <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
-      Preferences saved.
-    </div>
-  {% endif %}
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Preferences</h1>
 
-  <!-- Reading preferences -->
-  <form method="POST" action="/settings/preferences" hx-boost="true" class="space-y-6">
+{% if saved %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">Preferences saved.</div>
+{% endif %}
 
-    <section>
-      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Reading</h2>
-      <div class="space-y-4">
+<form method="POST" action="/settings/preferences" hx-boost="true" class="space-y-6">
 
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Unread filter</label>
-            <p class="text-xs text-gray-500 mt-0.5">Adaptive: show only unread when any exist, otherwise all</p>
-          </div>
-          <select name="unread_filter"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="adaptive" {% if s.unread_filter == "adaptive" %}selected{% endif %}>Adaptive</option>
-            <option value="unread_only" {% if s.unread_filter == "unread_only" %}selected{% endif %}>Unread only</option>
-            <option value="show_all" {% if s.unread_filter == "show_all" %}selected{% endif %}>Show all</option>
-          </select>
-        </div>
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Mark as read on scroll</label>
-            <p class="text-xs text-gray-500 mt-0.5">Automatically mark articles as read when scrolled past</p>
-          </div>
-          <input type="checkbox" name="mark_read_on_scroll" {% if s.mark_read_on_scroll %}checked{% endif %}
-                 class="w-4 h-4 text-blue-600 rounded border-gray-300">
-        </div>
-
-        <div class="flex items-center justify-between">
-          <label class="text-sm font-medium text-gray-700">Default sort order</label>
-          <select name="default_sort_order"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="newest" {% if s.default_sort_order == "newest" %}selected{% endif %}>Newest first</option>
-            <option value="oldest" {% if s.default_sort_order == "oldest" %}selected{% endif %}>Oldest first</option>
-          </select>
-        </div>
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Articles per page</label>
-            <p class="text-xs text-gray-500 mt-0.5">10–200</p>
-          </div>
-          <input type="number" name="articles_per_page" value="{{ s.articles_per_page }}"
-                 min="10" max="200"
-                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
-        </div>
-
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Date &amp; time</h2>
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Timezone</label>
+        <p class="text-xs text-gray-500 mt-0.5">Used to display dates and to schedule briefing emails</p>
       </div>
-    </section>
-
-    <section>
-      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Article list layout</h2>
-      <div class="space-y-4">
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Desktop density</label>
-            <p class="text-xs text-gray-500 mt-0.5">How much space each article row takes</p>
-          </div>
-          <select name="list_density_web"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="compact" {% if s.list_density_web == "compact" %}selected{% endif %}>Compact</option>
-            <option value="comfortable" {% if s.list_density_web == "comfortable" %}selected{% endif %}>Comfortable</option>
-            <option value="summary" {% if s.list_density_web == "summary" %}selected{% endif %}>Summary</option>
-          </select>
-        </div>
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Mobile density</label>
-            <p class="text-xs text-gray-500 mt-0.5">Density on small screens</p>
-          </div>
-          <select name="list_density_mobile"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="comfortable" {% if s.list_density_mobile == "comfortable" %}selected{% endif %}>Comfortable</option>
-            <option value="compact" {% if s.list_density_mobile == "compact" %}selected{% endif %}>Compact</option>
-            <option value="summary" {% if s.list_density_mobile == "summary" %}selected{% endif %}>Summary</option>
-          </select>
-        </div>
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Label display</label>
-            <p class="text-xs text-gray-500 mt-0.5">How labels appear in the article list</p>
-          </div>
-          <select name="label_display"
-                  class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            <option value="none" {% if s.label_display == "none" %}selected{% endif %}>None</option>
-            <option value="indicator" {% if s.label_display == "indicator" %}selected{% endif %}>Indicator</option>
-            <option value="dots" {% if s.label_display == "dots" %}selected{% endif %}>Top 5</option>
-          </select>
-        </div>
-
-      </div>
-    </section>
-
-    <section>
-      <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Layout breakpoints</h2>
-      <p class="text-xs text-gray-500 mb-3">Viewport widths (px) that separate small / medium / large buckets.</p>
-      <div class="space-y-4">
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Small → Medium</label>
-            <p class="text-xs text-gray-500 mt-0.5">Below this width = small bucket</p>
-          </div>
-          <input type="number" name="bucket_small_max" value="{{ s.bucket_small_max }}"
-                 min="320" max="1000"
-                 class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
-        </div>
-
-        <div class="flex items-center justify-between">
-          <div>
-            <label class="text-sm font-medium text-gray-700">Medium → Large</label>
-            <p class="text-xs text-gray-500 mt-0.5">Below this width = medium bucket</p>
-          </div>
-          <input type="number" name="bucket_medium_max" value="{{ s.bucket_medium_max }}"
-                 min="420" max="2000"
-                 class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
-        </div>
-
-      </div>
-    </section>
-
-    <div>
-      <button type="submit"
-              class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-        Save preferences
-      </button>
+      <select name="timezone" class="border border-gray-300 rounded px-2 py-1.5 text-sm max-w-[16rem]">
+        {% if not is_common_timezone(s.timezone) %}
+        <option value="{{ s.timezone }}" selected>{{ s.timezone }}</option>
+        {% endif %}
+        {% for region, zones in timezone_groups() %}
+        <optgroup label="{{ region }}">
+          {% for tz in zones %}
+          <option value="{{ tz }}" {% if tz == s.timezone %}selected{% endif %}>{{ tz }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
     </div>
+  </section>
 
-  </form>
-
-  <!-- Layout per bucket (per-device, stored in localStorage) -->
-  <section class="mt-8 pt-6 border-t border-gray-200">
-    <h2 class="text-sm font-medium text-gray-700 mb-1">Layout per bucket</h2>
-    <p class="text-xs text-gray-500 mb-4">Saved for this device only. 2 = two panels, 3 = three panels.</p>
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Article list</h2>
     <div class="space-y-4">
 
       <div class="flex items-center justify-between">
         <div>
-          <label class="text-sm font-medium text-gray-700">Small bucket</label>
-          <p class="text-xs text-gray-500 mt-0.5">≤ {{ s.bucket_small_max }}px</p>
+          <label class="text-sm font-medium text-gray-700">Unread filter</label>
+          <p class="text-xs text-gray-500 mt-0.5">Adaptive: show only unread when any exist, otherwise all</p>
         </div>
-        <select data-layout-bucket="small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="1">1 panel</option>
-          <option value="2">2 panels</option>
+        <select name="unread_filter" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="adaptive" {% if s.unread_filter == "adaptive" %}selected{% endif %}>Adaptive</option>
+          <option value="unread_only" {% if s.unread_filter == "unread_only" %}selected{% endif %}>Unread only</option>
+          <option value="show_all" {% if s.unread_filter == "show_all" %}selected{% endif %}>Show all</option>
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium text-gray-700">Default sort order</label>
+        <select name="default_sort_order" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="newest" {% if s.default_sort_order == "newest" %}selected{% endif %}>Newest first</option>
+          <option value="oldest" {% if s.default_sort_order == "oldest" %}selected{% endif %}>Oldest first</option>
         </select>
       </div>
 
       <div class="flex items-center justify-between">
         <div>
-          <label class="text-sm font-medium text-gray-700">Medium bucket</label>
-          <p class="text-xs text-gray-500 mt-0.5">{{ s.bucket_small_max + 1 }}–{{ s.bucket_medium_max }}px</p>
+          <label class="text-sm font-medium text-gray-700">Articles per page</label>
+          <p class="text-xs text-gray-500 mt-0.5">10–200</p>
         </div>
-        <select data-layout-bucket="medium" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="2">2 panels</option>
-          <option value="3">3 panels</option>
+        <input type="number" name="articles_per_page" value="{{ s.articles_per_page }}"
+               min="10" max="200"
+               class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Desktop density</label>
+          <p class="text-xs text-gray-500 mt-0.5">How much space each article row takes</p>
+        </div>
+        <select name="list_density_web" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="compact" {% if s.list_density_web == "compact" %}selected{% endif %}>Compact</option>
+          <option value="comfortable" {% if s.list_density_web == "comfortable" %}selected{% endif %}>Comfortable</option>
+          <option value="summary" {% if s.list_density_web == "summary" %}selected{% endif %}>Summary</option>
         </select>
       </div>
 
       <div class="flex items-center justify-between">
         <div>
-          <label class="text-sm font-medium text-gray-700">Large bucket</label>
-          <p class="text-xs text-gray-500 mt-0.5">&gt; {{ s.bucket_medium_max }}px</p>
+          <label class="text-sm font-medium text-gray-700">Mobile density</label>
+          <p class="text-xs text-gray-500 mt-0.5">Density on small screens</p>
         </div>
-        <select data-layout-bucket="large" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="2">2 panels</option>
-          <option value="3">3 panels</option>
+        <select name="list_density_mobile" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="comfortable" {% if s.list_density_mobile == "comfortable" %}selected{% endif %}>Comfortable</option>
+          <option value="compact" {% if s.list_density_mobile == "compact" %}selected{% endif %}>Compact</option>
+          <option value="summary" {% if s.list_density_mobile == "summary" %}selected{% endif %}>Summary</option>
+        </select>
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Label display</label>
+          <p class="text-xs text-gray-500 mt-0.5">How labels appear in the article list</p>
+        </div>
+        <select name="label_display" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="none" {% if s.label_display == "none" %}selected{% endif %}>None</option>
+          <option value="indicator" {% if s.label_display == "indicator" %}selected{% endif %}>Indicator</option>
+          <option value="dots" {% if s.label_display == "dots" %}selected{% endif %}>Top 5</option>
         </select>
       </div>
 
     </div>
   </section>
 
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Reading view</h2>
+    <div class="space-y-4">
 
-  <!-- Change password -->
-  <section class="mt-10 pt-6 border-t border-gray-200">
-    <h2 class="text-sm font-medium text-gray-700 mb-3">Change password</h2>
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Mark as read on scroll</label>
+          <p class="text-xs text-gray-500 mt-0.5">Automatically mark articles as read when scrolled past</p>
+        </div>
+        <input type="checkbox" name="mark_read_on_scroll" {% if s.mark_read_on_scroll %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+      </div>
 
-    {% if pw_error %}
-      <div id="pw-error" tabindex="-1"
-           class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700 focus:outline-none">
-        {{ pw_error }}
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium text-gray-700">Font size</label>
+        <div class="flex rounded border border-gray-300 overflow-hidden text-sm">
+          {% for val, label in [("sm", "Small"), ("md", "Medium"), ("lg", "Large")] %}
+          <label class="relative">
+            <input type="radio" name="reading_font_size" value="{{ val }}"
+                   {% if s.reading_font_size == val %}checked{% endif %}
+                   class="sr-only peer">
+            <span class="block px-3 py-1.5 cursor-pointer select-none
+                         peer-checked:bg-blue-600 peer-checked:text-white
+                         hover:bg-gray-50 text-gray-700 border-l border-gray-300 first:border-l-0">
+              {{ label }}
+            </span>
+          </label>
+          {% endfor %}
+        </div>
       </div>
-    {% endif %}
-    {% if pw_saved %}
-      <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
-        Password changed successfully.
-      </div>
-    {% endif %}
 
-    <form method="POST" action="/settings/password" hx-boost="true" class="space-y-3 max-w-sm">
-      <div>
-        <label class="block text-sm text-gray-600 mb-1">Current password</label>
-        <input type="password" name="current_password" required autocomplete="current-password"
-               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium text-gray-700">Font family</label>
+        <div class="flex rounded border border-gray-300 overflow-hidden text-sm">
+          <label class="relative">
+            <input type="radio" name="reading_font_family" value="sans"
+                   {% if s.reading_font_family == "sans" %}checked{% endif %}
+                   class="sr-only peer">
+            <span class="block px-3 py-1.5 cursor-pointer select-none
+                         peer-checked:bg-blue-600 peer-checked:text-white
+                         hover:bg-gray-50 text-gray-700">
+              Sans-serif
+            </span>
+          </label>
+          <label class="relative">
+            <input type="radio" name="reading_font_family" value="serif"
+                   {% if s.reading_font_family == "serif" %}checked{% endif %}
+                   class="sr-only peer">
+            <span class="block px-3 py-1.5 cursor-pointer select-none border-l border-gray-300
+                         peer-checked:bg-blue-600 peer-checked:text-white
+                         hover:bg-gray-50 text-gray-700" style="font-family: Georgia, serif;">
+              Serif
+            </span>
+          </label>
+        </div>
       </div>
-      <div>
-        <label class="block text-sm text-gray-600 mb-1">New password</label>
-        <input type="password" name="new_password" required minlength="8" autocomplete="new-password"
-               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      </div>
-      <div>
-        <label class="block text-sm text-gray-600 mb-1">Confirm new password</label>
-        <input type="password" name="confirm_password" required autocomplete="new-password"
-               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      </div>
-      <div>
-        <button type="submit"
-                class="px-4 py-1.5 bg-gray-700 text-white text-sm rounded hover:bg-gray-800">
-          Change password
-        </button>
-      </div>
-    </form>
+
+    </div>
   </section>
 
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Layout breakpoints</h2>
+    <p class="text-xs text-gray-500 mb-3">Viewport widths (px) that separate small / medium / large buckets.</p>
+    <div class="space-y-4">
 
-</div>
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Small → Medium</label>
+          <p class="text-xs text-gray-500 mt-0.5">Below this width = small bucket</p>
+        </div>
+        <input type="number" name="bucket_small_max" value="{{ s.bucket_small_max }}"
+               min="320" max="1000"
+               class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+      </div>
+
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Medium → Large</label>
+          <p class="text-xs text-gray-500 mt-0.5">Below this width = medium bucket</p>
+        </div>
+        <input type="number" name="bucket_medium_max" value="{{ s.bucket_medium_max }}"
+               min="420" max="2000"
+               class="w-24 border border-gray-300 rounded px-2 py-1.5 text-sm text-right">
+      </div>
+
+    </div>
+  </section>
+
+<!-- Device-specific settings (stored in localStorage) -->
+<section class="mt-8 pt-6 border-t border-gray-200">
+  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">This device</h2>
+  <p class="text-xs text-gray-500 mb-4">Saved in this browser only.</p>
+  <div class="space-y-4">
+
+    <div class="flex items-center justify-between">
+      <label class="text-sm font-medium text-gray-700">Color scheme</label>
+      <div class="flex rounded border border-gray-300 overflow-hidden text-sm">
+        {% for val, lbl in [("light", "Light"), ("system", "System"), ("dark", "Dark")] %}
+        <label class="relative">
+          <input type="radio" name="color_scheme_device" value="{{ val }}"
+                 class="sr-only peer">
+          <span class="block px-3 py-1.5 cursor-pointer select-none
+                       peer-checked:bg-blue-600 peer-checked:text-white
+                       hover:bg-gray-50 text-gray-700 border-l border-gray-300 first:border-l-0">
+            {{ lbl }}
+          </span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Small — sidebar</label>
+        <p class="text-xs text-gray-500 mt-0.5">≤ {{ s.bucket_small_max }}px</p>
+      </div>
+      <select id="sidebar-mode-small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="collapsible">Collapsible</option>
+        <option value="hideable-up">Hideable</option>
+      </select>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Small — article detail</label>
+        <p class="text-xs text-gray-500 mt-0.5">How to open articles on small screens</p>
+      </div>
+      <select id="detail-mode-small" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="inline">Expand in list</option>
+        <option value="fullscreen">Open full screen</option>
+      </select>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Medium bucket</label>
+        <p class="text-xs text-gray-500 mt-0.5">{{ s.bucket_small_max + 1 }}–{{ s.bucket_medium_max }}px</p>
+      </div>
+      <select data-layout-bucket="medium" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="2">2 panels</option>
+        <option value="3">3 panels</option>
+      </select>
+    </div>
+
+    <div class="flex items-center justify-between">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Large bucket</label>
+        <p class="text-xs text-gray-500 mt-0.5">&gt; {{ s.bucket_medium_max }}px</p>
+      </div>
+      <select data-layout-bucket="large" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="2">2 panels</option>
+        <option value="3">3 panels</option>
+      </select>
+    </div>
+
+  </div>
+</section>
+
+  <div class="mt-8">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Save preferences
+    </button>
+  </div>
+
+</form>
+
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var cs;
+  try { cs = localStorage.getItem('colorScheme'); } catch(e) {}
+  cs = cs || 'system';
+  var radio = document.querySelector('input[name="color_scheme_device"][value="' + cs + '"]');
+  if (radio) radio.checked = true;
+})();
+
+function applyColorScheme(scheme) {
+  try { localStorage.setItem('colorScheme', scheme); } catch(e) {}
+  if (scheme === 'dark') {
+    document.documentElement.classList.add('dark');
+  } else if (scheme === 'light') {
+    document.documentElement.classList.remove('dark');
+  } else {
+    document.documentElement.classList.toggle('dark',
+      !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
+  }
+}
+document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(el) {
+  el.addEventListener('change', function() { applyColorScheme(this.value); });
+});
+</script>
 {% endblock %}

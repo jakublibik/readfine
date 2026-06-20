@@ -7,6 +7,7 @@
 
 {% if logs %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
@@ -27,12 +28,13 @@
         </td>
         <td class="px-4 py-2 text-gray-400 text-xs max-w-xs truncate">{{ log.detail | tojson if log.detail else "—" }}</td>
         <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          <time datetime="{{ log.created_at.isoformat() }}">{{ log.created_at.strftime("%b %d, %H:%M") }}</time>
+          <time datetime="{{ log.created_at.isoformat() }}">{{ log.created_at | utctime('short') }}</time>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% else %}
 <p class="text-sm text-gray-400">No audit log entries yet.</p>

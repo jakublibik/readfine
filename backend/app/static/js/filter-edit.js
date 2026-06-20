@@ -4,35 +4,122 @@
   var cfg = JSON.parse(cfgEl.textContent);
   var FIELDS = cfg.fields;
   var OPERATORS = cfg.operators;
+  var AI_SCORE_OPERATORS = cfg.aiScoreOperators;
+  var AI_SCORE_AVAILABLE = cfg.aiScoreAvailable;
   var ACTION_TYPES = cfg.actionTypes;
   var LABELS = cfg.labels;
 
+  var FIELD_OPERATORS = {
+    'title_or_content': ['contains', 'not_contains', 'regex'],
+    'title':            ['contains', 'not_contains', 'equals', 'regex'],
+    'content':          ['contains', 'not_contains', 'regex'],
+    'author':           ['contains', 'not_contains', 'equals', 'regex'],
+    'url':              ['contains', 'not_contains', 'equals', 'regex'],
+    'published_at':     ['equals', 'gt', 'lt'],
+    'ai_score':         AI_SCORE_OPERATORS,
+  };
+
+  function getOperatorsForField(field) {
+    return FIELD_OPERATORS[field] || OPERATORS;
+  }
+
+  function getPlaceholderForField(field) {
+    if (field === 'ai_score') return '0–100';
+    if (field === 'published_at') return 'YYYY-MM-DD';
+    return 'value';
+  }
+
+  function updateConditionRow(row) {
+    var fieldSel = row.querySelector('[name="cond_field"]');
+    var opSel = row.querySelector('[name="cond_operator"]');
+    var valInput = row.querySelector('[name="cond_value"]');
+    if (!fieldSel || !opSel) return;
+    var field = fieldSel.value;
+    var ops = getOperatorsForField(field);
+    var currentOp = opSel.value;
+    opSel.innerHTML = ops.map(function (o) {
+      return '<option value="' + o + '"' + (o === currentOp ? ' selected' : '') + '>' + o + '</option>';
+    }).join('');
+    // If current operator not in allowed list, reset to first
+    if (ops.indexOf(currentOp) === -1) opSel.value = ops[0];
+    if (valInput) valInput.placeholder = getPlaceholderForField(field);
+    updateAiFilterUI();
+    updateRegexHintUI();
+  }
+
+  function updateAiFilterUI() {
+    if (!AI_SCORE_AVAILABLE) return;
+    var rows = document.querySelectorAll('.condition-row');
+    var hasAi = false;
+    rows.forEach(function (r) {
+      var fs = r.querySelector('[name="cond_field"]');
+      if (fs && fs.value === 'ai_score') hasAi = true;
+    });
+    var badge = document.getElementById('filter-type-badge');
+    var notice = document.getElementById('ai-filter-notice');
+    if (badge) {
+      if (hasAi) {
+        badge.textContent = 'Score filter';
+        badge.className = 'text-xs px-2 py-0.5 rounded font-medium bg-purple-100 text-purple-700';
+        badge.classList.remove('hidden');
+      } else {
+        badge.textContent = 'Regular filter';
+        badge.className = 'text-xs px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-500';
+        badge.classList.remove('hidden');
+      }
+    }
+    if (notice) notice.classList.toggle('hidden', !hasAi);
+  }
+
+  function updateRegexHintUI() {
+    var hint = document.getElementById('regex-hint');
+    if (!hint) return;
+    var hasRegex = false;
+    document.querySelectorAll('.condition-row [name="cond_operator"]').forEach(function (op) {
+      if (op.value === 'regex') hasRegex = true;
+    });
+    hint.classList.toggle('hidden', !hasRegex);
+  }
+
+  function wireOperatorHint(row) {
+    var op = row.querySelector('[name="cond_operator"]');
+    if (op) op.addEventListener('change', updateRegexHintUI);
+  }
+
   document.getElementById('add-condition').addEventListener('click', function () {
     var row = document.createElement('div');
-    row.className = 'flex items-center gap-2 condition-row';
+    row.className = 'flex flex-wrap items-center gap-2 condition-row';
     row.innerHTML =
-      '<select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">' +
-        FIELDS.map(function (f) { return '<option value="' + f + '">' + f.replace(/_/g, ' ') + '</option>'; }).join('') +
-      '</select>' +
-      '<select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">' +
-        OPERATORS.map(function (o) { return '<option value="' + o + '">' + o + '</option>'; }).join('') +
-      '</select>' +
-      '<input type="text" name="cond_value" required class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm" placeholder="value">' +
-      '<input type="hidden" name="cond_position" value="0">' +
-      '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>';
-    row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); });
+      '<div class="flex items-center gap-2 shrink-0">' +
+        '<select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-field-select">' +
+          FIELDS.map(function (f) { return '<option value="' + f + '">' + f.replace(/_/g, ' ') + '</option>'; }).join('') +
+        '</select>' +
+        '<select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">' +
+          OPERATORS.map(function (o) { return '<option value="' + o + '">' + o + '</option>'; }).join('') +
+        '</select>' +
+        '<input type="hidden" name="cond_position" value="0">' +
+      '</div>' +
+      '<input type="text" name="cond_value" required class="flex-1 min-w-32 border border-gray-300 rounded px-2 py-1.5 text-sm" placeholder="value">' +
+      '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row shrink-0">✕</button>';
+    row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); updateAiFilterUI(); updateRegexHintUI(); });
+    var fieldSel = row.querySelector('[name="cond_field"]');
+    fieldSel.addEventListener('change', function () { updateConditionRow(row); });
+    wireOperatorHint(row);
     document.getElementById('conditions').appendChild(row);
+    // Filter the operator list to the default field's allowed operators
+    // (also refreshes the AI-filter and regex-hint UI).
+    updateConditionRow(row);
   });
 
   document.getElementById('add-action').addEventListener('click', function () {
     var labelOptions = LABELS.map(function (l) { return '<option value="' + l.id + '">' + l.name + '</option>'; }).join('');
     var row = document.createElement('div');
-    row.className = 'flex items-center gap-2 action-row';
+    row.className = 'flex flex-wrap items-center gap-2 action-row';
     row.innerHTML =
-      '<select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select">' +
+      '<select name="action_type" class="border border-gray-300 rounded px-2 py-1.5 text-sm action-type-select">' +
         ACTION_TYPES.map(function (t) { return '<option value="' + t + '">' + t + '</option>'; }).join('') +
       '</select>' +
-      '<select name="action_value" class="border border-gray-300 rounded px-2 py-1 text-sm hidden label-select">' +
+      '<select name="action_value" class="border border-gray-300 rounded px-2 py-1.5 text-sm hidden label-select">' +
         '<option value="">-- select label --</option>' + labelOptions +
       '</select>' +
       '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>';
@@ -44,9 +131,24 @@
   });
 
   // Attach remove handlers to pre-rendered rows (from server)
-  document.querySelectorAll('.condition-row .remove-row, .action-row .remove-row').forEach(function (btn) {
-    btn.addEventListener('click', function () { btn.closest('.condition-row, .action-row').remove(); });
+  document.querySelectorAll('.condition-row .remove-row').forEach(function (btn) {
+    btn.addEventListener('click', function () { btn.closest('.condition-row').remove(); updateAiFilterUI(); updateRegexHintUI(); });
   });
+  document.querySelectorAll('.action-row .remove-row').forEach(function (btn) {
+    btn.addEventListener('click', function () { btn.closest('.action-row').remove(); });
+  });
+
+  // Wire change handlers + initial state for pre-rendered condition rows
+  document.querySelectorAll('.condition-row').forEach(function (row) {
+    var fieldSel = row.querySelector('[name="cond_field"]');
+    if (fieldSel) {
+      fieldSel.addEventListener('change', function () { updateConditionRow(row); });
+      updateConditionRow(row);
+    }
+    wireOperatorHint(row);
+  });
+  updateAiFilterUI();
+  updateRegexHintUI();
 
   window.toggleActionValue = function (select) {
     var labelSelect = select.closest('.action-row').querySelector('.label-select');
@@ -65,36 +167,34 @@
   });
 
   // ── scope_include: "All feeds" mutual exclusivity ────────────────────────────
+  // Clicking a specific feed directly overrides "All feeds" (same UX as catch me up
+  // scope selector): items are dimmed when "All" is active but remain clickable.
   var scopeAll = document.getElementById('scope-all');
   if (scopeAll) {
     var scopeItems = document.querySelectorAll('#scope-include-list input[name="scope_include"]');
 
     function setScopeAllMode(allChecked) {
       scopeItems.forEach(function (cb) {
-        cb.disabled = allChecked;
+        cb.style.opacity = allChecked ? '0.35' : '';
         if (allChecked) cb.checked = false;
       });
     }
 
-    // Initial state is already set by server-rendered HTML (disabled attr).
-    // Wire up interactions:
+    // Apply initial dimming state from server-rendered checked state.
+    setScopeAllMode(scopeAll.checked);
+
     scopeAll.addEventListener('change', function () {
-      if (this.checked) {
-        setScopeAllMode(true);
-      } else {
-        // User unchecked "All" — enable items but don't select any
-        scopeItems.forEach(function (cb) { cb.disabled = false; });
-      }
+      setScopeAllMode(this.checked);
     });
 
     scopeItems.forEach(function (cb) {
       cb.addEventListener('change', function () {
         if (this.checked) {
-          // Deselect "All feeds" when any specific item is picked
+          // Clicking a feed directly overrides "All feeds"
           scopeAll.checked = false;
-          scopeItems.forEach(function (c) { c.disabled = false; });
+          scopeItems.forEach(function (c) { c.style.opacity = ''; });
         } else {
-          // If nothing else is checked, revert to "All feeds"
+          // Last item unchecked → revert to "All feeds"
           var anyChecked = Array.from(scopeItems).some(function (c) { return c.checked; });
           if (!anyChecked) {
             scopeAll.checked = true;
@@ -103,6 +203,12 @@
         }
       });
     });
+  }
+
+  // ── scroll to test result if present ────────────────────────────────────
+  var testResult = document.getElementById('test-result');
+  if (testResult && testResult.children.length > 0) {
+    testResult.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   // ── scope_except toggle ───────────────────────────────────────────────────

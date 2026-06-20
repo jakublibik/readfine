@@ -1,6 +1,7 @@
 """Feed subscription service: subscribe, unsubscribe, list."""
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
@@ -13,9 +14,13 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.utils.crypto import encrypt
-from app.utils.url_validator import validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 logger = logging.getLogger(__name__)
+
+# Feed IDs for which an initial fetch task is already running.
+# Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
+_initial_fetch_in_progress: set[int] = set()
 
 
 async def subscribe(
@@ -28,6 +33,8 @@ async def subscribe(
     db: AsyncSession,
     is_private: bool = False,
     trigger_initial_fetch: bool = True,
+    import_mode: str = "recent",
+    import_limit: int = 500,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -38,7 +45,7 @@ async def subscribe(
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
-    validate_feed_url(url)
+    await async_validate_feed_url(url)
 
     # Validate folder ownership
     if folder_id is not None:
@@ -48,16 +55,17 @@ async def subscribe(
         if not folder_result.scalar_one_or_none():
             raise ValueError("Folder not found")
 
-    # Check subscription limit
-    app_settings_result = await db.execute(
-        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-    )
-    max_feeds = app_settings_result.scalar_one_or_none() or 200
-    count_result = await db.execute(
-        select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-    )
-    if (count_result.scalar() or 0) >= max_feeds:
-        raise ValueError(f"Feed limit reached ({max_feeds})")
+    # Check subscription limit (admins are exempt)
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise ValueError(f"Feed limit reached ({max_feeds})")
 
     feed: Feed | None = None
     parsed = None
@@ -138,28 +146,196 @@ async def subscribe(
         await db.rollback()
         raise ValueError("Already subscribed to this feed")
     await db.refresh(user_feed)
+    user_feed.feed = feed
 
-    # Kick off initial fetch in the background
-    if trigger_initial_fetch:
-        asyncio.create_task(_initial_fetch(feed.id))
+    # Kick off initial fetch in the background (skip if already running for this feed).
+    # Mark in-progress synchronously here, before spawning the task: if .add() lived
+    # inside _initial_fetch it would only run once the task is scheduled, so two
+    # concurrent subscribes to the same new feed could both pass the guard and fetch
+    # it twice. (Downstream dedup makes that safe, just wasteful.)
+    if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
+        _initial_fetch_in_progress.add(feed.id)
+        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit))
 
     return user_feed
 
 
-async def _initial_fetch(feed_id: int) -> None:
-    """Run an immediate fetch for a newly subscribed feed."""
-    import app.database as db_module
-    if db_module.async_session_factory is None:
-        return
-    async with db_module.async_session_factory() as session:
-        feed = await session.get(Feed, feed_id)
-        if not feed:
+async def _initial_fetch(feed_id: int, import_mode: str = "recent", import_limit: int = 500) -> None:
+    """Run an immediate fetch for a newly subscribed feed.
+
+    import_mode "recent" (default): import only articles published within the retention
+    horizon (published_cutoff), no count limit. import_mode "latest": no time cutoff,
+    import up to import_limit newest articles (e.g. pulling a full archive feed).
+
+    The caller (subscribe) already added feed_id to _initial_fetch_in_progress;
+    this only owns the discard.
+    """
+    try:
+        import app.database as db_module
+        if db_module.async_session_factory is None:
             return
-        settings_row = await session.execute(
-            select(AppSettings.default_purge_keep_count).where(AppSettings.id == 1)
+        async with db_module.async_session_factory() as session:
+            feed = await session.get(Feed, feed_id)
+            if not feed:
+                return
+            # Scheduler may have already fetched this feed while we were queued
+            if feed.last_fetched_at is not None:
+                return
+            published_cutoff = None
+            initial_limit: int | None = None
+            if import_mode == "latest":
+                initial_limit = import_limit
+            else:
+                # Recent: bound the import to the retention horizon so we don't pull
+                # (and run readable/scoring on) articles the purge would soon remove.
+                days = (await session.execute(
+                    select(AppSettings.default_purge_after_days).where(AppSettings.id == 1)
+                )).scalar_one_or_none()
+                if days:
+                    published_cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            await fetch_feed(
+                feed, session, initial_limit=initial_limit, published_cutoff=published_cutoff
+            )
+    finally:
+        _initial_fetch_in_progress.discard(feed_id)
+
+
+async def subscribe_scrape(
+    user: User,
+    url: str,
+    selector: str,
+    title: str,
+    folder_id: int | None,
+    db: AsyncSession,
+    fetch_interval_min: int | None = None,
+    validate_selector: bool = True,
+) -> UserFeed:
+    """Subscribe a user to a scrape-type feed (URL + CSS selector pair).
+
+    With validate_selector=False the live page fetch + selector check is skipped
+    (used by OPML import to restore a previously-working scrape feed even when the
+    page is momentarily unreachable); the background initial fetch still runs.
+    """
+    await async_validate_feed_url(url)
+
+    if folder_id is not None:
+        folder_result = await db.execute(
+            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
         )
-        initial_limit = settings_row.scalar_one_or_none() or 500
-        await fetch_feed(feed, session, initial_limit=initial_limit)
+        if not folder_result.scalar_one_or_none():
+            raise ValueError("Folder not found")
+
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise ValueError(f"Feed limit reached ({max_feeds})")
+
+    selector = selector.strip()
+    if not selector:
+        raise ValueError("CSS selector is required")
+    if len(selector) > 500:
+        raise ValueError("CSS selector is too long (max 500 characters)")
+
+    # Validate selector against the live page before saving
+    if validate_selector:
+        from app.fetcher.scrape import extract_article_links
+        loop = asyncio.get_running_loop()
+        try:
+            html = await loop.run_in_executor(
+                None, fetch_url_with_ssrf_check, url, None, 30,
+                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
+            )
+        except Exception as exc:
+            raise ValueError(f"Could not fetch the page: {exc}") from exc
+        links = extract_article_links(html, selector, url)
+        if not links:
+            raise ValueError(
+                f"CSS selector '{selector}' matched no article links on the page. "
+                "Use the Preview button to test your selector before saving."
+            )
+
+    # Share public scrape feeds with matching URL + selector
+    existing = await db.execute(
+        select(Feed).where(
+            Feed.feed_url == url,
+            Feed.feed_type == "scrape",
+            Feed.is_private == False,
+            Feed.type_config["article_links_selector"].astext == selector,
+        )
+    )
+    feed = existing.scalar_one_or_none()
+    is_new_feed = feed is None
+
+    if feed:
+        already = await db.execute(
+            select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
+        )
+        if already.scalar_one_or_none():
+            raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+    else:
+        feed = Feed(
+            feed_url=url[:2048],
+            feed_type="scrape",
+            is_private=False,
+            title=title[:255],
+            site_url=url[:2048],
+            type_config={"article_links_selector": selector},
+            subscriber_count=0,
+            fetch_interval_min=fetch_interval_min,
+        )
+        db.add(feed)
+        await db.flush()
+
+    await db.execute(
+        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
+    )
+
+    user_feed = UserFeed(
+        user_id=user.id,
+        feed_id=feed.id,
+        folder_id=folder_id,
+        extract_readable=True,
+    )
+    db.add(user_feed)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+    await db.refresh(user_feed)
+
+    # Mark in-progress synchronously before spawning (see subscribe() for why).
+    if is_new_feed and feed.id not in _initial_fetch_in_progress:
+        _initial_fetch_in_progress.add(feed.id)
+        asyncio.create_task(_initial_fetch_scrape(feed.id))
+
+    return user_feed
+
+
+async def _initial_fetch_scrape(feed_id: int) -> None:
+    """Run an immediate scrape for a newly subscribed scrape feed.
+
+    The caller (subscribe_scrape) already added feed_id to
+    _initial_fetch_in_progress; this only owns the discard.
+    """
+    try:
+        import app.database as db_module
+        from app.fetcher.scrape import fetch_scrape_feed
+        if db_module.async_session_factory is None:
+            return
+        async with db_module.async_session_factory() as session:
+            feed = await session.get(Feed, feed_id)
+            if not feed or feed.last_fetched_at is not None:
+                return
+            await fetch_scrape_feed(feed, session)
+    finally:
+        _initial_fetch_in_progress.discard(feed_id)
 
 
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
@@ -234,8 +410,71 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
     await db.commit()
 
 
-async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
-    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical)."""
+async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
+    """Clean up all feed subscriptions for a user being deleted (no commit).
+
+    For each subscription: removes UserArticleState rows, decrements subscriber_count,
+    and deletes the feed + its articles if no subscribers remain.
+    Called by admin delete_user before the user row is deleted.
+    """
+    user_feeds_result = await db.execute(
+        select(UserFeed).where(UserFeed.user_id == user_id)
+    )
+    user_feeds = user_feeds_result.scalars().all()
+
+    starred_or_archived_subq = (
+        select(UserArticleState.article_id)
+        .where(
+            UserArticleState.article_id == Article.id,
+            (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
+        )
+        .correlate(Article)
+        .exists()
+    )
+
+    for uf in user_feeds:
+        feed_id = uf.feed_id
+        article_ids_subq = select(Article.id).where(Article.feed_id == feed_id).scalar_subquery()
+
+        await db.execute(
+            delete(UserArticleState).where(
+                UserArticleState.user_id == user_id,
+                UserArticleState.article_id.in_(article_ids_subq),
+                UserArticleState.is_starred == False,
+                UserArticleState.is_archived == False,
+            )
+        )
+        await db.delete(uf)
+        await db.execute(
+            update(Feed)
+            .where(Feed.id == feed_id)
+            .values(subscriber_count=func.greatest(Feed.subscriber_count - 1, 0))
+        )
+        feed = await db.scalar(select(Feed).where(Feed.id == feed_id))
+        if feed and feed.subscriber_count == 0:
+            await db.execute(
+                update(Article)
+                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .values(feed_id=None)
+            )
+            await db.execute(
+                delete(Article).where(Article.feed_id == feed_id, ~starred_or_archived_subq)
+            )
+            await db.delete(feed)
+
+
+async def list_user_feeds(
+    user: User, db: AsyncSession, include_unread: bool = False
+) -> list[UserFeed]:
+    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical).
+
+    With ``include_unread=True`` each returned object's ``unread_count`` is replaced
+    with a value computed fresh from the DB (excluding retention-trimmed stubs),
+    matching what the web UI shows. The cached ``UserFeed.unread_count`` column can
+    drift (the fetcher and retention don't recompute it consistently), so API
+    callers that surface the number should opt in. Off by default so web callers,
+    which compute their own counts, don't pay for a redundant query.
+    """
     result = await db.execute(
         select(UserFeed)
         .join(Feed, Feed.id == UserFeed.feed_id)
@@ -247,4 +486,27 @@ async def list_user_feeds(user: User, db: AsyncSession) -> list[UserFeed]:
             func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
         )
     )
-    return result.scalars().all()
+    user_feeds = result.scalars().all()
+
+    if include_unread and user_feeds:
+        feed_ids = [uf.feed_id for uf in user_feeds]
+        fresh = dict((await db.execute(
+            select(Article.feed_id, func.count(Article.id))
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
+            .where(
+                Article.feed_id.in_(feed_ids),
+                Article.trimmed_at.is_(None),
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
+            .group_by(Article.feed_id)
+        )).all())
+        # Plain attribute write: the GET path never commits (get_db only rolls
+        # back on close) and no query runs after this, so it never persists.
+        for uf in user_feeds:
+            uf.unread_count = fresh.get(uf.feed_id, 0)
+
+    return user_feeds

@@ -2,7 +2,7 @@
 {% block title %}Register – Readfine{% endblock %}
 
 {% block content %}
-<div class="min-h-screen flex items-center justify-center">
+<div class="min-h-screen flex items-start sm:items-center justify-center pt-12 pb-8 sm:py-8">
     <div class="w-full max-w-sm">
         <h1 class="text-2xl font-semibold text-center mb-6">Readfine</h1>
 
@@ -14,12 +14,15 @@
 
         <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
             <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+            <input type="hidden" name="timezone" id="tz-field">
             {% if invite_token %}
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
             <div>
-                <label class="block text-sm font-medium mb-1" for="display_name">Display name</label>
-                <input id="display_name" name="display_name" type="text" required
+                <label class="block text-sm font-medium mb-1" for="display_name">Display name <span class="text-gray-400 font-normal">(optional)</span></label>
+                <input id="display_name" name="display_name" type="text"
+                    value="{{ prefill_display_name or '' }}"
+                    placeholder="Defaults to your email username"
                     class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             </div>
             <div>
@@ -35,14 +38,42 @@
                     class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                 <p class="text-xs text-gray-400 mt-1">At least 8 characters</p>
             </div>
-            <button type="submit"
-                class="w-full bg-blue-600 text-white rounded px-4 py-2 text-sm font-medium hover:bg-blue-700">
+            <div>
+                <label class="block text-sm font-medium mb-1" for="confirm_password">Confirm password</label>
+                <input id="confirm_password" name="confirm_password" type="password" required autocomplete="new-password"
+                    class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <button type="submit" id="submit-btn"
+                class="w-full bg-blue-600 text-white rounded px-4 py-2 text-sm font-medium hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed">
                 Create account
             </button>
         </form>
+        <script nonce="{{ request.state.csp_nonce }}">
+        // Prefill the user's timezone from the browser so new accounts get it right.
+        try {
+            document.getElementById('tz-field').value =
+                Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+        } catch (e) { /* leave empty → server defaults to UTC */ }
+
+        document.querySelector('form').addEventListener('submit', function() {
+            var btn = document.getElementById('submit-btn');
+            btn.disabled = true;
+            btn.textContent = 'Creating account…';
+        });
+        </script>
 
         <p class="text-center text-sm text-gray-500 mt-4">
             Already have an account? <a href="/login" class="text-blue-600 hover:underline">Sign in</a>
+        </p>
+
+        <p class="text-center text-xs text-gray-400 mt-4">
+            By creating an account you agree to our
+            <a href="/terms" target="_blank" rel="noopener noreferrer" class="hover:underline">Terms of Service</a>
+            and
+            <a href="/privacy" target="_blank" rel="noopener noreferrer" class="hover:underline">Privacy Policy</a>.
+        </p>
+        <p class="text-center text-xs text-gray-400 mt-2">
+            New to Readfine? <a href="/help" class="hover:underline">See the guide</a>.
         </p>
     </div>
 </div>

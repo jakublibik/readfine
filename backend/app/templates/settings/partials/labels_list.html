@@ -1,24 +1,64 @@
+{% set label_colors = ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#ec4899','#f43f5e','#64748b','#374151'] %}
 <div id="labels-list">
+  {% if error %}
+  <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+  {% endif %}
+  {% if success %}
+  <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">{{ success }}</div>
+  {% endif %}
   {% if labels %}
     <ul class="space-y-2">
       {% for label in labels %}
-      <li class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded">
-        <span class="w-4 h-4 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
-        <form hx-post="/settings/labels/{{ label.id }}"
-              hx-target="#labels-list"
-              hx-swap="outerHTML"
-              class="flex flex-1 items-center gap-2">
-          <input type="text" name="name" value="{{ label.name }}" required
-                 class="flex-1 border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <input type="color" name="color" value="{{ label.color }}"
-                 class="w-7 h-7 rounded cursor-pointer border border-gray-200">
-          <button type="submit" class="text-xs text-blue-600 hover:underline">Save</button>
-        </form>
-        <button hx-delete="/settings/labels/{{ label.id }}"
+      <li class="bg-white border border-gray-200 rounded">
+        <!-- Compact row -->
+        <div class="flex items-center gap-3 px-3 py-2">
+          <span class="w-4 h-4 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+          <span class="flex-1 text-sm text-gray-800">{{ label.name }}</span>
+          <button type="button" class="label-edit-toggle text-xs text-blue-600 hover:underline">Edit</button>
+          <button type="button"
+                  class="swap-confirm text-xs text-red-400 hover:text-red-600"
+                  data-confirm-text="Confirm"
+                  data-confirm-class="text-xs text-red-600 font-medium hover:text-red-800"
+                  hx-delete="/settings/labels/{{ label.id }}"
+                  hx-target="#labels-list"
+                  hx-swap="outerHTML">Delete</button>
+        </div>
+        <!-- Edit panel -->
+        {% set custom_color = label.color if label.color not in label_colors else '' %}
+        <div class="label-edit-panel hidden border-t border-gray-100 px-3 py-3">
+          <form hx-post="/settings/labels/{{ label.id }}"
                 hx-target="#labels-list"
                 hx-swap="outerHTML"
-                hx-confirm="Delete label '{{ label.name }}'?"
-                class="text-xs text-red-400 hover:text-red-600">Delete</button>
+                class="space-y-3">
+            <div>
+              <label class="block text-xs text-gray-500 mb-1">Name</label>
+              <input type="text" name="name" value="{{ label.name }}" required
+                     class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs text-gray-500 mb-1.5">Color</label>
+              <div class="color-swatch-group flex flex-wrap gap-1.5 mb-2">
+                {% for c in label_colors %}
+                <button type="button" data-color="{{ c }}"
+                        class="color-swatch w-6 h-6 rounded-full {% if c == label.color %}ring-2 ring-gray-700 ring-offset-1{% endif %} hover:scale-110 transition-transform"
+                        style="background-color: {{ c }}"></button>
+                {% endfor %}
+              </div>
+              <div class="flex items-center gap-2">
+                <input type="text" class="color-custom-input border border-gray-300 rounded px-2 py-1 text-xs font-mono w-24 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                       maxlength="7" placeholder="#rrggbb" value="{{ custom_color }}">
+                <span class="color-custom-preview w-5 h-5 rounded-full border border-gray-300 flex-shrink-0"
+                      {% if custom_color %}style="background-color: {{ custom_color }}"{% endif %}></span>
+              </div>
+            </div>
+            <input type="hidden" name="color" value="{{ label.color }}">
+            <div class="flex items-center gap-3">
+              <button type="submit"
+                      class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">Save</button>
+              <button type="button" class="label-edit-cancel text-sm text-gray-400 hover:text-gray-600">Cancel</button>
+            </div>
+          </form>
+        </div>
       </li>
       {% endfor %}
     </ul>

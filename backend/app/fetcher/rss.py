@@ -4,75 +4,106 @@ import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import select
+from sqlalchemy import case, func, literal, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models.article import Article
+from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
-from app.utils.url_validator import validate_feed_url
+from app.utils.http_client import READFINE_UA
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url, validate_feed_url
 
 logger = logging.getLogger(__name__)
 
+FETCH_ERROR_DISABLE_THRESHOLD = 5  # consecutive failures before feed is disabled
+
 _HEADERS = {
-    "User-Agent": "Readfine/1.0 (+https://github.com/readfine/readfine)",
+    "User-Agent": READFINE_UA,
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
 }
 _TIMEOUT = 30  # seconds
+_MAX_REDIRECTS = 5
+
+_STRIP_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "fbclid", "gclid", "msclkid",
+})
+
+
+def _normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return None
+        path = p.path.rstrip("/") or "/"
+        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
+        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
+    except Exception:
+        return None
+
 
 
 async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
-    validate_feed_url(url)
-    async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
-        response = await client.get(url, headers=_HEADERS)
-        response.raise_for_status()
-        content = response.text
-
-    loop = asyncio.get_event_loop()
+    await async_validate_feed_url(url)
+    loop = asyncio.get_running_loop()
+    content = await loop.run_in_executor(
+        None, fetch_url_with_ssrf_check, url, None, _TIMEOUT, _HEADERS
+    )
     parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
-    if parsed.bozo and not parsed.entries and not parsed.feed:
-        raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+    if parsed.bozo:
+        import xml.sax._exceptions as _sax
+        if isinstance(parsed.bozo_exception, _sax.SAXParseException):
+            # XML parse error means the response is HTML, not RSS
+            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+        if not parsed.entries and not parsed.feed:
+            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
     return parsed
 
 
-async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None) -> int:
+async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None, published_cutoff: datetime | None = None) -> int:
     """Fetch a feed and store new articles. Returns number of new articles saved."""
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
 
     try:
-        validate_feed_url(feed_url)
+        await async_validate_feed_url(feed_url)
         auth = None
         if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
             auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True, max_redirects=5) as client:
-            response = await client.get(feed_url, headers=_HEADERS, auth=auth)
-            response.raise_for_status()
-            content = response.text
-
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        content = await loop.run_in_executor(
+            None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
+        )
         parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
 
-        new_count = await _save_articles(feed, parsed, db, limit=initial_limit)
+        new_count = await _save_articles(feed, parsed, db, limit=initial_limit, published_cutoff=published_cutoff)
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = datetime.now(timezone.utc)
         feed.last_fetch_duration_ms = duration_ms
         feed.status = "active"
         feed.last_error = None
+        feed.fetch_error_count = 0
 
         latest_pub = _latest_published(parsed.entries)
         if latest_pub:
@@ -82,20 +113,36 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
+    except IntegrityError as exc:
+        # Benign concurrent-fetch race: another worker inserted the same
+        # (feed_id, guid_hash) between our dedup SELECT and flush. Not a feed
+        # failure — roll back and let the next scheduled fetch pick them up.
+        await db.rollback()
+        logger.info("Concurrent duplicate insert for feed %d, skipping round: %s", feed_id, exc)
+        return 0
+
     except Exception as exc:
         await db.rollback()
-        logger.error("Error fetching feed %d (%s): %s", feed_id, feed_url, exc)
+        logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+        is_4xx = http_status is not None and 400 <= http_status < 500
         db.add(FetchLog(
             feed_id=feed_id,
             failed_at=datetime.now(timezone.utc),
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        from sqlalchemy import update as sa_update
+        if is_4xx:
+            new_status = literal("disabled")
+        else:
+            new_status = case(
+                (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
+                else_=literal("error"),
+            )
         await db.execute(
-            sa_update(Feed).where(Feed.id == feed_id).values(
-                status="error",
+            update(Feed).where(Feed.id == feed_id).values(
+                status=new_status,
+                fetch_error_count=Feed.fetch_error_count + 1,
                 last_error=str(exc)[:500],
                 last_fetched_at=datetime.now(timezone.utc),
             )
@@ -104,16 +151,31 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         return 0
 
 
-async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: AsyncSession, limit: int | None = None) -> int:
+async def _save_articles(
+    feed: Feed,
+    parsed: feedparser.FeedParserDict,
+    db: AsyncSession,
+    limit: int | None = None,
+    published_cutoff: datetime | None = None,
+) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     entries = parsed.entries[:limit] if limit is not None else parsed.entries
 
     # Deduplicate within this batch and compute guid_hashes up front
     candidates: dict[str, feedparser.util.FeedParserDict] = {}  # hash → entry (first wins)
     for entry in entries:
-        guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
-        if not guid:
+        raw_guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
+        if not raw_guid:
             continue
+        # Skip entries older than the purge cutoff — prevents re-inserting purgeable articles
+        # after they've been purged from the DB and the feed XML still contains them.
+        if published_cutoff is not None:
+            pub = entry.get("published_parsed") or entry.get("updated_parsed")
+            if pub:
+                pub_dt = _struct_to_dt(pub)
+                if pub_dt is not None and pub_dt < published_cutoff:
+                    continue
+        guid = _normalize_guid(raw_guid)
         guid_hash = hashlib.sha256(guid.encode()).hexdigest()
         candidates.setdefault(guid_hash, entry)
 
@@ -130,25 +192,48 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     )
     existing_hashes: set[str] = set(existing_result.scalars())
 
+    # Secondary dedup by URL — catches feeds that rotate GUIDs on updates (e.g. BBC).
+    candidate_urls = [
+        _safe_url(e.get("link")) for e in candidates.values()
+        if _safe_url(e.get("link"))
+    ]
+    existing_urls: set[str] = set()
+    if candidate_urls:
+        url_result = await db.execute(
+            select(Article.url).where(
+                Article.feed_id == feed.id,
+                Article.url.in_(candidate_urls),
+            )
+        )
+        existing_urls = set(url_result.scalars())
+
+    fetched_at = datetime.now(timezone.utc)
     new_articles: list[Article] = []
     for guid_hash, entry in candidates.items():
         if guid_hash in existing_hashes:
             continue
+        article_url = _safe_url(entry.get("link"))
+        if article_url and article_url in existing_urls:
+            continue
 
-        guid = (entry.get("id") or entry.get("link") or entry.get("title") or "")
+        guid = _normalize_guid(entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
             content = nh3.clean(content)
+            if article_url:
+                from app.utils.parsing import rewrite_relative_urls
+                content = rewrite_relative_urls(content, article_url)
 
         word_count, estimated_read_min = _reading_stats(content)
         pub = entry.get("published_parsed") or entry.get("updated_parsed")
-        published_at = _struct_to_dt(pub) if pub else None
+        published_at = _clamp_published_at(_struct_to_dt(pub) if pub else None, fetched_at)
 
         article = Article(
             feed_id=feed.id,
             guid=guid[:2048],
             guid_hash=guid_hash,
-            url=_safe_url(entry.get("link")),
+            url=article_url,
+            url_normalized=_normalize_url(article_url),
             title=(entry.get("title") or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,
@@ -165,11 +250,22 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     if new_articles:
         # Flush to get IDs, then apply filters before the outer commit.
         # A concurrent fetch may have inserted the same article between our SELECT and now;
-        # the IntegrityError propagates to fetch_feed's except clause which handles it.
+        # the IntegrityError propagates to fetch_feed's dedicated handler, which treats
+        # this benign race as "0 new articles" rather than a fetch failure.
         await db.flush()
-        from app.services.filter_service import apply_filters_to_article
-        for article in new_articles:
-            await apply_filters_to_article(article, db)
+
+        # Increment unread_count for every subscriber of this feed.
+        # Filters may decrement it afterwards for articles they mark as read.
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.feed_id == feed.id)
+            .values(unread_count=UserFeed.unread_count + len(new_articles))
+        )
+
+        from app.services.filter_service import apply_filters_to_new_articles
+        await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        await _dedup_cross_feed(feed.id, new_articles, db)
 
         # Auto-detect full-content feed and disable readable extraction if warranted
         from app.services.readable_service import maybe_disable_readable_for_feed
@@ -178,13 +274,157 @@ async def _save_articles(feed: Feed, parsed: feedparser.FeedParserDict, db: Asyn
     return len(new_articles)
 
 
+async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
+    """Post-gather dedup: marks cross-feed duplicate articles as read.
+
+    Catches race conditions where _dedup_cross_feed (per-feed, pre-commit) couldn't see
+    the other feed's uncommitted articles. Scoped to articles fetched since `since`.
+    Returns number of (user, article) pairs marked as read.
+
+    Only marks the higher-ID article (newer) as read, keeping the lowest-ID one unread.
+    This prevents the race-condition case where both duplicates get marked as read.
+    """
+    ArticleB = aliased(Article)
+    UserFeedB = aliased(UserFeed)
+
+    dup_exists = (
+        select(literal(1))
+        .select_from(ArticleB)
+        .join(UserFeedB, UserFeedB.feed_id == ArticleB.feed_id)
+        .where(
+            UserFeedB.user_id == UserFeed.user_id,
+            ArticleB.url_normalized == Article.url_normalized,
+            ArticleB.id < Article.id,
+        )
+        .correlate(UserFeed, Article)
+        .exists()
+    )
+
+    rows = (await db.execute(
+        select(UserFeed.user_id, Article.id.label("article_id"), Article.feed_id)
+        .select_from(Article)
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .where(
+            Article.url_normalized.is_not(None),
+            Article.fetched_at >= since,
+            dup_exists,
+        )
+    )).all()
+
+    if not rows:
+        return 0
+
+    await db.execute(
+        pg_insert(UserArticleState)
+        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .on_conflict_do_nothing()
+    )
+
+    by_feed: dict[int, list[int]] = defaultdict(list)
+    for r in rows:
+        by_feed[r.feed_id].append(r.user_id)
+
+    for feed_id, user_ids in by_feed.items():
+        unread_subq = (
+            select(func.count())
+            .select_from(Article)
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == UserFeed.user_id),
+            )
+            .where(
+                Article.feed_id == feed_id,
+                (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+            )
+            .correlate(UserFeed)
+            .scalar_subquery()
+        )
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.user_id.in_(user_ids), UserFeed.feed_id == feed_id)
+            .values(unread_count=unread_subq)
+        )
+
+    await db.commit()
+    return len(rows)
+
+
+async def _dedup_cross_feed(
+    feed_id: int, new_articles: list[Article], db: AsyncSession
+) -> None:
+    """For users subscribed to this feed who already have the same URL from another feed,
+    mark the new duplicate article as read and adjust unread_count."""
+    articles_with_url = [a for a in new_articles if a.url_normalized]
+    if not articles_with_url:
+        return
+
+    ArticleB = aliased(Article)
+    UserFeedB = aliased(UserFeed)
+
+    dup_exists = (
+        select(literal(1))
+        .select_from(ArticleB)
+        .join(UserFeedB, UserFeedB.feed_id == ArticleB.feed_id)
+        .where(
+            UserFeedB.user_id == UserFeed.user_id,
+            ArticleB.url_normalized == Article.url_normalized,
+            ArticleB.id != Article.id,
+        )
+        .correlate(UserFeed, Article)
+        .exists()
+    )
+
+    rows = (await db.execute(
+        select(UserFeed.user_id, Article.id.label("article_id"))
+        .select_from(Article)
+        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+        .where(
+            Article.id.in_([a.id for a in articles_with_url]),
+            Article.url_normalized.is_not(None),
+            dup_exists,
+        )
+    )).all()
+
+    if not rows:
+        return
+
+    await db.execute(
+        pg_insert(UserArticleState)
+        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .on_conflict_do_nothing()
+    )
+
+    affected_user_ids = list({r.user_id for r in rows})
+    unread_subq = (
+        select(func.count())
+        .select_from(Article)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == UserFeed.user_id),
+        )
+        .where(
+            Article.feed_id == feed_id,
+            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+        )
+        .correlate(UserFeed)
+        .scalar_subquery()
+    )
+    await db.execute(
+        update(UserFeed)
+        .where(UserFeed.user_id.in_(affected_user_ids), UserFeed.feed_id == feed_id)
+        .values(unread_count=unread_subq)
+    )
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _extract_content(entry) -> tuple[str | None, str | None]:
     if entry.get("content"):
         for c in entry.content:
             if c.get("value"):
-                return c.value, "feed_content"
+                return c.value, "feed_full"
     if entry.get("summary"):
         return entry.summary, "feed_summary"
     return None, None
@@ -240,6 +480,18 @@ def _struct_to_dt(t) -> datetime:
     return datetime(*t[:6], tzinfo=timezone.utc)
 
 
+_PUBLISHED_MIN = datetime(2000, 1, 1, tzinfo=timezone.utc)
+
+
+def _clamp_published_at(dt: datetime | None, fetched_at: datetime) -> datetime | None:
+    """Return None if dt is implausibly old or far in the future."""
+    if dt is None:
+        return None
+    if dt < _PUBLISHED_MIN or dt > fetched_at + timedelta(days=1):
+        return None
+    return dt
+
+
 def _latest_published(entries) -> datetime | None:
     dates = []
     for e in entries:
@@ -247,6 +499,22 @@ def _latest_published(entries) -> datetime | None:
         if t:
             dates.append(_struct_to_dt(t))
     return max(dates) if dates else None
+
+
+def _normalize_guid(raw: str) -> str:
+    """Strip URL fragment from GUIDs that are HTTP URLs.
+
+    Some feeds (e.g. BBC) append a changing fragment (#0, #2, …) to article URLs
+    used as GUIDs, causing the same article to be stored multiple times.
+    Non-URL GUIDs (UUIDs, opaque strings) are returned unchanged.
+    """
+    try:
+        p = urlparse(raw)
+        if p.scheme in ("http", "https"):
+            return urlunparse(p._replace(fragment=""))
+    except Exception:
+        pass
+    return raw
 
 
 def _safe_url(value: str | None, max_len: int = 2048) -> str | None:

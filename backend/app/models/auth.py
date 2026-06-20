@@ -30,7 +30,7 @@ class Invitation(Base):
     email: Mapped[str | None] = mapped_column(String(255))
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    used_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id"))
+    used_by: Mapped[int | None] = mapped_column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     creator: Mapped["User"] = relationship(foreign_keys=[created_by])

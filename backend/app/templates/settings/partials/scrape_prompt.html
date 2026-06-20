@@ -1,0 +1,14 @@
+<div class="pt-2 border-t border-gray-200">
+  <div class="flex items-center justify-between mb-1">
+    <label class="text-sm font-medium text-gray-700">AI prompt</label>
+    <button type="button"
+            data-copy-from="scrape-manual-prompt"
+            class="copy-from-btn text-xs text-blue-600 hover:underline">Copy</button>
+  </div>
+  <textarea id="scrape-manual-prompt" readonly rows="6"
+            class="w-full border border-gray-200 rounded px-3 py-2 text-xs font-mono bg-gray-50 text-gray-600 resize-none focus:outline-none">{{ prompt }}</textarea>
+  <p class="text-xs text-gray-400 mt-1">
+    Copy this prompt, paste it into any AI (ChatGPT, Claude, Gemini…), then paste the returned CSS selector into the field above.
+    If the preview shows too few or wrong articles, tell the AI: <em>"that selector returns wrong results, suggest an alternative"</em>.
+  </p>
+</div>

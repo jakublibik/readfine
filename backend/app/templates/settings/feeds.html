@@ -1,105 +1,155 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "feeds" %}
 {% block title %}Feeds – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-3xl mx-auto px-4 py-8">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-      <h1 class="text-xl font-semibold text-gray-900">Feeds</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <a href="/settings/labels" class="text-sm text-blue-600 hover:underline">Labels</a>
-      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
-      <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
-      <a href="/settings/opml" class="text-sm text-blue-600 hover:underline">OPML</a>
-    </div>
-  </div>
+{% block settings_main_width %}max-w-4xl{% endblock %}
 
-  <!-- Subscribe form -->
-  <div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded">
-    <h2 class="text-sm font-medium text-gray-700 mb-3">Subscribe to a feed</h2>
-    {% if error %}
-      <p class="text-sm text-red-500 mb-3">{{ error }}</p>
-    {% endif %}
-    <form id="feed-subscribe-form" method="POST" action="/settings/feeds" hx-boost="true" class="space-y-3">
-      <div class="flex gap-3">
-        <input id="feed-url-input" type="url" name="url" placeholder="https://example.com/feed.xml" required
-               value="{{ subscribe_url or '' }}"
-               class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Feeds</h1>
+
+{% if added %}
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+  Feed <strong>{{ added }}</strong> added successfully.
+</div>
+{% endif %}
+
+<!-- Subscribe form -->
+<div class="mb-8 p-4 bg-gray-50 border border-gray-200 rounded">
+  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Subscribe to a feed</h2>
+  <p class="text-xs text-gray-400 mb-3">Accepts RSS/Atom URL or website URL (auto-detection).</p>
+  <form id="feed-subscribe-form" method="POST" action="/settings/feeds" class="space-y-2">
+    <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+      <input id="feed-url-input" type="url" name="url" placeholder="https://example.com/feed.xml" required
+             value="{{ subscribe_url or '' }}"
+             hx-post="/settings/feeds/test"
+             hx-include="#feed-subscribe-form"
+             hx-target="#feed-test-result"
+             hx-indicator="#feed-test-spinner"
+             hx-trigger="keydown[key=='Enter']"
+             class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <div class="flex gap-2 items-center">
         <button type="button"
                 hx-post="/settings/feeds/test"
                 hx-include="#feed-subscribe-form"
                 hx-target="#feed-test-result"
                 hx-indicator="#feed-test-spinner"
-                class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap flex items-center gap-1">
-          <svg id="feed-test-spinner" class="htmx-indicator animate-spin h-3 w-3 flex-shrink-0" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-          </svg>
+                class="flex-1 sm:flex-none px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
           Test
         </button>
-        <button type="submit"
-                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
+        <button type="button"
+                hx-post="/settings/feeds"
+                hx-include="#feed-subscribe-form"
+                hx-target="#feed-test-result"
+                hx-indicator="#feed-test-spinner"
+                class="flex-1 sm:flex-none px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 whitespace-nowrap">
           Subscribe
         </button>
+        <svg id="feed-test-spinner" class="htmx-indicator animate-spin h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
       </div>
-      <div id="feed-test-result" class="min-h-0"></div>
-      <div class="flex gap-3">
-        <input type="text" name="custom_title" placeholder="Custom title (optional)"
-               class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <select name="folder_id" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="">No folder</option>
-          {% for folder in folders %}
-            <option value="{{ folder.id }}">{{ folder.name }}</option>
-          {% endfor %}
+<div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
+      <input type="text" name="custom_title" placeholder="Custom title (optional)"
+             class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <select name="folder_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <option value="">No folder</option>
+        {% for folder in folders %}
+          <option value="{{ folder.id }}">{{ folder.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex items-start gap-2">
+      <input type="checkbox" id="feed-is-private" name="is_private"
+             class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer">
+      <label for="feed-is-private" class="text-sm text-gray-600 cursor-pointer select-none">
+        Private feed
+        <span class="block text-xs text-gray-400 font-normal">
+          Public feeds are shared — other subscribers on this server reuse the same cached articles.
+          Mark as private to keep this feed isolated to your account.
+        </span>
+      </label>
+    </div>
+    <details class="text-sm" id="feed-auth-details">
+      <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">HTTP Basic Auth (optional)</summary>
+      <div class="mt-2 flex flex-col sm:flex-row gap-2 sm:gap-3">
+        <input type="text" id="feed-auth-user" name="fetch_auth_user" placeholder="Feed username"
+               autocomplete="off"
+               class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <input type="password" id="feed-auth-pass" name="fetch_auth_pass" placeholder="Feed password"
+               autocomplete="new-password"
+               class="flex-1 min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+    </details>
+    <details class="text-sm" id="feed-import-details">
+      <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">Import scope (optional)</summary>
+      <div class="mt-2 flex flex-col sm:flex-row gap-2 sm:gap-3">
+        <select name="import_mode"
+                class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="recent" selected>Recent (within retention window)</option>
+          <option value="latest">Latest N articles</option>
         </select>
+        <input type="number" name="import_limit" value="500" min="1"
+               class="w-28 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
-      <div class="flex items-start gap-2">
-        <input type="checkbox" id="feed-is-private" name="is_private"
-               class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer">
-        <label for="feed-is-private" class="text-sm text-gray-600 cursor-pointer select-none">
-          Private feed
-          <span class="block text-xs text-gray-400 font-normal">
-            Public feeds are shared — other subscribers on this server reuse the same cached articles.
-            Mark as private to keep this feed isolated to your account.
-          </span>
-        </label>
-      </div>
-      <details class="text-sm" id="feed-auth-details">
-        <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">HTTP Basic Auth (optional)</summary>
-        <div class="mt-2 flex gap-3">
-          <input type="text" id="feed-auth-user" name="fetch_auth_user" placeholder="Feed username"
-                 autocomplete="off"
-                 class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-          <input type="password" id="feed-auth-pass" name="fetch_auth_pass" placeholder="Feed password"
-                 autocomplete="new-password"
-                 class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        </div>
-      </details>
-    </form>
-  </div>
+      <p class="mt-1 text-xs text-gray-400">
+        <strong>Recent</strong> imports only articles within the retention window.
+        <strong>Latest N</strong> pulls up to N newest articles regardless of age (e.g. importing an archive feed).
+      </p>
+    </details>
+  </form>
+</div>
 
-  <!-- Feeds + folders list -->
-  <div id="feeds-list">
-    {% include "settings/partials/feeds_list.html" %}
-  </div>
-
-  <!-- Add folder -->
-  <div class="mt-6 pt-4 border-t border-gray-200">
-    <h2 class="text-sm font-medium text-gray-700 mb-2">Add folder</h2>
-    <form hx-post="/settings/folders"
+<!-- Feeds + folders list -->
+<div class="flex items-center gap-1 mb-3">
+  <button id="tab-feeds"
+          hx-get="/settings/feeds-list"
           hx-target="#feeds-list"
           hx-swap="outerHTML"
-          hx-on:htmx:after-request="this.reset()"
-          class="flex gap-3">
-      <input type="text" name="name" placeholder="Folder name" required
-             class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <button type="submit"
-              class="px-3 py-1.5 bg-gray-600 text-white text-sm rounded hover:bg-gray-700">
-        Create
-      </button>
-    </form>
-  </div>
-
+          class="px-3 py-1 text-sm rounded bg-white dark:bg-gray-700 shadow-sm text-gray-900 dark:text-gray-100 font-medium">Feeds</button>
+  <button id="tab-stats"
+          hx-get="/settings/feeds-stats-partial"
+          hx-target="#feeds-list"
+          hx-swap="outerHTML"
+          class="px-3 py-1 text-sm rounded text-gray-500 dark:text-gray-400 font-medium hover:bg-white dark:hover:bg-gray-700 hover:shadow-sm">Stats</button>
 </div>
+<div id="feeds-list">
+  {% include "settings/partials/feeds_list.html" %}
+</div>
+
+{# ── Data retention ─────────────────────────────────────────────────────────── #}
+<p class="mt-4 text-xs text-gray-400">
+  {% if purge_days and purge_count %}
+    Articles are kept for up to <span class="text-gray-500">{{ purge_days }} days</span> and a maximum of <span class="text-gray-500">{{ purge_count }} per feed</span>.
+  {% elif purge_days %}
+    Articles are kept for up to <span class="text-gray-500">{{ purge_days }} days</span>.
+  {% elif purge_count %}
+    A maximum of <span class="text-gray-500">{{ purge_count }} articles per feed</span> are kept.
+  {% else %}
+    No automatic article deletion is configured.
+  {% endif %}
+  Starred and archived articles are never deleted; articles you've read are kept longer
+  (without full text) to power your interest profile.
+</p>
+
+<!-- Add folder -->
+<div class="mt-6 pt-4 border-t border-gray-200">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Add folder</h2>
+  <form hx-post="/settings/folders"
+        hx-target="#feeds-list"
+        hx-swap="outerHTML"
+        data-reset-on-request
+        class="flex gap-3">
+    <input type="text" name="name" placeholder="Folder name" required
+           class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Create
+    </button>
+  </form>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('js/feeds-settings.js') }}"></script>
 {% endblock %}

@@ -1,66 +1,54 @@
-# Projekt: Readfine
+# Project: Readfine
 
-Self-hosted webová RSS čtečka podobná Tiny Tiny RSS.
-Specifikace: `RSS_Aplikace_Specifikace.md` — přečíst na začátku práce.
+Self-hosted web RSS reader (inspired by Tiny Tiny RSS) with feed scraping, filters,
+article scoring, and AI summaries, scoring and briefings.
 
 ## Tech stack
 - Backend: Python 3.12 + FastAPI
-- Databáze: PostgreSQL
-- Task queue: APScheduler (uvnitř FastAPI procesu)
+- Database: PostgreSQL
+- Task queue: APScheduler (in-process, inside the FastAPI process)
 - Frontend: HTMX + Jinja2 + Tailwind CSS
-- Readable extrakce: trafilatura → readability-lxml
-- AI: Anthropic Claude API + OpenAI API + Google gemini API (konfigurovatelné) 
-- Auth: JWT tokeny
-- Nasazení: Docker na VPS
+- Readable extraction: trafilatura → readability-lxml (fallback)
+- AI: Anthropic Claude / OpenAI / Google Gemini (configurable, bring-your-own-key)
+- Auth: signed session cookies (web) + JWT (API)
+- Deployment: Docker
 - Package manager: uv
 
-## Technická rozhodnutí
-- **Prostředí**: hybrid – PostgreSQL v Dockeru, FastAPI lokálně přes uv
-- **SMTP**: vlastní schránka na Webglobe (libik.cz)
-- **VPS**: řeší se při nasazení (po MVP)
-- **CSRF**: JWT v `Authorization` headeru → CSRF není potřeba
+## Technical decisions
+- **Dev environment**: hybrid — PostgreSQL in Docker, FastAPI run locally via uv
+- **CSRF**: the web is protected by `starlette_csrf.CSRFMiddleware` (double-submit
+  cookie + `x-csrftoken` header; HTMX requests attach it via `csrf.js`). The API is
+  exempt (it authenticates with a JWT in the `Authorization` header), as are the auth
+  forms (`/login`, `/register`, `/logout`, `/reset-password`, `/resend-verification`)
+- **Git workflow**: `dev` = development (default branch), `master` = production/release;
+  merge to `master` only on release
 
-## Stav implementace
-- dokončena fáze 7, ladíme chyby
+## Status
+Core implementation complete (MVP + post-MVP + AI). Implemented: RSS/Atom and web-scraping
+feeds, folders, scheduled fetching, readable extraction, 3-panel reading UI, article states,
+labels, filters (conditions → actions, regex, AND/OR, feed/folder scoping), per-user settings,
+admin panel, SMTP, API tokens, retention/purge, dark mode, AI summaries, relevance scoring,
+chat over articles, and Catch me up & briefings. Preparing the public release.
 
-### Hotovo (Fáze 1–6 + většina Fáze 7)
-- Fáze 1: struktura projektu, config, Docker, Alembic migrace
-- Fáze 2: autentizace, JWT, registrace, reset hesla
-- Fáze 3: feeds, fetchování, APScheduler, složky
-- Fáze 4: články, 3-panel UI, HTMX, stavy článků
-- Fáze 5: štítky, filtry (včetně multi-select scope_include/scope_except)
-- Fáze 6: nastavení uživatele, admin panel, SMTP, API tokeny
-- Fáze 7 – readable extraction: trafilatura → readability-lxml pipeline, scheduler, retry, admin dashboard
-- Fáze 7 – purge jobs: age- a count-based retention
-- Fáze 7 – různé: content source label, folder UniqueConstraint, fetch_auth_pass SecretStr
+## Testing
+- **Test**: auth flows (login, registration, verification, password reset), account deletion,
+  irreversible/destructive data operations, business-logic services (fetcher, filters, AI
+  pipeline, briefing, scoring, purge), security-critical paths (crypto, rate limiting,
+  URL/SSRF validation)
+- **Don't test**: CRUD routes (name/email/password/settings changes), admin UI, Jinja2
+  templates, simple static routes — low risk, reversible or trivial
+- A new feature gets a test if it is irreversible, security-critical, or contains non-trivial
+  business logic
 
-### Zbývá dokončit MVP (Fáze 7)
+## CSS / Tailwind conventions
+- When fixing layout bugs, find the root cause (e.g. a flex/truncate parent) rather than
+  patching symptoms
+- After changing classes in templates, rebuild the stylesheet: `npm run build`
+- CSP is nonce-based: an inline `<script>` needs `nonce="{{ request.state.csp_nonce }}"`;
+  inline event handlers belong in external JS
 
-
-## Odložené nálezy (post-MVP nebo ve volném prostoru)
-1. subscriber_count race condition
-2. JWT lifetime 15 min + refresh token
-3. Fetch error 4xx vs 5xx rozlišení
-4. content_source hodnoty sjednotit s architekturou
-5. API endpointy /feeds/refresh a /feeds/detect
-6. Filter scope S2: scope_include/scope_except → JSONB
-7. trafilatura `favor_recall=True` — zvážit bez corpus dat
-
-## Post-MVP TODO
-- limit na počet článků při prvním stažení
-- **Layout přepínač**: volba mezi 3-panel a 2-panel zobrazením v nastavení uživatele
-- **Katalog veřejných feedů**: při přidávání feedu možnost vybrat z předpřipravené nabídky veřejných/populárních feedů
-- **Readable extraction – cookie injection**: Per-feed session cookies pro weby s cookie-based auth (seekingalpha.com apod.). Šifrovat stejně jako fetch_auth_pass, uživatel obnovuje po expiraci.
-- **Zobrazení labelů na článcích**: barevné badgy v seznamu článků i v detailu. Vyžaduje: přidat labels do ArticleResponse (schema + JOIN/array_agg), šablony article_row.html + article_detail.html. Zvážit toggle v user_settings.
-- **HTTP auth při editaci feedu pro jediného odběratele**: pokud je user jediný subscriber daného feedu, umožnit mu nastavit/změnit HTTP Basic Auth přímo v feed_edit (fetch_auth_user + fetch_auth_pass). Aktuálně je to možné jen při přidávání feedu.
-
-## Post-MVP nápady
-- **Plošné testové pokrytí**: Po MVP zvážit rozšíření testů nad rámec kritických částí.
-
-## Testování
-- Strategie: testy jen pro kritické části (auth, fetcher, filtry) — CRUD a UI bez testů
-
-## Preference uživatele
-- Komunikace v češtině
-- Výchozí jazyk aplikace: **en** (angličtina)
-- Na konci session: `git push` + `/clear`
+## Before large changes
+- For non-trivial work (e.g. error handling, new features), propose at least two approaches
+  with tradeoffs and wait for approval before implementing
+- Don't assume behavior is a bug — verify the current behavior is actually wrong before
+  "fixing" it

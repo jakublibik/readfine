@@ -1,0 +1,159 @@
+{% extends "settings/base.html" %}
+{% set active = "profile" %}
+{% block title %}Profile – Readfine{% endblock %}
+
+{% block settings_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Profile</h1>
+
+<div class="space-y-8">
+
+  <!-- Display name -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Display name</h2>
+    {% if name_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Display name updated.
+    </div>
+    {% endif %}
+    {% if name_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ name_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/name" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Name</label>
+        <input type="text" name="display_name" value="{{ user.display_name }}" required
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          Save name
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Email -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Email address</h2>
+    {% if email_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Email address updated.
+    </div>
+    {% endif %}
+    {% if email_pending %}
+    <div class="mb-3 px-4 py-2 bg-blue-50 border border-blue-200 rounded text-sm text-blue-700">
+      A confirmation link was sent to <strong>{{ email_pending }}</strong>. Your email will change once you confirm it.
+    </div>
+    {% endif %}
+    {% if email_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ email_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/email" hx-boost="true"
+          hx-indicator="#email-spinner" hx-disabled-elt="find button[type=submit]"
+          class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">New email</label>
+        <input type="email" name="email" value="{{ user.email }}" required autocomplete="email"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password (to confirm)</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div class="flex items-center gap-2">
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed">
+          Update email
+        </button>
+        <svg id="email-spinner"
+             class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
+             xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+        </svg>
+      </div>
+    </form>
+  </section>
+
+  <!-- Change password -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Change password</h2>
+    {% if pw_saved %}
+    <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+      Password changed successfully.
+    </div>
+    {% endif %}
+    {% if pw_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ pw_error }}
+    </div>
+    {% endif %}
+    <form method="POST" action="/settings/profile/password" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">New password</label>
+        <input type="password" name="new_password" required minlength="8" autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Confirm new password</label>
+        <input type="password" name="confirm_password" required autocomplete="new-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+          Change password
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Delete account -->
+  {% if user.role != "admin" %}
+  <section>
+    <h2 class="text-sm font-medium text-red-600 mb-3 pb-1 border-b border-red-200">Danger zone</h2>
+    {% if delete_error %}
+    <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+      {{ delete_error }}
+    </div>
+    {% endif %}
+    <p class="text-sm text-gray-600 mb-3">
+      Permanently delete your account and all associated data (feeds, articles, labels, filters, briefings).
+      This action <strong>cannot be undone</strong>.
+    </p>
+    <form method="POST" action="/settings/profile/delete-account" hx-boost="true" class="space-y-3 max-w-sm">
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">Current password</label>
+        <input type="password" name="current_password" required autocomplete="current-password"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400">
+      </div>
+      <div>
+        <label class="block text-sm text-gray-600 mb-1">
+          Type <code class="bg-gray-100 px-1 rounded text-xs">delete my account</code> to confirm
+        </label>
+        <input type="text" name="confirm_text" required autocomplete="off"
+               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-red-400">
+      </div>
+      <div>
+        <button type="submit"
+                class="px-4 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700">
+          Delete my account
+        </button>
+      </div>
+    </form>
+  </section>
+  {% endif %}
+
+</div>
+{% endblock %}

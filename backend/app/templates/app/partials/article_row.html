@@ -1,15 +1,23 @@
 {% set d = density | default("comfortable") %}
 {% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
 {% set ld = label_display | default("indicator") %}
+{% set show_score = show_ai_score | default(false) %}
+{% if show_score and article.ai_score is not none %}
+  {% set score_int = (article.ai_score * 100) | round | int %}
+  {% if article.ai_score >= 0.75 %}{% set score_class = "ai-score-high" %}
+  {% elif article.ai_score >= 0.4 %}{% set score_class = "ai-score-mid" %}
+  {% else %}{% set score_class = "ai-score-low" %}{% endif %}
+{% endif %}
 
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-60{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1 pb-2{% endif %}"
+     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      data-url="{{ article.url or '' }}"
      hx-get="/htmx/articles/{{ article.id }}"
+     hx-trigger="click[!event.target.closest('[data-stop-propagation]')]"
      hx-target="#article-detail"
      hx-swap="innerHTML">
 
@@ -17,6 +25,7 @@
   <!-- Compact: star + title + feed + date all inline -->
   <div class="flex items-center gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
+            hx-target="this"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
@@ -34,6 +43,17 @@
          class="text-sm leading-snug whitespace-nowrap text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
     </div>
     <div class="flex items-center gap-1 flex-shrink-0">
+      {% if chat_article_ids is defined %}
+      <svg id="chat-indicator-{{ article.id }}"
+           class="w-3 h-3 text-gray-400 flex-shrink-0 {% if article.id not in chat_article_ids %}hidden{% endif %}"
+           fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      {% endif %}
+      {% if show_score and article.ai_score is not none %}
+      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
+      {% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -48,7 +68,7 @@
             {% if article.labels %}
               <span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
             {% else %}
-              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300 dark:border-gray-500"></span>
             {% endif %}
           {% else %}
             {% if article.labels %}
@@ -56,20 +76,21 @@
                 <span class="inline-block w-[9px] h-[9px] rounded-full opacity-80" style="background-color: {{ label.color }}"></span>
               {% endfor %}
               {% if article.labels | length > 5 %}
-                <span class="text-[10px] text-gray-400 leading-none">+{{ article.labels | length - 5 }}</span>
+                <span class="text-[10px] text-gray-500 leading-none">+{{ article.labels | length - 5 }}</span>
               {% endif %}
             {% else %}
-              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300 dark:border-gray-500"></span>
             {% endif %}
           {% endif %}
         </button>
         {% endif %}
       </div>
-      <span class="text-xs text-gray-400">
+      <span class="text-xs text-gray-500">
         {% if article.published_at %}
           <time datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
         {% else %}{{ article.formatted_date }}{% endif %}
       </span>
+      <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
   </div>
 
@@ -77,6 +98,7 @@
   <!-- Comfortable / Summary: star + title, then feed + date row -->
   <div class="flex items-baseline gap-1">
     <button hx-post="/htmx/articles/{{ article.id }}/star"
+            hx-target="this"
             hx-swap="none"
             data-stop-propagation
             data-star-btn
@@ -90,15 +112,27 @@
     </button>
     <a data-article-title
        {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
-       class="text-sm leading-snug line-clamp-2 text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
+       class="min-w-0 break-words text-sm leading-snug text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
   </div>
 
-  <div class="flex items-center justify-between mt-0.5">
+  <div class="flex items-center justify-between mt-1">
     <div class="flex items-center gap-1.5 min-w-0">
-      <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-400 leading-none">▲</span>
-      <span class="text-xs text-gray-400 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+      <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-500 leading-none">▲</span>
+      <span class="text-xs text-gray-500 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+      <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
+      {% if chat_article_ids is defined %}
+      <svg id="chat-indicator-{{ article.id }}"
+           class="w-3 h-3 text-gray-400 flex-shrink-0 {% if article.id not in chat_article_ids %}hidden{% endif %}"
+           fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+      </svg>
+      {% endif %}
+      {% if show_score and article.ai_score is not none %}
+      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
+      {% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -113,7 +147,7 @@
             {% if article.labels %}
               <span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
             {% else %}
-              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300 dark:border-gray-500"></span>
             {% endif %}
           {% else %}
             {% if article.labels %}
@@ -121,16 +155,16 @@
                 <span class="inline-block w-[9px] h-[9px] rounded-full opacity-80" style="background-color: {{ label.color }}"></span>
               {% endfor %}
               {% if article.labels | length > 5 %}
-                <span class="text-[10px] text-gray-400 leading-none ml-0.5">+{{ article.labels | length - 5 }}</span>
+                <span class="text-[10px] text-gray-500 leading-none ml-0.5">+{{ article.labels | length - 5 }}</span>
               {% endif %}
             {% else %}
-              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>
+              <span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300 dark:border-gray-500"></span>
             {% endif %}
           {% endif %}
         </button>
         {% endif %}
       </div>
-      <span class="text-xs text-gray-400">
+      <span class="text-xs text-gray-500">
         {% if article.published_at %}
           <time datetime="{{ article.published_at.isoformat() }}">{{ article.formatted_date }}</time>
         {% else %}{{ article.formatted_date }}{% endif %}
@@ -139,13 +173,8 @@
   </div>
 
   {% if d == "summary" and article.snippet %}
-    <p class="text-xs text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
+    <p class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
   {% endif %}
-
-  <!-- Archived indicator (all densities) -->
-  <div data-archived-indicator class="{% if d == 'compact' %}inline ml-1{% else %}mt-1 pl-5{% endif %} {% if not article.is_archived %}hidden{% endif %}">
-    <span class="text-xs text-gray-400">archived</span>
-  </div>
 
 </div>

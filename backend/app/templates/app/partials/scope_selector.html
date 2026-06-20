@@ -1,0 +1,87 @@
+{#
+  Reusable scope selector (scope_include only).
+
+  Variables expected in context:
+    user_feeds   — list of UserFeed ORM objects (with .feed, .folder, .folder_id, .feed_id, .custom_title)
+    scope_value  — currently selected scope as JSON string or None (e.g. '["feed:1","folder:2"]')
+    input_name   — name attribute for the hidden input (default: "scope_include")
+    selector_id  — unique ID prefix to allow multiple selectors on one page (default: "scope")
+#}
+{% set input_name = input_name | default("scope_include") %}
+{% set selector_id = selector_id | default("scope") %}
+
+{% if scope_value %}
+  {% set selected_items = scope_value | tojson %}
+{% else %}
+  {% set selected_items = "[]" %}
+{% endif %}
+
+{# Collect no-folder feeds #}
+{% set ns_scope = namespace(nf_feeds=[]) %}
+{% for uf in user_feeds %}
+  {% if uf.folder_id is none %}
+    {% set ns_scope.nf_feeds = ns_scope.nf_feeds + [uf] %}
+  {% endif %}
+{% endfor %}
+
+{# Collect unique folders #}
+{% set ns_folders = namespace(seen=[]) %}
+{% for uf in user_feeds %}
+  {% if uf.folder and uf.folder_id not in ns_folders.seen %}
+    {% set ns_folders.seen = ns_folders.seen + [uf.folder_id] %}
+  {% endif %}
+{% endfor %}
+
+<div class="scope-selector" data-selector-id="{{ selector_id }}">
+  <input type="hidden" name="{{ input_name }}" id="{{ selector_id }}-value" value="{{ scope_value or '' }}">
+
+  <div class="border border-gray-200 rounded max-h-48 overflow-y-auto p-2 space-y-0.5 bg-gray-50">
+    <!-- All feeds option -->
+    <label class="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer py-0.5">
+      <input type="checkbox" id="{{ selector_id }}-all" class="rounded scope-all-cb">
+      All feeds
+    </label>
+    <hr class="border-gray-200 my-1">
+
+    <!-- Folders + their feeds -->
+    {% for uf in user_feeds %}
+      {% if uf.folder and uf.folder_id not in ns_folders.seen %}
+      {% endif %}
+    {% endfor %}
+    {% set ns_fld = namespace(rendered=[]) %}
+    {% for uf in user_feeds %}
+      {% if uf.folder and uf.folder_id not in ns_fld.rendered %}
+        {% set ns_fld.rendered = ns_fld.rendered + [uf.folder_id] %}
+        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+          <input type="checkbox" class="rounded scope-item-cb" data-selector="{{ selector_id }}"
+                 value="folder:{{ uf.folder_id }}">
+          📁 {{ uf.folder.name }}
+        </label>
+        {% for uuf in user_feeds if uuf.folder_id == uf.folder_id %}
+          <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer py-0.5 pl-5">
+            <input type="checkbox" class="rounded scope-item-cb" data-selector="{{ selector_id }}"
+                   value="feed:{{ uuf.feed_id }}">
+            {{ uuf.custom_title or uuf.feed.title }}
+          </label>
+        {% endfor %}
+      {% endif %}
+    {% endfor %}
+
+    <!-- No-folder feeds -->
+    {% if ns_scope.nf_feeds %}
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+        <input type="checkbox" class="rounded scope-item-cb" data-selector="{{ selector_id }}"
+               value="folder:0">
+        📁 No folder
+      </label>
+      {% for uf in ns_scope.nf_feeds %}
+        <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer py-0.5 pl-5">
+          <input type="checkbox" class="rounded scope-item-cb" data-selector="{{ selector_id }}"
+                 value="feed:{{ uf.feed_id }}">
+          {{ uf.custom_title or uf.feed.title }}
+        </label>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>
+

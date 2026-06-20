@@ -9,7 +9,7 @@ from app.database import Base
 class Feed(Base):
     __tablename__ = "feeds"
     __table_args__ = (
-        CheckConstraint("status IN ('active', 'error', 'paused')", name="ck_feeds_status"),
+        CheckConstraint("status IN ('active', 'error', 'paused', 'disabled')", name="ck_feeds_status"),
         CheckConstraint("feed_type IN ('rss', 'youtube', 'scrape', 'twitter', 'podcast')", name="ck_feeds_feed_type"),
     )
 
@@ -23,6 +23,7 @@ class Feed(Base):
     favicon_url: Mapped[str | None] = mapped_column(String(2048))
     favicon_data: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_fetch_duration_ms: Mapped[int | None] = mapped_column(Integer)
@@ -57,6 +58,7 @@ class Folder(Base):
 
 class UserFeed(Base):
     __tablename__ = "user_feeds"
+    __table_args__ = (UniqueConstraint("user_id", "feed_id", name="uq_user_feeds_user_feed"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
@@ -65,6 +67,9 @@ class UserFeed(Base):
     custom_title: Mapped[str | None] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     extract_readable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    readable_auto_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ai_scoring_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    ai_summary_enabled: Mapped[bool | None] = mapped_column(Boolean)
     unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     purge_after_days: Mapped[int | None] = mapped_column(SmallInteger)
     purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger)

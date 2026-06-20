@@ -1,0 +1,638 @@
+{% extends "base.html" %}
+{% block title %}Catch me up & Briefings – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen bg-gray-50">
+
+  <!-- Header bar -->
+  <header class="sticky top-0 z-10 bg-white border-b border-gray-200 px-4 py-2.5 flex items-center gap-3">
+    <a href="/app" class="text-gray-400 hover:text-gray-600 flex-shrink-0" title="Back to app">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+      </svg>
+    </a>
+    <h1 class="text-base font-semibold text-gray-800 -translate-y-0.5">Catch me up & Briefings</h1>
+  </header>
+
+  {% if not catchup_available %}
+  <div class="max-w-lg mx-auto mt-16 px-6 text-center">
+    <p class="text-gray-500 text-sm">AI is not configured. Set up an AI provider in
+      <a href="/settings/ai" class="text-blue-600 hover:underline">Settings → AI</a>.
+    </p>
+  </div>
+  {% else %}
+
+  <div class="max-w-5xl mx-auto px-2 sm:px-4 py-3 sm:py-6 grid grid-cols-1 lg:grid-cols-[20rem_1fr] gap-3 sm:gap-6 items-start">
+
+    <!-- ── Left column: saved configs + form ────────────────────────────── -->
+    <div class="space-y-3 sm:space-y-4">
+
+      <!-- Saved configs -->
+      <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <h2 class="text-xs font-medium text-gray-600 mb-3">Saved configurations</h2>
+
+        <div id="catchup-configs-list-wrapper">
+          {% include "app/partials/catchup_configs_list.html" %}
+        </div>
+
+        <!-- Save current settings -->
+        <form class="mt-3 flex gap-2"
+              hx-post="/htmx/catchup-configs"
+              hx-target="#catchup-configs-list-wrapper"
+              hx-swap="innerHTML"
+              hx-include="#catchup-form"
+              hx-on::before-request="if (!this.querySelector('[name=name]').value.trim()) { document.body.dispatchEvent(new CustomEvent('showToast', {detail:{msg:'Enter a configuration name.',type:'warning'}})); event.preventDefault(); }"
+              hx-on::after-request="if (event.detail.successful) this.querySelector('[name=name]').value = ''"
+              id="save-config-form">
+          <input type="text" name="name" placeholder="Configuration name…" maxlength="100"
+                 class="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm min-w-0">
+          <button type="submit"
+                  class="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 text-gray-700 rounded border border-gray-200">
+            Save
+          </button>
+        </form>
+      </div>
+
+      <!-- Form (collapsed if saved configs exist) -->
+      <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <button type="button" id="settings-toggle"
+                class="w-full flex items-center justify-between px-4 py-2.5 text-xs font-medium text-gray-600 hover:bg-gray-50 cursor-pointer transition-colors">
+          <span>Configuration</span>
+          <svg id="settings-toggle-arrow" class="w-3.5 h-3.5 transition-transform {% if not saved_configs %}rotate-90{% endif %}"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </button>
+        <div id="settings-panel" {% if saved_configs %}class="hidden"{% endif %}>
+      <form id="catchup-form"
+            hx-post="/htmx/catch-me-up/generate"
+            hx-target="#catchup-result"
+            hx-swap="innerHTML"
+            hx-on::before-request="document.getElementById('catchup-spinner').classList.remove('hidden'); document.getElementById('catchup-result').closest('.relative').scrollIntoView({ behavior: 'smooth', block: 'start' })"
+            hx-on::after-request="document.getElementById('catchup-spinner').classList.add('hidden')"
+            class="p-4 space-y-4 border-t border-gray-100">
+
+        <!-- Period -->
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Period</label>
+          <div class="flex gap-2">
+            {% for val, label in [("today", "Today"), ("yesterday", "Since yesterday"), ("7days", "Last 7 days")] %}
+            <label class="flex-1 text-center">
+              <input type="radio" name="period" value="{{ val }}" class="sr-only peer"
+                     {% if loop.last %}checked{% endif %}>
+              <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
+                           peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
+                           hover:bg-gray-50 transition-colors">
+                {{ label }}
+              </span>
+            </label>
+            {% endfor %}
+          </div>
+          <p id="period-desc" class="text-xs text-gray-400 mt-1.5"></p>
+        </div>
+
+        <!-- Scope -->
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Feeds</label>
+          {% include "app/partials/scope_selector.html" with context %}
+        </div>
+
+        <!-- Filters -->
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1.5">Filters</label>
+          <div class="bg-gray-50 rounded-lg p-3 space-y-2">
+
+            <!-- Status -->
+            <div class="flex items-center gap-3">
+              <span class="text-xs text-gray-500 w-14 flex-shrink-0">Status</span>
+              <div class="flex gap-1.5">
+                {% for val, lbl in [("all", "All"), ("not_opened", "Not opened")] %}
+                <label>
+                  <input type="radio" name="filter_status" value="{{ val }}" class="sr-only peer"
+                         {% if val == "all" %}checked{% endif %}>
+                  <span class="text-xs py-1 px-2 rounded border border-gray-200 cursor-pointer
+                               peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
+                               hover:bg-gray-100 block transition-colors">
+                    {{ lbl }}
+                  </span>
+                </label>
+                {% endfor %}
+              </div>
+            </div>
+
+            <!-- Relevance -->
+            <div class="flex items-start gap-3">
+              <span class="text-xs text-gray-500 w-14 flex-shrink-0 pt-1">Relevance</span>
+              <div class="flex flex-col gap-1 items-start">
+                {% set rel_opts = [("all", "All articles"), ("labeled", "Labeled only")] %}
+                {% if ai_scoring_available %}{% set rel_opts = rel_opts + [("score", "Labeled + min score")] %}{% endif %}
+                {% for val, lbl in rel_opts %}
+                <label>
+                  <input type="radio" name="relevance_mode" value="{{ val }}" class="sr-only peer relevance-radio"
+                         {% if val == "all" %}checked{% endif %}>
+                  <span class="text-xs py-1 px-2 rounded border border-gray-200 cursor-pointer whitespace-nowrap
+                               peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
+                               hover:bg-gray-100 block transition-colors">
+                    {{ lbl }}
+                  </span>
+                </label>
+                {% endfor %}
+              </div>
+            </div>
+
+            <!-- Score threshold (shown only when relevance_mode = score) -->
+            {% if ai_scoring_available %}
+            <div class="flex items-center gap-3 hidden" id="score-value-row">
+              <span class="text-xs text-gray-500 w-14 flex-shrink-0"></span>
+              <label class="flex items-center gap-1.5 text-xs text-gray-700">
+                Score ≥
+                <input type="number" id="score-filter-value"
+                       min="0" max="100" step="1" value="50"
+                       class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs">
+              </label>
+            </div>
+            {% endif %}
+
+            <!-- filter_labeled driven by relevance_mode -->
+            <input type="hidden" name="filter_labeled" id="filter-labeled-hidden" value="false">
+
+          </div>
+        </div>
+
+        <!-- Article limit -->
+        <div class="flex items-center gap-3">
+          <label class="text-xs font-medium text-gray-600 flex-shrink-0" for="article-limit">
+            Article limit
+          </label>
+          <input type="number" name="article_limit" id="article-limit"
+                 min="10" max="500" value="500"
+                 class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </div>
+
+        <!-- Model slot -->
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
+          <div class="flex gap-2">
+            {% for val, lbl in [("fast", "Fast"), ("quality", "Quality")] %}
+            <label class="flex-1 text-center">
+              <input type="radio" name="model_slot" value="{{ val }}" class="sr-only peer"
+                     {% if val == "fast" %}checked{% endif %}>
+              <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
+                           peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
+                           hover:bg-gray-50 transition-colors">
+                {{ lbl }}
+              </span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+
+        <!-- Include article text -->
+        <label class="flex items-start gap-2 cursor-pointer">
+          <input type="checkbox" name="include_snippet" value="true" checked
+                 class="rounded mt-0.5 flex-shrink-0">
+          <span class="text-sm text-gray-700">
+            Include article text
+            <span class="block text-xs text-gray-400 font-normal mt-0.5">
+              Up to 150 characters of normalized text per article
+              (AI summary → readable content → content)
+            </span>
+          </span>
+        </label>
+
+        <!-- Custom prompt (collapsible) -->
+        <div>
+          <button type="button" id="prompt-toggle"
+                  class="text-xs text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0 flex items-center gap-1">
+            <svg id="prompt-toggle-arrow" class="w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            Custom prompt
+          </button>
+          <div id="prompt-panel" class="hidden mt-2">
+            <textarea name="custom_prompt" id="custom-prompt"
+                      rows="4" placeholder="{{ default_catchup_prompt }}"
+                      class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono resize-y"></textarea>
+            <div class="text-right mt-1">
+              <button type="button" data-insert-default="#custom-prompt" class="text-xs text-blue-600 hover:underline bg-transparent border-0 p-0 cursor-pointer">insert default</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Count + cost -->
+        <div class="text-xs text-gray-500 space-y-1 min-h-[2.5rem]">
+          <div id="catchup-count">
+            <span class="text-gray-400">Select filters to see article count</span>
+          </div>
+          <div id="catchup-cost"></div>
+        </div>
+
+        <!-- Generate button -->
+        <button type="submit"
+                hx-disabled-elt="this"
+                hx-on::before-request="document.getElementById('catchup-result').closest('.relative').scrollIntoView({ behavior: 'smooth', block: 'start' })"
+                class="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+          Generate briefing
+        </button>
+
+      </form>
+      </div>{# /settings-panel #}
+      </div>{# /card wrapper #}
+
+    </div>
+
+    <!-- ── Right column: result ───────────────────────────────────────── -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 min-h-[12rem] relative">
+
+      <!-- Copy button -->
+      <button id="catchup-copy-btn"
+              type="button"
+              title="Copy to clipboard"
+              class="hidden absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 border-0 bg-transparent cursor-pointer">
+        <svg id="catchup-copy-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-4 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+        </svg>
+      </button>
+
+      <!-- Spinner -->
+      <div id="catchup-spinner" class="hidden absolute inset-0 flex items-start justify-center pt-20 bg-white/80 dark:bg-gray-800/80 rounded-lg z-10">
+        <div class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+          <svg class="w-5 h-5 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+          </svg>
+          Generating briefing…
+        </div>
+      </div>
+
+      <div id="catchup-result" class="text-sm text-gray-400">
+        Configure filters and click <em>Generate briefing</em>.
+      </div>
+    </div>
+
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="application/json" id="period-descs-data" nonce="{{ request.state.csp_nonce }}">{{ period_descs | default({}) | tojson }}</script>
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+
+  var PERIOD_DESCS = JSON.parse(document.getElementById('period-descs-data').textContent);
+
+  function updatePeriodDesc() {
+    var sel = document.querySelector('input[name="period"]:checked');
+    var el = document.getElementById('period-desc');
+    if (el) el.textContent = sel ? (PERIOD_DESCS[sel.value] || '') : '';
+  }
+
+  // ── Settings panel toggle ────────────────────────────────────────────────
+  var settingsToggle = document.getElementById('settings-toggle');
+  var settingsPanel = document.getElementById('settings-panel');
+  var settingsArrow = document.getElementById('settings-toggle-arrow');
+  if (settingsToggle) {
+    settingsToggle.addEventListener('click', function () {
+      var open = !settingsPanel.classList.contains('hidden');
+      settingsPanel.classList.toggle('hidden', open);
+      settingsArrow.classList.toggle('rotate-90', !open);
+      if (!open) { triggerCountRefresh(); triggerCostRefresh(); }
+    });
+  }
+
+  // ── Relevance mode (All / Labeled / Labeled + score) ──────────────────────
+  // Maps a single selector onto the backend's filter_labeled + filter_score_min.
+  // 'score' ⊆ 'labeled' — scoring only runs on labeled articles, so the score
+  // tier implies labeled. Score input carries its name only in 'score' mode.
+  function applyRelevanceMode(mode) {
+    var labeledHidden = document.getElementById('filter-labeled-hidden');
+    var scoreRow = document.getElementById('score-value-row');
+    var scoreInput = document.getElementById('score-filter-value');
+    if (labeledHidden) {
+      labeledHidden.value = (mode === 'labeled' || mode === 'score') ? 'true' : 'false';
+    }
+    if (scoreRow) scoreRow.classList.toggle('hidden', mode !== 'score');
+    if (scoreInput) {
+      if (mode === 'score') scoreInput.setAttribute('name', 'filter_score_min');
+      else scoreInput.removeAttribute('name');
+    }
+  }
+
+  function currentRelevanceMode() {
+    var checked = document.querySelector('.relevance-radio:checked');
+    return checked ? checked.value : 'all';
+  }
+
+  document.querySelectorAll('.relevance-radio').forEach(function (r) {
+    r.addEventListener('change', function () {
+      applyRelevanceMode(currentRelevanceMode());
+      triggerCountRefresh();
+    });
+  });
+  applyRelevanceMode(currentRelevanceMode());
+
+  // ── Custom prompt toggle ──────────────────────────────────────────────────
+  var promptToggle = document.getElementById('prompt-toggle');
+  var promptPanel = document.getElementById('prompt-panel');
+  var promptArrow = document.getElementById('prompt-toggle-arrow');
+  if (promptToggle) {
+    promptToggle.addEventListener('click', function () {
+      var open = !promptPanel.classList.contains('hidden');
+      promptPanel.classList.toggle('hidden', open);
+      promptArrow.classList.toggle('rotate-90', !open);
+    });
+  }
+
+  // ── Count + cost refresh ──────────────────────────────────────────────────
+  var countTimer = null;
+  var costTimer = null;
+
+  function buildQueryString(extra) {
+    var form = document.getElementById('catchup-form');
+    if (!form) return '';
+    var fd = new FormData(form);
+    var params = new URLSearchParams();
+    fd.forEach(function (val, key) {
+      if (key !== 'custom_prompt' && key !== 'relevance_mode') params.append(key, val);
+    });
+    if (extra) Object.keys(extra).forEach(function (k) { params.set(k, extra[k]); });
+    return params.toString();
+  }
+
+  function triggerCountRefresh() {
+    clearTimeout(countTimer);
+    countTimer = setTimeout(function () {
+      var qs = buildQueryString();
+      htmx.ajax('GET', '/htmx/catch-me-up/count?' + qs, {
+        target: '#catchup-count', swap: 'innerHTML'
+      });
+    }, 300);
+  }
+
+  function triggerCostRefresh() {
+    clearTimeout(costTimer);
+    costTimer = setTimeout(function () {
+      var qs = buildQueryString();
+      htmx.ajax('GET', '/htmx/catch-me-up/cost?' + qs, {
+        target: '#catchup-cost', swap: 'innerHTML'
+      });
+    }, 300);
+  }
+
+  // Attach listeners to form inputs
+  var form = document.getElementById('catchup-form');
+  if (form) {
+    form.addEventListener('change', function (e) {
+      if (e.target.name === 'period') {
+        updatePeriodDesc();
+      }
+      if (e.target.name === 'model_slot') {
+        triggerCostRefresh();
+      } else if (e.target.name === 'include_snippet') {
+        triggerCostRefresh();
+        triggerCountRefresh();
+      } else if (e.target.id === 'scope-value' || e.target.name === 'scope_include') {
+        triggerCountRefresh();
+      } else {
+        triggerCountRefresh();
+      }
+    });
+    document.getElementById('article-limit').addEventListener('input', function () {
+      triggerCountRefresh();
+      triggerCostRefresh();
+    });
+    // Initial load
+    updatePeriodDesc();
+    triggerCountRefresh();
+    triggerCostRefresh();
+  }
+
+  // ── Load saved config into form ───────────────────────────────────────────
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-action="load-catchup-config"], [data-action="generate-catchup-config"]');
+    if (!btn) return;
+    var raw = btn.getAttribute('data-config');
+    if (!raw) return;
+    var cfg;
+    try { cfg = JSON.parse(raw); } catch (err) { return; }
+    var isGenerate = btn.getAttribute('data-action') === 'generate-catchup-config';
+    _applyConfig(cfg, !isGenerate);
+    if (isGenerate) {
+      var form = document.getElementById('catchup-form');
+      if (form) {
+        form.requestSubmit();
+        var resultArea = document.getElementById('catchup-result');
+        if (resultArea) resultArea.closest('.relative').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  });
+
+  function _applyConfig(cfg, expandPanel) {
+    var form = document.getElementById('catchup-form');
+    if (!form) return;
+
+    // Expand settings panel if collapsed and requested
+    if (expandPanel && settingsPanel && settingsPanel.classList.contains('hidden')) {
+      settingsPanel.classList.remove('hidden');
+      if (settingsArrow) settingsArrow.classList.add('rotate-90');
+    }
+
+    // Period
+    var periodRadio = form.querySelector('input[name="period"][value="' + cfg.period + '"]');
+    if (periodRadio) periodRadio.checked = true;
+
+    // Model slot
+    var modelRadio = form.querySelector('input[name="model_slot"][value="' + cfg.model_slot + '"]');
+    if (modelRadio) modelRadio.checked = true;
+
+    // Filter status
+    var statusRadio = form.querySelector('input[name="filter_status"][value="' + cfg.filter_status + '"]');
+    if (statusRadio) statusRadio.checked = true;
+
+    // Relevance mode (derived from filter_labeled + filter_score_min)
+    var hasScore = cfg.filter_score_min !== null && cfg.filter_score_min !== undefined;
+    var relMode = hasScore ? 'score' : (cfg.filter_labeled ? 'labeled' : 'all');
+    var relRadio = form.querySelector('.relevance-radio[value="' + relMode + '"]');
+    // Saved 'score' config but scoring no longer available → fall back to labeled
+    if (!relRadio && relMode === 'score') {
+      relMode = 'labeled';
+      relRadio = form.querySelector('.relevance-radio[value="labeled"]');
+    }
+    if (relRadio) relRadio.checked = true;
+    var scoreInput = document.getElementById('score-filter-value');
+    if (scoreInput && hasScore) {
+      scoreInput.value = Math.round(cfg.filter_score_min * 100);
+    }
+    applyRelevanceMode(relMode);
+
+    // Article limit
+    var limitInput = document.getElementById('article-limit');
+    if (limitInput) limitInput.value = cfg.article_limit;
+
+    // Include snippet
+    var snippetCb = form.querySelector('input[name="include_snippet"]');
+    if (snippetCb) snippetCb.checked = !!cfg.include_snippet;
+
+    // Custom prompt
+    var promptTextarea = document.getElementById('custom-prompt');
+    var promptPanel = document.getElementById('prompt-panel');
+    var promptArrow = document.getElementById('prompt-toggle-arrow');
+    if (promptTextarea) {
+      promptTextarea.value = cfg.custom_prompt || '';
+      if (cfg.custom_prompt && promptPanel) {
+        promptPanel.classList.remove('hidden');
+        if (promptArrow) promptArrow.classList.add('rotate-90');
+      }
+      if (window._refreshInsertDefaultLabels) window._refreshInsertDefaultLabels();
+    }
+
+    // Scope — update hidden input and re-init checkboxes
+    var scopeHidden = document.getElementById('scope-value');
+    if (scopeHidden) {
+      scopeHidden.value = cfg.scope_include || '';
+      // Re-init checkboxes
+      var allCb = document.getElementById('scope-all');
+      var items = document.querySelectorAll('input.scope-item-cb[data-selector="scope"]');
+      items.forEach(function (cb) { cb.checked = false; cb.style.opacity = ''; });
+      if (cfg.scope_include) {
+        try {
+          var selected = JSON.parse(cfg.scope_include);
+          selected.forEach(function (val) {
+            var cb = document.querySelector('input.scope-item-cb[data-selector="scope"][value="' + val + '"]');
+            if (cb) cb.checked = true;
+          });
+          if (allCb) allCb.checked = false;
+        } catch (e) {}
+      } else {
+        if (allCb) allCb.checked = true;
+        items.forEach(function (cb) { cb.style.opacity = '0.35'; });
+      }
+    }
+
+    // Fill name input in save form
+    var nameInput = document.querySelector('#save-config-form [name=name]');
+    if (nameInput) nameInput.value = cfg.name;
+
+    updatePeriodDesc();
+    triggerCountRefresh();
+    triggerCostRefresh();
+  }
+
+  // ── Copy button ──────────────────────────────────────────────────────────
+  var copyBtn = document.getElementById('catchup-copy-btn');
+  var copyIcon = document.getElementById('catchup-copy-icon');
+  var resultDiv = document.getElementById('catchup-result');
+
+  var _copyIconDefault = copyIcon ? copyIcon.innerHTML : '';
+  var _copyIconCheck = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>';
+
+  // Show copy button after HTMX swaps result
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target && e.detail.target.id === 'catchup-result') {
+      var hasContent = resultDiv.querySelector('.prose') !== null;
+      if (copyBtn) copyBtn.classList.toggle('hidden', !hasContent);
+    }
+  });
+
+  if (copyBtn) {
+    copyBtn.addEventListener('click', function () {
+      var text = resultDiv.innerText.trim();
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(function () {
+        copyIcon.innerHTML = _copyIconCheck;
+        copyBtn.classList.add('text-green-500');
+        setTimeout(function () {
+          copyIcon.innerHTML = _copyIconDefault;
+          copyBtn.classList.remove('text-green-500');
+        }, 2000);
+      });
+    });
+  }
+
+  // Update config via PUT when editing a saved config
+  // (re-use save form — set hidden config_id before submit if editing)
+  // Currently loading config fills the main form; saving creates a new config.
+  // Full PUT editing can be added later if needed.
+
+})();
+</script>
+<script src="{{ static_url('js/scope-selector.js') }}"></script>
+
+{# Briefing modal overlay #}
+<div id="briefing-modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center"
+     aria-modal="true" role="dialog">
+  <div class="absolute inset-0 bg-black/40" data-action="close-briefing-modal"></div>
+  <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+      <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100" id="briefing-modal-title">Briefing</h2>
+      <button data-action="close-briefing-modal" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div id="briefing-modal-content" class="px-5 py-4"></div>
+  </div>
+</div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  function openBriefingModal(configId, configName) {
+    var overlay = document.getElementById('briefing-modal-overlay');
+    var title = document.getElementById('briefing-modal-title');
+    var content = document.getElementById('briefing-modal-content');
+    if (title) title.textContent = 'Briefing — ' + configName;
+    // Show a loading shell so the modal isn't empty during load (and to clear any
+    // stale content from a previous open) — visible on slower connections.
+    if (content) {
+      content.innerHTML = '<div class="py-6 flex items-center justify-center gap-2 text-sm text-gray-400">' +
+        '<svg class="animate-spin h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>' +
+        '</svg>Loading…</div>';
+    }
+    if (overlay) overlay.classList.remove('hidden');
+    htmx.ajax('GET', '/htmx/catchup-configs/' + configId + '/briefing', {
+      target: '#briefing-modal-content',
+      swap: 'innerHTML'
+    });
+  }
+  function closeBriefingModal() {
+    var overlay = document.getElementById('briefing-modal-overlay');
+    if (overlay) overlay.classList.add('hidden');
+  }
+  window.openBriefingModal = openBriefingModal;
+  window.closeBriefingModal = closeBriefingModal;
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeBriefingModal();
+  });
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-action="close-briefing-modal"]')) {
+      closeBriefingModal();
+      return;
+    }
+    var opener = e.target.closest('[data-action="open-briefing-modal"]');
+    if (opener) {
+      openBriefingModal(opener.dataset.configId, opener.dataset.configName);
+    }
+  });
+
+  // Event delegation for briefing modal interactive fields (loaded via HTMX)
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el.dataset.action === 'toggle-briefing-fields') {
+      var fields = document.getElementById('briefing-fields');
+      if (fields) fields.classList.toggle('hidden', !el.checked);
+    } else if (el.dataset.action === 'toggle-briefing-day') {
+      var dayRow = document.getElementById('briefing-day-row');
+      if (dayRow) dayRow.classList.toggle('hidden', el.value !== 'weekly');
+    }
+  });
+})();
+</script>
+{% endblock %}

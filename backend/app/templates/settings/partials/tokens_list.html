@@ -14,16 +14,14 @@
         {% endif %}
       </div>
     </div>
-    <form method="POST" action="/settings/tokens/{{ token.id }}/revoke"
-          hx-post="/settings/tokens/{{ token.id }}/revoke"
+    <form hx-post="/settings/tokens/{{ token.id }}/revoke"
           hx-target="#tokens-list"
-          hx-confirm="Revoke token '{{ token.name }}'?"
           class="inline">
       <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
       <button type="submit"
-              class="text-xs text-red-600 hover:text-red-800 hover:underline">
-        Revoke
-      </button>
+              class="swap-confirm text-xs text-red-600 hover:text-red-800 hover:underline"
+              data-confirm-text="Confirm"
+              data-confirm-class="text-xs text-red-600 font-medium hover:text-red-800">Revoke</button>
     </form>
   </li>
   {% endfor %}

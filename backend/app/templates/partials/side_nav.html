@@ -1,0 +1,44 @@
+{% macro side_nav(nav_items, title="", back_url="", back_label="", cross_url="", cross_label="") %}
+<nav class="bg-white border-b border-gray-200 sm:border-b-0 sm:border-r sm:w-44 sm:shrink-0 sm:px-3 sm:pt-3 sm:pb-6 sm:sticky sm:top-0 sm:h-screen sm:overflow-y-auto">
+
+  {# Mobile: horizontal scrollable tabs #}
+  <div class="sm:hidden px-3 py-2">
+    <div class="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap text-sm">
+      {% if back_url %}
+      <a href="{{ back_url }}" class="shrink-0 text-xs text-gray-400 hover:text-gray-600 mr-3">← Back</a>
+      {% endif %}
+      {% for item in nav_items %}
+      <a href="{{ item.url }}" class="shrink-0 px-3 py-1.5 rounded {% if item.active %}bg-gray-100 font-medium text-gray-900{% else %}text-gray-600 hover:bg-gray-100{% endif %}">{{ item.label }}</a>
+      {% endfor %}
+      {% if cross_url %}
+      <a href="{{ cross_url }}" class="shrink-0 text-xs text-gray-400 hover:text-gray-600 ml-3">{{ cross_label }} →</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Desktop: vertical sidebar #}
+  <div class="hidden sm:flex sm:flex-col sm:min-h-full">
+    {% if back_url or cross_url %}
+    <div class="mb-4 pb-4 border-b border-gray-200 flex items-center justify-between gap-2">
+      {% if back_url %}
+      <a href="{{ back_url }}" class="text-xs text-gray-400 hover:text-gray-600">← {{ back_label }}</a>
+      {% endif %}
+      {% if cross_url %}
+      <a href="{{ cross_url }}" class="text-xs text-gray-400 hover:text-gray-600">{{ cross_label }} →</a>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if title %}
+    <div class="mb-6">
+      <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">{{ title }}</span>
+    </div>
+    {% endif %}
+    <ul class="space-y-1 text-sm flex-1">
+      {% for item in nav_items %}
+      <li><a href="{{ item.url }}" class="flex items-center px-3 py-2 rounded hover:bg-gray-100 {% if item.active %}bg-gray-100 font-medium{% endif %}">{{ item.label }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+
+</nav>
+{% endmacro %}

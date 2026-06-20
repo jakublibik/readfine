@@ -3,19 +3,34 @@ from datetime import datetime, timezone
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.security import decode_access_token, hash_token
 from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
+from app.models.settings import AppSettings
+from app.utils.datetime_format import current_viewer_tz
+from app.utils.request_context import current_viewer_is_admin
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
 async def _get_user_by_id(user_id: int, db: AsyncSession) -> User | None:
-    result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
-    return result.scalar_one_or_none()
+    result = await db.execute(
+        select(User)
+        .options(selectinload(User.settings))
+        .where(User.id == user_id, User.is_active == True)
+    )
+    user = result.scalar_one_or_none()
+    if user is not None:
+        # Carry the viewer's timezone for server-side date formatting.
+        tz = user.settings.timezone if user.settings else None
+        current_viewer_tz.set(tz or "UTC")
+        # Carry admin status for template-level cross-navigation links.
+        current_viewer_is_admin.set(user.role == "admin")
+    return user
 
 
 async def get_current_user(
@@ -28,7 +43,7 @@ async def get_current_user(
     user_id = request.session.get("user_id")
     if user_id:
         user = await _get_user_by_id(user_id, db)
-        if user:
+        if user and request.session.get("tv", 0) == user.session_token_version:
             return user
 
     # 2. Try Bearer token (API)
@@ -39,7 +54,7 @@ async def get_current_user(
         payload = decode_access_token(token)
         if payload:
             user = await _get_user_by_id(int(payload["sub"]), db)
-            if user:
+            if user and payload.get("tv", 0) == user.session_token_version:
                 return user
 
         # Try API token (hashed lookup)
@@ -72,7 +87,7 @@ async def get_api_user(
         payload = decode_access_token(token)
         if payload:
             user = await _get_user_by_id(int(payload["sub"]), db)
-            if user:
+            if user and payload.get("tv", 0) == user.session_token_version:
                 return user
 
         token_hash = hash_token(token)
@@ -97,3 +112,9 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin required")
     return user
+
+
+async def require_ai_enabled(db: AsyncSession = Depends(get_db)) -> None:
+    row = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    if row is None or not row.ai_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="AI features are disabled by the administrator")

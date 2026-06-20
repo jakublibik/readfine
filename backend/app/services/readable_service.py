@@ -1,17 +1,20 @@
 """Readable extraction pipeline: trafilatura → readability-lxml fallback."""
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 import nh3
 import trafilatura
+from bs4 import BeautifulSoup
 from readability import Document
 from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
+from app.utils.http_client import READFINE_UA
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +44,7 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
 
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
-        headers = {"User-Agent": "Readfine/1.0 (+https://github.com/readfine)"}
+        headers = {"User-Agent": READFINE_UA}
         current_url = url
         with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers) as client:
             for _ in range(_MAX_REDIRECTS + 1):
@@ -83,7 +86,8 @@ def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
     import re
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
-                                 include_links=True, include_images=True)
+                                 include_links=True, include_images=True,
+                                 favor_precision=True)
     if not result:
         return None
     # trafilatura outputs <graphic src="..." alt="..."/> instead of <img>
@@ -167,6 +171,65 @@ def _sanitize(html: str) -> str:
                      link_rel="noopener noreferrer")
 
 
+# Block elements left empty after sanitization (e.g. an `<li>` whose only child was a
+# stripped share-button link) render as stray bullets/gaps. Media-bearing blocks are kept.
+_EMPTY_BLOCK_TAGS = ["li", "p"]
+_MEDIA_TAGS = ["img", "picture", "video", "audio", "iframe", "svg", "source"]
+
+
+def _drop_empty_blocks(html: str) -> str:
+    """Remove block elements with no text and no media, left empty by sanitization."""
+    soup = BeautifulSoup(html, "html.parser")
+    # Repeat until stable: removing an inner empty block can empty its parent.
+    while True:
+        removed = False
+        for el in soup.find_all(_EMPTY_BLOCK_TAGS):
+            if el.get_text(strip=True) or el.find(_MEDIA_TAGS):
+                continue
+            el.decompose()
+            removed = True
+        if not removed:
+            break
+    return str(soup)
+
+
+def apply_readable_result(
+    article: Article,
+    content: Optional[str],
+    error: Optional[str],
+    http_status: Optional[int],
+) -> bool:
+    """Apply extraction result to article fields. Returns True if HTTP 403."""
+    if content:
+        article.readable_content = content
+        article.readable_status = "success"
+        article.readable_error = None
+        plain = nh3.clean(content, tags=set())
+        words = len(re.findall(r"\w+", plain))
+        article.word_count = words
+        article.estimated_read_min = max(1, round(words / 200))
+        return False
+
+    article.readable_error = error
+    is_4xx = http_status is not None and 400 <= http_status < 500
+    is_403 = http_status == 403
+    if is_4xx:
+        article.readable_status = "failed"
+        article.readable_failed_at = datetime.now(timezone.utc)
+        article.readable_next_retry_at = None
+    else:
+        retries = (article.readable_retries or 0) + 1
+        article.readable_retries = retries
+        if retries >= _MAX_RETRIES:
+            article.readable_status = "failed"
+            article.readable_failed_at = datetime.now(timezone.utc)
+            article.readable_next_retry_at = None
+        else:
+            delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
+    return is_403
+
+
 def extract_readable(url: str, auth_user: Optional[str] = None,
                      auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int]]:
     """
@@ -188,7 +251,8 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    return _sanitize(content), None, None
+    from app.utils.parsing import rewrite_relative_urls
+    return rewrite_relative_urls(_drop_empty_blocks(_sanitize(content)), url), None, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -202,6 +266,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
         select(Article)
         .where(
             Article.readable_status == "pending",
+            # never re-extract a retention-trimmed stub — it would re-fetch the body
+            Article.trimmed_at.is_(None),
             Article.url.isnot(None),
             Article.url != "",
             and_(
@@ -229,8 +295,10 @@ async def process_pending_readable(db: AsyncSession) -> int:
             try:
                 from app.utils.crypto import decrypt
                 decrypted_pass = decrypt(auth_pass_enc)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decrypt fetch_auth_pass for feed %d: %s", feed_id, exc
+                )
         feed_auth[feed_id] = (auth_user, decrypted_pass)
 
     import asyncio
@@ -263,38 +331,23 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
+        is_403 = apply_readable_result(article, content, error, http_status)
+        from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if content:
-            article.readable_content = content
-            article.readable_status = "success"
-            article.readable_error = None
             feed_403_streak.pop(article.feed_id, None)  # reset streak on success
-        else:
-            article.readable_error = error
-            is_4xx = http_status is not None and 400 <= http_status < 500
-            is_403 = http_status == 403
-            if is_4xx:
-                article.readable_status = "failed"
-                article.readable_next_retry_at = None
-            else:
-                retries = (article.readable_retries or 0) + 1
-                article.readable_retries = retries
-                if retries >= _MAX_RETRIES:
-                    article.readable_status = "failed"
-                    article.readable_next_retry_at = None
-                else:
-                    delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-                    article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
-
-            if is_403:
-                streak = feed_403_streak.get(article.feed_id, 0) + 1
-                feed_403_streak[article.feed_id] = streak
-                feeds_with_403.add(article.feed_id)
-                if streak >= _CONSECUTIVE_403_THRESHOLD:
-                    feeds_to_disable.add(article.feed_id)
+            await run_pipeline_for_article_all_users(article, db)
+        elif article.readable_status == "failed":
+            # Terminal failure — score with RSS content
+            await run_pipeline_for_article_all_users(article, db)
+        if is_403:
+            streak = feed_403_streak.get(article.feed_id, 0) + 1
+            feed_403_streak[article.feed_id] = streak
+            feeds_with_403.add(article.feed_id)
+            if streak >= _CONSECUTIVE_403_THRESHOLD:
+                feeds_to_disable.add(article.feed_id)
 
         processed += 1
-
-    await db.commit()
+        await db.commit()  # per-article: keeps transactions short even with inline AI calls
 
     # Feeds that hit the threshold within this batch — disable immediately
     for feed_id in feeds_to_disable:
@@ -346,6 +399,7 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 
     for uf in user_feeds:
         uf.extract_readable = False
+        uf.readable_auto_disabled = True
     await db.commit()
 
     # Mark pending articles for this feed as skipped (no need to extract)
@@ -385,6 +439,7 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
 
     for uf in user_feeds:
         uf.extract_readable = False
+        uf.readable_auto_disabled = True
 
     pending_result = await db.execute(
         select(Article).where(
@@ -395,8 +450,13 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
     pending = pending_result.scalars().all()
     for article in pending:
         article.readable_status = "skipped"
+        article.readable_error = "HTTP 403 Forbidden"
 
     await db.commit()
+
+    from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+    for article in pending:
+        await run_pipeline_for_article_all_users(article, db)
     logger.warning(
         "readable: disabled extraction for feed %d after %d consecutive 403 errors"
         " (cancelled %d pending articles)",

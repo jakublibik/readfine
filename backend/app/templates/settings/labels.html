@@ -1,38 +1,43 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "labels" %}
 {% block title %}Labels – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-2xl mx-auto px-4 py-8">
-  <div class="flex items-center justify-between mb-6">
-    <div>
-      <a href="/app" class="text-sm text-gray-500 hover:underline">← Back to reader</a>
-      <h1 class="text-xl font-semibold text-gray-900">Labels</h1>
-    </div>
-    <div class="flex items-center gap-4">
-      <a href="/settings/filters" class="text-sm text-blue-600 hover:underline">Filters</a>
-      <a href="/settings/preferences" class="text-sm text-blue-600 hover:underline">Preferences</a>
-    </div>
-  </div>
 
-  <!-- Add label form -->
-  <form hx-post="/settings/labels"
-        hx-target="#labels-list"
-        hx-swap="outerHTML"
-        class="flex items-center gap-3 mb-6">
-    <input type="text" name="name" placeholder="Label name" required
+{% block settings_content %}
+{% set label_colors = ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#ec4899','#f43f5e','#64748b','#374151'] %}
+<h1 class="text-xl font-semibold text-gray-900 mb-6">Labels</h1>
+
+<!-- Add label form -->
+<form hx-post="/settings/labels"
+      hx-target="#labels-list"
+      hx-swap="outerHTML"
+      data-clear-on-swap="name"
+      class="mb-6 space-y-3">
+  <div class="flex items-center gap-3">
+    <input type="text" name="name" placeholder="Label name" required autocomplete="off"
            class="flex-1 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-    <input type="color" name="color" value="#6366f1"
-           class="w-8 h-8 rounded cursor-pointer border border-gray-300">
     <button type="submit"
-            class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
       Add
     </button>
-  </form>
-
-  <!-- Labels list -->
-  <div id="labels-list">
-    {% include "settings/partials/labels_list.html" %}
   </div>
+  <div class="color-swatch-group flex flex-wrap gap-1.5">
+    {% for c in label_colors %}
+    <button type="button" data-color="{{ c }}"
+            class="color-swatch w-6 h-6 rounded-full {% if c == '#6366f1' %}ring-2 ring-gray-700 ring-offset-1{% endif %} hover:scale-110 transition-transform"
+            style="background-color: {{ c }}"></button>
+    {% endfor %}
+  </div>
+  <div class="flex items-center gap-2">
+    <input type="text" class="color-custom-input border border-gray-300 rounded px-2 py-1 text-xs font-mono w-24 focus:outline-none focus:ring-1 focus:ring-blue-500" maxlength="7" placeholder="#rrggbb">
+    <span class="color-custom-preview w-5 h-5 rounded-full border border-gray-300 flex-shrink-0"></span>
+    <span class="text-xs text-gray-400">Custom</span>
+  </div>
+  <input type="hidden" name="color" value="#6366f1">
+</form>
 
-
+<!-- Labels list -->
+<div id="labels-list">
+  {% include "settings/partials/labels_list.html" %}
 </div>
+
 {% endblock %}

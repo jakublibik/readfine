@@ -1,17 +1,20 @@
-<div id="article-content-{{ article.id }}">
-  {% if article.readable_status == 'pending' %}
-  <p class="text-xs text-gray-400 italic mb-4">Readable content extraction in progress…</p>
-  {% elif article.readable_status == 'failed' %}
+<div id="article-content-{{ article.id }}"
+     {% if article.readable_status == 'pending' %}
+     hx-get="/htmx/articles/{{ article.id }}/readable-poll"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     {% endif %}>
+  {% if article.readable_status in ['failed', 'skipped'] and article.readable_error %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
-      Full content could not be retrieved (access denied). The feed may require authentication, or this site does not allow automated access.
+      Full content could not be retrieved (403 Access denied). The site is likely blocking requests from this server (geo-block or datacenter IP block).
     {%- else -%}
       Readable content extraction failed{% if article.readable_error %}: {{ article.readable_error }}{% endif %}.
     {%- endif %}
     Showing feed content.
   </p>
   {% endif %}
-  <div class="prose prose-sm max-w-none text-gray-800">
+  <div class="prose max-w-none text-gray-800">
     {% if article.readable_status == 'success' and article.readable_content %}
       {{ article.readable_content | safe }}
     {% elif article.content %}
@@ -20,9 +23,89 @@
       <p class="text-gray-400 italic">No content available.</p>
     {% endif %}
   </div>
-  {% if article.readable_status == 'success' and article.readable_content %}
-    <p class="text-xs text-gray-400 text-right mt-3">readable content</p>
-  {% elif article.content %}
-    <p class="text-xs text-gray-400 text-right mt-3">feed content</p>
+  {% if article.readable_status == 'pending' %}
+  <div class="flex items-center gap-2 text-xs text-gray-400 italic mt-4">
+    <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+    </svg>
+    Extracting full content…
+  </div>
   {% endif %}
+  <div id="detail-labels-{{ article.id }}" class="detail-labels-area {% if article.labels %}flex flex-wrap items-center gap-x-3 gap-y-1 mt-4{% endif %}">
+    {% for label in article.labels %}
+      <span class="flex items-center gap-1 text-xs text-gray-500">
+        <span class="inline-block w-2 h-2 rounded-full flex-shrink-0" style="background-color: {{ label.color }}"></span>
+        {{ label.name }}
+      </span>
+    {% endfor %}
+  </div>
+
+  <div class="article-bottom-bar hidden flex items-center justify-between mt-3" data-article-id="{{ article.id }}">
+    <div class="flex items-center gap-1">
+      <button data-bottom-star
+              hx-post="/htmx/articles/{{ article.id }}/star"
+              hx-target="#star-btn-{{ article.id }}"
+              hx-swap="innerHTML"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+              title="{% if article.is_starred %}Remove star{% else %}Star{% endif %}">
+        {% if article.is_starred %}
+          <span class="text-[16px] leading-none text-gray-600" style="margin-top:-2px">★</span>
+        {% else %}
+          <span class="text-[16px] leading-none text-gray-300" style="margin-top:-2px">☆</span>
+        {% endif %}
+      </button>
+      <button data-bottom-archive
+              hx-post="/htmx/articles/{{ article.id }}/archive"
+              hx-target="#archive-btn-{{ article.id }}"
+              hx-swap="innerHTML"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+              title="{% if article.is_archived %}Unarchive{% else %}Archive{% endif %}">
+        <svg class="w-4 h-4 {% if article.is_archived %}text-gray-700 dark:text-gray-200{% else %}text-gray-400 dark:text-gray-500{% endif %}" style="margin-top:1px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 6l1.5-3h13L20 6M4 6v12a1 1 0 001 1h14a1 1 0 001-1V6M12 10v5m-2-2.5l2 2.5 2-2.5"/>
+        </svg>
+      </button>
+      <button data-bottom-share
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Share">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a1 1 0 001 1h14a1 1 0 001-1v-2M8 10l4-4 4 4M12 6v8"/>
+        </svg>
+      </button>
+      {% if chat_available %}
+      <button data-show-chat-modal="{{ article.id }}"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Chat">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
+        </svg>
+      </button>
+      {% endif %}
+      <div id="detail-labels-btn-{{ article.id }}" class="detail-labels-btn flex">
+        <button class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100"
+                data-stop-propagation
+                data-label-trigger
+                hx-get="/htmx/articles/{{ article.id }}/labels"
+                hx-target="#label-picker"
+                hx-swap="innerHTML"
+                title="Labels">
+          {% if article.labels %}<span class="inline-block w-[9px] h-[9px] rounded-full bg-gray-400"></span>
+          {% else %}<span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>{% endif %}
+        </button>
+      </div>
+      <button data-bottom-next
+              class="hidden w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Next article">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"/>
+        </svg>
+      </button>
+    </div>
+    {% if article.readable_status == 'success' and article.readable_content %}
+      <span class="text-xs text-gray-400">readable content</span>
+    {% elif article.content %}
+      <span class="text-xs text-gray-400">feed content</span>
+    {% endif %}
+  </div>
 </div>

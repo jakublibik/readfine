@@ -13,7 +13,7 @@
   <form hx-post="/admin/invitations"
         hx-target="#invitations-table"
         hx-swap="innerHTML"
-        hx-on::after-request="this.reset()"
+        data-reset-on-request
         class="flex flex-wrap gap-3 items-end">
     <div>
       <label class="block text-xs text-gray-500 mb-1">Email (optional)</label>
@@ -34,7 +34,7 @@
 
 <!-- Invitations table -->
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
-  <div id="invitations-table">
+  <div id="invitations-table" class="overflow-x-auto">
     {% include "admin/partials/invitations_table.html" %}
   </div>
 </div>

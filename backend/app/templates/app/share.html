@@ -1,51 +1,93 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ article.title }} – Readfine</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-50 min-h-screen">
-  <div class="max-w-3xl mx-auto px-4 py-10">
+{% extends "base.html" %}
 
-    <div class="mb-6 text-sm text-gray-400">
-      Shared via <a href="/login" class="hover:underline">Readfine</a>
-      {% if feed_title %} · {{ feed_title }}{% endif %}
-    </div>
+{% block title %}{{ article.title or "Shared article" }} – Readfine{% endblock %}
 
-    <article>
-      <header class="mb-6">
-        {% if article.url %}
-          <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
-             class="text-2xl font-bold text-gray-900 leading-snug hover:underline">
-            {{ article.title or "Untitled" }}
-          </a>
-        {% else %}
-          <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "Untitled" }}</h1>
-        {% endif %}
-        <div class="mt-2 text-sm text-gray-500 flex flex-wrap gap-x-3">
-          {% if article.author %}<span>{{ article.author }}</span>{% endif %}
-          {% if article.published_at %}
-            <span>{{ article.published_at.strftime("%B %d, %Y") }}</span>
-          {% endif %}
-          {% if article.estimated_read_min %}
-            <span>{{ article.estimated_read_min }} min read</span>
-          {% endif %}
-        </div>
-      </header>
+{% block content %}
+<div class="min-h-screen bg-gray-50 flex flex-col">
 
-      <div class="prose prose-sm max-w-none text-gray-800">
-        {% if article.readable_status == 'success' and article.readable_content %}
-          {{ article.readable_content | safe }}
-        {% elif article.content %}
-          {{ article.content | safe }}
-        {% else %}
-          <p class="text-gray-400 italic">No content available.</p>
+  <!-- Branding bar -->
+  <header class="flex-shrink-0 border-b border-gray-200 bg-gray-50">
+    <div class="max-w-[52rem] mx-auto px-6 py-3 flex items-center justify-between text-sm text-gray-400">
+      <div class="flex items-center gap-2 min-w-0">
+        <a href="/login" class="font-semibold text-gray-600 hover:text-gray-900 shrink-0">Readfine</a>
+        {% if feed_title %}
+          <span class="shrink-0">·</span>
+          <span class="truncate">{{ feed_title }}</span>
         {% endif %}
       </div>
-    </article>
+      <a href="/login" class="ml-4 shrink-0 text-blue-500 hover:text-blue-700">Sign in →</a>
+    </div>
+  </header>
 
+  <!-- Content row: gray sides + white center -->
+  <div class="flex flex-1">
+    <div class="hidden lg:block flex-1 bg-gray-50"></div>
+
+    <main class="w-full lg:max-w-[52rem] bg-white">
+      <article class="px-6 py-6">
+
+        <!-- Header -->
+        <header class="mb-6">
+          <div class="mb-1">
+            {% if article.url %}
+              <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer"
+                 class="text-2xl font-bold text-gray-900 leading-snug hover:underline"
+                 id="share-article-title">
+                {{ article.title or "Untitled" }}
+              </a>
+            {% else %}
+              <h1 class="text-2xl font-bold text-gray-900 leading-snug"
+                  id="share-article-title">{{ article.title or "Untitled" }}</h1>
+            {% endif %}
+          </div>
+          <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mt-2 text-sm text-gray-500">
+            {% if feed_title %}<span>{{ feed_title }}</span>{% endif %}
+            {% if article.author %}
+              {% if feed_title %}<span>·</span>{% endif %}
+              <span>{{ article.author }}</span>
+            {% endif %}
+            {% if article.published_at %}
+              {% if feed_title or article.author %}<span>·</span>{% endif %}
+              <span><time datetime="{{ article.published_at.isoformat() }}">{{ article.published_at | localtime('date') }}</time></span>
+            {% endif %}
+            {% if article.estimated_read_min %}
+              {% if feed_title or article.author or article.published_at %}<span>·</span>{% endif %}
+              <span>{{ article.estimated_read_min }} min read</span>
+            {% endif %}
+          </div>
+        </header>
+
+        <!-- Content -->
+        <div class="prose max-w-none text-gray-800">
+          {% if article.readable_status == 'success' and article.readable_content %}
+            {{ article.readable_content | safe }}
+          {% elif article.content %}
+            {{ article.content | safe }}
+          {% else %}
+            <p class="text-gray-400 italic">No content available.</p>
+          {% endif %}
+        </div>
+
+      </article>
+    </main>
+
+    <div class="hidden lg:block flex-1 bg-gray-50"></div>
   </div>
-</body>
-</html>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+  document.addEventListener('DOMContentLoaded', function () {
+    var titleEl = document.getElementById('share-article-title');
+    var prose = document.querySelector('.prose');
+    if (!titleEl || !prose) return;
+    var titleText = titleEl.textContent.trim().toLowerCase();
+    var firstHeading = prose.querySelector('h1, h2, h3');
+    if (firstHeading && firstHeading.textContent.trim().toLowerCase() === titleText) {
+      firstHeading.remove();
+    }
+  });
+</script>
+{% endblock %}

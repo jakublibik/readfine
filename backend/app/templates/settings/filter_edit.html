@@ -1,222 +1,245 @@
-{% extends "base.html" %}
+{% extends "settings/base.html" %}
+{% set active = "filters" %}
 {% block title %}{% if filter %}Edit filter{% else %}New filter{% endif %} – Readfine{% endblock %}
-{% block content %}
-<div class="max-w-2xl mx-auto px-4 py-8">
-  <h1 class="text-xl font-semibold text-gray-900 mb-6">
+
+{% block settings_content %}
+<div class="flex items-baseline gap-3 mb-6">
+  <h1 class="text-xl font-semibold text-gray-900">
     {% if filter %}Edit filter{% else %}New filter{% endif %}
   </h1>
+  <span id="filter-type-badge" class="hidden text-xs px-2 py-0.5 rounded font-medium"></span>
+</div>
 
-  {% if error %}
-  <div class="mb-4 px-4 py-3 rounded bg-red-50 border border-red-200 text-sm text-red-700">{{ error }}</div>
-  {% endif %}
+{% if error %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+{% endif %}
 
-  <form method="POST"
-        action="{% if filter %}/settings/filters/{{ filter.id }}/edit{% else %}/settings/filters{% endif %}"
-        hx-boost="true"
-        class="space-y-6">
+<form method="POST"
+      action="{% if filter %}/settings/filters/{{ filter.id }}/edit{% else %}/settings/filters{% endif %}"
+      hx-boost="true"
+      class="space-y-6">
+  {# fv = submitted form values on error, otherwise saved filter values #}
+  {% set fv = form_values if form_values is defined else filter %}
 
-    <!-- Basic info -->
-    <div class="space-y-4">
-      <div>
-        <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-        <input type="text" name="name" required
-               value="{{ filter.name if filter else '' }}"
-               class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+  <!-- Basic info -->
+  <div class="space-y-4">
+    <div>
+      <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
+      <input type="text" name="name" required autocomplete="off"
+             value="{{ fv.name if fv else '' }}"
+             class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    </div>
+    <div class="flex flex-wrap items-center gap-x-6 gap-y-3">
+      <label class="flex items-center gap-2 text-sm text-gray-700">
+        <input type="hidden" name="is_active" value="false">
+        <input type="checkbox" name="is_active" value="true"
+               {% if not fv or fv.is_active %}checked{% endif %}
+               class="rounded">
+        Active
+      </label>
+      <label class="flex items-center gap-2 text-sm text-gray-700">
+        <input type="hidden" name="stop_on_match" value="false">
+        <input type="checkbox" name="stop_on_match" value="true"
+               {% if fv and fv.stop_on_match %}checked{% endif %}
+               class="rounded">
+        Stop on match
+      </label>
+      <div class="flex items-center gap-2">
+        <label class="text-sm text-gray-700">Match</label>
+        <select name="match_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+          <option value="AND" {% if not fv or fv.match_operator == 'AND' %}selected{% endif %}>ALL conditions (AND)</option>
+          <option value="OR" {% if fv and fv.match_operator == 'OR' %}selected{% endif %}>ANY condition (OR)</option>
+        </select>
       </div>
-      <div class="flex items-center gap-6">
-        <label class="flex items-center gap-2 text-sm text-gray-700">
-          <input type="hidden" name="is_active" value="false">
-          <input type="checkbox" name="is_active" value="true"
-                 {% if not filter or filter.is_active %}checked{% endif %}
-                 class="rounded">
-          Active
-        </label>
-        <label class="flex items-center gap-2 text-sm text-gray-700">
-          <input type="hidden" name="stop_on_match" value="false">
-          <input type="checkbox" name="stop_on_match" value="true"
-                 {% if filter and filter.stop_on_match %}checked{% endif %}
-                 class="rounded">
-          Stop on match
-        </label>
-        <div class="flex items-center gap-2">
-          <label class="text-sm text-gray-700">Match</label>
-          <select name="match_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
-            <option value="AND" {% if not filter or filter.match_operator == 'AND' %}selected{% endif %}>ALL conditions (AND)</option>
-            <option value="OR" {% if filter and filter.match_operator == 'OR' %}selected{% endif %}>ANY condition (OR)</option>
-          </select>
-        </div>
-        <div class="flex items-center gap-2">
-          <label class="text-sm text-gray-700">Priority</label>
-          <input type="number" name="position" min="0"
-                 value="{{ filter.position if filter else 0 }}"
-                 class="w-16 border border-gray-300 rounded px-2 py-1 text-sm">
-        </div>
+      <div class="flex items-center gap-2">
+        <label class="text-sm text-gray-700">Priority</label>
+        <input type="number" name="position" min="0"
+               value="{{ fv.position if fv else 0 }}"
+               class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
     </div>
+  </div>
 
-    <!-- Scope -->
-    {% set scope_include_list = filter.scope_include if filter else [] %}
-    {% set scope_except_list  = filter.scope_except  if filter else [] %}
-    {% set scope_is_all = not scope_include_list %}
-    {% set ns_nf = namespace(feeds=[]) %}
-    {% for uf in user_feeds %}{% if uf.folder_id is none %}{% set ns_nf.feeds = ns_nf.feeds + [uf] %}{% endif %}{% endfor %}
+  <!-- Scope -->
+  {% set scope_include_list = fv.scope_include if fv else [] %}
+  {% set scope_except_list  = fv.scope_except  if fv else [] %}
+  {% set scope_is_all = not scope_include_list %}
+  {% set ns_nf = namespace(feeds=[]) %}
+  {% for uf in user_feeds %}{% if uf.folder_id is none %}{% set ns_nf.feeds = ns_nf.feeds + [uf] %}{% endif %}{% endfor %}
 
-    {# Macro: renders a checkbox list of folders + feeds #}
-    {# name_attr = form field name, selected_list = list of "feed:X"/"folder:X" to pre-check #}
-    {# disable_all = whether to start disabled (scope_include panel when scope_is_all) #}
-    {% macro feed_checkbox_list(name_attr, selected_list, disable_all=false) %}
-      {% for folder in folders %}
-        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
-          <input type="checkbox" name="{{ name_attr }}" value="folder:{{ folder.id }}"
-                 {% if 'folder:' ~ folder.id in selected_list %}checked{% endif %}
-                 {% if disable_all %}disabled{% endif %}
+  {# Macro: renders a checkbox list of folders + feeds #}
+  {% macro feed_checkbox_list(name_attr, selected_list) %}
+    {% for folder in folders %}
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+        <input type="checkbox" name="{{ name_attr }}" value="folder:{{ folder.id }}"
+               {% if 'folder:' ~ folder.id in selected_list %}checked{% endif %}
+               class="rounded scope-cb">
+        📁 {{ folder.name }}
+      </label>
+      {% for uf in user_feeds if uf.folder_id == folder.id %}
+        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
+          <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
+                 {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
                  class="rounded scope-cb">
-          📁 {{ folder.name }}
+          {{ uf.custom_title or uf.feed.title }}
         </label>
-        {% for uf in user_feeds if uf.folder_id == folder.id %}
-          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
-            <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
-                   {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
-                   {% if disable_all %}disabled{% endif %}
-                   class="rounded scope-cb">
-            {{ uf.custom_title or uf.feed.title }}
-          </label>
-        {% endfor %}
       {% endfor %}
-      {% if ns_nf.feeds %}
-        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
-          <input type="checkbox" name="{{ name_attr }}" value="folder:0"
-                 {% if 'folder:0' in selected_list %}checked{% endif %}
-                 {% if disable_all %}disabled{% endif %}
+    {% endfor %}
+    {% if ns_nf.feeds %}
+      <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5">
+        <input type="checkbox" name="{{ name_attr }}" value="folder:0"
+               {% if 'folder:0' in selected_list %}checked{% endif %}
+               class="rounded scope-cb">
+        📁 No folder
+      </label>
+      {% for uf in ns_nf.feeds %}
+        <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
+          <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
+                 {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
                  class="rounded scope-cb">
-          📁 No folder
+          {{ uf.custom_title or uf.feed.title }}
         </label>
-        {% for uf in ns_nf.feeds %}
-          <label class="flex items-center gap-2 text-sm text-gray-700 cursor-pointer py-0.5 pl-5">
-            <input type="checkbox" name="{{ name_attr }}" value="feed:{{ uf.feed_id }}"
-                   {% if 'feed:' ~ uf.feed_id in selected_list %}checked{% endif %}
-                   {% if disable_all %}disabled{% endif %}
-                   class="rounded scope-cb">
-            {{ uf.custom_title or uf.feed.title }}
+      {% endfor %}
+    {% endif %}
+  {% endmacro %}
+
+  <div>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Scope</h2>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+
+      <!-- scope_include -->
+      <div>
+        <p class="text-xs text-gray-500 mb-1">Apply to:</p>
+        <div class="border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100" id="scope-include-list">
+          <label class="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer py-0.5">
+            <input type="checkbox" id="scope-all" class="rounded"
+                   {% if scope_is_all %}checked{% endif %}>
+            All feeds
           </label>
-        {% endfor %}
-      {% endif %}
-    {% endmacro %}
-
-    <div>
-      <h2 class="text-sm font-medium text-gray-700 mb-2">Scope</h2>
-      <div class="grid grid-cols-2 gap-4">
-
-        <!-- scope_include -->
-        <div>
-          <p class="text-xs text-gray-500 mb-1">Apply to:</p>
-          <div class="border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100" id="scope-include-list">
-            <label class="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer py-0.5">
-              <input type="checkbox" id="scope-all" class="rounded"
-                     {% if scope_is_all %}checked{% endif %}>
-              All feeds
-            </label>
-            {% if not scope_is_all or folders or ns_nf.feeds %}
-              <hr class="border-gray-100 my-1">
-            {% endif %}
-            {{ feed_checkbox_list("scope_include", scope_include_list, disable_all=scope_is_all) }}
-          </div>
+          {% if not scope_is_all or folders or ns_nf.feeds %}
+            <hr class="border-gray-100 my-1">
+          {% endif %}
+          {{ feed_checkbox_list("scope_include", scope_include_list) }}
         </div>
-
-        <!-- scope_except -->
-        <div>
-          <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none mb-1">
-            <input type="checkbox" id="except-toggle"
-                   {% if scope_except_list %}checked{% endif %}
-                   class="rounded">
-            Except:
-          </label>
-          <div id="except-panel" class="{% if not scope_except_list %}hidden{% endif %}
-                                        border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100">
-            {{ feed_checkbox_list("scope_except", scope_except_list) }}
-          </div>
-        </div>
-
       </div>
-    </div>
 
-    <!-- Conditions -->
-    <div>
-      <h2 class="text-sm font-medium text-gray-700 mb-2">Conditions</h2>
-      <div id="conditions" class="space-y-2">
-        {% set existing_conditions = filter.conditions if filter else [] %}
-        {% for c in existing_conditions %}
-        <div class="flex items-center gap-2 condition-row">
-          <select name="cond_field" class="border border-gray-300 rounded px-2 py-1 text-sm">
+      <!-- scope_except -->
+      <div>
+        <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none mb-1">
+          <input type="checkbox" id="except-toggle"
+                 {% if scope_except_list %}checked{% endif %}
+                 class="rounded">
+          Except:
+        </label>
+        <div id="except-panel" class="{% if not scope_except_list %}hidden{% endif %}
+                                      border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-100">
+          {{ feed_checkbox_list("scope_except", scope_except_list) }}
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Conditions -->
+  <div>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Conditions</h2>
+    <div id="ai-filter-notice" class="hidden mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+      Score filters run after regular filters and scoring — they only apply to articles that have received an AI score.<br>Pipeline: regular filters → scoring (labeled articles) → score filters.
+    </div>
+    <div id="conditions" class="space-y-2">
+      {% set existing_conditions = fv.conditions if fv else [] %}
+      {% for c in existing_conditions %}
+      <div class="flex flex-wrap items-center gap-2 condition-row">
+        <div class="flex items-center gap-2 shrink-0">
+          <select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-field-select">
             {% for f in ['title_or_content','title','content','author','url','published_at'] %}
               <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f | replace('_', ' ') }}</option>
             {% endfor %}
+            {% if ai_score_available %}
+              <option value="ai_score" {% if c.field == 'ai_score' %}selected{% endif %}>ai score</option>
+            {% endif %}
           </select>
-          <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1 text-sm">
+          <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
             {% for op in ['contains','not_contains','equals','regex','gt','lt'] %}
               <option value="{{ op }}" {% if c.operator == op %}selected{% endif %}>{{ op }}</option>
             {% endfor %}
           </select>
-          <input type="text" name="cond_value" value="{{ c.value }}" required
-                 class="flex-1 border border-gray-300 rounded px-2 py-1 text-sm">
           <input type="hidden" name="cond_position" value="{{ c.position }}">
-          <button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>
         </div>
-        {% endfor %}
+        <input type="text" name="cond_value" value="{{ c.value }}" required
+               class="flex-1 min-w-32 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row shrink-0">✕</button>
       </div>
-      <button type="button" id="add-condition"
-              class="mt-2 text-sm text-blue-600 hover:underline">+ Add condition</button>
+      {% endfor %}
     </div>
+    <button type="button" id="add-condition"
+            class="mt-2 text-sm text-blue-600 hover:underline">+ Add condition</button>
+    <div id="regex-hint" class="hidden mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800 space-y-1">
+      <p><strong>Regex tips</strong> — patterns match anywhere in the field and are case-insensitive (Python syntax):</p>
+      <ul class="space-y-0.5 ml-1">
+        <li><code class="font-mono">\bword\b</code> — whole word only</li>
+        <li><code class="font-mono">(apple|pear|fig)</code> — any of several terms</li>
+        <li><code class="font-mono">^Breaking</code> — at the start of the field</li>
+      </ul>
+      <p>Blocks:
+        <code class="font-mono">.</code> any character,
+        <code class="font-mono">\d</code> digit,
+        <code class="font-mono">\w</code> letter/number,
+        <code class="font-mono">*</code> zero or more,
+        <code class="font-mono">+</code> one or more,
+        <code class="font-mono">[a-z]</code> a range.</p>
+      <p><a href="/help#regex" target="_blank" rel="noopener noreferrer" class="underline">Full regex guide &rarr;</a></p>
+    </div>
+  </div>
 
-    <!-- Actions -->
-    <div>
-      <h2 class="text-sm font-medium text-gray-700 mb-2">Actions</h2>
-      <div id="actions" class="space-y-2">
-        {% set existing_actions = filter.actions if filter else [] %}
-        {% for a in existing_actions %}
-        <div class="flex items-center gap-2 action-row">
-          <select name="action_type" class="border border-gray-300 rounded px-2 py-1 text-sm action-type-select">
-            {% for at in ['label','mark_read','star','hide'] %}
-              <option value="{{ at }}" {% if a.action_type == at %}selected{% endif %}>{{ at }}</option>
-            {% endfor %}
-          </select>
-          <select name="action_value"
-                  class="border border-gray-300 rounded px-2 py-1 text-sm {% if a.action_type != 'label' %}hidden{% endif %} label-select">
-            <option value="">-- select label --</option>
-            {% for label in labels %}
-              <option value="{{ label.id }}" {% if a.action_value == label.id | string %}selected{% endif %}>
-                {{ label.name }}
-              </option>
-            {% endfor %}
-          </select>
-          <button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>
-        </div>
-        {% endfor %}
+  <!-- Actions -->
+  <div>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Actions</h2>
+    <div id="actions" class="space-y-2">
+      {% set existing_actions = fv.actions if fv else [] %}
+      {% for a in existing_actions %}
+      <div class="flex flex-wrap items-center gap-2 action-row">
+        <select name="action_type" class="border border-gray-300 rounded px-2 py-1.5 text-sm action-type-select">
+          {% for at in ['label','mark_read','star'] %}
+            <option value="{{ at }}" {% if a.action_type == at %}selected{% endif %}>{{ at }}</option>
+          {% endfor %}
+        </select>
+        <select name="action_value"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm {% if a.action_type != 'label' %}hidden{% endif %} label-select">
+          <option value="">-- select label --</option>
+          {% for label in labels %}
+            <option value="{{ label.id }}" {% if a.action_value == label.id | string %}selected{% endif %}>
+              {{ label.name }}
+            </option>
+          {% endfor %}
+        </select>
+        <button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>
       </div>
-      <button type="button" id="add-action"
-              class="mt-2 text-sm text-blue-600 hover:underline">+ Add action</button>
+      {% endfor %}
     </div>
+    <button type="button" id="add-action"
+            class="mt-2 text-sm text-blue-600 hover:underline">+ Add action</button>
+  </div>
 
-    <div class="flex items-center gap-3 pt-2">
-      <button type="submit"
-              class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-        {% if filter %}Save changes{% else %}Create filter{% endif %}
-      </button>
-      <button type="submit" name="save_and_test" value="1"
-              class="px-3 py-2 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-100">
-        Save & Test
-      </button>
-      <a href="/settings/filters" class="text-sm text-gray-500 hover:underline">Cancel</a>
-    </div>
-    {% if test_result is defined and test_result %}
-      {% set result = test_result %}
-      <div class="mt-2">{% include "settings/partials/filter_test_result.html" %}</div>
-    {% else %}
-      <div id="test-result"></div>
-    {% endif %}
-  </form>
-</div>
+  <div class="flex items-center gap-3 pt-2">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      {% if filter %}Save changes{% else %}Create filter{% endif %}
+    </button>
+    <button type="submit" name="save_and_test" value="1"
+            class="px-4 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50">
+      Save & Test
+    </button>
+    <a href="/settings/filters" class="text-sm text-gray-500 hover:underline">Cancel</a>
+  </div>
+  {% if test_result is defined and test_result %}
+    {% set result = test_result %}
+    <div id="test-result" class="mt-2">{% include "settings/partials/filter_test_result.html" %}</div>
+  {% else %}
+    <div id="test-result"></div>
+  {% endif %}
+</form>
 
-<script type="application/json" id="filter-edit-cfg">{"fields":["title_or_content","title","content","author","url","published_at"],"operators":["contains","not_contains","equals","regex","gt","lt"],"actionTypes":["label","mark_read","star","hide"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
+<script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if ai_score_available %},"ai_score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"aiScoreOperators":["equals","gt","lt"],"aiScoreAvailable":{{ 'true' if ai_score_available else 'false' }},"actionTypes":["label","mark_read","star"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
 {% endblock %}
-{% block scripts %}<script src="/static/js/filter-edit.js"></script>{% endblock %}
+{% block scripts %}<script src="{{ static_url('js/filter-edit.js') }}"></script>{% endblock %}

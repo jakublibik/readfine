@@ -18,8 +18,9 @@ from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
-from app.services.feed import subscribe
+from app.services.feed import subscribe, subscribe_scrape
 from app.services.filter_service import create_filter
+from app.utils.datetime_format import is_valid_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -41,16 +42,33 @@ _TTRSS_FIELD_MAP = {
 
 _TTRSS_ACTION_MAP = {
     "2": "mark_read",
-    "3": "hide",
+    # TT-RSS "publish/hide" has no Readfine equivalent; map to the closest
+    # supported "remove from view" action so the import stays valid.
+    "3": "mark_read",
     "4": "star",
     "7": "label",
 }
 
 _REGEX_SPECIAL = re.compile(r"[.*+?^${}()|[\]\\]")
 
+_TRUTHY = {"1", "t", "true", "yes", "on"}
+
 
 def _looks_like_regex(value: str) -> bool:
     return bool(_REGEX_SPECIAL.search(value))
+
+
+def _truthy(value: Any) -> bool:
+    """Normalize a JSON-ish boolean. TTRSS exports raw DB values, so a flag may
+    arrive as a real bool, an int (1/0), or a Postgres string ("t"/"f"). Plain
+    bool() is wrong here: bool("f") is True."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
@@ -200,11 +218,20 @@ def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
     attrs: dict[str, str] = {
         "text": title,
         "title": title,
+        # Kept as "rss" so other OPML readers still treat the outline as a feed;
+        # Readfine's own import keys on the "feed-type" attribute below, not "type".
         "type": "rss",
         "xmlUrl": feed.feed_url,
     }
     if feed.site_url:
         attrs["htmlUrl"] = feed.site_url
+    # Scrape feeds carry their CSS selector in custom attributes so a Readfine
+    # export round-trips back into Readfine (OPML has no native scrape support).
+    if feed.feed_type == "scrape":
+        selector = (feed.type_config or {}).get("article_links_selector")
+        if selector:
+            attrs["feed-type"] = "scrape"
+            attrs["article-links-selector"] = selector
     SubElement(parent, "outline", **attrs)
 
 
@@ -262,6 +289,13 @@ async def import_opml(
     import_filters: bool,
     db: AsyncSession,
 ) -> ImportResult:
+    """Import subscriptions/labels/prefs/filters from an OPML file.
+
+    Not atomic: each pass (labels, feeds, prefs, filters) commits independently, so a
+    late failure can leave earlier passes persisted. This is intentional — the import
+    is idempotent: existing labels/feeds/folders/filters are detected and skipped, so
+    re-running after a failure converges without creating duplicates.
+    """
     result = ImportResult()
 
     try:
@@ -322,7 +356,10 @@ async def import_opml(
                 break
             if added_id and xml_url:
                 feed_url_to_id[xml_url] = added_id
-                new_feed_ids.append(added_id)
+                # Scrape feeds already trigger their own background fetch in
+                # subscribe_scrape; don't queue them for the RSS _initial_fetch.
+                if (outline.get("feed-type") or "").strip().lower() != "scrape":
+                    new_feed_ids.append(added_id)
 
         # Refresh existing subscriptions into lookup map
         existing_uf_result = await db.execute(
@@ -374,8 +411,13 @@ async def import_opml(
                 key = outline.get("pref-name") or outline.get("text", "")
                 value = outline.get("value", "")
                 if key == "USER_TIMEZONE" and value:
-                    us.timezone = value[:50]
-                    result.prefs_updated += 1
+                    # TTRSS allows "Automatic" and other non-IANA values; only accept
+                    # names zoneinfo can resolve, otherwise downstream tz math breaks.
+                    if is_valid_timezone(value):
+                        us.timezone = value[:50]
+                        result.prefs_updated += 1
+                    else:
+                        result.warnings.append(f"Ignored unsupported timezone '{value}'")
                 elif key == "PURGE_OLD_DAYS" and value.isdigit():
                     # No global purge setting in our model — skip
                     pass
@@ -389,11 +431,15 @@ async def import_opml(
                 user, filters_el, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db
             )
 
-    # Kick off initial fetches after all filters are in DB
+    # Kick off initial fetches after all filters are in DB. Mark in-progress
+    # synchronously before spawning (the task no longer self-marks — see subscribe()).
     import app.database as db_module
-    from app.services.feed import _initial_fetch
+    from app.services.feed import _initial_fetch, _initial_fetch_in_progress
     if new_feed_ids and db_module.async_session_factory is not None:
         for feed_id in new_feed_ids:
+            if feed_id in _initial_fetch_in_progress:
+                continue
+            _initial_fetch_in_progress.add(feed_id)
             asyncio.create_task(_initial_fetch(feed_id))
 
     return result
@@ -489,8 +535,32 @@ async def _import_feed(
         return None
 
     title = (outline.get("text") or outline.get("title") or "").strip() or None
+    feed_type = (outline.get("feed-type") or "").strip().lower()
 
     try:
+        if feed_type == "scrape":
+            selector = (outline.get("article-links-selector") or "").strip()
+            if not selector:
+                result.feeds_failed += 1
+                result.warnings.append(
+                    f"Failed to import {xml_url}: scrape feed is missing its CSS selector"
+                )
+                return None
+            # Trust the backup: skip live selector validation (the page may be
+            # temporarily down or changed). subscribe_scrape still kicks off the
+            # first scrape on a background task, like a normal scrape subscribe.
+            uf = await subscribe_scrape(
+                user=user,
+                url=xml_url,
+                selector=selector,
+                title=title or xml_url,
+                folder_id=folder_id,
+                db=db,
+                validate_selector=False,
+            )
+            result.feeds_added += 1
+            return uf.feed_id
+
         uf = await subscribe(
             user=user,
             url=xml_url,
@@ -676,12 +746,14 @@ def _parse_ttrss_filter(
     result: ImportResult,
 ) -> FilterCreate | None:
     """Parse TTRSS OPML filter format (best-effort)."""
-    match_operator = "OR" if fd.get("match_any_rule") else "AND"
+    match_operator = "OR" if _truthy(fd.get("match_any_rule")) else "AND"
 
     conditions = []
     for rule in fd.get("rules", []):
+        # TTRSS exports raw DB values without casting, so filter_type may be an
+        # int (1) or a string ("1"); our map is keyed by string.
         filter_type = rule.get("filter_type")
-        our_field = _TTRSS_FIELD_MAP.get(filter_type)
+        our_field = _TTRSS_FIELD_MAP.get(str(filter_type)) if filter_type is not None else None
         if our_field is None:
             result.warnings.append(
                 f"Filter '{fd.get('name')}': unknown filter_type {filter_type}, rule skipped"
@@ -692,7 +764,7 @@ def _parse_ttrss_filter(
         if not value:
             continue
 
-        inverse = bool(rule.get("inverse"))
+        inverse = _truthy(rule.get("inverse"))
         if inverse:
             operator = "not_contains"
         elif _looks_like_regex(value):
@@ -708,7 +780,7 @@ def _parse_ttrss_filter(
     actions = []
     for action in fd.get("actions", []):
         action_id = action.get("action_id")
-        our_action = _TTRSS_ACTION_MAP.get(action_id)
+        our_action = _TTRSS_ACTION_MAP.get(str(action_id)) if action_id is not None else None
         if our_action is None:
             continue
         action_value = None
@@ -725,15 +797,22 @@ def _parse_ttrss_filter(
             action_value = str(label_id)
         actions.append(FilterActionCreate(action_type=our_action, action_value=action_value))
 
-    # TTRSS scope is per-ID and doesn't transfer — import as global
-    if fd.get("cat_filter") or any(r.get("feed_id") or r.get("cat_id") for r in fd.get("rules", [])):
+    # TTRSS scope is per-rule (feed/category) and doesn't transfer — import as global.
+    # Older exports use feed_id/cat_id; current exports resolve to a "match" array or
+    # a "feed" title string per rule.
+    def _rule_has_scope(r: dict) -> bool:
+        return bool(
+            r.get("feed_id") or r.get("cat_id") or r.get("match") or r.get("feed")
+        )
+
+    if fd.get("cat_filter") or any(_rule_has_scope(r) for r in fd.get("rules", [])):
         result.warnings.append(
             f"Filter '{fd.get('name')}': scope (feed/category) not imported (TTRSS IDs don't transfer)"
         )
 
     return FilterCreate(
         name="",
-        is_active=bool(fd.get("enabled", True)),
+        is_active=_truthy(fd.get("enabled", True)),
         match_operator=match_operator,
         conditions=conditions,
         actions=actions,

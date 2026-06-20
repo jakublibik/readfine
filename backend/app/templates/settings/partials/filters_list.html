@@ -1,28 +1,37 @@
 <div id="filters-list">
   {% if filters %}
+    {%- set ai_fields = ['ai_score'] -%}
+    {%- set regular_filters = [] -%}
+    {%- set ai_filters = [] -%}
+    {%- for f in filters -%}
+      {%- if f.conditions | selectattr('field', 'in', ai_fields) | list -%}
+        {%- set _ = ai_filters.append(f) -%}
+      {%- else -%}
+        {%- set _ = regular_filters.append(f) -%}
+      {%- endif -%}
+    {%- endfor -%}
     <ul class="space-y-3">
-      {% for f in filters %}
+      {% for f in regular_filters + ai_filters %}
+      {%- set is_ai = f.conditions | selectattr('field', 'in', ai_fields) | list | length > 0 -%}
+      {% if is_ai and loop.index0 == regular_filters | length and regular_filters %}
+        <li class="flex items-center gap-2 py-1">
+          <div class="flex-1 border-t border-dashed border-gray-200"></div>
+          <span class="text-xs text-gray-400 shrink-0">↓ Score filters — run after scoring</span>
+          <div class="flex-1 border-t border-dashed border-gray-200"></div>
+        </li>
+      {% endif %}
       <li class="p-4 bg-white border border-gray-200 rounded">
         <div class="flex items-start justify-between gap-3">
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
-              <span class="font-medium text-sm text-gray-900">{{ f.name }}</span>
-              {% if not f.is_active %}
-                <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
-              {% endif %}
-              {% if f.stop_on_match %}
-                <span class="text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded">stop on match</span>
-              {% endif %}
-            </div>
-            <div class="text-xs text-gray-500 space-y-0.5">
-              {% for c in f.conditions %}
-                <div>{{ c.field }} {{ c.operator }} <em>{{ c.value }}</em></div>
-              {% endfor %}
-            </div>
-            {% if f.actions %}
-              <div class="text-xs text-gray-400 mt-1">
-                Actions: {{ f.actions | map(attribute='action_type') | join(', ') }}
-              </div>
+          <div class="flex items-center gap-2 flex-1 min-w-0">
+            <span class="font-medium text-sm text-gray-900">{{ f.name }}</span>
+            {% if is_ai %}
+              <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score</span>
+            {% endif %}
+            {% if not f.is_active %}
+              <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
+            {% endif %}
+            {% if f.stop_on_match %}
+              <span class="text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded">stop on match</span>
             {% endif %}
           </div>
           <div class="flex items-center gap-2 flex-shrink-0">
@@ -34,25 +43,46 @@
             <!-- Edit -->
             <a href="/settings/filters/{{ f.id }}/edit"
                class="text-xs text-blue-600 hover:underline">Edit</a>
-            <!-- Apply -->
-            <button hx-post="/settings/filters/{{ f.id }}/apply"
+            <!-- Apply (shows a preview with scoring impact before committing) -->
+            <button type="button"
+                    class="text-xs text-green-600 hover:text-green-800"
+                    hx-post="/settings/filters/{{ f.id }}/apply/preview"
                     hx-target="#test-result-{{ f.id }}"
-                    hx-swap="innerHTML"
-                    hx-confirm="Apply filter '{{ f.name }}' to all existing articles?"
-                    class="text-xs text-green-600 hover:text-green-800">Apply</button>
+                    hx-swap="innerHTML">Apply</button>
             <!-- Delete -->
-            <button hx-delete="/settings/filters/{{ f.id }}"
+            <button type="button"
+                    class="swap-confirm text-xs text-red-400 hover:text-red-600"
+                    data-confirm-text="Confirm"
+                    data-confirm-class="text-xs text-red-600 font-medium hover:text-red-800"
+                    hx-delete="/settings/filters/{{ f.id }}"
                     hx-target="#filters-list"
-                    hx-swap="outerHTML"
-                    hx-confirm="Delete filter '{{ f.name }}'?"
-                    class="text-xs text-red-400 hover:text-red-600">Delete</button>
+                    hx-swap="outerHTML">Delete</button>
           </div>
         </div>
+        <div class="text-xs text-gray-500 space-y-0.5 mt-1">
+          {% for c in f.conditions %}
+            <div>{{ c.field }} {{ c.operator }} <em>{{ c.value }}</em></div>
+          {% endfor %}
+        </div>
+        {% if f.actions %}
+          {%- set label_map = {} -%}
+          {%- for l in (labels if labels is defined else []) -%}
+            {%- set _ = label_map.update({l.id|string: l.name}) -%}
+          {%- endfor -%}
+          <div class="text-xs text-gray-400 mt-1">
+            Actions: {% for a in f.actions -%}
+              {{ a.action_type }}{% if a.action_type == 'label' and a.action_value %} → {{ label_map.get(a.action_value, a.action_value) }}{% endif %}{%- if not loop.last %}, {% endif -%}
+            {%- endfor -%}
+          </div>
+        {% endif %}
         <div id="test-result-{{ f.id }}" class="mt-2"></div>
       </li>
       {% endfor %}
     </ul>
   {% else %}
-    <p class="text-sm text-gray-400">No filters yet. <a href="/settings/filters/new" class="text-blue-600 hover:underline">Create one</a>.</p>
+    <p class="text-sm text-gray-400">No filters yet. A filter runs on new articles: when your conditions
+      match, it applies actions automatically (add a label, mark as read, star).
+      <a href="/settings/filters/new" class="text-blue-600 hover:underline">Create one</a> or
+      <a href="/help#filters" class="text-blue-600 hover:underline">learn more</a>.</p>
   {% endif %}
 </div>

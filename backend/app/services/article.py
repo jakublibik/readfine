@@ -1,21 +1,69 @@
 """Article service: listing, detail, state toggles, unread count management."""
+import logging
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal_column, select, update
+from sqlalchemy import func, literal, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.models.label import ArticleLabel
+from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.utils.datetime_format import current_viewer_tz, format_local
 
+logger = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 _SNIPPET_LEN = 200
+
+
+async def _recalc_unread_for_feeds(user_id: int, feed_ids, db: AsyncSession) -> None:
+    """Recalculate unread_count for the given feeds in one statement.
+
+    `feed_ids` may be a list of ints or a single-column subquery (SELECT feed_id …).
+    Uses a correlated subquery so the update is a single SQL statement regardless
+    of how many feeds are affected.
+    """
+    if isinstance(feed_ids, (list, tuple, set)) and not feed_ids:
+        return
+    unread_subq = (
+        select(func.count())
+        .select_from(Article)
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id)
+            & (UserArticleState.user_id == user_id),
+        )
+        .where(
+            Article.feed_id == UserFeed.feed_id,
+            Article.trimmed_at.is_(None),
+            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
+        )
+        .correlate(UserFeed)
+        .scalar_subquery()
+    )
+    await db.execute(
+        update(UserFeed)
+        .where(UserFeed.user_id == user_id, UserFeed.feed_id.in_(feed_ids))
+        .values(unread_count=unread_subq)
+    )
+
+
+async def _recalculate_unread_counts(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> None:
+    """Recalculate unread_count for feeds touched by the given article IDs.
+
+    For small, already-materialized batches (e.g. scroll-based mark-read).
+    """
+    if not article_ids:
+        return
+    affected_feed_ids = select(Article.feed_id.distinct()).where(Article.id.in_(article_ids))
+    await _recalc_unread_for_feeds(user_id, affected_feed_ids, db)
 
 
 def _make_snippet(summary: str | None, content: str | None) -> str | None:
@@ -31,12 +79,8 @@ def _make_snippet(summary: str | None, content: str | None) -> str | None:
 
 
 def _format_date(dt: datetime | None) -> str:
-    if dt is None:
-        return ""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    today = datetime.now(timezone.utc).date()
-    return dt.strftime("%H:%M") if dt.date() == today else dt.strftime("%b %d, %H:%M")
+    # Uses the per-request viewer timezone (set in the auth dependency).
+    return format_local(dt, current_viewer_tz.get(), "short")
 
 
 _FTS_VECTOR = (
@@ -104,6 +148,10 @@ async def list_articles(
             )
         )
 
+    # Retention-trimmed articles are body-stripped stubs kept only for the interest
+    # profile — never shown in the UI.
+    stmt = stmt.where(Article.trimmed_at.is_(None))
+
     if feed_id is not None:
         stmt = stmt.where(Article.feed_id == feed_id)
 
@@ -144,14 +192,21 @@ async def list_articles(
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
         tsquery = func.websearch_to_tsquery('simple', q)
+        try:
+            # Round-trip to PostgreSQL to catch malformed inputs before the full query
+            await db.execute(select(tsquery))
+        except Exception:
+            logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
+            tsquery = func.plainto_tsquery('simple', q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
         stmt = stmt.order_by(
             func.ts_rank(fts_vec, tsquery).desc(),
-            Article.published_at.desc().nulls_last(),
+            func.coalesce(Article.published_at, Article.fetched_at).desc(),
             Article.id.desc(),
         )
     else:
-        order = Article.published_at.asc().nulls_last() if sort_order == "oldest" else Article.published_at.desc().nulls_last()
+        coalesced = func.coalesce(Article.published_at, Article.fetched_at)
+        order = coalesced.asc() if sort_order == "oldest" else coalesced.desc()
         stmt = stmt.order_by(order)
     stmt = stmt.limit(limit).offset(offset)
 
@@ -189,6 +244,7 @@ async def list_articles(
             is_read=state.is_read if state else False,
             is_starred=state.is_starred if state else False,
             is_archived=state.is_archived if state else False,
+            ai_score=state.ai_score if state else None,
             labels=labels_by_article.get(article.id, []),
         ))
     return items
@@ -248,6 +304,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         content_source=article.content_source,
         readable_content=article.readable_content,
         readable_status=article.readable_status,
+        readable_error=article.readable_error,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,
@@ -257,6 +314,20 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         is_archived=state.is_archived if state else False,
         read_at=state.read_at if state else None,
         share_token=state.share_token if state else None,
+        ai_summary=state.ai_summary if state else None,
+        ai_context=state.ai_context if state else None,
+        labels=[
+            {"id": r.id, "name": r.name, "color": r.color}
+            for r in (await db.execute(
+                select(Label.id, Label.name, Label.color)
+                .join(ArticleLabel, ArticleLabel.label_id == Label.id)
+                .where(
+                    ArticleLabel.article_id == article_id,
+                    ArticleLabel.user_id == user.id,
+                )
+                .order_by(Label.position, Label.name)
+            )).all()
+        ],
     )
 
 
@@ -282,77 +353,151 @@ async def mark_scope_read(
 
     if starred_only or archived_only:
         # Articles in these views already have a state row by definition – plain UPDATE suffices.
-        subq = (
-            select(UserArticleState.article_id)
-            .join(Article, Article.id == UserArticleState.article_id)
-            .where(UserArticleState.user_id == user.id, Article.fetched_at <= before)
+        # Drive the UPDATE from a subquery so we never materialize IDs into Python
+        # (which previously blew past asyncpg's 32767-parameter limit on large feeds).
+        filter_cond = (
+            UserArticleState.is_starred == True
+            if starred_only
+            else UserArticleState.is_archived == True
         )
-        if starred_only:
-            subq = subq.where(UserArticleState.is_starred == True)
-        else:
-            subq = subq.where(UserArticleState.is_archived == True)
+        scope_articles = (
+            select(Article.id)
+            .join(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id)
+                & (UserArticleState.user_id == user.id),
+            )
+            .where(Article.fetched_at <= before, filter_cond)
+        )
         await db.execute(
             update(UserArticleState)
             .where(
                 UserArticleState.user_id == user.id,
-                UserArticleState.article_id.in_(subq),
+                UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
             .values(is_read=True, read_at=now)
         )
+        affected_feeds = select(Article.feed_id.distinct()).where(Article.id.in_(scope_articles))
+        await _recalc_unread_for_feeds(user.id, affected_feeds, db)
         await db.commit()
         return
 
     # All other scopes: user must be subscribed; upsert to handle missing state rows.
-    subq = (
-        select(Article.id)
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.fetched_at <= before)
+    # A single INSERT … SELECT … ON CONFLICT keeps everything server-side — no IDs
+    # round-trip through Python, so feed size is irrelevant.
+    def scoped_select(*cols):
+        q = (
+            select(*cols)
+            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+            .where(Article.fetched_at <= before)
+        )
+        if feed_id is not None:
+            q = q.where(Article.feed_id == feed_id)
+        elif folder_id is not None:
+            q = q.where(UserFeed.folder_id.is_(None) if folder_id == 0 else UserFeed.folder_id == folder_id)
+        elif label_id is not None:
+            q = q.join(
+                ArticleLabel,
+                (ArticleLabel.article_id == Article.id)
+                & (ArticleLabel.user_id == user.id)
+                & (ArticleLabel.label_id == label_id),
+            )
+        elif labeled_only:
+            q = q.where(
+                select(ArticleLabel.article_id)
+                .where((ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
+                .exists()
+            )
+        # else: no extra filter → all subscribed articles
+        return q
+
+    insert_select = scoped_select(
+        literal(user.id), Article.id,
+        literal(True), literal(False), literal(False), literal(now),
     )
-    if feed_id is not None:
-        subq = subq.where(Article.feed_id == feed_id)
-    elif folder_id is not None:
-        if folder_id == 0:
-            subq = subq.where(UserFeed.folder_id.is_(None))
-        else:
-            subq = subq.where(UserFeed.folder_id == folder_id)
-    elif label_id is not None:
-        subq = subq.join(
-            ArticleLabel,
-            (ArticleLabel.article_id == Article.id)
-            & (ArticleLabel.user_id == user.id)
-            & (ArticleLabel.label_id == label_id),
-        )
-    elif labeled_only:
-        subq = subq.where(
-            select(ArticleLabel.article_id)
-            .where((ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
-            .exists()
-        )
-    # else: no extra filter → all subscribed articles
-
-    article_ids = (await db.execute(subq)).scalars().all()
-    if not article_ids:
-        return
-
-    stmt = pg_insert(UserArticleState).values([
-        {
-            "user_id": user.id,
-            "article_id": aid,
-            "is_read": True,
-            "is_starred": False,
-            "is_archived": False,
-            "is_hidden": False,
-            "read_at": now,
-        }
-        for aid in article_ids
-    ]).on_conflict_do_update(
+    stmt = pg_insert(UserArticleState).from_select(
+        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at"],
+        insert_select,
+    ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
         set_={"is_read": True, "read_at": now},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
+    await _recalc_unread_for_feeds(user.id, scoped_select(Article.feed_id).distinct(), db)
     await db.commit()
+
+
+async def filter_accessible_article_ids(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> list[int]:
+    """Return the subset of article_ids the user may act on.
+
+    Access mirrors get_article: the article belongs to a subscribed feed, or the
+    user has starred/archived it. Guards client-driven state writes (batch
+    mark-read, dwell) against stale/crafted ids that fall outside the user's
+    reading context and would otherwise skew their stats / AI preference.
+    """
+    if not article_ids:
+        return []
+    rows = await db.execute(
+        select(Article.id)
+        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
+        )
+        .where(
+            Article.id.in_(article_ids),
+            UserFeed.id.is_not(None)
+            | UserArticleState.is_starred.is_(True)
+            | UserArticleState.is_archived.is_(True),
+        )
+    )
+    return [r[0] for r in rows.all()]
+
+
+async def mark_articles_read_batch(user: User, article_ids: list[int], db: AsyncSession) -> None:
+    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read."""
+    if not article_ids:
+        return
+    article_ids = await filter_accessible_article_ids(user.id, article_ids, db)
+    if not article_ids:
+        return
+    now = datetime.now(timezone.utc)
+    stmt = pg_insert(UserArticleState).values([
+        {"user_id": user.id, "article_id": aid, "is_read": True,
+         "is_starred": False, "is_archived": False, "read_at": now}
+        for aid in article_ids
+    ]).on_conflict_do_update(
+        index_elements=["user_id", "article_id"],
+        set_={"is_read": True, "read_at": now},
+        where=(UserArticleState.__table__.c.is_read.is_not(True)),
+    )
+    await db.execute(stmt)
+    await _recalculate_unread_counts(user.id, article_ids, db)
+    await db.commit()
+
+
+def _apply_star_side_effects(state, article, *, starred: bool, extract_readable: bool) -> None:
+    """Star/unstar side effects shared by toggle_article_state and update_article_state
+    so web and API star behave identically.
+
+    Starring marks user intent (user_starred — a positive AI-preference signal),
+    retention protection (ever_starred), starred_at, and triggers readable
+    extraction. Unstarring snapshots dwell and treats an unstar within 60s as an
+    accidental star (clears ever_starred)."""
+    if starred:
+        state.user_starred = True
+        state.ever_starred = True
+        state.starred_at = datetime.now(timezone.utc)
+        if extract_readable and article.readable_status == "skipped":
+            article.readable_status = "pending"
+    else:
+        state.unstar_dwell_seconds = state.dwell_seconds
+        if state.starred_at and (datetime.now(timezone.utc) - state.starred_at).total_seconds() < 60:
+            state.ever_starred = False
 
 
 async def toggle_article_state(
@@ -402,9 +547,15 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
+        delta = -1 if new_value else 1
+        await db.execute(
+            update(UserFeed)
+            .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
+            .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
+        )
 
-    if field == "is_starred" and new_value and extract_readable and article.readable_status == "skipped":
-        article.readable_status = "pending"
+    if field == "is_starred":
+        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
 
     await db.commit()
     await db.refresh(state)
@@ -420,6 +571,7 @@ async def toggle_article_state(
         content_source=article.content_source,
         readable_content=article.readable_content,
         readable_status=article.readable_status,
+        readable_error=article.readable_error,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,
@@ -449,6 +601,7 @@ async def update_article_state(
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
+            UserFeed.extract_readable,
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
@@ -468,18 +621,31 @@ async def update_article_state(
     if not row:
         return None
 
-    article, state, feed_title, custom_title = row
+    article, state, feed_title, custom_title, extract_readable = row
 
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
 
     if payload.is_read is not None:
+        was_read = bool(state.is_read)
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
+        if was_read != payload.is_read:
+            delta = -1 if payload.is_read else 1
+            await db.execute(
+                update(UserFeed)
+                .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
+                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
+            )
 
     if payload.is_starred is not None:
+        was_starred = bool(state.is_starred)
         state.is_starred = payload.is_starred
+        if payload.is_starred != was_starred:
+            _apply_star_side_effects(
+                state, article, starred=payload.is_starred, extract_readable=bool(extract_readable)
+            )
 
     if payload.is_archived is not None:
         state.is_archived = payload.is_archived
@@ -498,6 +664,7 @@ async def update_article_state(
         content_source=article.content_source,
         readable_content=article.readable_content,
         readable_status=article.readable_status,
+        readable_error=article.readable_error,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,

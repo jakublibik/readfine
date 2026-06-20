@@ -1,0 +1,104 @@
+{% extends "admin/base.html" %}
+{% block title %}Scoring eval – Readfine{% endblock %}
+{% set active = "scoring_eval" %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-2">Scoring eval</h1>
+<p class="text-sm text-gray-500 mb-4">
+  Does <code>ai_score</code> predict real engagement? Engaged =
+  <code>starred OR dwell ≥ 60s OR link opened</code> (<code>is_read</code> excluded —
+  it is set even for unseen articles). Observational, not randomized; the label is
+  affected by exposure bias, so treat AUC as a lower bound.
+</p>
+
+<div class="flex flex-wrap items-center gap-3 mb-6 text-sm">
+  <span class="text-gray-500">Window:</span>
+  {% for d in [30, 90, 180, 365] %}
+  <a href="/admin/scoring-eval?days={{ d }}{% if eval.user_id %}&user_id={{ eval.user_id }}{% endif %}"
+     class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if eval.days == d else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">
+    {{ d }}d
+  </a>
+  {% endfor %}
+
+  <form method="get" action="/admin/scoring-eval" class="flex items-center gap-2 ml-auto">
+    <input type="hidden" name="days" value="{{ eval.days }}">
+    <label class="text-gray-500" for="eval-user">User:</label>
+    <select name="user_id" id="eval-user" class="border border-gray-300 rounded px-2 py-1 text-sm">
+      <option value="">All users (aggregate)</option>
+      {% for u in users %}
+      <option value="{{ u.user.id }}" {{ 'selected' if eval.user_id == u.user.id }}>{{ u.user.display_name or u.user.email }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="px-2 py-1 rounded border border-gray-300 text-gray-600 hover:border-gray-400">Show</button>
+  </form>
+</div>
+
+{% if eval.n == 0 %}
+<p class="text-sm text-gray-400">No scored articles in this window.</p>
+{% else %}
+
+<div class="grid grid-cols-2 gap-4 mb-8 sm:grid-cols-4">
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-2xl font-bold text-gray-900">{{ eval.n }}</div>
+    <div class="text-sm text-gray-500 mt-1">Scored articles</div>
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-2xl font-bold text-gray-900">{{ '%.1f' % (eval.engaged_rate * 100) }}%</div>
+    <div class="text-sm text-gray-500 mt-1">Engaged <span class="text-gray-400">({{ eval.engaged_total }})</span></div>
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    {% if eval.auc is not none %}
+    <div class="text-2xl font-bold {{ 'text-green-600' if eval.auc >= 0.7 else ('text-amber-600' if eval.auc >= 0.6 else 'text-gray-500') }}">{{ '%.3f' % eval.auc }}</div>
+    {% else %}
+    <div class="text-2xl font-bold text-gray-400">—</div>
+    {% endif %}
+    <div class="text-sm text-gray-500 mt-1">AUC <span class="text-gray-400">(0.5 = random)</span></div>
+  </div>
+</div>
+
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Calibration <span class="font-normal text-gray-400">(engagement rate should rise with score)</span></h2>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Score bucket</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Articles</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Engaged</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Engagement rate</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for b in eval.calibration %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700 tabular-nums">{{ (b.lo * 100) | round | int }}–{{ (b.hi * 100) | round | int }}</td>
+        <td class="px-4 py-2 text-gray-500 text-right tabular-nums">{{ b.count }}</td>
+        <td class="px-4 py-2 text-gray-500 text-right tabular-nums">{{ b.engaged }}</td>
+        <td class="px-4 py-2 text-right tabular-nums {{ 'text-gray-700' if b.rate is not none else 'text-gray-300' }}">
+          {{ ('%.1f' % (b.rate * 100)) ~ '%' if b.rate is not none else '—' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Score distribution <span class="font-normal text-gray-400">(spikes at 5-point steps = LLM self-quantization)</span></h2>
+{% set max_count = (eval.histogram | map(attribute='count') | max) or 1 %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-x-auto mb-8">
+  <table class="w-full text-sm">
+    <tbody class="divide-y divide-gray-100">
+      {% for h in eval.histogram %}
+      {% if h.count %}
+      <tr>
+        <td class="px-4 py-1 text-gray-500 tabular-nums whitespace-nowrap w-24">{{ (h.lo * 100) | round | int }}–{{ (h.hi * 100) | round | int }}</td>
+        <td class="px-4 py-1 text-gray-500 text-right tabular-nums w-16">{{ h.count }}</td>
+        <td class="px-4 py-1 font-mono text-blue-400 leading-none whitespace-nowrap">{{ '▇' * ((h.count / max_count * 40) | round | int) }}</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endif %}
+{% endblock %}

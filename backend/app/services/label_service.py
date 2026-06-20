@@ -9,6 +9,10 @@ from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
 
 
+class LabelAlreadyExistsError(Exception):
+    """Raised when creating a label whose name already exists for the user."""
+
+
 async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
     result = await db.execute(
         select(Label)
@@ -19,6 +23,11 @@ async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
 
 
 async def create_label(user: User, payload: LabelCreate, db: AsyncSession) -> LabelResponse:
+    existing = await db.scalar(
+        select(Label).where(Label.user_id == user.id, Label.name == payload.name)
+    )
+    if existing is not None:
+        raise LabelAlreadyExistsError(payload.name)
     label = Label(
         user_id=user.id,
         name=payload.name,
@@ -98,7 +107,41 @@ async def assign_label(
 
     db.add(ArticleLabel(user_id=user.id, article_id=article_id, label_id=label_id))
     await db.commit()
+
+    await _enqueue_scoring_for_label(user.id, article_id, db)
     return True
+
+
+async def _enqueue_scoring_for_label(user_id: int, article_id: int, db: AsyncSession) -> None:
+    """Trigger AI scoring for a freshly labeled article, mirroring the filter
+    label→scoring path (see filter_service.apply_filters_to_new_articles).
+
+    Either enqueue a scoring job now (no readable needed, or readable already
+    done) or flip readable to "pending" so the readable→scoring pipeline picks it
+    up. enqueue_scoring_job is idempotent and checks eligibility itself.
+    """
+    article = await db.get(Article, article_id)
+    if article is None:
+        return
+
+    uf = None
+    if article.feed_id is not None:
+        uf = await db.scalar(
+            select(UserFeed).where(
+                UserFeed.user_id == user_id,
+                UserFeed.feed_id == article.feed_id,
+            )
+        )
+
+    if uf is not None and uf.extract_readable and article.readable_status == "skipped":
+        article.readable_status = "pending"
+        await db.commit()
+        return
+
+    if uf is None or not uf.extract_readable or article.readable_status == "success":
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        if await enqueue_scoring_job(article, user_id, db):
+            await db.commit()
 
 
 async def remove_label(

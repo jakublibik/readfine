@@ -23,6 +23,14 @@ command -v python3     >/dev/null 2>&1 || error "python3 required for key genera
 success "All prerequisites met."
 echo ""
 
+# ── Guard: don't clobber an existing install ──────────────────────────────────
+if [[ -f .env ]]; then
+    error ".env already exists. Re-running setup would generate a NEW ENCRYPTION_KEY and make
+       all stored API keys / feed passwords permanently unreadable.
+       To reconfigure: edit .env by hand.
+       To start fresh:  back up ENCRYPTION_KEY, then  rm .env && docker compose down -v && bash setup.sh"
+fi
+
 # ── 2. Prompts ────────────────────────────────────────────────────────────────
 echo -e "${BLUE}── Database ──────────────────────────────────────${NC}"
 

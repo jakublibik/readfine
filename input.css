@@ -1,0 +1,9 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.ai-text > :first-child { margin-top: 0; }
+.ai-text > :last-child { margin-bottom: 0; }
+
+.ai-loading-indicator { display: none; }
+.ai-loading-indicator.htmx-request { display: flex; }

@@ -31,7 +31,7 @@
       <td class="px-4 py-2 text-gray-600">{{ inv.email or "—" }}</td>
       <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
         {% if inv.expires_at %}
-          <time datetime="{{ inv.expires_at.isoformat() }}" data-format="date">{{ inv.expires_at.strftime("%b %d, %Y") }}</time>
+          <time datetime="{{ inv.expires_at.isoformat() }}">{{ inv.expires_at | localtime('date') }}</time>
         {% else %}—{% endif %}
       </td>
       <td class="px-4 py-2">
@@ -44,13 +44,13 @@
       <td class="px-4 py-2 text-gray-500">{{ inv.creator.display_name if inv.creator else "—" }}</td>
       <td class="px-4 py-2 text-right">
         {% if not inv.used_at %}
-          <button hx-delete="/admin/invitations/{{ inv.id }}"
+          <button type="button"
+                  class="swap-confirm text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-red-500"
+                  data-confirm-text="Confirm"
+                  data-confirm-class="text-xs px-2 py-1 rounded border border-red-600 bg-red-600 text-white font-medium hover:bg-red-700"
+                  hx-delete="/admin/invitations/{{ inv.id }}"
                   hx-target="#invitations-table"
-                  hx-swap="innerHTML"
-                  hx-confirm="Revoke this invitation?"
-                  class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-red-500">
-            Revoke
-          </button>
+                  hx-swap="innerHTML">Revoke</button>
         {% endif %}
       </td>
     </tr>

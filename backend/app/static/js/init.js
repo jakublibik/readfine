@@ -7,8 +7,29 @@
 
   var LAYOUT_DEFAULTS = { small: '1', medium: '2', large: '3' };
   var w = window.innerWidth;
-  var bucket = w <= 640 ? 'small' : w <= 1100 ? 'medium' : 'large';
+  // Read the user's custom breakpoints from server-rendered <html> data attributes so
+  // the first-paint bucket matches what app.js computes later (no layout flash on reload).
+  var smallMax = parseInt(document.documentElement.dataset.bucketSmallMax, 10) || 640;
+  var mediumMax = parseInt(document.documentElement.dataset.bucketMediumMax, 10) || 1100;
+  var bucket = w <= smallMax ? 'small' : w <= mediumMax ? 'medium' : 'large';
   var layout;
   try { layout = localStorage.getItem('layout_' + bucket); } catch (e) {}
+  document.documentElement.dataset.bucket = bucket;
   document.documentElement.dataset.layout = layout || LAYOUT_DEFAULTS[bucket];
+
+  if (bucket === 'small') {
+    var sidebarMode;
+    try { sidebarMode = localStorage.getItem('sidebar_mode_small'); } catch (e) {}
+    var resolvedMode = sidebarMode || 'hideable-up';
+    if (resolvedMode === 'hideable') resolvedMode = 'hideable-up';
+    document.documentElement.dataset.sidebarMode = resolvedMode;
+  }
+
+  // Dark mode: apply before first paint
+  var _cs;
+  try { _cs = localStorage.getItem('colorScheme'); } catch (e) {}
+  _cs = _cs || 'system';
+  if (_cs === 'dark' || (_cs === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+    document.documentElement.classList.add('dark');
+  }
 })();

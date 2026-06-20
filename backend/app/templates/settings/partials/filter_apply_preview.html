@@ -1,0 +1,47 @@
+<div class="apply-preview text-xs bg-gray-50 border border-gray-200 rounded p-2 mt-1 space-y-2">
+  {% if is_ai_filter %}
+    <p class="text-gray-700">
+      <strong>{{ matched }}</strong> article{% if matched != 1 %}s{% endif %} currently match.
+    </p>
+    <p class="text-amber-700">
+      This is an AI filter — it applies to articles that already have a score.
+      Retroactive scoring is triggered by label filters, not by score conditions.
+    </p>
+    <div class="flex items-center gap-3">
+      <button hx-post="/settings/filters/{{ filter_id }}/apply"
+              hx-vals='{"mode": "skip"}'
+              hx-target="#test-result-{{ filter_id }}" hx-swap="innerHTML"
+              class="text-green-600 font-medium hover:text-green-800">Apply</button>
+      <button type="button" class="apply-cancel text-gray-400 hover:text-gray-600">Cancel</button>
+    </div>
+  {% else %}
+    <p class="text-gray-700">
+      <strong>{{ matched }}</strong> article{% if matched != 1 %}s{% endif %} match this filter.
+    </p>
+    {% if scoring_count > 0 %}
+      <p class="{% if scoring_count > 1000 %}text-red-700 font-medium{% else %}text-gray-600{% endif %}">
+        Up to ~<strong>{{ scoring_count }}</strong> will be queued for AI scoring.
+        {% if scoring_count > 1000 %}That's a lot of AI calls — consider narrowing the filter scope.{% endif %}
+      </p>
+      <div class="flex items-center gap-3 flex-wrap">
+        <button hx-post="/settings/filters/{{ filter_id }}/apply"
+                hx-vals='{"mode": "score"}'
+                hx-target="#test-result-{{ filter_id }}" hx-swap="innerHTML"
+                class="text-green-600 font-medium hover:text-green-800">Apply &amp; score</button>
+        <button hx-post="/settings/filters/{{ filter_id }}/apply"
+                hx-vals='{"mode": "skip"}'
+                hx-target="#test-result-{{ filter_id }}" hx-swap="innerHTML"
+                class="text-gray-600 hover:text-gray-800">Apply without scoring</button>
+        <button type="button" class="apply-cancel text-gray-400 hover:text-gray-600">Cancel</button>
+      </div>
+    {% else %}
+      <div class="flex items-center gap-3">
+        <button hx-post="/settings/filters/{{ filter_id }}/apply"
+                hx-vals='{"mode": "score"}'
+                hx-target="#test-result-{{ filter_id }}" hx-swap="innerHTML"
+                class="text-green-600 font-medium hover:text-green-800">Apply</button>
+        <button type="button" class="apply-cancel text-gray-400 hover:text-gray-600">Cancel</button>
+      </div>
+    {% endif %}
+  {% endif %}
+</div>
