@@ -1,0 +1,5 @@
+# Shell scripts must keep LF line endings so they run under WSL/Linux even when
+# the repo is cloned on Windows, where Git's core.autocrlf defaults to true and
+# would otherwise check them out with CRLF (breaks `bash setup.sh` with errors
+# like ": invalid option name: pipefail").
+*.sh text eol=lf

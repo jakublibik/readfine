@@ -16,8 +16,10 @@ article scoring, and AI summaries, scoring and briefings.
 
 ## Technical decisions
 - **Dev environment**: hybrid — PostgreSQL in Docker, FastAPI run locally via uv
-- **CSRF**: the web uses signed sessions and the API uses a JWT in the `Authorization`
-  header → no CSRF tokens needed (API and auth forms are exempt)
+- **CSRF**: the web is protected by `starlette_csrf.CSRFMiddleware` (double-submit
+  cookie + `x-csrftoken` header; HTMX requests attach it via `csrf.js`). The API is
+  exempt (it authenticates with a JWT in the `Authorization` header), as are the auth
+  forms (`/login`, `/register`, `/logout`, `/reset-password`, `/resend-verification`)
 - **Git workflow**: `dev` = development (default branch), `master` = production/release;
   merge to `master` only on release
 
