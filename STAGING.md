@@ -35,9 +35,13 @@ The staging stack ships **no reverse proxy**: the app is published on
 existing edge however you prefer, and **gate it** (it is not meant to be open):
 
 - **Reverse-proxy subdomain** — add a server block to your existing proxy that
-  forwards your staging hostname to `http://127.0.0.1:8001`. From a containerised
-  nginx, reach the host with `host.docker.internal` (add
-  `extra_hosts: ["host.docker.internal:host-gateway"]` to that nginx service).
+  forwards your staging hostname to the app. From a containerised nginx, reach
+  the host with `host.docker.internal` (add
+  `extra_hosts: ["host.docker.internal:host-gateway"]` to that nginx service) and
+  `proxy_pass http://host.docker.internal:8001`. In that case the app must NOT be
+  bound to loopback only, or the proxy container can't reach it — set
+  `STAGING_BIND=0.0.0.0` in `.env.staging` and keep the host/network firewall
+  restricting inbound to 80/443 (+22) so 8001 stays private.
 - **Tunnel** (Cloudflare Tunnel, Tailscale, …) pointed at `localhost:8001`.
 - **SSH tunnel** for ad-hoc checks:
   `ssh -L 8001:localhost:8001 user@server`, then open `http://localhost:8001`.

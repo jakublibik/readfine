@@ -49,8 +49,12 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
-      # Loopback only. Your reverse proxy / tunnel forwards to this.
-      - "127.0.0.1:8001:8000"
+      # Default loopback-only (safe). A containerised reverse proxy on the same
+      # host CANNOT reach a 127.0.0.1-bound port via host.docker.internal /
+      # host-gateway (that resolves to the bridge gateway IP, not loopback) — in
+      # that setup set STAGING_BIND=0.0.0.0 in .env.staging. Keep the host/network
+      # firewall restricting inbound to 80/443 (+22) so 8001 stays private.
+      - "${STAGING_BIND:-127.0.0.1}:8001:8000"
     depends_on:
       db:
         condition: service_healthy
