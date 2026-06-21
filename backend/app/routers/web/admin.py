@@ -256,7 +256,11 @@ async def admin_test_smtp(
         return HTMLResponse('<span class="text-red-600">SMTP not configured (missing host or from address).</span>')
     except Exception as e:
         logger.error("SMTP test failed: %s", e)
-        return HTMLResponse('<span class="text-red-600">Failed to send test email. Check server logs for details.</span>')
+        from html import escape
+        detail = escape(f"{type(e).__name__}: {e}".strip().rstrip(":").strip())
+        return HTMLResponse(
+            '<span class="text-red-600">Failed to send test email: ' + detail + "</span>"
+        )
 
 
 # ── Invitations ───────────────────────────────────────────────────────────────
