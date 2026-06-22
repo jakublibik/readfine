@@ -93,6 +93,40 @@ class TestCollectFeedOutlines:
         assert len(out) == 1
         assert out[0][0].get("xmlUrl") == "http://a.com/rss"
 
+    def test_feedly_layout(self):
+        # Mirrors real Feedly exports (verified against live samples): flat
+        # 2-level folder->feed, type="rss", htmlUrl present, and an empty folder.
+        body = ET.fromstring(
+            '<body>'
+            '<outline text="Apps" title="Apps">'
+            '<outline text="AppShopper" type="rss" xmlUrl="http://a/rss" htmlUrl="http://a"/>'
+            '<outline text="OSX" type="rss" xmlUrl="http://b/rss" htmlUrl="http://b"/>'
+            '</outline>'
+            '<outline text="AWS" title="AWS"/>'  # empty folder
+            '<outline text="Blog"><outline text="Arch" type="rss" xmlUrl="http://c/rss"/></outline>'
+            '</body>'
+        )
+        out = _collect_feed_outlines(body)
+        assert {(o.get("xmlUrl"), f) for o, f in out} == {
+            ("http://a/rss", "Apps"),
+            ("http://b/rss", "Apps"),
+            ("http://c/rss", "Blog"),
+        }
+
+    def test_inoreader_duplicate_feed_across_folders(self):
+        # Inoreader lets one feed live in multiple folders, so it appears twice in
+        # the OPML. Both outlines are collected (import dedups via "Already
+        # subscribed"); the structural parser must not silently drop either.
+        body = ET.fromstring(
+            '<body>'
+            '<outline text="News"><outline text="WSJ" type="rss" xmlUrl="http://wsj/rss"/></outline>'
+            '<outline text="Finance"><outline text="WSJ" type="rss" xmlUrl="http://wsj/rss"/></outline>'
+            '</body>'
+        )
+        out = _collect_feed_outlines(body)
+        assert sorted(f for _, f in out) == ["Finance", "News"]
+        assert {o.get("xmlUrl") for o, _ in out} == {"http://wsj/rss"}
+
 
 # ── _find_section ─────────────────────────────────────────────────────────────
 
