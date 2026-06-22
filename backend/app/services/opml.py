@@ -338,6 +338,7 @@ async def import_opml(
 
     # Pass 2: import feeds + folders
     feed_url_to_id: dict[str, int] = {}
+    feed_title_to_id: dict[str, int] = {}  # TTRSS filters scope feeds by title, not URL
     folder_name_to_id: dict[str, int] = {}
     new_feed_ids: list[int] = []  # collected for deferred initial fetch
 
@@ -370,6 +371,9 @@ async def import_opml(
         for uf, feed in existing_uf_result.all():
             if feed.feed_url not in feed_url_to_id:
                 feed_url_to_id[feed.feed_url] = uf.feed_id
+            title = (uf.custom_title or feed.title or "").strip()
+            if title and title not in feed_title_to_id:
+                feed_title_to_id[title] = uf.feed_id
 
         # Refresh folder map
         existing_folders = await db.execute(
@@ -387,6 +391,9 @@ async def import_opml(
         )
         for uf, feed in existing_uf_result.all():
             feed_url_to_id[feed.feed_url] = uf.feed_id
+            title = (uf.custom_title or feed.title or "").strip()
+            if title and title not in feed_title_to_id:
+                feed_title_to_id[title] = uf.feed_id
 
         existing_folders = await db.execute(
             select(Folder).where(Folder.user_id == user.id)
@@ -428,7 +435,8 @@ async def import_opml(
         filters_el = _find_section(body, "tt-rss-filters")
         if filters_el is not None:
             await _import_filters_element(
-                user, filters_el, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db
+                user, filters_el, label_name_to_id, feed_url_to_id, feed_title_to_id,
+                folder_name_to_id, result, db
             )
 
     # Kick off initial fetches after all filters are in DB. Mark in-progress
@@ -594,6 +602,7 @@ async def _import_filters_element(
     filters_el: Element,
     label_name_to_id: dict[str, int],
     feed_url_to_id: dict[str, int],
+    feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
     db: AsyncSession,
@@ -617,7 +626,7 @@ async def _import_filters_element(
         if not isinstance(filters_data, list):
             result.warnings.append("Filters data is not a list, skipping")
             return
-        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db)
+        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db)
     else:
         # TTRSS format: each child outline has CDATA text = single filter JSON object
         filters_data = []
@@ -634,7 +643,22 @@ async def _import_filters_element(
                     filters_data.append(fd)
             except json.JSONDecodeError as exc:
                 result.warnings.append(f"Could not parse filter JSON: {exc}")
-        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, folder_name_to_id, result, db)
+        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db)
+
+
+def _dedupe_conditions(
+    conditions: list[FilterConditionCreate],
+) -> list[FilterConditionCreate]:
+    """Drop duplicate conditions, keeping the first occurrence (and its position)."""
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[FilterConditionCreate] = []
+    for c in conditions:
+        key = (c.field, c.operator, c.value)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    return deduped
 
 
 def _filter_fingerprint(name: str, conditions: list[FilterConditionCreate]) -> tuple:
@@ -648,6 +672,7 @@ async def _import_filters(
     filters_data: list[dict[str, Any]],
     label_name_to_id: dict[str, int],
     feed_url_to_id: dict[str, int],
+    feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
     db: AsyncSession,
@@ -671,13 +696,20 @@ async def _import_filters(
             if "match_operator" in fd:
                 payload = _parse_readfine_filter(fd, label_name_to_id, feed_url_to_id, folder_name_to_id, result)
             else:
-                payload = _parse_ttrss_filter(fd, label_name_to_id, result)
+                payload = _parse_ttrss_filter(
+                    fd, label_name_to_id, feed_title_to_id, folder_name_to_id, result
+                )
 
             if payload is None:
                 result.filters_skipped += 1
                 continue
 
             payload.name = name
+            # Collapse duplicate conditions. TTRSS scope is per-rule, so once we
+            # factor it up to the filter (e.g. a "match-all on 9 feeds" filter),
+            # the rules degenerate into identical (field, operator, value) triples;
+            # in Readfine a repeated condition is a pure no-op either way.
+            payload.conditions = _dedupe_conditions(payload.conditions)
 
             fp = _filter_fingerprint(name, payload.conditions)
             if fp in existing_fingerprints:
@@ -740,15 +772,79 @@ def _parse_readfine_filter(
     )
 
 
+def _resolve_named_scope(
+    name: str,
+    is_cat: bool,
+    feed_title_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
+    unresolved: set[str],
+) -> str | None:
+    """Resolve a TTRSS scope target (feed title or category name) to a Readfine
+    scope token. TTRSS categories map to Readfine folders. Records misses in
+    `unresolved` so the caller can warn."""
+    if is_cat:
+        folder_id = folder_name_to_id.get(name)
+        if folder_id:
+            return f"folder:{folder_id}"
+    else:
+        feed_id = feed_title_to_id.get(name)
+        if feed_id:
+            return f"feed:{feed_id}"
+    unresolved.add(name)
+    return None
+
+
+def _rule_scope_targets(
+    rule: dict,
+    feed_title_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
+    unresolved: set[str],
+) -> tuple[list[str], bool]:
+    """Return (scope_tokens, is_global) for a single TTRSS rule.
+
+    is_global means the rule applies to all feeds (no scope). Two on-disk shapes:
+    - newer "match" array: [[name, is_cat, is_zero], ...] — is_zero (feed id 0) = all
+    - classic single target: "feed" title string + "cat_filter" bool ("" = all)
+    Both reference feeds/categories by name (TTRSS resolves ids to titles on export),
+    so a miss means the feed/folder isn't subscribed, not that the format is unknown.
+    """
+    match = rule.get("match")
+    if isinstance(match, list) and match:
+        tokens: list[str] = []
+        for entry in match:
+            if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                continue
+            name, is_cat = entry[0], _truthy(entry[1])
+            is_zero = _truthy(entry[2]) if len(entry) > 2 else False
+            if is_zero or not name or name == 0:
+                return [], True  # an "all feeds/categories" entry makes the rule global
+            tok = _resolve_named_scope(str(name), is_cat, feed_title_to_id, folder_name_to_id, unresolved)
+            if tok:
+                tokens.append(tok)
+        return tokens, False
+
+    feed_name = str(rule.get("feed") or "").strip()
+    if not feed_name:
+        return [], True
+    tok = _resolve_named_scope(
+        feed_name, _truthy(rule.get("cat_filter")), feed_title_to_id, folder_name_to_id, unresolved
+    )
+    return ([tok] if tok else []), False
+
+
 def _parse_ttrss_filter(
     fd: dict,
     label_name_to_id: dict[str, int],
+    feed_title_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
     result: ImportResult,
 ) -> FilterCreate | None:
     """Parse TTRSS OPML filter format (best-effort)."""
     match_operator = "OR" if _truthy(fd.get("match_any_rule")) else "AND"
 
     conditions = []
+    rule_scopes: list[tuple[list[str], bool]] = []  # (tokens, is_global) per kept rule
+    unresolved_scope: set[str] = set()
     for rule in fd.get("rules", []):
         # TTRSS exports raw DB values without casting, so filter_type may be an
         # int (1) or a string ("1"); our map is keyed by string.
@@ -773,6 +869,11 @@ def _parse_ttrss_filter(
             operator = "contains"
 
         conditions.append(FilterConditionCreate(field=our_field, operator=operator, value=value))
+        # Track scope only for rules that contribute a condition; a dropped rule's
+        # scope is moot.
+        rule_scopes.append(
+            _rule_scope_targets(rule, feed_title_to_id, folder_name_to_id, unresolved_scope)
+        )
 
     if not conditions:
         return None
@@ -797,26 +898,63 @@ def _parse_ttrss_filter(
             action_value = str(label_id)
         actions.append(FilterActionCreate(action_type=our_action, action_value=action_value))
 
-    # TTRSS scope is per-rule (feed/category) and doesn't transfer — import as global.
-    # Older exports use feed_id/cat_id; current exports resolve to a "match" array or
-    # a "feed" title string per rule.
-    def _rule_has_scope(r: dict) -> bool:
-        return bool(
-            r.get("feed_id") or r.get("cat_id") or r.get("match") or r.get("feed")
-        )
-
-    if fd.get("cat_filter") or any(_rule_has_scope(r) for r in fd.get("rules", [])):
-        result.warnings.append(
-            f"Filter '{fd.get('name')}': scope (feed/category) not imported (TTRSS IDs don't transfer)"
-        )
+    # TTRSS scope is per-rule; Readfine scope is per-filter. We can only safely
+    # factor it out when *every* kept rule is feed/category-scoped (none global).
+    # If the filter mixes scoped and global rules, applying scope would wrongly
+    # narrow the global rules, so we import it as global with a warning.
+    scope_include = _derive_filter_scope(fd.get("name"), rule_scopes, unresolved_scope, result)
 
     return FilterCreate(
         name="",
         is_active=_truthy(fd.get("enabled", True)),
         match_operator=match_operator,
+        scope_include=scope_include,
         conditions=conditions,
         actions=actions,
     )
+
+
+def _derive_filter_scope(
+    filter_name: Any,
+    rule_scopes: list[tuple[list[str], bool]],
+    unresolved_scope: set[str],
+    result: ImportResult,
+) -> list[str]:
+    """Collapse per-rule TTRSS scope into a single per-filter scope_include.
+
+    Returns [] (global) unless every rule is scoped and at least one target
+    resolved. See _parse_ttrss_filter for the safety rationale.
+    """
+    scoped = [tokens for tokens, is_global in rule_scopes if not is_global]
+    has_global = any(is_global for _, is_global in rule_scopes)
+
+    if not scoped:
+        return []  # no rule carried scope — a plain global filter, nothing to warn about
+
+    if has_global:
+        result.warnings.append(
+            f"Filter '{filter_name}': scope not applied — mixes feed-scoped and global "
+            f"rules, imported as global (review scope manually)"
+        )
+        return []
+
+    # Every rule is scoped. Union the resolved targets (exact for shared scope, a
+    # minor broadening for OR filters with differing per-rule scope — acceptable).
+    tokens = sorted({tok for group in scoped for tok in group})
+
+    if unresolved_scope:
+        result.warnings.append(
+            f"Filter '{filter_name}': scope targets not found, skipped: "
+            f"{', '.join(sorted(unresolved_scope))}"
+        )
+
+    if not tokens:
+        result.warnings.append(
+            f"Filter '{filter_name}': scope could not be resolved, imported as global"
+        )
+        return []
+
+    return tokens
 
 
 def _resolve_scope(
