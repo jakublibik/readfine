@@ -1469,6 +1469,42 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   }
 });
 
+// In collapsible mode the sidebar is dropped to opacity:0 during a refresh to hide
+// the rail↔overlay content swap, then restored once the refresh settles. That restore
+// MUST be guaranteed: the sidebar holds its own (only) toggle button, so if opacity
+// stays 0 the whole sidebar — and the way out of it — becomes invisible, locking the
+// user out until a full page reload. Normal restore is on afterSettle; the error
+// handlers below cover a failed request, and the watchdog covers the case where no
+// request settles or even fires at all.
+var _sidebarOpacityTimer = null;
+
+function _restoreSidebarOpacity(sb) {
+  sb = sb || document.getElementById('sidebar');
+  if (_sidebarOpacityTimer) { clearTimeout(_sidebarOpacityTimer); _sidebarOpacityTimer = null; }
+  if (!sb || sb.style.opacity !== '0') return;
+  sb.style.transition = 'opacity 150ms ease';
+  sb.style.opacity = '1';
+  setTimeout(function () { sb.style.transition = ''; sb.style.opacity = ''; }, 160);
+}
+
+function _hideSidebarForRefresh(sb) {
+  if (!sb) return;
+  sb.style.transition = 'none';
+  sb.style.opacity = '0';
+  if (_sidebarOpacityTimer) clearTimeout(_sidebarOpacityTimer);
+  // Backstop: force the sidebar visible again even if the refresh never settles.
+  _sidebarOpacityTimer = setTimeout(function () { _restoreSidebarOpacity(sb); }, 1500);
+}
+
+// Sidebar refresh failed (network/server error) — restore visibility immediately
+// instead of waiting for the watchdog, so the rail never lingers invisible.
+document.body.addEventListener('htmx:sendError', function (e) {
+  if (e.detail.target && e.detail.target.id === 'sidebar') _restoreSidebarOpacity(e.detail.target);
+});
+document.body.addEventListener('htmx:responseError', function (e) {
+  if (e.detail.target && e.detail.target.id === 'sidebar') _restoreSidebarOpacity(e.detail.target);
+});
+
 // HTMX settle can re-apply server classes and drop client-added "collapsed".
 // Re-apply once more after settle to keep sections collapsed after sidebar refresh.
 document.body.addEventListener('htmx:afterSettle', function (e) {
@@ -1479,11 +1515,7 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     var newScroll = sb.querySelector('#sidebar-scroll');
     if (newScroll) newScroll.scrollTop = window._sidebarScroll;
   }
-  if (sb.style.opacity === '0') {
-    sb.style.transition = 'opacity 150ms ease';
-    sb.style.opacity = '1';
-    setTimeout(function () { sb.style.transition = ''; sb.style.opacity = ''; }, 160);
-  }
+  _restoreSidebarOpacity(sb);
 });
 
 restoreSidebarCollapse(false);
@@ -1729,20 +1761,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 
   function openSidebarOverlay() {
-    if (isCollapsible()) {
-      var sb = document.getElementById('sidebar');
-      if (sb) { sb.style.transition = 'none'; sb.style.opacity = '0'; }
-    }
+    if (isCollapsible()) _hideSidebarForRefresh(document.getElementById('sidebar'));
     document.documentElement.classList.add('mobile-sidebar-open');
     history.pushState({ mobileSidebarOpen: true }, '');
     if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   function closeSidebarOverlay() {
-    if (isCollapsible()) {
-      var sb = document.getElementById('sidebar');
-      if (sb) { sb.style.transition = 'none'; sb.style.opacity = '0'; }
-    }
+    if (isCollapsible()) _hideSidebarForRefresh(document.getElementById('sidebar'));
     document.documentElement.classList.remove('mobile-sidebar-open');
     if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
