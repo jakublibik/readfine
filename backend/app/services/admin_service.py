@@ -36,6 +36,8 @@ async def update_app_settings(db: AsyncSession, data: dict) -> AppSettings:
     s.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(s)
+    from app.services.app_settings_cache import invalidate_registration_cache
+    invalidate_registration_cache()
     return s
 
 
