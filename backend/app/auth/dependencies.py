@@ -12,7 +12,7 @@ from app.models.user import User
 from app.models.auth import ApiToken
 from app.models.settings import AppSettings
 from app.utils.datetime_format import current_viewer_tz
-from app.utils.request_context import current_viewer_is_admin
+from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -30,6 +30,8 @@ async def _get_user_by_id(user_id: int, db: AsyncSession) -> User | None:
         current_viewer_tz.set(tz or "UTC")
         # Carry admin status for template-level cross-navigation links.
         current_viewer_is_admin.set(user.role == "admin")
+        # Carry unresolved-AI-error status for the nav badge.
+        current_viewer_ai_error.set(bool(user.settings and user.settings.last_ai_error))
     return user
 
 

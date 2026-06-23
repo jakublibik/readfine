@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 import feedparser
 from bs4 import BeautifulSoup
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from app.auth.security import hash_password, password_within_limit, verify_password, hash_token
 from app.config import settings as app_settings_config
@@ -1600,6 +1600,26 @@ async def settings_ai(
 ):
     ctx = await _ai_page_context(user, db)
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+
+@router.post("/ai/dismiss-error", response_class=HTMLResponse)
+async def settings_ai_dismiss_error(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear the persisted last-AI-error record (manual dismiss). The badge and
+    panel both read this field, so both disappear. If the cause persists, the
+    next background AI call re-sets it and the badge returns."""
+    await db.execute(
+        update(UserSettings)
+        .where(UserSettings.user_id == user.id)
+        .values(last_ai_error=None, last_ai_error_at=None)
+    )
+    await db.commit()
+    # Empty body removes the panel (hx-swap=outerHTML); HX-Trigger clears any
+    # nav badges still in the DOM on this page.
+    return HTMLResponse("", headers={"HX-Trigger": "ai-error-dismissed"})
 
 
 @limiter.limit("10/minute")

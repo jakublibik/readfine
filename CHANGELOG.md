@@ -15,6 +15,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   form (type, subject, message) that emails all admins via the configured SMTP,
   with `Reply-To` set to the sender's account email. Off by default; admins enable
   it in Admin → Settings (requires SMTP).
+- AI error badge: a red dot on the user menu and the Settings → AI nav item when a
+  background AI call (e.g. scoring) last failed, so credit/quota errors are visible
+  without opening Settings. Self-clears on the next successful AI call, or dismiss it
+  manually via the × on the error panel in Settings → AI.
 
 ## [0.9.0] - 2026-06-20
 

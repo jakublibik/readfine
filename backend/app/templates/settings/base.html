@@ -14,7 +14,7 @@
   {"label": "Tokens",      "url": "/settings/tokens",       "active": active == "tokens"},
 ] %}
 {% if app_ai_enabled() %}
-  {% set settings_nav_items = _nav_before_ai + [{"label": "AI", "url": "/settings/ai", "active": active == "ai"}] + _nav_after_ai %}
+  {% set settings_nav_items = _nav_before_ai + [{"label": "AI", "url": "/settings/ai", "active": active == "ai", "badge": ai_error_fresh()}] + _nav_after_ai %}
 {% else %}
   {% set settings_nav_items = _nav_before_ai + _nav_after_ai %}
 {% endif %}

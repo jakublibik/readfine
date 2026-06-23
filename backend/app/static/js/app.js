@@ -344,6 +344,12 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target && e.detail.target.id === 'article-list') _navSnapshot = null;
 });
 
+// Dismissing the AI error (Settings → AI) fires this via HX-Trigger; clear any
+// AI error dots still rendered on the page (e.g. the side-nav "AI" badge).
+document.body.addEventListener('ai-error-dismissed', function () {
+  document.querySelectorAll('.ai-error-badge').forEach(function (el) { el.remove(); });
+});
+
 document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');
   if (!navItem) return;
