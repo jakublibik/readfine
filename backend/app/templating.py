@@ -76,8 +76,24 @@ def set_ai_enabled(value: bool) -> None:
     _ai_enabled = value
 
 
+# Whether the in-app feedback link should show: admin enabled it AND SMTP is
+# configured (otherwise the message couldn't be delivered). Mirrors the
+# AppSettings singleton; refreshed at startup and on every admin settings save.
+_feedback_available: bool = False
+
+
+def get_feedback_available() -> bool:
+    return _feedback_available
+
+
+def set_feedback_available(value: bool) -> None:
+    global _feedback_available
+    _feedback_available = value
+
+
 templates.env.globals["static_url"] = static_url
 templates.env.globals["app_ai_enabled"] = get_ai_enabled
+templates.env.globals["app_feedback_available"] = get_feedback_available
 templates.env.globals["viewer_is_admin"] = lambda: current_viewer_is_admin.get()
 templates.env.globals["timezone_groups"] = timezone_groups
 templates.env.globals["is_common_timezone"] = is_common_timezone

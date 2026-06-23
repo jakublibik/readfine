@@ -145,6 +145,27 @@
   </div>
 </div>
 
+{% if app_feedback_available() %}
+<!-- Feedback modal overlay -->
+<div id="feedback-modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-8"
+     aria-modal="true" role="dialog">
+  <div class="absolute inset-0 bg-black/40" data-action="close-feedback-modal"></div>
+  <div class="relative bg-white dark:bg-gray-800 shadow-2xl w-full max-w-lg sm:mx-4
+              max-h-[92vh] sm:max-h-[85vh] overflow-y-auto rounded-t-xl sm:rounded-xl">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+      <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">Send feedback</h2>
+      <button data-action="close-feedback-modal" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div id="feedback-modal-content" class="px-5 py-5"></div>
+  </div>
+</div>
+{% endif %}
+
 <!-- Global label picker popover -->
 <div id="label-picker"
      class="hidden fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[220px] max-h-64 overflow-y-auto"></div>

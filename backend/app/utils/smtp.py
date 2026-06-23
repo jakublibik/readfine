@@ -18,7 +18,13 @@ def _get_password(s: AppSettings) -> str | None:
         return None
 
 
-def send_email(s: AppSettings, to: str, subject: str, body: str) -> None:
+def send_email(
+    s: AppSettings,
+    to: str,
+    subject: str,
+    body: str,
+    reply_to: str | None = None,
+) -> None:
     """Send a plain-text email using the given AppSettings.
 
     Raises:
@@ -32,9 +38,8 @@ def send_email(s: AppSettings, to: str, subject: str, body: str) -> None:
     msg["Subject"] = subject
     msg["From"] = s.smtp_from_email
     msg["To"] = to
-
-    password = _get_password(s)
-    port = s.smtp_port or 587
+    if reply_to:
+        msg["Reply-To"] = reply_to
 
     _smtp_send(s, [to], msg.as_string())
 

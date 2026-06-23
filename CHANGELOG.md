@@ -9,6 +9,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- In-app feedback / bug report: a "Send feedback" item in the user menu opens a
+  form (type, subject, message) that emails all admins via the configured SMTP,
+  with `Reply-To` set to the sender's account email. Off by default; admins enable
+  it in Admin → Settings (requires SMTP).
+
 ## [0.9.0] - 2026-06-20
 
 First public release. Self-hosted RSS reader with:

@@ -36,7 +36,7 @@ from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
 
-from app.templating import templates, set_ai_enabled
+from app.templating import templates, set_ai_enabled, set_feedback_available
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -177,6 +177,7 @@ async def admin_settings_save(
         "smtp_from_email": form.get("smtp_from_email", "").strip() or None,
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
+        "feedback_enabled": form.get("feedback_enabled") == "true",
         "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
         "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
         "legal_jurisdiction": form.get("legal_jurisdiction", "").strip() or None,
@@ -194,6 +195,7 @@ async def admin_settings_save(
     try:
         s = await update_app_settings(db, data)
         set_ai_enabled(s.ai_enabled)
+        set_feedback_available(bool(s.feedback_enabled and s.smtp_host and s.smtp_from_email))
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
         legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {

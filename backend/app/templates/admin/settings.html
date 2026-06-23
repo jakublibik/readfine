@@ -228,6 +228,19 @@
         </div>
         <div id="smtp-test-result" class="text-sm"></div>
       </div>
+
+      <div class="flex items-start justify-between gap-4 pt-2 border-t border-gray-100">
+        <div>
+          <label class="text-sm font-medium text-gray-700">User feedback</label>
+          <p class="text-xs text-gray-400">
+            Show a "Send feedback" item in the user menu. Messages are emailed to
+            admins via SMTP above, so it requires SMTP to be configured.
+          </p>
+        </div>
+        <input type="checkbox" name="feedback_enabled" value="true"
+               {% if s.feedback_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
+      </div>
     </div>
   </section>
 

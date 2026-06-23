@@ -753,9 +753,32 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   }
 });
 
+// ── Feedback modal ─────────────────────────────────────────────────────────
+function openFeedbackModal() {
+  var menu = document.getElementById('full-menu-dropdown');
+  if (menu) menu.classList.add('hidden');
+  var overlay = document.getElementById('feedback-modal-overlay');
+  if (!overlay) return;
+  var content = document.getElementById('feedback-modal-content');
+  if (content) {
+    content.innerHTML = '<div class="py-6 flex items-center justify-center gap-2 text-sm text-gray-400">' +
+      '<svg class="animate-spin h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24">' +
+      '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+      '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>' +
+      '</svg>Loading…</div>';
+  }
+  overlay.classList.remove('hidden');
+  htmx.ajax('GET', '/htmx/feedback', { target: '#feedback-modal-content', swap: 'innerHTML' });
+}
+
+function closeFeedbackModal() {
+  var overlay = document.getElementById('feedback-modal-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closeSearchModal(); return; }
+  if (e.key === 'Escape') { closeSearchModal(); closeFeedbackModal(); return; }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
   if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
     e.preventDefault();
@@ -866,6 +889,8 @@ document.addEventListener('click', function (e) {
   if (action === 'toggle-user-menu') { toggleUserMenu(); return; }
   if (action === 'open-search') { openSearchModal(); return; }
   if (action === 'close-search') { closeSearchModal(); return; }
+  if (action === 'open-feedback-modal') { openFeedbackModal(); return; }
+  if (action === 'close-feedback-modal') { closeFeedbackModal(); return; }
   if (action === 'submit-search') { submitSearch(); return; }
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
