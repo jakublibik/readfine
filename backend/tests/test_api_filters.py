@@ -73,6 +73,20 @@ class TestCreateFilter:
         response = client.post("/api/v1/filters", json=payload)
         assert response.status_code == 422
 
+    def test_archive_action_accepted(self, client):
+        # The API shares the FilterCreate schema with the web form, so the new
+        # 'archive' action must validate at the API boundary too.
+        f = _make_filter_response()
+        payload = {**_VALID_FILTER_PAYLOAD, "actions": [{"action_type": "archive"}]}
+        with patch("app.routers.api.v1.filters.create_filter", new=AsyncMock(return_value=f)):
+            response = client.post("/api/v1/filters", json=payload)
+        assert response.status_code == 201
+
+    def test_invalid_action_type_returns_422(self, client):
+        payload = {**_VALID_FILTER_PAYLOAD, "actions": [{"action_type": "delete_everything"}]}
+        response = client.post("/api/v1/filters", json=payload)
+        assert response.status_code == 422
+
     def test_requires_auth(self, unauth_client):
         response = unauth_client.post("/api/v1/filters", json=_VALID_FILTER_PAYLOAD)
         assert response.status_code == 401
