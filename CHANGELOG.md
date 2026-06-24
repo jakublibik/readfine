@@ -19,6 +19,33 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   background AI call (e.g. scoring) last failed, so credit/quota errors are visible
   without opening Settings. Self-clears on the next successful AI call, or dismiss it
   manually via the × on the error panel in Settings → AI.
+- Filter action **archive**: alongside label / mark-as-read / star, a filter can now
+  archive matching articles (removes them from the inbox and exempts them from
+  retention purge). Available in Settings → Filters and via OPML round-trip.
+
+### Changed
+
+- Stats: the single "Backlog" figure is split into **labeled backlog** (unread items
+  carrying a label) and **starred backlog** (your read-later pile); both are now
+  all-time rather than capped at 90 days. Reading streak, per-day reads and the most
+  active hour are computed in your own timezone instead of UTC.
+- OPML import: Tiny Tiny RSS filter scope (feed / category) is now matched by name and
+  mapped to the corresponding Readfine feed/folder scope, instead of being dropped and
+  imported as global. Mixed scoped/global filters still import as global with a warning.
+- Admin → Settings: the SMTP test now shows the underlying error detail on failure,
+  making misconfiguration easier to diagnose.
+
+### Fixed
+
+- Stats: corrected the engagement funnel bars.
+- Mobile: the collapsible sidebar reliably reappears after a refresh instead of
+  occasionally staying hidden.
+- Favicon: app pages now declare the raster apple-touch-icon, so Firefox/Android use
+  it for link previews and home-screen tiles instead of rasterizing the SVG.
+
+### Security
+
+- Migrated JWT handling from the unmaintained `python-jose` to `PyJWT`.
 
 ## [0.9.0] - 2026-06-20
 
