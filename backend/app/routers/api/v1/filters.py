@@ -35,7 +35,7 @@ async def post_filter(
     try:
         return await create_filter(user.id, payload, db)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e))
 
 
 @router.get("/{filter_id}", response_model=FilterResponse)
@@ -60,7 +60,7 @@ async def patch_filter(
     try:
         f = await update_filter(user.id, filter_id, payload, db)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e))
     if not f:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Filter not found")
     return f

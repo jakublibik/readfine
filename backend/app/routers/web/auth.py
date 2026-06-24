@@ -185,7 +185,7 @@ async def register(
 
     email = email.strip()
 
-    def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_ENTITY, **extra):
+    def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
                "prefill_email": email, "prefill_display_name": display_name, **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
