@@ -6,6 +6,14 @@ unauthenticated hit — and ``/`` is the most crawled endpoint (bots). Cache onl
 the single boolean those public GET routes need; authenticated/admin code keeps
 reading the full ``AppSettings`` fresh from the DB, so SMTP/AI/legal config never
 goes stale. Invalidated on every admin write (see ``update_app_settings``).
+
+Single-process assumption: the cache and its invalidation are per-process. The
+target deployment runs one app process (APScheduler lives in-process too), so the
+admin write that toggles registration invalidates the same process that serves the
+public routes. Under a multi-worker deploy (e.g. several Uvicorn workers) only the
+worker handling the admin save drops its copy; others keep the stale flag until
+restart — the same caveat as the in-memory login rate limiter. The other
+module-level mirrors (``set_ai_enabled`` / ``set_feedback_available``) share it.
 """
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession

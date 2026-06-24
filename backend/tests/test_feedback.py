@@ -63,13 +63,15 @@ class TestFeedbackSubmit:
         # On success the form is replaced by a confirmation, not kept filled.
         assert "has been sent" in resp.text
         assert "<textarea" not in resp.text
-        assert len(sent) == 2
-        assert {m["to"] for m in sent} == {"admin1@test.com", "admin2@test.com"}
-        for m in sent:
-            assert m["reply_to"] == "user1@test.com"          # sender's account email
-            assert m["subject"] == "[Readfine bug] Broken button"
-            assert "user1@test.com" in m["body"]              # identity always in body
-            assert "The star icon does nothing." in m["body"]
+        # All admins are reached in a single SMTP transaction (one send_email call
+        # with the full recipient list), not one call per admin.
+        assert len(sent) == 1
+        m = sent[0]
+        assert m["to"] == ["admin1@test.com", "admin2@test.com"]
+        assert m["reply_to"] == "user1@test.com"          # sender's account email
+        assert m["subject"] == "[Readfine bug] Broken button"
+        assert "user1@test.com" in m["body"]              # identity always in body
+        assert "The star icon does nothing." in m["body"]
 
     def test_unknown_type_falls_back_to_feedback(self, client, mock_db):
         mock_db.execute.side_effect = [
