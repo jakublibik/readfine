@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-25
+
 ### Added
 
 - In-app feedback / bug report: a "Send feedback" item in the user menu opens a
