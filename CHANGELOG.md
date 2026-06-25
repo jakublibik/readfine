@@ -9,6 +9,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- One-command local demo: `docker compose -f docker-compose.demo.yml up` brings the
+  app up on `http://localhost:8000` with a seeded admin and no setup wizard, for
+  trying it out before a full install. Demo only — plain HTTP, `DEBUG=true`, and
+  hard-coded throwaway secrets; not for production. See README → Quick demo.
+
 ## [0.10.0] - 2026-06-25
 
 ### Added
