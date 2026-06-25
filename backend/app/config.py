@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     rate_limit_ai_context: str = "6/minute"
     rate_limit_ai_chat: str = "20/minute"
     rate_limit_ai_catchup: str = "1/minute"
+    rate_limit_feedback: str = "3/hour"
 
     @model_validator(mode="after")
     def _reject_insecure_secrets(self) -> "Settings":

@@ -7,6 +7,8 @@ PLAN.md
 .env
 .env.local
 .env.*.local
+# Staging instance env (holds secrets); .env.staging.example is committed
+.env.staging
 
 # Backup config — holds restic/R2 secrets; example template is committed
 backup.env

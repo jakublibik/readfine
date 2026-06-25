@@ -23,6 +23,7 @@ class AppSettings(Base):
     smtp_from_email: Mapped[str | None] = mapped_column(String(255))
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    feedback_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     legal_operator_name: Mapped[str | None] = mapped_column(String(255))
     legal_contact_email: Mapped[str | None] = mapped_column(String(255))
     legal_jurisdiction: Mapped[str | None] = mapped_column(String(100))

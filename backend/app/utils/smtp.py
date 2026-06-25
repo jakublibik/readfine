@@ -18,25 +18,37 @@ def _get_password(s: AppSettings) -> str | None:
         return None
 
 
-def send_email(s: AppSettings, to: str, subject: str, body: str) -> None:
+def send_email(
+    s: AppSettings,
+    to: str | list[str],
+    subject: str,
+    body: str,
+    reply_to: str | None = None,
+) -> None:
     """Send a plain-text email using the given AppSettings.
 
+    ``to`` may be a single address or a list; a list is delivered in one SMTP
+    transaction (all recipients share the To header).
+
     Raises:
-        ValueError: if SMTP is not configured
+        ValueError: if SMTP is not configured or no recipient is given
         smtplib.SMTPException: on connection/send errors
     """
     if not s.smtp_host or not s.smtp_from_email:
         raise ValueError("SMTP not configured (missing host or from address)")
 
+    recipients = [to] if isinstance(to, str) else list(to)
+    if not recipients:
+        raise ValueError("No recipients")
+
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
     msg["From"] = s.smtp_from_email
-    msg["To"] = to
+    msg["To"] = ", ".join(recipients)
+    if reply_to:
+        msg["Reply-To"] = reply_to
 
-    password = _get_password(s)
-    port = s.smtp_port or 587
-
-    _smtp_send(s, [to], msg.as_string())
+    _smtp_send(s, recipients, msg.as_string())
 
 
 def send_html_email(

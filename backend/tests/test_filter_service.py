@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from unittest.mock import AsyncMock, MagicMock
+
 from app.services.filter_service import (
+    _execute_actions,
     _matches_condition,
     _validate_ai_conditions,
     _validate_published_at_conditions,
@@ -731,3 +734,61 @@ class TestEvaluateFilterWithAiScore:
         f = make_filter([make_condition("title", "contains", "python")],
                         scope_except="not-valid-json")
         assert evaluate_filter(f, make_article(title="Python")) is True
+
+
+# ── _execute_actions: archive ───────────────────────────────────────────────
+
+def make_action(action_type, action_value=None):
+    return SimpleNamespace(action_type=action_type, action_value=action_value)
+
+
+def _state_fetch_db(state):
+    """Mock AsyncSession whose execute() returns `state` from scalar_one_or_none()."""
+    db = AsyncMock()
+    db.add = MagicMock()
+    result = MagicMock()
+    result.scalar_one_or_none = MagicMock(return_value=state)
+    db.execute = AsyncMock(return_value=result)
+    return db
+
+
+class TestExecuteArchiveAction:
+    async def test_archive_sets_is_archived(self):
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("archive")]
+        state = SimpleNamespace(is_read=False, is_starred=False, is_archived=False)
+        db = _state_fetch_db(state)
+
+        changed = await _execute_actions(f, make_article(), user_id=1, user_feed=make_user_feed(), db=db)
+
+        assert changed is True
+        assert state.is_archived is True
+        # Archive must not touch read/star state.
+        assert state.is_read is False
+        assert state.is_starred is False
+
+    async def test_archive_idempotent_when_already_archived(self):
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("archive")]
+        state = SimpleNamespace(is_read=False, is_starred=False, is_archived=True)
+        db = _state_fetch_db(state)
+
+        changed = await _execute_actions(f, make_article(), user_id=1, user_feed=make_user_feed(), db=db)
+
+        assert changed is False
+        assert state.is_archived is True
+
+    async def test_archive_creates_state_when_missing(self):
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("archive")]
+        db = _state_fetch_db(None)  # no existing state row
+
+        changed = await _execute_actions(f, make_article(), user_id=1, user_feed=make_user_feed(), db=db)
+
+        assert changed is True
+        db.add.assert_called_once()
+        added = db.add.call_args[0][0]
+        assert added.is_archived is True

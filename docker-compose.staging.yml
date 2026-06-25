@@ -1,0 +1,63 @@
+# Readfine — STAGING stack.
+#
+# A self-contained parallel copy of the app for verifying that an update builds,
+# migrates, and runs on the server before promoting the same commit to
+# production. Throwaway data — its own DB volume, fully separate from prod.
+#
+# It deliberately ships NO reverse proxy: the app is published on a loopback
+# port (127.0.0.1:8001) only. Expose it however you expose production (an extra
+# proxy server block, a tunnel, an SSH tunnel, …) and gate it — staging is not
+# meant to be public. See STAGING.md.
+#
+# Runs as its own Compose project (name below) so it never collides with prod.
+
+name: readfine-staging
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: ${DB_NAME:-readfine}
+      POSTGRES_USER: ${DB_USER:-readfine}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-readfine}
+    ports:
+      # Loopback only — for psql/debugging from the host. 5433 avoids clashing
+      # with a production db published on 5432.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgres_data_staging:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-readfine}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    # Mirror production exactly (single worker, no uvicorn access log, migrations
+    # on start) so staging exercises the same runtime — that's the whole point.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log"
+    env_file: .env.staging
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      # Default loopback-only (safe). A containerised reverse proxy on the same
+      # host CANNOT reach a 127.0.0.1-bound port via host.docker.internal /
+      # host-gateway (that resolves to the bridge gateway IP, not loopback) — in
+      # that setup set STAGING_BIND=0.0.0.0 in .env.staging. Keep the host/network
+      # firewall restricting inbound to 80/443 (+22) so 8001 stays private.
+      - "${STAGING_BIND:-127.0.0.1}:8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data_staging:

@@ -6,10 +6,19 @@
 <h1 class="text-xl font-semibold text-gray-900 mb-6">AI</h1>
 
 {% if s.last_ai_error and s.last_ai_error_at %}
-<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-  <span class="font-medium">Last AI error</span>
-  ({{ s.last_ai_error_at.strftime("%Y-%m-%d %H:%M") }} UTC):
-  {{ s.last_ai_error }}
+<div id="ai-error-panel" class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700 flex items-start gap-2">
+  <div class="flex-1">
+    <span class="font-medium">Last AI error</span>
+    ({{ s.last_ai_error_at.strftime("%Y-%m-%d %H:%M") }} UTC):
+    {{ s.last_ai_error }}
+  </div>
+  <button hx-post="/settings/ai/dismiss-error"
+          hx-target="#ai-error-panel"
+          hx-swap="outerHTML"
+          class="flex-shrink-0 text-red-400 hover:text-red-600 cursor-pointer bg-transparent border-0 p-0 leading-none"
+          title="Dismiss" aria-label="Dismiss AI error">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+  </button>
 </div>
 {% endif %}
 

@@ -42,11 +42,14 @@ async def lifespan(app: FastAPI):
             await seed_first_admin(session, settings.first_admin_email, settings.first_admin_password)
 
     from app.models.settings import AppSettings
-    from app.templating import set_ai_enabled
+    from app.templating import set_ai_enabled, set_feedback_available
     async with db.async_session_factory() as session:
         row = await session.scalar(select(AppSettings).where(AppSettings.id == 1))
         if row:
             set_ai_enabled(row.ai_enabled)
+            set_feedback_available(
+                bool(row.feedback_enabled and row.smtp_host and row.smtp_from_email)
+            )
 
     from app.fetcher.scheduler import create_scheduler
     sched = create_scheduler()

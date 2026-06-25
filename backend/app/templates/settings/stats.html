@@ -9,20 +9,29 @@
 {# ── Summary cards ─────────────────────────────────────────────────────────── #}
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
   <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Labeled unread</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if reading.labeled_backlog > 0 %}{{ reading.labeled_backlog }}{% else %}—{% endif %}
+    </div>
+    {% if reading.labeled_backlog > 0 %}
+    <div class="text-xs text-gray-400 mt-0.5">unread articles</div>
+    {% endif %}
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="text-xs text-gray-500 mb-1">Starred to read</div>
+    <div class="text-2xl font-bold text-gray-900">
+      {% if reading.starred_backlog > 0 %}{{ reading.starred_backlog }}{% else %}—{% endif %}
+    </div>
+    {% if reading.starred_backlog > 0 %}
+    <div class="text-xs text-gray-400 mt-0.5">starred articles</div>
+    {% endif %}
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-xs text-gray-500 mb-1">Reading streak</div>
     <div class="text-2xl font-bold text-gray-900">
       {% if reading.streak > 0 %}{{ reading.streak }}{% else %}—{% endif %}
     </div>
     {% if reading.streak > 0 %}<div class="text-xs text-gray-400 mt-0.5">days</div>{% endif %}
-  </div>
-  <div class="bg-white border border-gray-200 rounded-lg p-4">
-    <div class="text-xs text-gray-500 mb-1">Backlog</div>
-    <div class="text-2xl font-bold text-gray-900">
-      {% if reading.backlog > 0 %}{{ reading.backlog }}{% else %}—{% endif %}
-    </div>
-    {% if reading.backlog > 0 %}
-    <div class="text-xs text-gray-400 mt-0.5">unread articles</div>
-    {% endif %}
   </div>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-xs text-gray-500 mb-1">Label coverage</div>
@@ -31,52 +40,39 @@
     </div>
     {% if labels.label_coverage_pct > 0 %}<div class="text-xs text-gray-400 mt-0.5">articles labeled</div>{% endif %}
   </div>
-  {% if ai_enabled and ai %}
-  <div class="bg-white border border-gray-200 rounded-lg p-4">
-    <div class="text-xs text-gray-500 mb-1">Scoring coverage</div>
-    <div class="text-2xl font-bold text-gray-900">
-      {% if ai.scoring_coverage_pct is not none %}{{ ai.scoring_coverage_pct }}%{% else %}—{% endif %}
-    </div>
-    {% if ai.scoring_coverage_pct is not none %}<div class="text-xs text-gray-400 mt-0.5">articles scored</div>{% endif %}
-  </div>
-  {% else %}
-  <div class="bg-gray-50 border border-gray-100 rounded-lg p-4 opacity-50">
-    <div class="text-xs text-gray-400 mb-1">Scoring coverage</div>
-    <div class="text-2xl font-bold text-gray-300">—</div>
-  </div>
-  {% endif %}
 </div>
 
 {# ── Reading ───────────────────────────────────────────────────────────────── #}
 <section class="mb-8">
   <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">Reading</h2>
 
-  {# Funnel #}
+  {# Engagement — each bar is % of fetched (independent dimensions, not nested funnel stages) #}
   {% if reading.total_articles > 0 %}
   <div class="mb-6">
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Engagement funnel</h3>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Engagement</h3>
     <div class="space-y-1.5">
-      {% set funnel_steps = [
-        (reading.total_articles, "Fetched", ""),
-        (reading.labeled_count, "Labeled", reading.total_articles),
-        (reading.starred_count, "Starred", reading.total_articles),
-        (reading.read_count, "Read / opened", reading.total_articles),
-      ] %}
-      {% for count, label, base in funnel_steps %}
+      {% set steps = [
+        {"count": reading.labeled_count, "label": "Labeled"},
+        {"count": reading.starred_count, "label": "Starred"},
+        {"count": reading.read_count, "label": "Read / opened"},
+      ]|sort(attribute="count", reverse=true) %}
+      {# Fetched = 100% reference #}
       <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ count }}</div>
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ reading.total_articles }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          {% if base and base > 0 %}
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [count / base * 100, 100]|min|round }}%"></div>
-          {% else %}
           <div class="bg-blue-500 h-2 rounded-full" style="width:100%"></div>
-          {% endif %}
+        </div>
+        <div class="w-28 text-xs text-gray-500">Fetched</div>
+      </div>
+      {% for step in steps %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count }}</div>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [step.count / reading.total_articles * 100, 100]|min|round }}%"></div>
         </div>
         <div class="w-28 text-xs text-gray-500">
-          {{ label }}
-          {% if base and base > 0 %}
-          <span class="text-gray-400">({{ (count / base * 100)|round(1) }}%)</span>
-          {% endif %}
+          {{ step.label }}
+          <span class="text-gray-400">({{ (step.count / reading.total_articles * 100)|round(1) }}%)</span>
         </div>
       </div>
       {% endfor %}
@@ -92,9 +88,7 @@
     <div>
       <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Most active hour</h3>
       {% if reading.active_hour is not none %}
-      <p class="text-lg font-semibold text-gray-800">{{ "%02d:00"|format(reading.active_hour) }}–{{ "%02d:00"|format((reading.active_hour + 1) % 24) }}
-        <span class="text-xs text-gray-400 font-normal">UTC</span>
-      </p>
+      <p class="text-lg font-semibold text-gray-800">{{ "%02d:00"|format(reading.active_hour) }}–{{ "%02d:00"|format((reading.active_hour + 1) % 24) }}</p>
       {% else %}
       <p class="text-sm text-gray-400">Not enough data</p>
       {% endif %}

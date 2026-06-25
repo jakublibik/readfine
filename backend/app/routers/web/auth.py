@@ -19,6 +19,7 @@ from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
 from app.config import settings as app_settings_config
 from app.database import get_db
+from app.services.app_settings_cache import get_registration_enabled
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
@@ -53,8 +54,7 @@ async def _get_valid_invitation(db: AsyncSession, token: str) -> Invitation | No
 async def root(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse(url="/app", status_code=302)
-    app_settings = await _get_app_settings(db)
-    registration_open = bool(app_settings) and app_settings.registration_enabled
+    registration_open = await get_registration_enabled(db)
     if registration_open:
         # Operator-provided marketing landing (gitignored). Falls back to /login when absent
         # (open-source default) — landing.example.html is a starter template, never rendered live.
@@ -90,8 +90,7 @@ async def robots_txt():
 async def login_page(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
-    app_settings = await _get_app_settings(db)
-    registration_open = bool(app_settings) and app_settings.registration_enabled
+    registration_open = await get_registration_enabled(db)
     return templates.TemplateResponse(request, "auth/login.html", {"registration_open": registration_open})
 
 
@@ -148,8 +147,7 @@ async def login(
 async def register_page(request: Request, invite: str | None = None, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
-    app_settings = await _get_app_settings(db)
-    registration_open = bool(app_settings) and app_settings.registration_enabled
+    registration_open = await get_registration_enabled(db)
 
     if invite:
         inv = await _get_valid_invitation(db, invite)
@@ -187,7 +185,7 @@ async def register(
 
     email = email.strip()
 
-    def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_ENTITY, **extra):
+    def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
                "prefill_email": email, "prefill_display_name": display_name, **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)

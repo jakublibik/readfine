@@ -437,7 +437,7 @@ async def _execute_actions(
                     ))
                     changed = True
 
-            elif action.action_type in ("mark_read", "star"):
+            elif action.action_type in ("mark_read", "star", "archive"):
                 state_result = await db.execute(
                     select(UserArticleState).where(
                         UserArticleState.user_id == user_id,
@@ -466,6 +466,13 @@ async def _execute_actions(
                     # preference profile, stats (starred_count, "AI got it wrong")
                     # and retention with automation. Same principle as is_read.
                     state.is_starred = True
+                    changed = True
+                elif action.action_type == "archive" and not state.is_archived:
+                    # Archive removes the article from the inbox/feed views and
+                    # exempts it from retention purge (see purge_service). Unlike
+                    # mark_read it does not touch is_read / unread_count — an
+                    # archived article can still be unread.
+                    state.is_archived = True
                     changed = True
 
         except Exception as exc:

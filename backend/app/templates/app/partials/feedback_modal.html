@@ -1,0 +1,54 @@
+<form hx-post="/htmx/feedback"
+      hx-target="#feedback-modal-content"
+      hx-swap="innerHTML"
+      hx-disabled-elt="#feedback-submit"
+      hx-indicator="#feedback-spinner"
+      class="space-y-4">
+
+  {% if error %}
+  <div class="px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700
+              dark:bg-red-950/40 dark:border-red-900 dark:text-red-300">{{ error }}</div>
+  {% endif %}
+
+  <div>
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Type</label>
+    <select name="feedback_type"
+            class="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 dark:text-gray-100">
+      <option value="feedback" {% if not values or values.feedback_type == 'feedback' %}selected{% endif %}>Feedback</option>
+      <option value="bug" {% if values and values.feedback_type == 'bug' %}selected{% endif %}>Bug report</option>
+      <option value="other" {% if values and values.feedback_type == 'other' %}selected{% endif %}>Other</option>
+    </select>
+  </div>
+
+  <div>
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Subject</label>
+    <input type="text" name="subject" maxlength="200" required
+           value="{{ values.subject if values else '' }}"
+           class="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 dark:text-gray-100">
+  </div>
+
+  <div>
+    <label class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Message</label>
+    <textarea name="message" rows="6" maxlength="5000" required
+              class="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 dark:text-gray-100">{{ values.message if values else '' }}</textarea>
+    <p class="text-xs text-gray-400 mt-1.5">
+      Sent to the administrator from your account email so they can reply.
+    </p>
+  </div>
+
+  <div class="flex items-center justify-end gap-3 pt-1">
+    <svg id="feedback-spinner" class="htmx-indicator w-4 h-4 text-gray-400 animate-spin flex-shrink-0"
+         fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg>
+    <button type="button" data-action="close-feedback-modal"
+            class="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100 border border-gray-300 dark:border-gray-600 rounded">
+      Cancel
+    </button>
+    <button type="submit" id="feedback-submit"
+            class="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50">
+      Send
+    </button>
+  </div>
+</form>

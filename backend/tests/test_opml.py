@@ -15,6 +15,7 @@ from app.services.opml import (
     _collect_feed_outlines,
     _feed_outline,
     _find_section,
+    _dedupe_conditions,
     _import_feed,
     _looks_like_regex,
     _parse_readfine_filter,
@@ -23,6 +24,7 @@ from app.services.opml import (
     _scope_to_urls,
     import_opml,
 )
+from app.schemas.filter import FilterConditionCreate
 
 
 def _body(xml: str):
@@ -91,6 +93,40 @@ class TestCollectFeedOutlines:
         assert len(out) == 1
         assert out[0][0].get("xmlUrl") == "http://a.com/rss"
 
+    def test_feedly_layout(self):
+        # Mirrors real Feedly exports (verified against live samples): flat
+        # 2-level folder->feed, type="rss", htmlUrl present, and an empty folder.
+        body = ET.fromstring(
+            '<body>'
+            '<outline text="Apps" title="Apps">'
+            '<outline text="AppShopper" type="rss" xmlUrl="http://a/rss" htmlUrl="http://a"/>'
+            '<outline text="OSX" type="rss" xmlUrl="http://b/rss" htmlUrl="http://b"/>'
+            '</outline>'
+            '<outline text="AWS" title="AWS"/>'  # empty folder
+            '<outline text="Blog"><outline text="Arch" type="rss" xmlUrl="http://c/rss"/></outline>'
+            '</body>'
+        )
+        out = _collect_feed_outlines(body)
+        assert {(o.get("xmlUrl"), f) for o, f in out} == {
+            ("http://a/rss", "Apps"),
+            ("http://b/rss", "Apps"),
+            ("http://c/rss", "Blog"),
+        }
+
+    def test_inoreader_duplicate_feed_across_folders(self):
+        # Inoreader lets one feed live in multiple folders, so it appears twice in
+        # the OPML. Both outlines are collected (import dedups via "Already
+        # subscribed"); the structural parser must not silently drop either.
+        body = ET.fromstring(
+            '<body>'
+            '<outline text="News"><outline text="WSJ" type="rss" xmlUrl="http://wsj/rss"/></outline>'
+            '<outline text="Finance"><outline text="WSJ" type="rss" xmlUrl="http://wsj/rss"/></outline>'
+            '</body>'
+        )
+        out = _collect_feed_outlines(body)
+        assert sorted(f for _, f in out) == ["Finance", "News"]
+        assert {o.get("xmlUrl") for o, _ in out} == {"http://wsj/rss"}
+
 
 # ── _find_section ─────────────────────────────────────────────────────────────
 
@@ -113,7 +149,7 @@ class TestParseTtrssFilter:
             "rules": [{"filter_type": "1", "reg_exp": "spam"}],
             "actions": [{"action_id": "2"}],
         }
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload is not None
         assert len(payload.conditions) == 1
         assert payload.conditions[0].field == "title"
@@ -123,34 +159,34 @@ class TestParseTtrssFilter:
     def test_match_any_rule_maps_to_or(self):
         fd = {"rules": [{"filter_type": "1", "reg_exp": "x"}], "match_any_rule": True,
               "actions": [{"action_id": "2"}]}
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload.match_operator == "OR"
 
     def test_inverse_rule_maps_to_not_contains(self):
         fd = {"rules": [{"filter_type": "5", "reg_exp": "x", "inverse": True}],
               "actions": [{"action_id": "2"}]}
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload.conditions[0].field == "content"
         assert payload.conditions[0].operator == "not_contains"
 
     def test_regex_value_maps_to_regex_operator(self):
         fd = {"rules": [{"filter_type": "1", "reg_exp": "foo.*bar"}],
               "actions": [{"action_id": "2"}]}
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload.conditions[0].operator == "regex"
 
     def test_unknown_filter_type_warns_and_skips_rule(self):
         res = ImportResult()
         fd = {"name": "F", "rules": [{"filter_type": "99", "reg_exp": "x"}],
               "actions": [{"action_id": "2"}]}
-        payload = _parse_ttrss_filter(fd, {}, res)
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, res)
         assert payload is None  # no valid conditions
         assert any("unknown filter_type" in w for w in res.warnings)
 
     def test_label_action_resolves_name_to_id(self):
         fd = {"rules": [{"filter_type": "1", "reg_exp": "x"}],
               "actions": [{"action_id": "7", "action_param": "Tech"}]}
-        payload = _parse_ttrss_filter(fd, {"Tech": 42}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {"Tech": 42}, {}, {}, ImportResult())
         assert payload.actions[0].action_type == "label"
         assert payload.actions[0].action_value == "42"
 
@@ -158,16 +194,107 @@ class TestParseTtrssFilter:
         res = ImportResult()
         fd = {"name": "F", "rules": [{"filter_type": "1", "reg_exp": "x"}],
               "actions": [{"action_id": "7", "action_param": "Ghost"}]}
-        payload = _parse_ttrss_filter(fd, {}, res)
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, res)
         assert payload.actions == []
         assert any("not found" in w for w in res.warnings)
 
-    def test_per_id_scope_warns(self):
+    def test_feed_scope_resolved_by_name(self):
+        # All rules scoped to the same feed title → factored into scope_include.
         res = ImportResult()
-        fd = {"name": "F", "rules": [{"filter_type": "1", "reg_exp": "x", "feed_id": 5}],
+        fd = {"name": "F", "match_any_rule": True,
+              "rules": [{"filter_type": "1", "reg_exp": "a", "feed": "Zero Hedge"},
+                        {"filter_type": "1", "reg_exp": "b", "feed": "Zero Hedge"}],
               "actions": [{"action_id": "2"}]}
-        _parse_ttrss_filter(fd, {}, res)
-        assert any("scope" in w.lower() for w in res.warnings)
+        payload = _parse_ttrss_filter(fd, {}, {"Zero Hedge": 7}, {}, res)
+        assert payload.scope_include == ["feed:7"]
+        assert res.warnings == []
+
+    def test_category_scope_resolved_to_folder(self):
+        # cat_filter=True targets a TTRSS category → Readfine folder.
+        res = ImportResult()
+        fd = {"name": "F",
+              "rules": [{"filter_type": "1", "reg_exp": "x", "cat_filter": True,
+                         "feed": "Search"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {}, {"Search": 3}, res)
+        assert payload.scope_include == ["folder:3"]
+
+    def test_union_of_distinct_feed_scopes(self):
+        res = ImportResult()
+        fd = {"name": "F", "match_any_rule": True,
+              "rules": [{"filter_type": "1", "reg_exp": ".*", "feed": "A"},
+                        {"filter_type": "1", "reg_exp": ".*", "feed": "B"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {"A": 1, "B": 2}, {}, res)
+        assert payload.scope_include == ["feed:1", "feed:2"]
+
+    def test_mixed_scoped_and_global_imported_as_global(self):
+        # A filter mixing a scoped rule with a global one must NOT narrow → global + warn.
+        res = ImportResult()
+        fd = {"name": "F", "match_any_rule": True,
+              "rules": [{"filter_type": "3", "reg_exp": "brain", "feed": ""},
+                        {"filter_type": "4", "reg_exp": "/medical/", "feed": "Zero Hedge"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {"Zero Hedge": 7}, {}, res)
+        assert payload.scope_include == []
+        assert any("mixes" in w for w in res.warnings)
+
+    def test_unresolved_scope_warns_and_imports_global(self):
+        res = ImportResult()
+        fd = {"name": "F",
+              "rules": [{"filter_type": "1", "reg_exp": "x", "feed": "Ghost Feed"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, res)
+        assert payload.scope_include == []
+        assert any("Ghost Feed" in w for w in res.warnings)
+
+    def test_unscoped_filter_has_no_scope_and_no_warning(self):
+        res = ImportResult()
+        fd = {"name": "F", "rules": [{"filter_type": "1", "reg_exp": "x", "feed": ""}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, res)
+        assert payload.scope_include == []
+        assert res.warnings == []
+
+    def test_watch_style_scoped_rules_collapse_to_one_condition(self):
+        # The real-world "Watch" case: N rules, each a match-all (.*) scoped to a
+        # different feed. After scope is factored to the filter, the conditions are
+        # identical and collapse to one, while the scope keeps every feed.
+        res = ImportResult()
+        fd = {"name": "Watch", "match_any_rule": True,
+              "rules": [{"filter_type": "1", "reg_exp": ".*", "feed": "A"},
+                        {"filter_type": "1", "reg_exp": ".*", "feed": "B"},
+                        {"filter_type": "1", "reg_exp": ".*", "feed": "C"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {"A": 1, "B": 2, "C": 3}, {}, res)
+        payload.conditions = _dedupe_conditions(payload.conditions)
+        assert len(payload.conditions) == 1
+        assert payload.conditions[0].value == ".*"
+        assert payload.scope_include == ["feed:1", "feed:2", "feed:3"]
+
+    def test_distinct_conditions_are_preserved(self):
+        # Different keywords must survive dedup (only exact triples collapse).
+        res = ImportResult()
+        fd = {"name": "Crypto", "match_any_rule": True,
+              "rules": [{"filter_type": "3", "reg_exp": "bitcoin", "cat_filter": True, "feed": "Search"},
+                        {"filter_type": "3", "reg_exp": "ethereum", "cat_filter": True, "feed": "Search"}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {}, {"Search": 5}, res)
+        payload.conditions = _dedupe_conditions(payload.conditions)
+        assert {c.value for c in payload.conditions} == {"bitcoin", "ethereum"}
+        assert payload.scope_include == ["folder:5"]
+
+    def test_dedupe_conditions_keeps_first_drops_repeats(self):
+        conds = [
+            FilterConditionCreate(field="title", operator="regex", value=".*", position=0),
+            FilterConditionCreate(field="title", operator="regex", value=".*", position=1),
+            FilterConditionCreate(field="content", operator="contains", value="x", position=2),
+        ]
+        out = _dedupe_conditions(conds)
+        assert [(c.field, c.operator, c.value, c.position) for c in out] == [
+            ("title", "regex", ".*", 0),
+            ("content", "contains", "x", 2),
+        ]
 
     def test_integer_filter_type_and_action_id(self):
         # Current TTRSS exports raw DB values without (int) cast on some backends,
@@ -177,7 +304,7 @@ class TestParseTtrssFilter:
             "rules": [{"filter_type": 1, "reg_exp": "spam"}],
             "actions": [{"action_id": 2}],
         }
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload is not None
         assert payload.conditions[0].field == "title"
         assert payload.actions[0].action_type == "mark_read"
@@ -191,7 +318,7 @@ class TestParseTtrssFilter:
             "enabled": "f",
             "actions": [{"action_id": "2"}],
         }
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload.match_operator == "AND"
         assert payload.is_active is False
         assert payload.conditions[0].operator == "contains"  # inverse "f" => not inverted
@@ -199,17 +326,29 @@ class TestParseTtrssFilter:
     def test_inverse_true_string_inverts(self):
         fd = {"rules": [{"filter_type": "1", "reg_exp": "x", "inverse": "t"}],
               "actions": [{"action_id": "2"}]}
-        payload = _parse_ttrss_filter(fd, {}, ImportResult())
+        payload = _parse_ttrss_filter(fd, {}, {}, {}, ImportResult())
         assert payload.conditions[0].operator == "not_contains"
 
-    def test_modern_match_scope_warns(self):
+    def test_modern_match_scope_resolved_by_name(self):
+        # Newer TTRSS "match" array: [[name, is_cat, is_zero], ...], referenced by name.
         res = ImportResult()
         fd = {"name": "F",
               "rules": [{"filter_type": "1", "reg_exp": "x",
-                         "match": [["Tech", False, False]]}],
+                         "match": [["Tech", False, False], ["News", True, False]]}],
               "actions": [{"action_id": "2"}]}
-        _parse_ttrss_filter(fd, {}, res)
-        assert any("scope" in w.lower() for w in res.warnings)
+        payload = _parse_ttrss_filter(fd, {}, {"Tech": 9}, {"News": 4}, res)
+        assert payload.scope_include == ["feed:9", "folder:4"]
+
+    def test_modern_match_all_entry_is_global(self):
+        # An "all feeds" entry (feed id 0 / is_zero) makes the rule global → no scope.
+        res = ImportResult()
+        fd = {"name": "F",
+              "rules": [{"filter_type": "1", "reg_exp": "x",
+                         "match": [[0, False, True]]}],
+              "actions": [{"action_id": "2"}]}
+        payload = _parse_ttrss_filter(fd, {}, {"Tech": 9}, {}, res)
+        assert payload.scope_include == []
+        assert res.warnings == []
 
 
 # ── _parse_readfine_filter ────────────────────────────────────────────────────

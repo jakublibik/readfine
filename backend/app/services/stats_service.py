@@ -1,11 +1,12 @@
 """Statistics service — reading stats, feed quality, AI stats, label stats."""
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
+from app.utils.datetime_format import current_viewer_tz, resolve_tz
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -38,7 +39,8 @@ class TopFeedDwell:
 @dataclass
 class ReadingStats:
     streak: int
-    backlog: int
+    labeled_backlog: int    # unread + has label (all time)
+    starred_backlog: int    # starred (all time)
     total_articles: int     # last 30d
     labeled_count: int
     read_count: int         # dwell >= 30s OR link opened
@@ -70,7 +72,6 @@ class GemArticle:
 
 @dataclass
 class AiStats:
-    scoring_coverage_pct: float | None
     calibration: AiCalibration
     gems: list[GemArticle]   # high score, never opened
     wrong: list[GemArticle]  # low score, ever_starred
@@ -175,13 +176,13 @@ async def get_feed_stats(user_id: int, db: AsyncSession, days: int = 30) -> list
 
 async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> ReadingStats:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    cutoff_90d = datetime.now(timezone.utc) - timedelta(days=90)
+    tz = current_viewer_tz.get()  # IANA name of the viewer's timezone (defaults to UTC)
 
     # Streak — consecutive days with dwell >= 30s, using read_at as timestamp
     streak_result = await db.execute(
         text("""
             WITH read_days AS (
-                SELECT DISTINCT DATE(read_at AT TIME ZONE 'UTC') AS d
+                SELECT DISTINCT (read_at AT TIME ZONE :tz)::date AS d
                 FROM user_article_states
                 WHERE user_id = :uid
                   AND read_at IS NOT NULL
@@ -199,16 +200,16 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
             )
             SELECT COALESCE(streak_len, 0)
             FROM streaks
-            WHERE last_day >= CURRENT_DATE - INTERVAL '1 day'
+            WHERE last_day >= (now() AT TIME ZONE :tz)::date - INTERVAL '1 day'
             ORDER BY last_day DESC
             LIMIT 1
         """),
-        {"uid": user_id},
+        {"uid": user_id, "tz": tz},
     )
     streak = int(streak_result.scalar() or 0)
 
-    # Backlog — unread + has label + published within 90 days
-    backlog_result = await db.execute(
+    # Labeled backlog — unread + has label (all time)
+    labeled_backlog_result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT a.id)
             FROM articles a
@@ -217,11 +218,24 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
             LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
             WHERE (uas.is_read IS NULL OR uas.is_read = false)
               AND a.trimmed_at IS NULL
-              AND (a.published_at IS NULL OR a.published_at >= :cutoff_90d)
         """),
-        {"uid": user_id, "cutoff_90d": cutoff_90d},
+        {"uid": user_id},
     )
-    backlog = int(backlog_result.scalar() or 0)
+    labeled_backlog = int(labeled_backlog_result.scalar() or 0)
+
+    # Starred backlog — currently starred (all time, "to read" pile)
+    starred_backlog_result = await db.execute(
+        text("""
+            SELECT COUNT(DISTINCT a.id)
+            FROM articles a
+            JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
+            JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
+            WHERE uas.is_starred = true
+              AND a.trimmed_at IS NULL
+        """),
+        {"uid": user_id},
+    )
+    starred_backlog = int(starred_backlog_result.scalar() or 0)
 
     # Funnel counts (last 30d)
     funnel_result = await db.execute(
@@ -247,25 +261,27 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
     read_count = int(f.read or 0)
     starred_count = int(f.starred or 0)
 
-    # Per-day reads (last 7 days, dwell >= 30s)
-    cutoff_7d = datetime.now(timezone.utc) - timedelta(days=7)
+    # Per-day reads (last 7 days, dwell >= 30s), grouped by the viewer's local date.
+    # Widened to 8 absolute days so the oldest visible local day isn't truncated at
+    # large UTC offsets.
+    cutoff_7d = datetime.now(timezone.utc) - timedelta(days=8)
     per_day_result = await db.execute(
         text("""
             SELECT
-                DATE(read_at AT TIME ZONE 'UTC') AS d,
+                (read_at AT TIME ZONE :tz)::date AS d,
                 COUNT(*) AS cnt
             FROM user_article_states
             WHERE user_id = :uid
               AND read_at IS NOT NULL
               AND dwell_seconds >= 30
               AND read_at >= :cutoff_7d
-            GROUP BY DATE(read_at AT TIME ZONE 'UTC')
+            GROUP BY (read_at AT TIME ZONE :tz)::date
             ORDER BY d
         """),
-        {"uid": user_id, "cutoff_7d": cutoff_7d},
+        {"uid": user_id, "cutoff_7d": cutoff_7d, "tz": tz},
     )
     per_day_map = {str(r.d): int(r.cnt) for r in per_day_result.fetchall()}
-    today = date.today()
+    today = datetime.now(resolve_tz(tz)).date()
     per_day = [
         DailyRead(
             date=str(today - timedelta(days=6 - i)),
@@ -274,31 +290,31 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
         for i in range(7)
     ]
 
-    # Active hour (0-23)
+    # Active hour (0-23, in the viewer's timezone)
     hour_result = await db.execute(
         text("""
-            SELECT EXTRACT(HOUR FROM read_at AT TIME ZONE 'UTC')::int AS h, COUNT(*) AS cnt
+            SELECT EXTRACT(HOUR FROM read_at AT TIME ZONE :tz)::int AS h, COUNT(*) AS cnt
             FROM user_article_states
             WHERE user_id = :uid AND read_at IS NOT NULL AND dwell_seconds >= 30
             GROUP BY h
             ORDER BY cnt DESC
             LIMIT 1
         """),
-        {"uid": user_id},
+        {"uid": user_id, "tz": tz},
     )
     hour_row = hour_result.first()
 
-    # Active day (0=Mon … 6=Sun, PostgreSQL DOW: 0=Sun … 6=Sat → convert)
+    # Active day (0=Mon … 6=Sun, PostgreSQL DOW: 0=Sun … 6=Sat → convert; viewer's tz)
     dow_result = await db.execute(
         text("""
-            SELECT EXTRACT(DOW FROM read_at AT TIME ZONE 'UTC')::int AS dow, COUNT(*) AS cnt
+            SELECT EXTRACT(DOW FROM read_at AT TIME ZONE :tz)::int AS dow, COUNT(*) AS cnt
             FROM user_article_states
             WHERE user_id = :uid AND read_at IS NOT NULL AND dwell_seconds >= 30
             GROUP BY dow
             ORDER BY cnt DESC
             LIMIT 1
         """),
-        {"uid": user_id},
+        {"uid": user_id, "tz": tz},
     )
     dow_row = dow_result.first()
 
@@ -370,7 +386,8 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
 
     return ReadingStats(
         streak=streak,
-        backlog=backlog,
+        labeled_backlog=labeled_backlog,
+        starred_backlog=starred_backlog,
         total_articles=total_articles,
         labeled_count=labeled_count,
         read_count=read_count,
@@ -388,24 +405,6 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
 
 async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStats:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-
-    # Scoring coverage
-    coverage_result = await db.execute(
-        text("""
-            SELECT
-                COUNT(DISTINCT a.id) AS total,
-                COUNT(DISTINCT CASE WHEN uas.ai_score IS NOT NULL THEN a.id END) AS scored
-            FROM articles a
-            JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
-            LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
-            WHERE a.fetched_at >= :cutoff
-        """),
-        {"uid": user_id, "cutoff": cutoff},
-    )
-    cov = coverage_result.one()
-    total_cov = int(cov.total or 0)
-    scored_cov = int(cov.scored or 0)
-    scoring_coverage_pct = round(scored_cov / total_cov * 100, 1) if total_cov > 0 else None
 
     # Calibration: avg score starred vs non-starred + min starred
     cal_result = await db.execute(
@@ -479,7 +478,6 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
     ]
 
     return AiStats(
-        scoring_coverage_pct=scoring_coverage_pct,
         calibration=calibration,
         gems=gems,
         wrong=wrong,
