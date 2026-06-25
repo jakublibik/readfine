@@ -1,0 +1,70 @@
+# ============================================================================
+#  DEMO ONLY — NOT FOR PRODUCTION
+# ============================================================================
+#  A zero-config way to try Readfine locally:
+#
+#      docker compose -f docker-compose.demo.yml up
+#
+#  Then open http://localhost:8000 and log in with:
+#      email:    demo@example.com
+#      password: demodemo
+#
+#  This file deliberately trades away all production hardening for a one-command
+#  trial: NO nginx/TLS (plain HTTP), DEBUG=true (so login cookies work over HTTP),
+#  and HARD-CODED throwaway secrets + admin credentials baked in below. Anyone who
+#  can reach this port can log in.
+#
+#  DO NOT deploy this. DO NOT copy these keys into a real install. For a real
+#  deployment run `bash setup.sh` (generates unique secrets, sets up TLS, prompts
+#  for your own admin account) — see README.md.
+# ============================================================================
+
+# Pin a dedicated project name so the demo never collides with a real install in
+# the same folder (its containers/volumes are namespaced under "readfine-demo",
+# separate from the production docker-compose.yml's "readfine" project).
+name: readfine-demo
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: readfine
+      POSTGRES_USER: readfine
+      POSTGRES_PASSWORD: readfine
+    # No host port published: the DB is reachable only by the app, and this avoids
+    # clashing with a real install's db on 5432 in the same folder.
+    volumes:
+      - demo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U readfine -d readfine"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1"
+    # Inline throwaway config — NOT for production (see banner above).
+    environment:
+      DATABASE_URL: postgresql+asyncpg://readfine:readfine@db:5432/readfine
+      # DEBUG=true is REQUIRED here: with debug off the session cookie is set
+      # Secure (HTTPS-only) and login would silently fail over plain http://localhost.
+      DEBUG: "true"
+      # Hard-coded throwaway secrets. Valid lengths, zero secrecy — demo only.
+      SECRET_KEY: demo-only-secret-key-not-for-production-do-not-reuse-0000000000
+      ENCRYPTION_KEY: demo0000demo0000demo0000demo0000
+      # App is exposed directly (no proxy in front) → read the real TCP peer.
+      TRUSTED_PROXY_COUNT: "0"
+      # Auto-create the demo admin on first run.
+      FIRST_ADMIN_EMAIL: demo@example.com
+      FIRST_ADMIN_PASSWORD: demodemo
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  demo_postgres_data:

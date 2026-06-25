@@ -17,6 +17,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 ## Contents
 
 - [Features](#features)
+- [Quick demo (try locally)](#quick-demo-try-locally)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
@@ -42,6 +43,35 @@ readable extraction, and optional AI summaries, scoring, and briefings.
   <img src="backend/app/static/images/landing/mobile_filters.png" width="30%" alt="Filters" />
   <img src="backend/app/static/images/landing/mobile_catchmeup.png" width="30%" alt="Catch me up" />
 </p>
+
+## Quick demo (try locally)
+
+Just want to click around first? With Docker installed, from a clone of this repo:
+
+```bash
+docker compose -f docker-compose.demo.yml up
+```
+
+Then open **http://localhost:8000** and log in:
+
+- **email:** `demo@example.com`
+- **password:** `demodemo`
+
+> [!WARNING]
+> **Demo only — not for production.** This compose file runs plain HTTP with no
+> reverse proxy, `DEBUG=true`, and **hard-coded throwaway secrets and admin
+> credentials**. It exists purely to try the app in one command. For a real
+> deployment use `setup.sh` below (unique secrets, TLS, your own admin account) —
+> never expose the demo compose or reuse its keys.
+
+Tear it down (and wipe the demo database) with:
+
+```bash
+docker compose -f docker-compose.demo.yml down -v
+```
+
+Prefer not to install anything? The hosted instance at
+[readfine.app](https://readfine.app) has open registration.
 
 ## Requirements
 
