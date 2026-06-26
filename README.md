@@ -1,5 +1,11 @@
 # Readfine
 
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/jakublibik/readfine?color=2563eb)](https://github.com/jakublibik/readfine/releases)
+[![Live demo](https://img.shields.io/badge/demo-readfine.app-2563eb)](https://readfine.app)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![Deploy: Docker](https://img.shields.io/badge/deploy-Docker-2496ED?logo=docker&logoColor=white)
+
 A self-hosted web RSS reader (inspired by Tiny Tiny RSS) with web scraping, filters,
 readable extraction, and optional AI summaries, scoring, and briefings.
 
