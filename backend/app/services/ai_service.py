@@ -541,7 +541,7 @@ _PREF_INSTRUCTION = (
     "one-off as high relevance.\n"
     "- Avoid lists only broad subject areas the reader is clearly not oriented toward, "
     "inferred from the contrast with their demonstrated interests — general areas only, "
-    "never specific people, organizations, tickers, or one-off events. May be empty.\n"
+    "never specific people, organizations, or one-off events. May be empty.\n"
     "- Be specific where the data supports it, but prefer a slightly broader topic over "
     "an overfit one-off.\n\n"
     "Output exactly three lines, nothing else:\n"
