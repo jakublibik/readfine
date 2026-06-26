@@ -13,6 +13,23 @@ document.addEventListener('htmx:afterRequest', function (e) {
   el.reset();
 });
 
+// ── Mobile side-nav: scroll the active tab into view on load ──────────────
+(function () {
+  function scrollActiveNavIntoView() {
+    var active = document.querySelector('[data-mobile-nav] [data-mobile-nav-active]');
+    if (!active) return;
+    var bar = active.closest('[data-mobile-nav]');
+    if (!bar || bar.offsetParent === null) return; // hidden (desktop): skip
+    // Horizontally center the active tab without scrolling the page vertically.
+    bar.scrollLeft = active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2;
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scrollActiveNavIntoView);
+  } else {
+    scrollActiveNavIntoView();
+  }
+})();
+
 // ── Sidebar: remove touch-active class after feed refresh ─────────────────
 document.addEventListener('htmx:afterRequest', function (e) {
   var btn = e.detail && e.detail.elt;
