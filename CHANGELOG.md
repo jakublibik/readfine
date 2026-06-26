@@ -16,6 +16,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   trying it out before a full install. Demo only — plain HTTP, `DEBUG=true`, and
   hard-coded throwaway secrets; not for production. See README → Quick demo.
 
+### Fixed
+
+- Infinite scroll in unread/label views could stop early or silently skip articles
+  when rows were marked read while scrolling (the unread set shrank under the
+  numeric page offset). The article list now uses keyset (cursor) pagination, so
+  scrolling reliably loads every remaining article regardless of mark-read-on-scroll.
+
 ## [0.10.0] - 2026-06-25
 
 ### Added

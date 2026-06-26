@@ -550,6 +550,23 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
     return oob
 
 
+def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: int) -> str:
+    """Query string for the infinite-scroll "load more" sentinel.
+
+    Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
+    and search isn't unread-filtered). Everything else uses a keyset cursor on
+    (sort_ts, id) so marking articles read mid-scroll can't shift the window and
+    skip rows — see ix_articles_sort_ts.
+    """
+    params = dict(filter_params)
+    if q and q.strip():
+        params["offset"] = next_offset
+    elif articles:
+        params["cursor_ts"] = articles[-1].sort_ts.isoformat()
+        params["cursor_id"] = articles[-1].id
+    return urlencode(params)
+
+
 @router.get("/htmx/articles", response_class=HTMLResponse)
 async def htmx_article_list(
     request: Request,
@@ -707,8 +724,7 @@ async def htmx_article_list(
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
         has_more=has_more,
-        filter_qs=urlencode(filter_params),
-        next_offset=len(articles),
+        more_qs=_build_more_qs(filter_params, articles, q, len(articles)),
         title_bar_count=title_bar_count,
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
@@ -729,6 +745,8 @@ async def htmx_article_list_more(
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
     offset: int = Query(0, ge=0),
+    cursor_ts: datetime | None = Query(None),
+    cursor_id: int | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -758,6 +776,8 @@ async def htmx_article_list_more(
         sort_order=sort_order,
         limit=articles_per_page,
         offset=offset,
+        cursor_ts=cursor_ts,
+        cursor_id=cursor_id,
     )
 
     has_more = len(articles) >= articles_per_page
@@ -791,8 +811,7 @@ async def htmx_article_list_more(
         "label_display": label_display,
         "show_ai_score": settings.ai_score_show_in_list if settings else False,
         "has_more": has_more,
-        "filter_qs": urlencode(filter_params),
-        "next_offset": offset + len(articles),
+        "more_qs": _build_more_qs(filter_params, articles, q, offset + len(articles)),
         **extra_ctx,
     })
 

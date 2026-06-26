@@ -3,7 +3,7 @@
 {% endfor %}
 {% if has_more %}
 <div id="load-more-sentinel"
-     hx-get="/htmx/articles/more?{{ filter_qs }}&offset={{ next_offset }}"
+     hx-get="/htmx/articles/more?{{ more_qs }}"
      hx-trigger="intersect once"
      hx-swap="outerHTML"></div>
 {% endif %}

@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal, literal_column, select, update
+from sqlalchemy import func, literal, literal_column, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,6 +106,8 @@ async def list_articles(
     sort_order: str = "newest",
     limit: int = 50,
     offset: int = 0,
+    cursor_ts: datetime | None = None,
+    cursor_id: int | None = None,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state."""
     # Starred/archived views: UserFeed is optional (articles remain visible after unsubscribe)
@@ -206,9 +208,25 @@ async def list_articles(
         )
     else:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
-        order = coalesced.asc() if sort_order == "oldest" else coalesced.desc()
-        stmt = stmt.order_by(order)
-    stmt = stmt.limit(limit).offset(offset)
+        if sort_order == "oldest":
+            # id tiebreaker keeps the total order deterministic (matches
+            # ix_articles_sort_ts) and is required for stable keyset pagination
+            stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
+            if cursor_ts is not None and cursor_id is not None:
+                stmt = stmt.where(
+                    tuple_(coalesced, Article.id) > tuple_(cursor_ts, cursor_id)
+                )
+        else:
+            stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
+            if cursor_ts is not None and cursor_id is not None:
+                stmt = stmt.where(
+                    tuple_(coalesced, Article.id) < tuple_(cursor_ts, cursor_id)
+                )
+    stmt = stmt.limit(limit)
+    # Keyset pagination (cursor) supersedes offset; offset stays for the FTS
+    # branch and the REST API, which keep offset/limit semantics.
+    if cursor_ts is None:
+        stmt = stmt.offset(offset)
 
     rows = (await db.execute(stmt)).all()
 
@@ -246,6 +264,7 @@ async def list_articles(
             is_archived=state.is_archived if state else False,
             ai_score=state.ai_score if state else None,
             labels=labels_by_article.get(article.id, []),
+            sort_ts=article.published_at or article.fetched_at,
         ))
     return items
 
