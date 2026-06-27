@@ -9,6 +9,27 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-06-27
+
+### Added
+
+- One-command local demo: `docker compose -f docker-compose.demo.yml up` brings the
+  app up on `http://localhost:8000` with a seeded admin and no setup wizard, for
+  trying it out before a full install. Demo only — plain HTTP, `DEBUG=true`, and
+  hard-coded throwaway secrets; not for production. See README → Quick demo.
+
+### Fixed
+
+- Infinite scroll in unread/label views could stop early or silently skip articles
+  when rows were marked read while scrolling (the unread set shrank under the
+  numeric page offset). The article list now uses keyset (cursor) pagination, so
+  scrolling reliably loads every remaining article regardless of mark-read-on-scroll.
+- Mobile: the active tab in the horizontal side-nav strip now scrolls into view on
+  load, instead of staying off-screen when the strip was left scrolled elsewhere.
+- Docker: the `db` healthcheck now probes the actual database (`pg_isready -d`),
+  so a `DB_USER` that differs from `DB_NAME` no longer logs a Postgres FATAL on
+  every check.
+
 ## [0.10.0] - 2026-06-25
 
 ### Added

@@ -24,13 +24,15 @@ article scoring, and AI summaries, scoring and briefings.
   merge to `master` only on release
 
 ## Status
-Released — **v0.9.0** (2026-06-20), first public release. Implemented: RSS/Atom and
+Released and on the post-release `0.x` line — first public release was v0.9.0 (2026-06-20);
+for the current version and release notes see `CHANGELOG.md` (and `RELEASING.md` for the
+process). Implemented: RSS/Atom and
 web-scraping feeds, folders, scheduled fetching, readable extraction, 3-panel reading UI,
 article states, labels, filters (conditions → actions, regex, AND/OR, feed/folder scoping),
 per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge, dark mode,
 OPML import/export (incl. TT-RSS compatibility), AI summaries, relevance scoring, chat over
 articles, and Catch me up & briefings. Self-hosted via Docker; hosted instance at
-readfine.app. Now on the post-release `0.x` line — see `CHANGELOG.md` and `RELEASING.md`.
+readfine.app.
 
 ## Testing
 - **Test**: auth flows (login, registration, verification, password reset), account deletion,

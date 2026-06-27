@@ -3,12 +3,12 @@
 
   {# Mobile: horizontal scrollable tabs #}
   <div class="sm:hidden px-3 py-2">
-    <div class="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap text-sm">
+    <div class="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap text-sm" data-mobile-nav>
       {% if back_url %}
       <a href="{{ back_url }}" class="shrink-0 text-xs text-gray-400 hover:text-gray-600 mr-3">← Back</a>
       {% endif %}
       {% for item in nav_items %}
-      <a href="{{ item.url }}" class="shrink-0 px-3 py-1.5 rounded {% if item.active %}bg-gray-100 font-medium text-gray-900{% else %}text-gray-600 hover:bg-gray-100{% endif %}">{{ item.label }}{% if item.badge %} <span class="ai-error-badge inline-block align-middle w-2 h-2 rounded-full bg-red-500" title="AI error"></span>{% endif %}</a>
+      <a href="{{ item.url }}"{% if item.active %} data-mobile-nav-active{% endif %} class="shrink-0 px-3 py-1.5 rounded {% if item.active %}bg-gray-100 font-medium text-gray-900{% else %}text-gray-600 hover:bg-gray-100{% endif %}">{{ item.label }}{% if item.badge %} <span class="ai-error-badge inline-block align-middle w-2 h-2 rounded-full bg-red-500" title="AI error"></span>{% endif %}</a>
       {% endfor %}
       {% if cross_url %}
       <a href="{{ cross_url }}" class="shrink-0 text-xs text-gray-400 hover:text-gray-600 ml-3">{{ cross_label }} →</a>

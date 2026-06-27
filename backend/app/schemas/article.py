@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ArticleStateUpdate(BaseModel):
@@ -36,6 +36,9 @@ class ArticleListItem(BaseModel):
     is_archived: bool
     ai_score: float | None = None
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
+    # coalesce(published_at, fetched_at) used for keyset pagination cursor;
+    # excluded from API JSON (internal pagination concern only)
+    sort_ts: datetime | None = Field(default=None, exclude=True)
 
     model_config = {"from_attributes": False}
 
