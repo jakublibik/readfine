@@ -361,6 +361,43 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target && e.detail.target.id === 'article-list') _navSnapshot = null;
 });
 
+// ── Article-list loading overlay ──────────────────────────────────────────
+// Switching nav (Starred ⇄ Labeled, folders, feeds…) swaps #article-list
+// asynchronously, so the nav highlight changed instantly while the list still
+// showed the previous section. Show a loading overlay over the list for the
+// duration of the request so the two don't visibly desync. The pagination
+// "load-more" sentinel targets itself (not #article-list), so it's excluded by
+// the target check and doesn't trigger the overlay.
+function _showListLoading() {
+  var list = document.getElementById('article-list');
+  if (!list || list.querySelector('.article-list-loading')) return;
+  var ov = document.createElement('div');
+  ov.className = 'article-list-loading absolute inset-0 z-20 bg-white/80 dark:bg-gray-800/80';
+  ov.innerHTML =
+    '<div class="sticky top-0 flex items-center justify-center" style="height:55vh">' +
+      '<svg class="w-6 h-6 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">' +
+        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>' +
+      '</svg>' +
+    '</div>';
+  list.appendChild(ov);
+}
+function _hideListLoading() {
+  var list = document.getElementById('article-list');
+  if (!list) return;
+  var ov = list.querySelector('.article-list-loading');
+  if (ov) ov.remove();
+}
+// On success the innerHTML swap removes the overlay for us; afterRequest is the
+// catch-all that also clears it after a 4xx/5xx (which leaves the old list in
+// place with no swap).
+document.body.addEventListener('htmx:beforeRequest', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _showListLoading();
+});
+document.body.addEventListener('htmx:afterRequest', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _hideListLoading();
+});
+
 // Dismissing the AI error (Settings → AI) fires this via HX-Trigger; clear any
 // AI error dots still rendered on the page (e.g. the side-nav "AI" badge).
 document.body.addEventListener('ai-error-dismissed', function () {
