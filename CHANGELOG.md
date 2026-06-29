@@ -9,6 +9,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- Search is now also a filter view: alongside the text query you can scope to
+  feeds/folders, filter by labels (any / specific) and read status (all / unread /
+  read), and choose the sort (relevance / newest / oldest). Leaving the text empty
+  applies the filters on their own. Search moved from the user menu to an icon in
+  the sidebar.
+
 ## [0.10.1] - 2026-06-27
 
 ### Added

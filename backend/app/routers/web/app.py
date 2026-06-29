@@ -483,25 +483,23 @@ async def htmx_refresh_feed(
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
 async def htmx_search_modal(
     request: Request,
+    scope: str | None = Query(None),
+    sort: str | None = Query(None),
+    status: str | None = Query(None),
+    labels: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db)
-
-    seen_folder_ids: set[int] = set()
-    folders: list[tuple[int, str]] = []
-    for uf in user_feeds:
-        if uf.folder_id and uf.folder_id not in seen_folder_ids:
-            seen_folder_ids.add(uf.folder_id)
-            folders.append((uf.folder_id, uf.folder.name))
-    folders.sort(key=lambda x: x[1].lower())
-
-    feeds = [(uf.feed_id, uf.custom_title or uf.feed.title) for uf in user_feeds]
-    feeds.sort(key=lambda x: x[1].lower())
+    user_labels = await list_labels(user, db)
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {
-        "folders": folders,
-        "feeds": feeds,
+        "user_feeds": user_feeds,
+        "labels": user_labels,
+        "scope_value": scope or None,
+        "sort_value": sort or None,
+        "status_value": status or None,
+        "label_value": labels or None,
     })
 
 
@@ -572,12 +570,16 @@ async def htmx_article_list(
     request: Request,
     feed_id: int | None = Query(None),
     folder_id: int | None = Query(None),
+    scope_include: str | None = Query(None),
     label_id: int | None = Query(None),
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
+    sort: str | None = Query(None),
+    read_status: str | None = Query(None),
+    label_filter: str | None = Query(None),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -587,7 +589,16 @@ async def htmx_article_list(
     )
     settings = settings_result.scalar_one_or_none()
 
+    # The search modal can submit with an empty query term as a pure filter view
+    # (scope / labels / status), so "search mode" is any of those, not just q.
+    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+
     sort_order = settings.default_sort_order if settings else "newest"
+    # Search has its own sort selector (relevance default); other views use the
+    # user's configured list sort. Without a query term relevance is meaningless,
+    # so list_articles' non-FTS branch treats "relevance" as newest.
+    if is_search:
+        sort_order = sort or "relevance"
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     label_display = settings.label_display if settings else "indicator"
@@ -596,8 +607,9 @@ async def htmx_article_list(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
-    if q or starred_only or archived_only:
-        # Search and state-based views always show everything
+    if is_search or starred_only or archived_only:
+        # Search uses its own status selector (read_status below); other
+        # state-based views always show everything.
         effective_unread_only = False
     elif unread_only:
         # Explicit "Unread" nav item — always filter
@@ -611,7 +623,8 @@ async def htmx_article_list(
         else:  # adaptive
             probe = await list_articles(
                 user=user, db=db,
-                feed_id=feed_id, folder_id=folder_id, label_id=label_id,
+                feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+                label_id=label_id,
                 labeled_only=labeled_only,
                 unread_only=True, limit=1,
             )
@@ -622,8 +635,11 @@ async def htmx_article_list(
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
+        scope_include=scope_include,
         label_id=label_id,
+        label_filter=label_filter,
         unread_only=effective_unread_only,
+        read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
@@ -675,6 +691,8 @@ async def htmx_article_list(
         filter_params["feed_id"] = feed_id
     if folder_id is not None:
         filter_params["folder_id"] = folder_id
+    if scope_include:
+        filter_params["scope_include"] = scope_include
     if label_id is not None:
         filter_params["label_id"] = label_id
     if effective_unread_only:
@@ -687,6 +705,13 @@ async def htmx_article_list(
         filter_params["labeled_only"] = "true"
     if q and q.strip():
         filter_params["q"] = q.strip()
+    if is_search:
+        # Carry the search/filter knobs into pagination, even with an empty query.
+        filter_params["sort"] = sort_order
+        if read_status:
+            filter_params["read_status"] = read_status
+        if label_filter:
+            filter_params["label_filter"] = label_filter
 
     extra_headers: dict[str, str] = {}
     if feed_id is not None:
@@ -719,6 +744,7 @@ async def htmx_article_list(
         starred_only=starred_only,
         archived_only=archived_only,
         search_query=q.strip() if q and q.strip() else None,
+        filter_active=is_search,
         mark_read_on_scroll=mark_read_on_scroll,
         density=density,
         label_display=label_display,
@@ -738,12 +764,16 @@ async def htmx_article_list_more(
     request: Request,
     feed_id: int | None = Query(None),
     folder_id: int | None = Query(None),
+    scope_include: str | None = Query(None),
     label_id: int | None = Query(None),
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
+    sort: str | None = Query(None),
+    read_status: str | None = Query(None),
+    label_filter: str | None = Query(None),
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
@@ -755,7 +785,10 @@ async def htmx_article_list_more(
     )
     settings = settings_result.scalar_one_or_none()
 
+    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
     sort_order = settings.default_sort_order if settings else "newest"
+    if is_search:
+        sort_order = sort or "relevance"
     articles_per_page = settings.articles_per_page if settings else 50
     ua = request.headers.get("user-agent", "")
     is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
@@ -767,8 +800,11 @@ async def htmx_article_list_more(
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
+        scope_include=scope_include,
         label_id=label_id,
+        label_filter=label_filter,
         unread_only=unread_only,
+        read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
@@ -786,6 +822,8 @@ async def htmx_article_list_more(
         filter_params["feed_id"] = feed_id
     if folder_id is not None:
         filter_params["folder_id"] = folder_id
+    if scope_include:
+        filter_params["scope_include"] = scope_include
     if label_id is not None:
         filter_params["label_id"] = label_id
     if unread_only:
@@ -798,6 +836,12 @@ async def htmx_article_list_more(
         filter_params["labeled_only"] = "true"
     if q and q.strip():
         filter_params["q"] = q.strip()
+    if is_search:
+        filter_params["sort"] = sort_order
+        if read_status:
+            filter_params["read_status"] = read_status
+        if label_filter:
+            filter_params["label_filter"] = label_filter
 
     extra_ctx = {}
     if settings and getattr(settings, 'ai_chat_enabled', False):

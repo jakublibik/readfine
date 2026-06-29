@@ -729,12 +729,24 @@ document.body.addEventListener('click', function (e) {
 });
 
 // ── Search modal ───────────────────────────────────────────────────────────
-function openSearchModal() {
+function openSearchModal(prefill) {
   var el = document.getElementById('full-menu-dropdown');
   if (el) el.classList.add('hidden');
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.remove('hidden');
-  htmx.ajax('GET', '/htmx/search-modal', { target: '#search-modal-content', swap: 'innerHTML' });
+  // Only restore the previous query/scope when reopening from the results header
+  // (prefill); a fresh search from the menu or the "/" shortcut starts empty.
+  window._searchPrefill = !!prefill;
+  var url = '/htmx/search-modal';
+  if (prefill) {
+    var qs = [];
+    if (window._lastSearchScope) qs.push('scope=' + encodeURIComponent(window._lastSearchScope));
+    if (window._lastSearchSort) qs.push('sort=' + encodeURIComponent(window._lastSearchSort));
+    if (window._lastSearchStatus) qs.push('status=' + encodeURIComponent(window._lastSearchStatus));
+    if (window._lastSearchLabels) qs.push('labels=' + encodeURIComponent(window._lastSearchLabels));
+    if (qs.length) url += '?' + qs.join('&');
+  }
+  htmx.ajax('GET', url, { target: '#search-modal-content', swap: 'innerHTML' });
 }
 
 function closeSearchModal() {
@@ -742,37 +754,58 @@ function closeSearchModal() {
   if (overlay) overlay.classList.add('hidden');
 }
 
-function updateSearchScope(value) {
-  var folderSel = document.getElementById('search-folder-select');
-  var feedSel = document.getElementById('search-feed-select');
-  if (folderSel) folderSel.disabled = value !== 'folder';
-  if (feedSel) feedSel.disabled = value !== 'feed';
-}
-
 function submitSearch() {
   var input = document.getElementById('search-input');
   if (!input) return;
   var q = input.value.trim();
-  if (!q) { input.focus(); return; }
-  var scopeEl = document.querySelector('input[name="search-scope"]:checked');
-  if (!scopeEl) return;
-  var params = new URLSearchParams({ q: q });
-  if (scopeEl.value === 'folder') {
-    var sel = document.getElementById('search-folder-select');
-    if (sel && sel.value) params.set('folder_id', sel.value);
-  } else if (scopeEl.value === 'feed') {
-    var sel = document.getElementById('search-feed-select');
-    if (sel && sel.value) params.set('feed_id', sel.value);
-  }
+  // Multi-select scope: hidden input holds a JSON array like ["feed:1","folder:2"].
+  var scopeEl = document.getElementById('search-scope-value');
+  var scopeVal = scopeEl ? scopeEl.value.trim() : '';
+  // Sort: relevance (default) | newest | oldest.
+  var sortEl = document.getElementById('search-sort');
+  var sortVal = sortEl ? sortEl.value : 'relevance';
+  // Status: all (default, no filter) | unread | read.
+  var statusEl = document.getElementById('search-status');
+  var statusVal = statusEl ? statusEl.value : 'all';
+  // Labels: JSON array like ["any"] or ["label:3"]. Empty = no label filter.
+  var labelsEl = document.getElementById('search-labels-value');
+  var labelsVal = labelsEl ? labelsEl.value.trim() : '';
+
+  // Empty text is allowed as a pure filter view, but only when at least one
+  // filter is set — otherwise it's just "all articles", so nudge for input.
+  var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all');
+  if (!q && !hasFilter) { input.focus(); return; }
+
+  window._lastSearchQuery = q;
+  window._lastSearchScope = scopeVal;
+  window._lastSearchSort = sortVal;
+  window._lastSearchStatus = statusVal;
+  window._lastSearchLabels = labelsVal;
+
+  var params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (scopeVal) params.set('scope_include', scopeVal);
+  params.set('sort', sortVal);
+  if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
+  if (labelsVal) params.set('label_filter', labelsVal);
   htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
   closeSearchModal();
+  // On mobile the search modal is opened from inside the sidebar overlay; close
+  // it so the results are immediately visible instead of hidden behind it.
+  if (window._closeMobileSidebarOverlay) window._closeMobileSidebarOverlay();
 }
 
 // Focus search input when modal loads
 document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (evt.detail.target.id === 'search-modal-content') {
     var input = document.getElementById('search-input');
-    if (input) input.focus();
+    if (input) {
+      // Pre-fill with the previous query only when reopening from the results
+      // header, so "search again" is one keystroke away.
+      if (window._searchPrefill && window._lastSearchQuery) input.value = window._lastSearchQuery;
+      input.focus();
+      input.select();
+    }
   }
 });
 
@@ -910,7 +943,8 @@ document.addEventListener('click', function (e) {
   if (!el) return;
   var action = el.dataset.action;
   if (action === 'toggle-user-menu') { toggleUserMenu(); return; }
-  if (action === 'open-search') { openSearchModal(); return; }
+  if (action === 'open-search') { openSearchModal(false); return; }
+  if (action === 'open-search-again') { openSearchModal(true); return; }
   if (action === 'close-search') { closeSearchModal(); return; }
   if (action === 'open-feedback-modal') { openFeedbackModal(); return; }
   if (action === 'close-feedback-modal') { closeFeedbackModal(); return; }
@@ -952,10 +986,6 @@ document.addEventListener('click', function (e) {
     });
     return;
   }
-});
-
-document.addEventListener('change', function (e) {
-  if (e.target.name === 'search-scope') { updateSearchScope(e.target.value); }
 });
 
 // ── Article read state (class toggle, no DOM swap) ────────────────────────
@@ -1821,6 +1851,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
+  // Exposed so global handlers (e.g. search submit) can dismiss the mobile
+  // sidebar overlay that the search modal was opened from.
+  window._closeMobileSidebarOverlay = function () {
+    if (!isMobile()) return;
+    if (document.documentElement.classList.contains('mobile-sidebar-open')) {
+      closeSidebarOverlay();
+      history.back();
+    }
+  };
+
   // Intercept toggle-sidebar-pin on mobile: open/close overlay instead of pinning
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
@@ -2488,7 +2528,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   }
 
   function attachGeneralChat() {
-    ['sidebar-chat-btn', 'sidebar-rail-chat-btn', 'mobile-bottom-chat-btn'].forEach(function (id) {
+    ['sidebar-chat-btn', 'mobile-bottom-chat-btn'].forEach(function (id) {
       var btn = document.getElementById(id);
       if (btn && !btn._generalChatAttached) {
         btn._generalChatAttached = true;

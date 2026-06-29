@@ -1,9 +1,10 @@
 """Article service: listing, detail, state toggles, unread count management."""
+import json
 import logging
 import re
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal, literal_column, select, tuple_, update
+from sqlalchemy import func, literal, literal_column, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +16,31 @@ from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUp
 from app.utils.datetime_format import current_viewer_tz, format_local
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_label_filter(label_filter: str | None) -> tuple[bool, list[int]]:
+    """Parse the label-filter JSON (same shape as the scope selector).
+
+    Returns (any_label, label_ids). "any" means "has at least one label" and
+    takes precedence over specific ids. Empty/invalid means no label filtering.
+    """
+    if not label_filter:
+        return False, []
+    try:
+        items = json.loads(label_filter)
+    except (json.JSONDecodeError, TypeError):
+        return False, []
+    if "any" in items:
+        return True, []
+    ids: list[int] = []
+    for item in items:
+        if isinstance(item, str) and item.startswith("label:"):
+            try:
+                ids.append(int(item[6:]))
+            except ValueError:
+                pass
+    return False, ids
+
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
@@ -97,8 +123,11 @@ async def list_articles(
     db: AsyncSession,
     feed_id: int | None = None,
     folder_id: int | None = None,
+    scope_include: str | None = None,
     label_id: int | None = None,
+    label_filter: str | None = None,
     unread_only: bool = False,
+    read_status: str | None = None,
     starred_only: bool = False,
     archived_only: bool = False,
     labeled_only: bool = False,
@@ -163,6 +192,23 @@ async def list_articles(
         else:
             stmt = stmt.where(UserFeed.folder_id == folder_id)
 
+    # Multi-select scope (same JSON format as filters/catchup: ["feed:1","folder:2"]).
+    # Empty lists mean "all feeds" — no restriction. Feed ownership is already
+    # enforced by the UserFeed join above, so unknown ids simply match nothing.
+    if scope_include:
+        from app.services.catchup_service import _parse_scope  # noqa: PLC0415
+        scope_feed_ids, scope_folder_ids = _parse_scope(scope_include)
+        if scope_feed_ids or scope_folder_ids:
+            clauses = []
+            if scope_feed_ids:
+                clauses.append(Article.feed_id.in_(scope_feed_ids))
+            for fid in scope_folder_ids:
+                if fid == 0:
+                    clauses.append(UserFeed.folder_id.is_(None))
+                else:
+                    clauses.append(UserFeed.folder_id == fid)
+            stmt = stmt.where(or_(*clauses))
+
     if label_id is not None:
         stmt = stmt.join(
             ArticleLabel,
@@ -180,10 +226,32 @@ async def list_articles(
             .exists()
         )
 
+    # Search label filter (multi-select): "any" = has at least one label,
+    # otherwise articles carrying at least one of the selected labels.
+    if label_filter:
+        any_label, lf_ids = _parse_label_filter(label_filter)
+        cond = (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id)
+        if any_label:
+            stmt = stmt.where(select(ArticleLabel.article_id).where(cond).exists())
+        elif lf_ids:
+            stmt = stmt.where(
+                select(ArticleLabel.article_id)
+                .where(cond & ArticleLabel.label_id.in_(lf_ids))
+                .exists()
+            )
+
     if unread_only:
         stmt = stmt.where(
             (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
+
+    # Search status filter (tri-state): "unread" / "read" / anything else = all.
+    if read_status == "unread":
+        stmt = stmt.where(
+            (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
+        )
+    elif read_status == "read":
+        stmt = stmt.where(UserArticleState.is_read == True)
 
     if starred_only:
         stmt = stmt.where(UserArticleState.is_starred == True)
@@ -201,11 +269,18 @@ async def list_articles(
             logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
             tsquery = func.plainto_tsquery('simple', q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
-        stmt = stmt.order_by(
-            func.ts_rank(fts_vec, tsquery).desc(),
-            func.coalesce(Article.published_at, Article.fetched_at).desc(),
-            Article.id.desc(),
-        )
+        coalesced = func.coalesce(Article.published_at, Article.fetched_at)
+        # Search honours its own sort selector; default is relevance (ts_rank).
+        if sort_order == "newest":
+            stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
+        elif sort_order == "oldest":
+            stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
+        else:
+            stmt = stmt.order_by(
+                func.ts_rank(fts_vec, tsquery).desc(),
+                coalesced.desc(),
+                Article.id.desc(),
+            )
     else:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
         if sort_order == "oldest":
