@@ -745,7 +745,12 @@ async def htmx_article_list(
         archived_only=archived_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
-        mark_read_on_scroll=mark_read_on_scroll,
+        # Text search uses offset pagination (ts_rank can't be keyset-paged). With a
+        # read-status filter, marking rows read on scroll shrinks the result set
+        # under the offset and skips articles, so disable mark-read-on-scroll for
+        # that case only. Plain text search (status=all) and the empty-query filter
+        # view (keyset pagination) are unaffected and keep it.
+        mark_read_on_scroll=mark_read_on_scroll and not (q and q.strip() and read_status),
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
