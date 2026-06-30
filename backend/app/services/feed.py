@@ -66,6 +66,7 @@ async def subscribe(
     trigger_initial_fetch: bool = True,
     import_mode: str = "recent",
     import_limit: int = 500,
+    fetch_interval_min: int | None = None,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -141,6 +142,7 @@ async def subscribe(
             title=title[:255],
             site_url=site_url[:2048] if site_url else None,
             subscriber_count=0,
+            fetch_interval_min=fetch_interval_min,
         )
         db.add(feed)
         await db.flush()  # get feed.id
