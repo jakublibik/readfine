@@ -14,7 +14,7 @@
     Showing feed content.
   </p>
   {% endif %}
-  <div class="prose max-w-none text-gray-800">
+  <div class="prose max-w-none text-gray-800 article-body">
     {% if article.readable_status == 'success' and article.readable_content %}
       {{ article.readable_content | safe }}
     {% elif article.content %}
