@@ -63,6 +63,12 @@
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
                 <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+                {% if uf.feed.next_fetch_at %}
+                  <div class="text-xs text-gray-400 mt-0.5 pl-6">Next fetch
+                    <time datetime="{{ uf.feed.next_fetch_at.isoformat() }}"
+                          title="{{ uf.feed.next_fetch_at | localtime('long') }}">~ {{ uf.feed.next_fetch_at | localtime('short') }}</time>
+                  </div>
+                {% endif %}
               {% endif %}
             </td>
             <td class="px-1.5 py-2">

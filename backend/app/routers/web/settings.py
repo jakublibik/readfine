@@ -41,6 +41,7 @@ from app.models.label import Label
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.fetcher.scheduler import compute_next_fetch_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
 from app.services.feed import (
@@ -197,6 +198,20 @@ async def _get_feeds_context(user, db):
         article_counts = {row.feed_id: row.cnt for row in counts_result}
     else:
         article_counts = {}
+    # Annotate errored feeds with their predicted next fetch (transient, in-memory).
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
+    min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    for uf in user_feeds:
+        uf.feed.next_fetch_at = (
+            compute_next_fetch_at(
+                uf.feed,
+                default_interval_min=default_interval,
+                min_interval_min=min_interval,
+            )
+            if uf.feed.status == "error"
+            else None
+        )
     return user_feeds, folders, article_counts
 
 
@@ -726,6 +741,11 @@ async def settings_feed_edit(
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
+        "next_fetch_at": compute_next_fetch_at(
+            uf.feed,
+            default_interval_min=(app_s.default_fetch_interval_min if app_s else None) or 60,
+            min_interval_min=(app_s.min_fetch_interval_min if app_s else None) or 15,
+        ),
         "is_sole_subscriber": uf.feed.subscriber_count == 1,
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,

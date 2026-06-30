@@ -39,6 +39,65 @@ def _slot_matches(effective_interval_min: int, minute: int) -> bool:
     return sub_period in (15, 30)
 
 
+def _ceil_to_slot(dt: datetime) -> datetime:
+    """Round *dt* up to the next scheduler slot (:00/:15/:30/:45)."""
+    floored = dt.replace(second=0, microsecond=0)
+    rem = floored.minute % 15
+    if rem == 0 and floored == dt:
+        return floored
+    return floored - timedelta(minutes=rem) + timedelta(minutes=15)
+
+
+def compute_next_fetch_at(
+    feed: Feed,
+    *,
+    default_interval_min: int,
+    min_interval_min: int,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Predict when the scheduler will next attempt to fetch *feed*.
+
+    Mirrors the due-feed query in :func:`_fetch_due_feeds` so the UI can show a
+    feed's next fetch without persisting it. Returns a timezone-aware datetime,
+    or ``None`` when no fetch is scheduled — paused/disabled feeds and feeds with
+    no subscribers are never queried by the scheduler.
+    """
+    now = now or datetime.now(timezone.utc)
+    if feed.subscriber_count <= 0 or feed.status not in ("active", "error"):
+        return None
+
+    effective_interval_min = max(
+        feed.fetch_interval_min or default_interval_min, min_interval_min
+    )
+
+    if feed.last_fetched_at is None:
+        due = now
+    elif feed.status == "error":
+        backoff_min = (
+            24 * 60
+            if feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
+            else max(15, default_interval_min * 2)
+        )
+        due = feed.last_fetched_at + timedelta(minutes=backoff_min)
+    else:  # active
+        due = feed.last_fetched_at + timedelta(minutes=effective_interval_min)
+
+    # A server-requested Retry-After (HTTP 429) defers the feed further.
+    if feed.retry_after_until is not None and feed.retry_after_until > due:
+        due = feed.retry_after_until
+
+    # The scheduler fires only at :00/:15/:30/:45, filtering by sub-period, and
+    # counts a feed as due up to the 2-minute grace early. Snap to the first
+    # qualifying slot at or after that point.
+    target = max(due - timedelta(minutes=2), now)
+    slot = _ceil_to_slot(target)
+    for _ in range(8):
+        if _slot_matches(effective_interval_min, slot.minute):
+            return slot
+        slot += timedelta(minutes=15)
+    return slot
+
+
 async def _fetch_due_feeds() -> None:
     """Job: fetch all active feeds that are due for an update."""
     if db.async_session_factory is None:

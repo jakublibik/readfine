@@ -206,6 +206,14 @@
   {% if uf.feed.last_error %}
   <div class="px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
     <span class="font-medium">Last error:</span> {{ uf.feed.last_error }}
+    {% if next_fetch_at %}
+    <div class="mt-1 text-red-600/80">Next fetch
+      <time datetime="{{ next_fetch_at.isoformat() }}"
+            title="{{ next_fetch_at | localtime('long') }}">~ {{ next_fetch_at | localtime('short') }}</time>
+    </div>
+    {% elif uf.feed.status == 'disabled' %}
+    <div class="mt-1 text-red-600/80">No fetch scheduled — this feed was auto-disabled after repeated errors. Save changes to re-enable it.</div>
+    {% endif %}
   </div>
   {% endif %}
 

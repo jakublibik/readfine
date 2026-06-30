@@ -16,7 +16,7 @@ from app.fetcher.rss import (
     _struct_to_dt,
     fetch_feed,
 )
-from app.fetcher.scheduler import _slot_matches, create_scheduler
+from app.fetcher.scheduler import compute_next_fetch_at, _slot_matches, create_scheduler
 from app.models.fetch_log import FetchLog
 from app.routers.web.admin import _quantize15
 
@@ -170,6 +170,99 @@ class TestSlotMatches:
         for interval in (15, 30, 60, 90, 120, 180):
             assert _slot_matches(interval, 15) == _slot_matches(interval, 45), \
                 f"interval={interval}: :15 and :45 should behave the same"
+
+
+# ── compute_next_fetch_at ─────────────────────────────────────────────────────
+
+def _sched_feed(**kwargs) -> SimpleNamespace:
+    defaults = dict(
+        status="active",
+        subscriber_count=1,
+        fetch_interval_min=None,
+        last_fetched_at=None,
+        retry_after_until=None,
+        fetch_error_count=0,
+    )
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+class TestComputeNextFetchAt:
+    """Predicted next fetch must mirror the _fetch_due_feeds query."""
+
+    DEFAULTS = dict(default_interval_min=60, min_interval_min=15)
+
+    def test_active_uses_interval_snapped_to_slot(self):
+        # 60-min feed last fetched at 13:00 → due 14:00, fires at the :00 slot.
+        feed = _sched_feed(
+            last_fetched_at=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 30, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+
+    def test_error_uses_double_default_backoff(self):
+        # error feed, count below threshold → backoff max(15, 60*2) = 120 min.
+        feed = _sched_feed(
+            status="error",
+            fetch_error_count=1,
+            last_fetched_at=datetime(2026, 1, 15, 12, 0, 9, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 15, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+
+    def test_error_at_disable_threshold_uses_24h(self):
+        feed = _sched_feed(
+            status="error",
+            fetch_error_count=5,
+            last_fetched_at=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 16, 12, 0, tzinfo=timezone.utc)
+
+    def test_retry_after_defers_beyond_backoff(self):
+        # 15-min feed (fires at every slot) so the snap isolates Retry-After.
+        feed = _sched_feed(
+            status="error",
+            fetch_interval_min=15,
+            fetch_error_count=1,
+            last_fetched_at=datetime(2026, 1, 15, 12, 0, tzinfo=timezone.utc),
+            retry_after_until=datetime(2026, 1, 15, 16, 7, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        # Retry-After 16:07 wins over the 14:00 backoff; snapped up to :15.
+        assert nxt == datetime(2026, 1, 15, 16, 15, tzinfo=timezone.utc)
+
+    def test_disabled_and_paused_have_no_schedule(self):
+        for status in ("disabled", "paused"):
+            feed = _sched_feed(status=status)
+            assert compute_next_fetch_at(feed, **self.DEFAULTS) is None
+
+    def test_no_subscribers_has_no_schedule(self):
+        feed = _sched_feed(subscriber_count=0)
+        assert compute_next_fetch_at(feed, **self.DEFAULTS) is None
+
+    def test_overdue_active_feed_returns_next_future_slot(self):
+        # Last fetched long ago → due in the past; predicted fetch is the next slot.
+        feed = _sched_feed(
+            last_fetched_at=datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 7, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        # 60-min feed only fires at :00, so the next eligible slot is 14:00.
+        assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+
+    def test_15min_feed_fires_at_quarter_slots(self):
+        feed = _sched_feed(
+            fetch_interval_min=15,
+            last_fetched_at=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 5, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 13, 15, tzinfo=timezone.utc)
 
 
 # ── _clamp_published_at ───────────────────────────────────────────────────────
