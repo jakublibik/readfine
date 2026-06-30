@@ -23,6 +23,7 @@ def make_config(**kwargs):
         scope_include=None,
         filter_status="all",
         filter_labeled=False,
+        label_filter=None,
         filter_score_min=None,
         article_limit=100,
         model_slot="quality",

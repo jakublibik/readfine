@@ -44,7 +44,7 @@ def _period_to_start_dt(period: str, tz_str: str | None) -> datetime:
     bound. So every period means "since X, up to now":
       today      → since today 00:00
       yesterday  → since yesterday 00:00 (intentionally includes today so far;
-                   the UI labels this "Since yesterday")
+                   the UI labels this "Yesterday+")
       7days      → rolling last 7 days
     """
     try:
@@ -135,7 +135,7 @@ async def fetch_catchup_articles(
     period: str,
     scope_include: str | None,
     filter_status: str,
-    filter_labeled: bool,
+    label_filter: str | None,
     filter_score_min: float | None,
 ) -> list[CatchupArticle]:
     """Fetch articles matching the given catchup parameters."""
@@ -191,16 +191,23 @@ async def fetch_catchup_articles(
             func.coalesce(UserArticleState.dwell_seconds, 0) == 0
         )
 
-    # Labeled filter
-    if filter_labeled:
-        stmt = stmt.where(
-            exists(
-                select(ArticleLabel.article_id).where(
-                    ArticleLabel.article_id == Article.id,
-                    ArticleLabel.user_id == user_id,
+    # Label filter (same JSON shape as search): "any" = has at least one label,
+    # otherwise articles carrying at least one of the selected labels.
+    if label_filter:
+        from app.services.article import _parse_label_filter  # noqa: PLC0415
+
+        any_label, lf_ids = _parse_label_filter(label_filter)
+        cond = (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id)
+        if any_label:
+            stmt = stmt.where(exists(select(ArticleLabel.article_id).where(cond)))
+        elif lf_ids:
+            stmt = stmt.where(
+                exists(
+                    select(ArticleLabel.article_id).where(
+                        cond & ArticleLabel.label_id.in_(lf_ids)
+                    )
                 )
             )
-        )
 
     # Score filter
     if filter_score_min is not None:

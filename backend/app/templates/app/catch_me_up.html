@@ -76,7 +76,7 @@
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1">Period</label>
           <div class="flex gap-2">
-            {% for val, label in [("today", "Today"), ("yesterday", "Since yesterday"), ("7days", "Last 7 days")] %}
+            {% for val, label in [("today", "Today"), ("yesterday", "Yesterday+"), ("7days", "Last 7 days")] %}
             <label class="flex-1 text-center">
               <input type="radio" name="period" value="{{ val }}" class="sr-only peer"
                      {% if loop.last %}checked{% endif %}>
@@ -95,6 +95,14 @@
         <div>
           <label class="block text-xs font-medium text-gray-600 mb-1">Feeds</label>
           {% include "app/partials/scope_selector.html" with context %}
+        </div>
+
+        <!-- Labels -->
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Labels</label>
+          {% with collapsible=False, selector_id="catchup-label", input_name="label_filter", label_value=None %}
+            {% include "app/partials/label_selector.html" %}
+          {% endwith %}
         </div>
 
         <!-- Filters -->
@@ -120,41 +128,31 @@
               </div>
             </div>
 
-            <!-- Relevance -->
-            <div class="flex items-start gap-3">
-              <span class="text-xs text-gray-500 w-14 flex-shrink-0 pt-1">Relevance</span>
-              <div class="flex flex-col gap-1 items-start">
-                {% set rel_opts = [("all", "All articles"), ("labeled", "Labeled only")] %}
-                {% if ai_scoring_available %}{% set rel_opts = rel_opts + [("score", "Labeled + min score")] %}{% endif %}
-                {% for val, lbl in rel_opts %}
-                <label>
-                  <input type="radio" name="relevance_mode" value="{{ val }}" class="sr-only peer relevance-radio"
-                         {% if val == "all" %}checked{% endif %}>
-                  <span class="text-xs py-1 px-2 rounded border border-gray-200 cursor-pointer whitespace-nowrap
-                               peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
-                               hover:bg-gray-100 block transition-colors">
-                    {{ lbl }}
-                  </span>
+            <!-- Score (only when scoring is available) -->
+            {% if ai_scoring_available %}
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-gray-500 w-14 flex-shrink-0">Score</span>
+                <label class="flex items-center gap-2 text-xs text-gray-700 cursor-pointer">
+                  <input type="checkbox" id="score-filter-enabled" class="rounded">
+                  Limit by relevance score
                 </label>
-                {% endfor %}
+              </div>
+              <div class="flex items-center gap-3 hidden" id="score-value-row">
+                <span class="text-xs w-14 flex-shrink-0"></span>
+                <label class="flex items-center gap-1.5 text-xs text-gray-700">
+                  Score ≥
+                  <input type="number" id="score-filter-value"
+                         min="0" max="100" step="1" value="50"
+                         class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs">
+                </label>
+              </div>
+              <div class="flex gap-3">
+                <span class="text-xs w-14 flex-shrink-0"></span>
+                <p class="text-xs text-gray-400">Scoring runs only on labeled articles.</p>
               </div>
             </div>
-
-            <!-- Score threshold (shown only when relevance_mode = score) -->
-            {% if ai_scoring_available %}
-            <div class="flex items-center gap-3 hidden" id="score-value-row">
-              <span class="text-xs text-gray-500 w-14 flex-shrink-0"></span>
-              <label class="flex items-center gap-1.5 text-xs text-gray-700">
-                Score ≥
-                <input type="number" id="score-filter-value"
-                       min="0" max="100" step="1" value="50"
-                       class="w-14 border border-gray-300 bg-white rounded px-2 py-1 text-xs">
-              </label>
-            </div>
             {% endif %}
-
-            <!-- filter_labeled driven by relevance_mode -->
-            <input type="hidden" name="filter_labeled" id="filter-labeled-hidden" value="false">
 
           </div>
         </div>
@@ -303,36 +301,29 @@
     });
   }
 
-  // ── Relevance mode (All / Labeled / Labeled + score) ──────────────────────
-  // Maps a single selector onto the backend's filter_labeled + filter_score_min.
-  // 'score' ⊆ 'labeled' — scoring only runs on labeled articles, so the score
-  // tier implies labeled. Score input carries its name only in 'score' mode.
-  function applyRelevanceMode(mode) {
-    var labeledHidden = document.getElementById('filter-labeled-hidden');
+  // ── Score filter (optional min relevance score) ───────────────────────────
+  // Independent of the label selector. The number input carries its submit name
+  // only when the checkbox is on, so an unchecked box sends no filter_score_min.
+  function applyScoreFilter() {
+    var enabled = document.getElementById('score-filter-enabled');
     var scoreRow = document.getElementById('score-value-row');
     var scoreInput = document.getElementById('score-filter-value');
-    if (labeledHidden) {
-      labeledHidden.value = (mode === 'labeled' || mode === 'score') ? 'true' : 'false';
-    }
-    if (scoreRow) scoreRow.classList.toggle('hidden', mode !== 'score');
+    var on = !!(enabled && enabled.checked);
+    if (scoreRow) scoreRow.classList.toggle('hidden', !on);
     if (scoreInput) {
-      if (mode === 'score') scoreInput.setAttribute('name', 'filter_score_min');
+      if (on) scoreInput.setAttribute('name', 'filter_score_min');
       else scoreInput.removeAttribute('name');
     }
   }
 
-  function currentRelevanceMode() {
-    var checked = document.querySelector('.relevance-radio:checked');
-    return checked ? checked.value : 'all';
-  }
-
-  document.querySelectorAll('.relevance-radio').forEach(function (r) {
-    r.addEventListener('change', function () {
-      applyRelevanceMode(currentRelevanceMode());
+  var scoreEnabled = document.getElementById('score-filter-enabled');
+  if (scoreEnabled) {
+    scoreEnabled.addEventListener('change', function () {
+      applyScoreFilter();
       triggerCountRefresh();
     });
-  });
-  applyRelevanceMode(currentRelevanceMode());
+  }
+  applyScoreFilter();
 
   // ── Custom prompt toggle ──────────────────────────────────────────────────
   var promptToggle = document.getElementById('prompt-toggle');
@@ -356,7 +347,7 @@
     var fd = new FormData(form);
     var params = new URLSearchParams();
     fd.forEach(function (val, key) {
-      if (key !== 'custom_prompt' && key !== 'relevance_mode') params.append(key, val);
+      if (key !== 'custom_prompt') params.append(key, val);
     });
     if (extra) Object.keys(extra).forEach(function (k) { params.set(k, extra[k]); });
     return params.toString();
@@ -452,21 +443,17 @@
     var statusRadio = form.querySelector('input[name="filter_status"][value="' + cfg.filter_status + '"]');
     if (statusRadio) statusRadio.checked = true;
 
-    // Relevance mode (derived from filter_labeled + filter_score_min)
+    // Score filter (independent toggle; only present when scoring is available)
     var hasScore = cfg.filter_score_min !== null && cfg.filter_score_min !== undefined;
-    var relMode = hasScore ? 'score' : (cfg.filter_labeled ? 'labeled' : 'all');
-    var relRadio = form.querySelector('.relevance-radio[value="' + relMode + '"]');
-    // Saved 'score' config but scoring no longer available → fall back to labeled
-    if (!relRadio && relMode === 'score') {
-      relMode = 'labeled';
-      relRadio = form.querySelector('.relevance-radio[value="labeled"]');
-    }
-    if (relRadio) relRadio.checked = true;
+    var scoreEnabledCb = document.getElementById('score-filter-enabled');
     var scoreInput = document.getElementById('score-filter-value');
     if (scoreInput && hasScore) {
       scoreInput.value = Math.round(cfg.filter_score_min * 100);
     }
-    applyRelevanceMode(relMode);
+    if (scoreEnabledCb) {
+      scoreEnabledCb.checked = hasScore;
+      applyScoreFilter();
+    }
 
     // Article limit
     var limitInput = document.getElementById('article-limit');
@@ -509,6 +496,30 @@
       } else {
         if (allCb) allCb.checked = true;
         items.forEach(function (cb) { cb.style.opacity = '0.35'; });
+      }
+    }
+
+    // Labels — update hidden input and re-init checkboxes (mirrors scope)
+    var labelHidden = document.getElementById('catchup-label-value');
+    if (labelHidden) {
+      labelHidden.value = cfg.label_filter || '';
+      var labelAny = document.getElementById('catchup-label-any');
+      var labelItems = document.querySelectorAll('input.label-item-cb[data-selector="catchup-label"]');
+      if (labelAny) labelAny.checked = false;
+      labelItems.forEach(function (cb) { cb.checked = false; cb.style.opacity = ''; });
+      if (cfg.label_filter) {
+        try {
+          var selectedLabels = JSON.parse(cfg.label_filter);
+          if (selectedLabels.indexOf('any') !== -1) {
+            if (labelAny) labelAny.checked = true;
+            labelItems.forEach(function (cb) { cb.style.opacity = '0.35'; });
+          } else {
+            selectedLabels.forEach(function (val) {
+              var cb = document.querySelector('input.label-item-cb[data-selector="catchup-label"][value="' + val + '"]');
+              if (cb) cb.checked = true;
+            });
+          }
+        } catch (e) {}
       }
     }
 
@@ -560,6 +571,7 @@
 })();
 </script>
 <script src="{{ static_url('js/scope-selector.js') }}"></script>
+<script src="{{ static_url('js/label-selector.js') }}"></script>
 
 {# Briefing modal overlay #}
 <div id="briefing-modal-overlay"

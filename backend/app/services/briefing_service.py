@@ -25,7 +25,7 @@ _inliner = css_inline.CSSInliner(keep_style_tags=True)
 
 _PERIOD_LABELS = {
     "today": "Today",
-    "yesterday": "Since yesterday",
+    "yesterday": "Yesterday+",
     "7days": "Last 7 days",
 }
 
@@ -168,7 +168,7 @@ async def send_briefing(
             period=config.period,
             scope_include=config.scope_include,
             filter_status=config.filter_status,
-            filter_labeled=config.filter_labeled,
+            label_filter=config.label_filter,
             filter_score_min=config.filter_score_min,
             tz_str=tz_str,
         )

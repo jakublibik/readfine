@@ -39,7 +39,7 @@ def _catchup_config_json(cfg) -> str:
         "scope_include": cfg.scope_include or "",
         "period": cfg.period,
         "filter_status": cfg.filter_status,
-        "filter_labeled": cfg.filter_labeled,
+        "label_filter": cfg.label_filter or "",
         "filter_score_min": cfg.filter_score_min,
         "article_limit": cfg.article_limit,
         "model_slot": cfg.model_slot,

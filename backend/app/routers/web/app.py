@@ -2018,6 +2018,7 @@ async def catchup_page(
         })
 
     user_feeds_data = await list_user_feeds(user, db)
+    user_labels = await list_labels(user, db)
     saved_configs = (await db.execute(
         select(UserCatchupConfig)
         .where(UserCatchupConfig.user_id == user.id)
@@ -2056,6 +2057,7 @@ async def catchup_page(
         "catchup_available": True,
         "ai_scoring_available": _scoring_available(ai_on, settings),
         "user_feeds": user_feeds_data,
+        "labels": user_labels,
         "saved_configs": saved_configs,
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
         "period_descs": period_descs,
@@ -2068,7 +2070,7 @@ async def htmx_catchup_count(
     request: Request,
     period: str = Query("7days"),
     filter_status: str = Query("all"),
-    filter_labeled: bool = Query(False),
+    label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     article_limit: int = Query(500),
@@ -2084,7 +2086,7 @@ async def htmx_catchup_count(
     articles = await fetch_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
-        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     count = len(articles)
@@ -2101,7 +2103,7 @@ async def htmx_catchup_cost(
     include_snippet: bool = Query(True),
     period: str = Query("7days"),
     filter_status: str = Query("all"),
-    filter_labeled: bool = Query(False),
+    label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     user: User = Depends(get_current_user),
@@ -2122,7 +2124,7 @@ async def htmx_catchup_cost(
     articles = await fetch_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
-        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     effective_count = min(len(articles), article_limit)
@@ -2145,7 +2147,7 @@ async def htmx_catchup_generate(
     request: Request,
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
@@ -2185,7 +2187,7 @@ async def htmx_catchup_generate(
         articles = await fetch_catchup_articles(
             user_id=user.id, tz_str=tz_str, db=db,
             period=period, scope_include=scope_include,
-            filter_status=filter_status, filter_labeled=filter_labeled,
+            filter_status=filter_status, label_filter=label_filter,
             filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
         )
     except Exception as exc:
@@ -2262,7 +2264,7 @@ async def htmx_catchup_config_create(
     scope_include: str | None = Form(None),
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
     model_slot: str = Form("fast"),
@@ -2301,7 +2303,7 @@ async def htmx_catchup_config_create(
         config.scope_include = scope_include
         config.period = period
         config.filter_status = filter_status
-        config.filter_labeled = filter_labeled
+        config.label_filter = label_filter
         config.filter_score_min = score_min_stored
         config.article_limit = article_limit
         config.model_slot = model_slot
@@ -2315,7 +2317,7 @@ async def htmx_catchup_config_create(
             scope_include=scope_include,
             period=period,
             filter_status=filter_status,
-            filter_labeled=filter_labeled,
+            label_filter=label_filter,
             filter_score_min=score_min_stored,
             article_limit=article_limit,
             model_slot=model_slot,
@@ -2336,7 +2338,7 @@ async def htmx_catchup_config_update(
     scope_include: str | None = Form(None),
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
     model_slot: str = Form("fast"),
@@ -2368,7 +2370,7 @@ async def htmx_catchup_config_update(
     config.scope_include = scope_include
     config.period = period
     config.filter_status = filter_status
-    config.filter_labeled = filter_labeled
+    config.label_filter = label_filter
     config.filter_score_min = filter_score_min / 100 if filter_score_min is not None else None
     config.article_limit = article_limit
     config.model_slot = model_slot
