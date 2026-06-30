@@ -764,6 +764,7 @@ async def settings_feed_update(
     uf.folder_id = folder_id
     uf.extract_readable = form.get("extract_readable") == "true"
     uf.readable_auto_disabled = False
+    uf.readable_auto_disabled_reason = None
     if form.get("ai_summary_enabled_present") == "1":
         uf.ai_summary_enabled = form.get("ai_summary_enabled") == "on"
 

@@ -28,6 +28,21 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   "Test" step caches the fetched feed briefly and Subscribe reuses it for both the
   title and the initial article import, so rate-limited sites (e.g. Reddit) no
   longer return 429 mid-subscribe.
+- Readable extraction that returns no usable content — e.g. a Reddit article page
+  that serves a bot-verification wall (HTTP 200) instead of the article — is no
+  longer saved as a blank "successful" extraction that rendered an empty body. Such
+  articles now show their original feed content, and a feed whose pages keep
+  extracting nothing auto-disables full-content extraction after repeated empties
+  (the same way persistent HTTP 403 blocks already did) instead of re-fetching every
+  page forever.
+- The auto-disabled notice for full-content extraction now states why it was turned
+  off — the feed already delivers full articles, or the site blocked extraction /
+  returned no readable content — instead of always claiming the site blocked it.
+- The article view no longer flickers an endless "Extracting full content…" spinner
+  for an article whose extraction failed and is waiting to retry; it shows the feed
+  content quietly, and the spinner appears only while a first attempt is in flight.
+- "Extract full content" from the article menu no longer momentarily drops the
+  article's star, archive, or label state from the action bar.
 
 ## [0.10.1] - 2026-06-27
 

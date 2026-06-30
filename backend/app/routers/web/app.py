@@ -892,8 +892,14 @@ async def htmx_article_detail(
         and trigger_row.readable_status == "skipped"
         and trigger_row.url
     ):
+        # Reset retry bookkeeping: a user-initiated open is a fresh attempt, so the
+        # article reads as "active" (spinner + poll) until this extraction resolves.
         await db.execute(
-            sa_update(Article).where(Article.id == article_id).values(readable_status="pending")
+            sa_update(Article).where(Article.id == article_id).values(
+                readable_status="pending",
+                readable_retries=0,
+                readable_next_retry_at=None,
+            )
         )
         await db.commit()
         asyncio.create_task(_extract_readable_bg(
@@ -1330,9 +1336,14 @@ async def htmx_extract_readable(
 
     apply_readable_result(article, content, error, http_status)
     await db.commit()
-    await db.refresh(article)
 
-    return _content_with_readtime_oob(request, article)
+    # Render from the full ArticleResponse (not the raw ORM row) so per-user fields
+    # — is_starred/is_archived/labels/readable_active — render correctly in the
+    # re-swapped content block; the ORM Article lacks them.
+    article_resp = await get_article(user, article_id, db)
+    if article_resp is None:
+        return HTMLResponse("")
+    return _content_with_readtime_oob(request, article_resp)
 
 
 def _ai_available(settings: UserSettings | None) -> bool:

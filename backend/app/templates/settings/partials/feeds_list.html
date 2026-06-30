@@ -58,7 +58,7 @@
                 {% endif %}
                 <span class="font-medium text-gray-900 truncate min-w-0">{{ uf.custom_title or uf.feed.title }}</span>
                 {% if uf.readable_auto_disabled %}
-                  <span title="Full content extraction was automatically disabled — the site blocked it." class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
+                  <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled — this feed already delivers full articles.{% else %}Full content extraction was automatically disabled — the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}

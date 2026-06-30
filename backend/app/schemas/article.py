@@ -55,6 +55,10 @@ class ArticleResponse(BaseModel):
     readable_content: str | None
     readable_status: str
     readable_error: str | None = None
+    # True only while a first extraction attempt is in flight (status 'pending',
+    # no retries yet). Drives the "Extracting…" spinner + poll; a pending article
+    # waiting on retry-backoff is not "active" and must not poll/flash.
+    readable_active: bool = False
     published_at: datetime | None
     estimated_read_min: int | None
     word_count: int | None

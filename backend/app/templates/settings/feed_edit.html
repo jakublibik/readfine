@@ -82,7 +82,11 @@
     {% if uf.readable_auto_disabled %}
     <div class="mt-2 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
       <span class="flex-shrink-0">⚠</span>
-      <span>Automatically disabled — the site blocked content extraction. You can re-enable it above, but it may be disabled again.</span>
+      {% if uf.readable_auto_disabled_reason == 'full_content' %}
+      <span>Automatically disabled — this feed already delivers full articles, so extraction was turned off. You can re-enable it above if needed.</span>
+      {% else %}
+      <span>Automatically disabled — the site blocked extraction or returned no readable content (e.g. a bot-verification wall). You can re-enable it above, but it may be disabled again.</span>
+      {% endif %}
     </div>
     {% endif %}
   </div>

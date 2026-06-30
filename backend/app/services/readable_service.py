@@ -30,6 +30,10 @@ _MAX_REDIRECTS = 5  # maximum followed redirects per request
 _FULL_CONTENT_THRESHOLD = 0.8
 _FULL_CONTENT_SAMPLE = 10  # how many recent articles to sample
 
+# Error message used when extraction yields no usable content (page produced nothing,
+# or the result collapsed to whitespace after sanitization, e.g. Reddit comment pages).
+_EMPTY_CONTENT_MSG = "No content could be extracted from the page"
+
 
 # ── core extraction ───────────────────────────────────────────────────────────
 
@@ -177,6 +181,20 @@ _EMPTY_BLOCK_TAGS = ["li", "p"]
 _MEDIA_TAGS = ["img", "picture", "video", "audio", "iframe", "svg", "source"]
 
 
+def _has_visible_content(html: str) -> bool:
+    """True if sanitized HTML has real text or media — not just whitespace.
+
+    Some pages (e.g. Reddit comment threads) extract to markup that collapses to
+    pure whitespace after sanitization; such results must not be stored as success.
+    """
+    if not html or not html.strip():
+        return False
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.get_text(strip=True):
+        return True
+    return soup.find(_MEDIA_TAGS) is not None
+
+
 def _drop_empty_blocks(html: str) -> str:
     """Remove block elements with no text and no media, left empty by sanitization."""
     soup = BeautifulSoup(html, "html.parser")
@@ -200,7 +218,9 @@ def apply_readable_result(
     http_status: Optional[int],
 ) -> bool:
     """Apply extraction result to article fields. Returns True if HTTP 403."""
-    if content:
+    # Whitespace-only content is treated as no content: storing it would mark the
+    # article "success" yet render blank, hiding the (often fuller) feed content.
+    if content and content.strip():
         article.readable_content = content
         article.readable_status = "success"
         article.readable_error = None
@@ -245,14 +265,18 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
     if not content:
         content = _extract_with_readability(html)
     if not content:
-        msg = "No content could be extracted from the page"
         logger.warning("readable extraction yielded no content for %s", url)
-        return None, msg, None
+        return None, _EMPTY_CONTENT_MSG, None
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
     from app.utils.parsing import rewrite_relative_urls
-    return rewrite_relative_urls(_drop_empty_blocks(_sanitize(content)), url), None, None
+    final = rewrite_relative_urls(_drop_empty_blocks(_sanitize(content)), url)
+    if not _has_visible_content(final):
+        # Extraction produced markup that sanitized down to nothing usable.
+        logger.warning("readable extraction collapsed to empty content for %s", url)
+        return None, _EMPTY_CONTENT_MSG, None
+    return final, None, None
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -305,14 +329,19 @@ async def process_pending_readable(db: AsyncSession) -> int:
     loop = asyncio.get_running_loop()
 
     processed = 0
-    feed_403_streak: dict[int, int] = {}   # consecutive 403s per feed in this batch
-    feeds_to_disable: set[int] = set()     # feeds that already hit the threshold
-    feeds_with_403: set[int] = set()       # feeds with any 403 (cross-batch check)
+    feed_403_streak: dict[int, int] = {}     # consecutive 403s per feed in this batch
+    feeds_to_disable: set[int] = set()       # feeds that hit the 403 threshold
+    feeds_with_403: set[int] = set()         # feeds with any 403 (cross-batch check)
+    feed_empty_streak: dict[int, int] = {}   # consecutive empty extractions per feed
+    feeds_to_disable_empty: set[int] = set() # feeds that hit the empty threshold
+    feeds_with_empty: set[int] = set()       # feeds with any empty (cross-batch check)
 
     for article in articles:
-        # Feed hit threshold earlier in this batch — skip without fetching
-        if article.feed_id in feeds_to_disable:
-            article.readable_status = "skipped"
+        # Feed hit a disable threshold earlier in this batch — skip without fetching.
+        # Leave it 'pending' (don't mark skipped here): the disable step below cancels
+        # *and* runs the AI pipeline on every still-pending article for the feed, so
+        # marking it skipped now would orphan it from scoring/filters.
+        if article.feed_id in feeds_to_disable or article.feed_id in feeds_to_disable_empty:
             processed += 1
             continue
 
@@ -332,9 +361,11 @@ async def process_pending_readable(db: AsyncSession) -> int:
             continue
 
         is_403 = apply_readable_result(article, content, error, http_status)
+        is_empty = content is None and error == _EMPTY_CONTENT_MSG
         from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if content:
-            feed_403_streak.pop(article.feed_id, None)  # reset streak on success
+            feed_403_streak.pop(article.feed_id, None)  # reset streaks on success
+            feed_empty_streak.pop(article.feed_id, None)
             await run_pipeline_for_article_all_users(article, db)
         elif article.readable_status == "failed":
             # Terminal failure — score with RSS content
@@ -346,16 +377,30 @@ async def process_pending_readable(db: AsyncSession) -> int:
             if streak >= _CONSECUTIVE_403_THRESHOLD:
                 feeds_to_disable.add(article.feed_id)
 
+        if is_empty:
+            streak = feed_empty_streak.get(article.feed_id, 0) + 1
+            feed_empty_streak[article.feed_id] = streak
+            feeds_with_empty.add(article.feed_id)
+            if streak >= _CONSECUTIVE_EMPTY_THRESHOLD:
+                feeds_to_disable_empty.add(article.feed_id)
+        else:
+            # Any non-empty outcome breaks the consecutive-empty streak
+            feed_empty_streak.pop(article.feed_id, None)
+
         processed += 1
         await db.commit()  # per-article: keeps transactions short even with inline AI calls
 
-    # Feeds that hit the threshold within this batch — disable immediately
+    # Feeds that hit a threshold within this batch — disable immediately
     for feed_id in feeds_to_disable:
         await _disable_readable_for_403(feed_id, db)
+    for feed_id in feeds_to_disable_empty - feeds_to_disable:
+        await _disable_readable_for_empty(feed_id, db)
 
-    # Feeds with some 403s but not yet at threshold — check cross-batch consecutive count
+    # Feeds below the in-batch threshold — check cross-batch consecutive counts
     for feed_id in feeds_with_403 - feeds_to_disable:
         await _maybe_disable_readable_for_403(feed_id, db)
+    for feed_id in feeds_with_empty - feeds_to_disable_empty - feeds_to_disable:
+        await _maybe_disable_readable_for_empty(feed_id, db)
 
     logger.info("readable: processed %d articles", processed)
     return processed
@@ -400,6 +445,7 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
     for uf in user_feeds:
         uf.extract_readable = False
         uf.readable_auto_disabled = True
+        uf.readable_auto_disabled_reason = "full_content"
     await db.commit()
 
     # Mark pending articles for this feed as skipped (no need to extract)
@@ -423,10 +469,19 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 
 
 _CONSECUTIVE_403_THRESHOLD = 3
+# Empty extractions are a weaker signal than 403s (an odd article can extract to
+# nothing on an otherwise-good feed), so require a longer streak before disabling.
+_CONSECUTIVE_EMPTY_THRESHOLD = 5
 
 
-async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
-    """Disable readable extraction for a feed and cancel all pending articles."""
+async def _disable_readable_for_feed(
+    feed_id: int, db: AsyncSession, *, pending_error: str
+) -> Optional[int]:
+    """Turn off readable extraction for a feed and cancel its pending articles.
+
+    Returns the number of pending articles cancelled, or None if the feed had no
+    active subscribers to disable (nothing happened).
+    """
     user_feeds_result = await db.execute(
         select(UserFeed).where(
             UserFeed.feed_id == feed_id,
@@ -435,11 +490,12 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
     )
     user_feeds = user_feeds_result.scalars().all()
     if not user_feeds:
-        return
+        return None
 
     for uf in user_feeds:
         uf.extract_readable = False
         uf.readable_auto_disabled = True
+        uf.readable_auto_disabled_reason = "blocked"
 
     pending_result = await db.execute(
         select(Article).where(
@@ -450,17 +506,41 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
     pending = pending_result.scalars().all()
     for article in pending:
         article.readable_status = "skipped"
-        article.readable_error = "HTTP 403 Forbidden"
+        article.readable_error = pending_error
 
     await db.commit()
 
     from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
     for article in pending:
         await run_pipeline_for_article_all_users(article, db)
+    return len(pending)
+
+
+async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable extraction for a feed after repeated 403 responses."""
+    cancelled = await _disable_readable_for_feed(
+        feed_id, db, pending_error="HTTP 403 Forbidden"
+    )
+    if cancelled is None:
+        return
     logger.warning(
         "readable: disabled extraction for feed %d after %d consecutive 403 errors"
         " (cancelled %d pending articles)",
-        feed_id, _CONSECUTIVE_403_THRESHOLD, len(pending),
+        feed_id, _CONSECUTIVE_403_THRESHOLD, cancelled,
+    )
+
+
+async def _disable_readable_for_empty(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable extraction for a feed that consistently extracts nothing."""
+    cancelled = await _disable_readable_for_feed(
+        feed_id, db, pending_error=_EMPTY_CONTENT_MSG
+    )
+    if cancelled is None:
+        return
+    logger.warning(
+        "readable: disabled extraction for feed %d after %d consecutive empty"
+        " extractions (cancelled %d pending articles)",
+        feed_id, _CONSECUTIVE_EMPTY_THRESHOLD, cancelled,
     )
 
 
@@ -492,3 +572,34 @@ async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> Non
         return
 
     await _disable_readable_for_403(feed_id, db)
+
+
+async def _maybe_disable_readable_for_empty(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable if the last N terminal articles for the feed all extracted empty.
+
+    Cross-batch counterpart of the in-batch streak check: when empty extractions
+    accumulate across scheduler runs (few articles per batch), this catches the feed
+    once enough terminally-failed articles share the empty-content error.
+    """
+    result = await db.execute(
+        select(Article.readable_status, Article.readable_error)
+        .where(
+            Article.feed_id == feed_id,
+            Article.readable_status.in_(["failed", "success"]),
+        )
+        .order_by(Article.id.desc())
+        .limit(_CONSECUTIVE_EMPTY_THRESHOLD)
+    )
+    rows = result.all()
+
+    if len(rows) < _CONSECUTIVE_EMPTY_THRESHOLD:
+        return
+
+    all_empty = all(
+        status == "failed" and error == _EMPTY_CONTENT_MSG
+        for status, error in rows
+    )
+    if not all_empty:
+        return
+
+    await _disable_readable_for_empty(feed_id, db)

@@ -399,6 +399,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         readable_content=article.readable_content,
         readable_status=article.readable_status,
         readable_error=article.readable_error,
+        readable_active=(article.readable_status == "pending" and not article.readable_retries),
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,

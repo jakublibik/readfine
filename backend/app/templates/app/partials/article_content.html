@@ -1,5 +1,5 @@
 <div id="article-content-{{ article.id }}"
-     {% if article.readable_status == 'pending' %}
+     {% if article.readable_active %}
      hx-get="/htmx/articles/{{ article.id }}/readable-poll"
      hx-trigger="every 2s"
      hx-swap="outerHTML"
@@ -23,7 +23,7 @@
       <p class="text-gray-400 italic">No content available.</p>
     {% endif %}
   </div>
-  {% if article.readable_status == 'pending' %}
+  {% if article.readable_active %}
   <div class="flex items-center gap-2 text-xs text-gray-400 italic mt-4">
     <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
