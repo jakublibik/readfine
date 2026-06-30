@@ -88,6 +88,12 @@ async def _fetch_due_feeds() -> None:
             select(Feed).where(
                 Feed.subscriber_count > 0,
                 *slot_conditions,
+                # Honor a server-requested Retry-After (HTTP 429): skip the feed
+                # until retry_after_until passes, regardless of interval/backoff.
+                or_(
+                    Feed.retry_after_until.is_(None),
+                    Feed.retry_after_until < func.now() + grace,
+                ),
                 or_(
                     and_(
                         Feed.status == "active",

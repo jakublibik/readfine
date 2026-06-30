@@ -1,8 +1,15 @@
 """Unit tests for SSRF-protection URL validator."""
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from unittest.mock import patch
 
-from app.utils.url_validator import redact_url, validate_feed_url
+from app.utils.url_validator import (
+    TRANSIENT_HTTP_STATUSES,
+    parse_retry_after,
+    redact_url,
+    validate_feed_url,
+)
 
 
 class TestSchemeValidation:
@@ -113,3 +120,51 @@ class TestRedactUrl:
         assert "secret" not in out
         assert "token=abc" not in out
         assert out == "https://example.com/feed?<redacted>"
+
+
+_NOW = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestParseRetryAfter:
+    def test_delta_seconds(self):
+        # well within bounds → exact delay
+        assert parse_retry_after("600", _NOW) == _NOW + timedelta(seconds=600)
+
+    def test_http_date(self):
+        target = _NOW + timedelta(hours=2)
+        header = target.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        assert parse_retry_after(header, _NOW) == target
+
+    def test_none_returns_none(self):
+        assert parse_retry_after(None, _NOW) is None
+
+    def test_blank_returns_none(self):
+        assert parse_retry_after("   ", _NOW) is None
+
+    def test_garbage_returns_none(self):
+        assert parse_retry_after("soon-ish", _NOW) is None
+
+    def test_floor_clamped_to_60s(self):
+        # server asks 5 s, we never retry sooner than 60 s
+        assert parse_retry_after("5", _NOW) == _NOW + timedelta(seconds=60)
+
+    def test_ceiling_clamped_to_24h(self):
+        assert parse_retry_after("999999", _NOW) == _NOW + timedelta(hours=24)
+
+    def test_zero_seconds_returns_none(self):
+        # delta-seconds of 0 is not a positive delay
+        assert parse_retry_after("0", _NOW) is None
+
+    def test_past_http_date_returns_none(self):
+        past = (_NOW - timedelta(hours=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        assert parse_retry_after(past, _NOW) is None
+
+
+class TestTransientHttpStatuses:
+    def test_429_and_408_are_transient(self):
+        assert 429 in TRANSIENT_HTTP_STATUSES
+        assert 408 in TRANSIENT_HTTP_STATUSES
+
+    def test_permanent_statuses_excluded(self):
+        for status in (400, 401, 403, 404, 410, 500, 503):
+            assert status not in TRANSIENT_HTTP_STATUSES

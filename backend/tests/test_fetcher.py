@@ -472,9 +472,22 @@ def _make_feed(**kwargs) -> SimpleNamespace:
         "last_fetch_duration_ms": None,
         "last_error": None,
         "last_published_at": None,
+        "retry_after_until": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
+
+
+def _update_values(session) -> dict:
+    """Extract column-name → value-clause from the update(Feed) the error path ran."""
+    stmt = session.execute.call_args[0][0]
+    return {col.name: val for col, val in stmt._values.items()}
+
+
+def _status_is_disabled(status_clause) -> bool:
+    """True only when status was set to the literal 'disabled' (not a case/error tier)."""
+    from sqlalchemy.sql.elements import BindParameter
+    return isinstance(status_clause, BindParameter) and status_clause.value == "disabled"
 
 
 def _make_session() -> AsyncMock:
@@ -532,6 +545,61 @@ class TestFetchFeedErrorHandling:
             await fetch_feed(feed, session)
         added = session.add.call_args[0][0]
         assert len(added.error_message) <= 500
+
+
+def _http_error(status: int, headers: dict | None = None):
+    import httpx
+    request = httpx.Request("GET", "https://example.com/feed.xml")
+    response = httpx.Response(status, request=request, headers=headers or {})
+    return httpx.HTTPStatusError(str(status), request=request, response=response)
+
+
+class TestFetchFeed429Transient:
+    """A 429 (rate limit) backs the feed off instead of disabling it on first hit."""
+
+    async def test_429_does_not_disable(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=_http_error(429)):
+            await fetch_feed(feed, session)
+        vals = _update_values(session)
+        assert not _status_is_disabled(vals["status"])
+
+    async def test_429_records_http_status(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=_http_error(429)):
+            await fetch_feed(feed, session)
+        added = session.add.call_args[0][0]
+        assert added.http_status == 429
+
+    async def test_429_sets_retry_after_until_from_header(self):
+        feed = _make_feed()
+        session = _make_session()
+        exc = _http_error(429, headers={"Retry-After": "600"})
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=exc):
+            await fetch_feed(feed, session)
+        rau = _update_values(session)["retry_after_until"].value
+        assert rau is not None
+        # 600 s is within [60 s, 24 h] bounds → honored as-is (allow a little slack)
+        assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
+
+    async def test_429_without_header_leaves_retry_after_null(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=_http_error(429)):
+            await fetch_feed(feed, session)
+        assert _update_values(session)["retry_after_until"].value is None
+
+    async def test_404_still_disables(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=_http_error(404)):
+            await fetch_feed(feed, session)
+        vals = _update_values(session)
+        assert _status_is_disabled(vals["status"])
+        assert vals["retry_after_until"].value is None
 
 
 class TestFetchFeedDuplicateRace:
@@ -629,3 +697,24 @@ class TestFetchFeedSuccessReset:
             await fetch_feed(feed, session)
 
         assert feed.last_error is None
+
+    async def test_success_clears_retry_after_until(self):
+        feed = _make_feed(
+            status="error",
+            retry_after_until=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
+        session = _make_session()
+
+        import feedparser
+        parsed = feedparser.FeedParserDict({
+            "bozo": False,
+            "entries": [],
+            "feed": feedparser.FeedParserDict({}),
+        })
+        with (
+            patch("app.fetcher.rss.fetch_url_with_ssrf_check", return_value="<rss/>"),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+        ):
+            await fetch_feed(feed, session)
+
+        assert feed.retry_after_until is None

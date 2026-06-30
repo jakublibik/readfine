@@ -22,7 +22,14 @@ from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
 from app.utils.http_client import READFINE_UA
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url, validate_feed_url
+from app.utils.url_validator import (
+    TRANSIENT_HTTP_STATUSES,
+    async_validate_feed_url,
+    fetch_url_with_ssrf_check,
+    parse_retry_after,
+    redact_url,
+    validate_feed_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +111,7 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         feed.status = "active"
         feed.last_error = None
         feed.fetch_error_count = 0
+        feed.retry_after_until = None
 
         latest_pub = _latest_published(parsed.entries)
         if latest_pub:
@@ -125,26 +133,37 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        is_4xx = http_status is not None and 400 <= http_status < 500
+        # 429/408 are transient (rate limit / timeout): back off via the normal
+        # error tier instead of disabling on first hit. Other 4xx stay permanent.
+        is_permanent_4xx = (
+            http_status is not None
+            and 400 <= http_status < 500
+            and http_status not in TRANSIENT_HTTP_STATUSES
+        )
         db.add(FetchLog(
             feed_id=feed_id,
             failed_at=datetime.now(timezone.utc),
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        if is_4xx:
+        if is_permanent_4xx:
             new_status = literal("disabled")
         else:
             new_status = case(
                 (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
                 else_=literal("error"),
             )
+        now = datetime.now(timezone.utc)
+        retry_after_until = None
+        if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
+            retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,
                 fetch_error_count=Feed.fetch_error_count + 1,
                 last_error=str(exc)[:500],
-                last_fetched_at=datetime.now(timezone.utc),
+                last_fetched_at=now,
+                retry_after_until=retry_after_until,
             )
         )
         await db.commit()

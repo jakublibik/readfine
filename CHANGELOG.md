@@ -17,6 +17,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   applies the filters on their own. Search moved from the user menu to an icon in
   the sidebar.
 
+### Fixed
+
+- A feed returning HTTP 429 (Too Many Requests) is no longer disabled on the first
+  hit. 429 and 408 are now treated as transient: the feed backs off via the normal
+  error tier and is only disabled after the usual run of consecutive failures. When
+  the server sends a `Retry-After` header, the scheduler waits at least that long
+  before re-fetching.
+
 ## [0.10.1] - 2026-06-27
 
 ### Added

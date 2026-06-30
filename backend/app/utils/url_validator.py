@@ -2,12 +2,56 @@
 import asyncio
 import ipaddress
 import socket
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 10
+
+# HTTP statuses that signal a *transient* failure (rate limit / timeout) rather
+# than a permanent one. Feeds returning these back off instead of being disabled.
+TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
+
+# Bounds for an honored Retry-After delay: never retry sooner than this, never
+# wait longer than this regardless of what the server asks for.
+_RETRY_AFTER_MIN = timedelta(seconds=60)
+_RETRY_AFTER_MAX = timedelta(hours=24)
+
+
+def parse_retry_after(value: str | None, now: datetime) -> datetime | None:
+    """Parse an HTTP ``Retry-After`` header into an absolute UTC timestamp.
+
+    Accepts either delta-seconds (RFC 7231) or an HTTP-date. The resulting delay
+    is clamped to ``[_RETRY_AFTER_MIN, _RETRY_AFTER_MAX]``. Returns ``None`` for
+    missing/blank/invalid input or a date that is not in the future.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+
+    delay: timedelta | None = None
+    if value.isdigit():
+        delay = timedelta(seconds=int(value))
+    else:
+        try:
+            parsed = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed is None:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        delay = parsed - now
+
+    if delay is None or delay <= timedelta(0):
+        return None
+    delay = max(_RETRY_AFTER_MIN, min(delay, _RETRY_AFTER_MAX))
+    return now + delay
 
 
 def redact_url(url: str) -> str:

@@ -26,6 +26,8 @@ class Feed(Base):
     fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).
+    retry_after_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_fetch_duration_ms: Mapped[int | None] = mapped_column(Integer)
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fetch_interval_min: Mapped[int | None] = mapped_column(SmallInteger)
