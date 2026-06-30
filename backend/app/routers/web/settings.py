@@ -837,6 +837,7 @@ async def settings_folder_create(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 
@@ -859,6 +860,7 @@ async def settings_folder_delete(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 
@@ -915,6 +917,7 @@ async def settings_folder_rename(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 

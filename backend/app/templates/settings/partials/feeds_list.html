@@ -150,3 +150,7 @@
     </div>
   {% endif %}
 </div>
+{% if with_folder_oob %}
+  {% set oob = true %}
+  {% include "settings/partials/folder_select.html" %}
+{% endif %}
