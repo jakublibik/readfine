@@ -26,6 +26,12 @@ class Feed(Base):
     fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).
+    retry_after_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # HTTP validators for conditional requests: sent back as If-None-Match /
+    # If-Modified-Since so an unchanged feed answers 304 Not Modified (no body).
+    etag: Mapped[str | None] = mapped_column(String(255))
+    last_modified: Mapped[str | None] = mapped_column(String(255))
     last_fetch_duration_ms: Mapped[int | None] = mapped_column(Integer)
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fetch_interval_min: Mapped[int | None] = mapped_column(SmallInteger)
@@ -68,6 +74,9 @@ class UserFeed(Base):
     description: Mapped[str | None] = mapped_column(Text)
     extract_readable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     readable_auto_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Why readable was auto-disabled: 'full_content' (feed already has full text) or
+    # 'blocked' (site refused/returned no extractable content). None when not disabled.
+    readable_auto_disabled_reason: Mapped[str | None] = mapped_column(String(20))
     ai_scoring_enabled: Mapped[bool | None] = mapped_column(Boolean)
     ai_summary_enabled: Mapped[bool | None] = mapped_column(Boolean)
     unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

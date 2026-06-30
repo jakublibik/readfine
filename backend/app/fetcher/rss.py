@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -22,7 +22,15 @@ from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
 from app.utils.http_client import READFINE_UA
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url, validate_feed_url
+from app.utils.url_validator import (
+    TRANSIENT_HTTP_STATUSES,
+    async_validate_feed_url,
+    fetch_url_conditional,
+    fetch_url_with_ssrf_check,
+    parse_retry_after,
+    redact_url,
+    validate_feed_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,22 +84,50 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     return parsed
 
 
-async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None, published_cutoff: datetime | None = None) -> int:
-    """Fetch a feed and store new articles. Returns number of new articles saved."""
+async def fetch_feed(
+    feed: Feed,
+    db: AsyncSession,
+    initial_limit: int | None = None,
+    published_cutoff: datetime | None = None,
+    prefetched: feedparser.FeedParserDict | None = None,
+) -> int:
+    """Fetch a feed and store new articles. Returns number of new articles saved.
+
+    *prefetched*: an already-fetched+parsed feed (e.g. from the subscribe/test step)
+    to reuse instead of downloading again — keeps the subscribe flow to a single
+    network request for rate-limited sites.
+    """
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
 
     try:
-        await async_validate_feed_url(feed_url)
-        auth = None
-        if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
-            auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
-        loop = asyncio.get_running_loop()
-        content = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
-        )
-        parsed = await loop.run_in_executor(None, feedparser.parse, content)
+        resp = None
+        if prefetched is not None:
+            parsed = prefetched
+        else:
+            await async_validate_feed_url(feed_url)
+            auth = None
+            if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
+                auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
+            loop = asyncio.get_running_loop()
+            resp = await loop.run_in_executor(
+                None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
+                feed.etag, feed.last_modified,
+            )
+            if resp.status_code == 304:
+                # Unchanged since last fetch — no body to parse. Record a successful
+                # poll and keep the stored validators.
+                feed.last_fetched_at = datetime.now(timezone.utc)
+                feed.last_fetch_duration_ms = int(time.monotonic() * 1000) - start_ms
+                feed.status = "active"
+                feed.last_error = None
+                feed.fetch_error_count = 0
+                feed.retry_after_until = None
+                await db.commit()
+                logger.info("Feed %d not modified (304)", feed_id)
+                return 0
+            parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
 
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
@@ -104,6 +140,15 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         feed.status = "active"
         feed.last_error = None
         feed.fetch_error_count = 0
+        feed.retry_after_until = None
+        # Update validators from this 200, but keep the last-known ones when the
+        # response omits a header (some CDNs send ETag only intermittently) so we
+        # don't lose the ability to make conditional requests.
+        if resp is not None:
+            if resp.etag:
+                feed.etag = resp.etag
+            if resp.last_modified:
+                feed.last_modified = resp.last_modified
 
         latest_pub = _latest_published(parsed.entries)
         if latest_pub:
@@ -125,26 +170,37 @@ async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = N
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        is_4xx = http_status is not None and 400 <= http_status < 500
+        # 429/408 are transient (rate limit / timeout): back off via the normal
+        # error tier instead of disabling on first hit. Other 4xx stay permanent.
+        is_permanent_4xx = (
+            http_status is not None
+            and 400 <= http_status < 500
+            and http_status not in TRANSIENT_HTTP_STATUSES
+        )
         db.add(FetchLog(
             feed_id=feed_id,
             failed_at=datetime.now(timezone.utc),
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        if is_4xx:
+        if is_permanent_4xx:
             new_status = literal("disabled")
         else:
             new_status = case(
                 (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
                 else_=literal("error"),
             )
+        now = datetime.now(timezone.utc)
+        retry_after_until = None
+        if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
+            retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,
                 fetch_error_count=Feed.fetch_error_count + 1,
                 last_error=str(exc)[:500],
-                last_fetched_at=datetime.now(timezone.utc),
+                last_fetched_at=now,
+                retry_after_until=retry_after_until,
             )
         )
         await db.commit()
@@ -193,16 +249,20 @@ async def _save_articles(
     existing_hashes: set[str] = set(existing_result.scalars())
 
     # Secondary dedup by URL — catches feeds that rotate GUIDs on updates (e.g. BBC).
-    candidate_urls = [
+    # Only URLs that identify a single item in this batch are usable as a dedup key
+    # (see _url_dedup_keys): a link shared by several items is a section/show-level
+    # URL (e.g. podcast episodes all pointing at the show page), so deduping on it
+    # would silently drop every new item after the first, since the shared URL is
+    # already in the DB while each item's GUID is unique.
+    url_dedup_keys = _url_dedup_keys(
         _safe_url(e.get("link")) for e in candidates.values()
-        if _safe_url(e.get("link"))
-    ]
+    )
     existing_urls: set[str] = set()
-    if candidate_urls:
+    if url_dedup_keys:
         url_result = await db.execute(
             select(Article.url).where(
                 Article.feed_id == feed.id,
-                Article.url.in_(candidate_urls),
+                Article.url.in_(url_dedup_keys),
             )
         )
         existing_urls = set(url_result.scalars())
@@ -474,6 +534,20 @@ def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
     plain = nh3.clean(content, tags=set())
     words = len(re.findall(r"\w+", plain))
     return words, max(1, round(words / 200))
+
+
+def _url_dedup_keys(urls) -> set[str]:
+    """URLs usable as a secondary dedup key: those identifying exactly one item in
+    the batch.
+
+    A link shared by several items is a section/show-level URL (e.g. podcast
+    episodes all linking to the show page), not an article identifier. Deduping on
+    such a URL would drop every new item whose link already exists in the DB even
+    though its GUID is unique — so shared URLs are excluded here. Falsy URLs are
+    ignored.
+    """
+    counts = Counter(u for u in urls if u)
+    return {u for u, n in counts.items() if n == 1}
 
 
 def _struct_to_dt(t) -> datetime:

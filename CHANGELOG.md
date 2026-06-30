@@ -9,6 +9,83 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-30
+
+### Added
+
+- Search is now also a filter view: alongside the text query you can scope to
+  feeds/folders, filter by labels (any / specific) and read status (all / unread /
+  read), and choose the sort (relevance / newest / oldest). Leaving the text empty
+  applies the filters on their own. Search moved from the user menu to an icon in
+  the sidebar.
+- Feeds are now fetched conditionally: Readfine remembers each feed's `ETag` /
+  `Last-Modified` and sends them back on the next poll, so an unchanged feed answers
+  `304 Not Modified` with no body and the download and parse are skipped entirely.
+  Less bandwidth, and lighter on rate-limited sites.
+- Catch me up & briefings now have a dedicated label filter (any label / specific
+  labels, OR) shown alongside the feed scope, replacing the old "Labeled only"
+  relevance radio. The minimum-score filter is now an independent toggle (shown only
+  when scoring is configured) rather than bundled with labels. The "Since yesterday"
+  period is now labelled "Yesterday+".
+- Adding a feed lets you set its fetch interval from the subscribe form, and owners
+  of a private or solely-subscribed feed can change the interval when editing it.
+  Shared public feeds show the interval read-only (only an admin can change it).
+- Errored feeds now show when they will next be retried, both on the feed list and
+  the feed detail page; a feed auto-disabled after repeated failures says so
+  explicitly instead of leaving the next fetch ambiguous.
+
+### Changed
+
+- Switching between sections (Starred, Labeled, folders, feeds) now shows a brief
+  loading overlay over the article list, so the sidebar highlight no longer appears
+  to change before the list it points at has loaded.
+- Creating, renaming, or deleting a folder immediately updates the folder dropdown in
+  the add-feed form without a page reload.
+
+### Fixed
+
+- Feeds where every item points at one shared link (e.g. a podcast whose episodes all
+  link to the show page) no longer have every new item after the first silently
+  dropped as a duplicate; items are now de-duplicated by links that actually identify
+  a single item, falling back to the unique GUID otherwise.
+- Reddit (and similar) article content built from a header-less layout table no longer
+  overflows the reading panel: such tables now stack the image above the text, images
+  are constrained to the column width, and genuine data tables scroll horizontally
+  instead of overflowing.
+- Text search combined with a read-status filter no longer skips results while
+  scrolling: mark-as-read-on-scroll is disabled for that specific case (where it
+  shifted the offset-paginated result set), leaving plain search and the filter view
+  unaffected.
+
+- A feed returning HTTP 429 (Too Many Requests) is no longer disabled on the first
+  hit. 429 and 408 are now treated as transient: the feed backs off via the normal
+  error tier and is only disabled after the usual run of consecutive failures. When
+  the server sends a `Retry-After` header, the scheduler waits at least that long
+  before re-fetching.
+- Adding a feed now costs a single network request instead of up to three. The
+  "Test" step caches the fetched feed briefly and Subscribe reuses it for both the
+  title and the initial article import, so rate-limited sites (e.g. Reddit) no
+  longer return 429 mid-subscribe.
+- When several feeds share a host (e.g. multiple Reddit subreddits), a scheduled
+  fetch no longer requests them all at once. Requests to a given host are now
+  serialized within a fetch round — different hosts still run in parallel — which
+  flattens the burst that made some of those feeds return HTTP 429.
+- Readable extraction that returns no usable content — e.g. a Reddit article page
+  that serves a bot-verification wall (HTTP 200) instead of the article — is no
+  longer saved as a blank "successful" extraction that rendered an empty body. Such
+  articles now show their original feed content, and a feed whose pages keep
+  extracting nothing auto-disables full-content extraction after repeated empties
+  (the same way persistent HTTP 403 blocks already did) instead of re-fetching every
+  page forever.
+- The auto-disabled notice for full-content extraction now states why it was turned
+  off — the feed already delivers full articles, or the site blocked extraction /
+  returned no readable content — instead of always claiming the site blocked it.
+- The article view no longer flickers an endless "Extracting full content…" spinner
+  for an article whose extraction failed and is waiting to retry; it shows the feed
+  content quietly, and the spinner appears only while a first attempt is in flight.
+- "Extract full content" from the article menu no longer momentarily drops the
+  article's star, archive, or label state from the action bar.
+
 ## [0.10.1] - 2026-06-27
 
 ### Added

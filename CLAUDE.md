@@ -20,8 +20,8 @@ article scoring, and AI summaries, scoring and briefings.
   cookie + `x-csrftoken` header; HTMX requests attach it via `csrf.js`). The API is
   exempt (it authenticates with a JWT in the `Authorization` header), as are the auth
   forms (`/login`, `/register`, `/logout`, `/reset-password`, `/resend-verification`)
-- **Git workflow**: `dev` = development (default branch), `master` = production/release;
-  merge to `master` only on release
+- **Git workflow**: `dev` = active development, `master` = production/release and the
+  GitHub default branch; new work branches off `dev`, merge to `master` only on release
 
 ## Status
 Released and on the post-release `0.x` line — first public release was v0.9.0 (2026-06-20);

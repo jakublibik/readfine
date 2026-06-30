@@ -91,7 +91,8 @@ class UserCatchupConfig(Base):
     scope_include: Mapped[str | None] = mapped_column(Text, nullable=True)
     period: Mapped[str] = mapped_column(String(20), nullable=False, default="7days")
     filter_status: Mapped[str] = mapped_column(String(20), nullable=False, default="all")
-    filter_labeled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    filter_labeled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # legacy, superseded by label_filter
+    label_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array: ["any"] or ["label:3", …]
     filter_score_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     article_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
     model_slot: Mapped[str] = mapped_column(String(10), nullable=False, default="fast")

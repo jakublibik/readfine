@@ -7,10 +7,13 @@ import pytest
 
 from app.services.readable_service import (
     apply_readable_result,
+    extract_readable,
     _extract_with_trafilatura,
     _extract_with_readability,
+    _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
+    _EMPTY_CONTENT_MSG,
     _MAX_RETRIES,
     _BACKOFF_MINUTES,
 )
@@ -68,6 +71,79 @@ class TestApplyReadableResultSuccess:
         article = _make_article()
         apply_readable_result(article, content, None, None)
         assert article.estimated_read_min == 2
+
+
+# ── apply_readable_result — empty / whitespace content ────────────────────────
+
+class TestApplyReadableResultEmpty:
+    def test_whitespace_only_content_not_success(self):
+        # A whitespace string is truthy but renders blank — must not be stored as
+        # success (it would hide the fuller feed content). Regression: Reddit posts.
+        article = _make_article()
+        apply_readable_result(article, "  \n\t ", None, None)
+        assert article.readable_status != "success"
+        assert article.readable_content is None
+
+    def test_whitespace_only_content_goes_to_retry(self):
+        article = _make_article(retries=0)
+        apply_readable_result(article, "   ", None, None)
+        assert article.readable_retries == 1
+
+    def test_real_content_still_success(self):
+        article = _make_article()
+        apply_readable_result(article, "  <p>Real text</p>  ", None, None)
+        assert article.readable_status == "success"
+
+
+# ── _has_visible_content ──────────────────────────────────────────────────────
+
+class TestHasVisibleContent:
+    def test_text_is_visible(self):
+        assert _has_visible_content("<p>Hello</p>") is True
+
+    def test_whitespace_only_not_visible(self):
+        assert _has_visible_content("<div>  </div>") is False
+
+    def test_empty_string_not_visible(self):
+        assert _has_visible_content("") is False
+
+    def test_blank_string_not_visible(self):
+        assert _has_visible_content("   \n ") is False
+
+    def test_media_only_is_visible(self):
+        assert _has_visible_content('<div><img src="x.jpg"></div>') is True
+
+    def test_iframe_only_is_visible(self):
+        assert _has_visible_content('<p><iframe src="https://y/embed/z"></iframe></p>') is True
+
+
+# ── extract_readable — collapse to empty after sanitization ───────────────────
+
+class TestExtractReadableCollapse:
+    def test_collapsed_content_returns_empty_msg(self):
+        # Extractor yields markup that sanitizes/drops down to pure whitespace.
+        with (
+            patch("app.services.readable_service._fetch_html",
+                  return_value=("<html><body>x</body></html>", None, 200)),
+            patch("app.services.readable_service._extract_with_trafilatura",
+                  return_value="<div>   </div>"),
+        ):
+            content, error, status = extract_readable("https://example.com/a")
+        assert content is None
+        assert error == _EMPTY_CONTENT_MSG
+        assert status is None
+
+    def test_real_content_passes_through(self):
+        with (
+            patch("app.services.readable_service._fetch_html",
+                  return_value=("<html><body>x</body></html>", None, 200)),
+            patch("app.services.readable_service._extract_with_trafilatura",
+                  return_value="<p>Genuine article body</p>"),
+        ):
+            content, error, status = extract_readable("https://example.com/a")
+        assert error is None
+        assert content is not None
+        assert "Genuine article body" in content
 
 
 # ── apply_readable_result — 4xx failure ───────────────────────────────────────

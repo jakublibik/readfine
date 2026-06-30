@@ -1,7 +1,15 @@
-{% if search_query %}
+{% if search_query or filter_active %}
 <div class="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
-  <svg class="w-3.5 h-3.5 text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
+  <button data-action="open-search-again"
+          class="text-blue-400 hover:text-blue-600 flex-shrink-0 bg-transparent border-0 cursor-pointer p-0.5"
+          title="New search">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
+  </button>
+  {% if search_query %}
   <span class="text-gray-500">Results for: <strong class="text-gray-800">{{ search_query }}</strong></span>
+  {% else %}
+  <span class="text-gray-500">Filtered results</span>
+  {% endif %}
   <button data-action="refresh-articles"
           class="ml-auto text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0.5"
           title="Clear search">
@@ -24,7 +32,7 @@
   {% endif %}
   <div aria-hidden="true" style="height:100vh"></div>
 {% else %}
-  {% if not search_query and has_feeds == false %}
+  {% if not search_query and not filter_active and has_feeds == false %}
   <div class="mt-10 mx-8">
     <div class="bg-green-50 border border-green-200 rounded-lg p-6 text-center space-y-3 dark:bg-green-950/40 dark:border-green-900">
       <p class="text-base font-semibold text-green-900 dark:text-green-200">Welcome to Readfine!</p>
@@ -41,7 +49,7 @@
   </div>
   {% else %}
   <div class="flex items-center justify-center h-48 text-gray-400 text-sm">
-    {% if search_query %}No results found.{% else %}No articles found.{% endif %}
+    {% if search_query or filter_active %}No results found.{% else %}No articles found.{% endif %}
   </div>
   {% endif %}
 {% endif %}

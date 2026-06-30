@@ -2,6 +2,8 @@
 // Replaces the inline <script> that was previously embedded in scope_selector.html.
 (function () {
   function initScopeSelector(container) {
+    if (container._scopeInited) return;
+    container._scopeInited = true;
     var sid = container.dataset.selectorId;
     if (!sid) return;
 
@@ -74,5 +76,19 @@
       });
   }
 
-  document.querySelectorAll('.scope-selector').forEach(initScopeSelector);
+  function initAll(root) {
+    (root || document).querySelectorAll('.scope-selector').forEach(initScopeSelector);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { initAll(document); });
+  } else {
+    initAll(document);
+  }
+
+  // Selectors loaded dynamically (e.g. the search modal swapped in via HTMX)
+  // need initialising once their markup settles.
+  document.body.addEventListener('htmx:afterSettle', function (e) {
+    initAll(e.detail.target);
+  });
 })();

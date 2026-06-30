@@ -51,12 +51,18 @@
 <div id="feed-test-result" class="sm:col-span-2 min-h-0"></div>
       <input type="text" name="custom_title" placeholder="Custom title (optional)"
              class="min-w-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <select name="folder_id" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <option value="">No folder</option>
-        {% for folder in folders %}
-          <option value="{{ folder.id }}">{{ folder.name }}</option>
-        {% endfor %}
-      </select>
+      {% include "settings/partials/folder_select.html" %}
+      <label class="sm:col-span-2 flex items-center gap-2 text-sm text-gray-600">
+        <span class="whitespace-nowrap">Fetch interval</span>
+        <select name="fetch_interval_min"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          <option value="">Default</option>
+          {% for m in [15,30,60,90,120,180,360,720,1440] %}
+            <option value="{{ m }}">{{ m }} min</option>
+          {% endfor %}
+        </select>
+        <span class="text-xs text-gray-400">How often new articles are checked. Applies only to feeds you originate; "Default" uses the server setting.</span>
+      </label>
     </div>
     <div class="flex items-start gap-2">
       <input type="checkbox" id="feed-is-private" name="is_private"

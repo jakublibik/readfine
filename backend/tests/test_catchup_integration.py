@@ -11,8 +11,9 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
-from app.models.article import Article
+from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
+from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.services.catchup_service import fetch_catchup_articles
 
@@ -73,10 +74,81 @@ async def test_trimmed_articles_excluded_from_catchup(pg):
     results = await fetch_catchup_articles(
         user_id=user.id, tz_str="UTC", db=pg,
         period="7days", scope_include=None,
-        filter_status="all", filter_labeled=False, filter_score_min=None,
+        filter_status="all", label_filter=None, filter_score_min=None,
     )
 
     titles = {r.title for r in results}
     ids = {r.id for r in results}
     assert normal.id in ids
     assert "Trimmed" not in titles
+
+
+async def _label(session, user, name):
+    lbl = Label(user_id=user.id, name=name)
+    session.add(lbl)
+    await session.flush()
+    return lbl
+
+
+async def _assign_label(session, user, article, label):
+    session.add(ArticleLabel(user_id=user.id, article_id=article.id, label_id=label.id))
+    await session.flush()
+
+
+async def test_label_filter_any(pg):
+    user, feed = await _setup(pg)
+    labeled = await _article(pg, feed, title="Labeled")
+    await _article(pg, feed, title="Unlabeled")
+    lbl = await _label(pg, user, "News")
+    await _assign_label(pg, user, labeled, lbl)
+
+    results = await fetch_catchup_articles(
+        user_id=user.id, tz_str="UTC", db=pg,
+        period="7days", scope_include=None,
+        filter_status="all", label_filter='["any"]', filter_score_min=None,
+    )
+
+    titles = {r.title for r in results}
+    assert "Labeled" in titles
+    assert "Unlabeled" not in titles
+
+
+async def test_label_filter_specific(pg):
+    user, feed = await _setup(pg)
+    a_news = await _article(pg, feed, title="News article")
+    a_tech = await _article(pg, feed, title="Tech article")
+    news = await _label(pg, user, "News")
+    tech = await _label(pg, user, "Tech")
+    await _assign_label(pg, user, a_news, news)
+    await _assign_label(pg, user, a_tech, tech)
+
+    results = await fetch_catchup_articles(
+        user_id=user.id, tz_str="UTC", db=pg,
+        period="7days", scope_include=None,
+        filter_status="all", label_filter=f'["label:{news.id}"]', filter_score_min=None,
+    )
+
+    titles = {r.title for r in results}
+    assert titles == {"News article"}
+
+
+async def test_label_filter_combined_with_score(pg):
+    user, feed = await _setup(pg)
+    lbl = await _label(pg, user, "News")
+
+    high = await _article(pg, feed, title="High score")
+    low = await _article(pg, feed, title="Low score")
+    await _assign_label(pg, user, high, lbl)
+    await _assign_label(pg, user, low, lbl)
+    pg.add(UserArticleState(user_id=user.id, article_id=high.id, ai_score=0.9))
+    pg.add(UserArticleState(user_id=user.id, article_id=low.id, ai_score=0.2))
+    await pg.flush()
+
+    results = await fetch_catchup_articles(
+        user_id=user.id, tz_str="UTC", db=pg,
+        period="7days", scope_include=None,
+        filter_status="all", label_filter='["any"]', filter_score_min=0.5,
+    )
+
+    titles = {r.title for r in results}
+    assert titles == {"High score"}

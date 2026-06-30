@@ -41,9 +41,17 @@ from app.models.label import Label
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.fetcher.scheduler import compute_next_fetch_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
-from app.services.feed import cleanup_user_feeds, list_user_feeds, subscribe, subscribe_scrape, unsubscribe
+from app.services.feed import (
+    cache_feed_preview,
+    cleanup_user_feeds,
+    list_user_feeds,
+    subscribe,
+    subscribe_scrape,
+    unsubscribe,
+)
 from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
@@ -190,6 +198,20 @@ async def _get_feeds_context(user, db):
         article_counts = {row.feed_id: row.cnt for row in counts_result}
     else:
         article_counts = {}
+    # Annotate errored feeds with their predicted next fetch (transient, in-memory).
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
+    min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    for uf in user_feeds:
+        uf.feed.next_fetch_at = (
+            compute_next_fetch_at(
+                uf.feed,
+                default_interval_min=default_interval,
+                min_interval_min=min_interval,
+            )
+            if uf.feed.status == "error"
+            else None
+        )
     return user_feeds, folders, article_counts
 
 
@@ -309,6 +331,11 @@ async def settings_feeds_test(
 
     feed_title = parsed.feed.get("title") or url
     entry_count = len(parsed.entries)
+    # Cache this parse so a follow-up Subscribe reuses it instead of re-fetching
+    # (single network request per add — important for rate-limited sites). Public
+    # feeds only; auth'd fetches are user-specific and not shared.
+    if not has_auth:
+        cache_feed_preview(url, parsed)
     return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
         "feed_title": feed_title,
         "entry_count": entry_count,
@@ -336,6 +363,8 @@ async def settings_feeds_subscribe(
     # imports up to import_limit newest articles regardless of age (e.g. archive import).
     import_mode = "latest" if form.get("import_mode") == "latest" else "recent"
     import_limit = max(1, min(safe_int(form.get("import_limit")) or 500, 100000))
+    interval_raw = safe_int(form.get("fetch_interval_min"))
+    fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15)) if interval_raw else None
 
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
@@ -344,7 +373,8 @@ async def settings_feeds_subscribe(
         uf = await subscribe(user=user, url=url, folder_id=folder_id,
                              custom_title=custom_title, fetch_auth_user=fetch_auth_user,
                              fetch_auth_pass=fetch_auth_pass, is_private=is_private, db=db,
-                             import_mode=import_mode, import_limit=import_limit)
+                             import_mode=import_mode, import_limit=import_limit,
+                             fetch_interval_min=fetch_interval_min)
         from urllib.parse import quote
         redirect_url = f"/settings/feeds?added={quote(uf.feed.title)}"
         if request.headers.get("HX-Request"):
@@ -711,10 +741,18 @@ async def settings_feed_edit(
         app_s and app_s.ai_enabled
         and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
     )
+    is_sole_subscriber = uf.feed.subscriber_count == 1
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
-        "is_sole_subscriber": uf.feed.subscriber_count == 1,
+        "next_fetch_at": compute_next_fetch_at(
+            uf.feed,
+            default_interval_min=(app_s.default_fetch_interval_min if app_s else None) or 60,
+            min_interval_min=(app_s.min_fetch_interval_min if app_s else None) or 15,
+        ),
+        "is_sole_subscriber": is_sole_subscriber,
+        "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
+        "default_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,
     })
@@ -752,14 +790,19 @@ async def settings_feed_update(
     uf.folder_id = folder_id
     uf.extract_readable = form.get("extract_readable") == "true"
     uf.readable_auto_disabled = False
+    uf.readable_auto_disabled_reason = None
     if form.get("ai_summary_enabled_present") == "1":
         uf.ai_summary_enabled = form.get("ai_summary_enabled") == "on"
 
-    interval_raw = safe_int(form.get("fetch_interval_min"))
-    if interval_raw is not None:
-        uf.feed.fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15))
-    else:
-        uf.feed.fetch_interval_min = None
+    # Interval is feed-wide. Only let the user change it when the feed is
+    # effectively theirs (private or sole subscriber) or they're an admin;
+    # on a shared public feed it's read-only (see feed_edit.html).
+    if user.role == "admin" or uf.feed.is_private or uf.feed.subscriber_count == 1:
+        interval_raw = safe_int(form.get("fetch_interval_min"))
+        if interval_raw is not None:
+            uf.feed.fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15))
+        else:
+            uf.feed.fetch_interval_min = None
 
     if uf.feed.is_private or uf.feed.subscriber_count == 1:
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
@@ -824,6 +867,7 @@ async def settings_folder_create(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 
@@ -846,6 +890,7 @@ async def settings_folder_delete(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 
@@ -902,6 +947,7 @@ async def settings_folder_rename(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "with_folder_oob": True,
     })
 
 

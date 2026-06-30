@@ -1,8 +1,10 @@
 """Feed subscription service: subscribe, unsubscribe, list."""
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
+import feedparser
 from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
@@ -22,6 +24,35 @@ logger = logging.getLogger(__name__)
 # Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
 _initial_fetch_in_progress: set[int] = set()
 
+# Short-lived cache of a fetched+parsed feed, shared between the "Test feed" step
+# and Subscribe so that adding a feed costs a single network request. Without it,
+# test + subscribe + initial fetch are three requests within seconds, which trips
+# rate-limited sites (e.g. Reddit) into a 429. Public/no-auth feeds only; keyed by
+# the (normalized) feed URL. In-process cache — fine for the single-process deploy,
+# same as _initial_fetch_in_progress.
+_FEED_PREVIEW_TTL = 120.0  # seconds
+_feed_preview_cache: dict[str, tuple[float, feedparser.FeedParserDict]] = {}
+
+
+def cache_feed_preview(url: str, parsed: feedparser.FeedParserDict) -> None:
+    """Store a successful public-feed parse for brief reuse by subscribe()."""
+    now = time.monotonic()
+    for stale in [k for k, (exp, _) in _feed_preview_cache.items() if exp <= now]:
+        _feed_preview_cache.pop(stale, None)
+    _feed_preview_cache[url] = (now + _FEED_PREVIEW_TTL, parsed)
+
+
+def get_cached_feed_preview(url: str) -> feedparser.FeedParserDict | None:
+    """Return a still-fresh cached parse for *url*, else None (evicting if expired)."""
+    entry = _feed_preview_cache.get(url)
+    if entry is None:
+        return None
+    expiry, parsed = entry
+    if expiry <= time.monotonic():
+        _feed_preview_cache.pop(url, None)
+        return None
+    return parsed
+
 
 async def subscribe(
     user: User,
@@ -35,6 +66,7 @@ async def subscribe(
     trigger_initial_fetch: bool = True,
     import_mode: str = "recent",
     import_limit: int = 500,
+    fetch_interval_min: int | None = None,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -89,8 +121,12 @@ async def subscribe(
                 raise ValueError("Already subscribed to this feed")
 
     if feed is None:
-        # Fetch feed to discover title / validate URL
-        parsed = await fetch_and_parse_url(url)
+        # Reuse a recent Test-step parse if available so the whole add flow is a
+        # single network request (avoids tripping rate limits like Reddit's). Only
+        # public feeds are cached; private/auth feeds always fetch fresh.
+        parsed = None if is_private else get_cached_feed_preview(url)
+        if parsed is None:
+            parsed = await fetch_and_parse_url(url)
         title = (
             custom_title
             or parsed.feed.get("title")
@@ -106,6 +142,7 @@ async def subscribe(
             title=title[:255],
             site_url=site_url[:2048] if site_url else None,
             subscriber_count=0,
+            fetch_interval_min=fetch_interval_min,
         )
         db.add(feed)
         await db.flush()  # get feed.id
@@ -155,12 +192,19 @@ async def subscribe(
     # it twice. (Downstream dedup makes that safe, just wasteful.)
     if trigger_initial_fetch and feed.id not in _initial_fetch_in_progress:
         _initial_fetch_in_progress.add(feed.id)
-        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit))
+        # Reuse the parse we already have (new public feed) so the initial import
+        # doesn't re-download — one fetch for the whole subscribe.
+        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit, prefetched=parsed))
 
     return user_feed
 
 
-async def _initial_fetch(feed_id: int, import_mode: str = "recent", import_limit: int = 500) -> None:
+async def _initial_fetch(
+    feed_id: int,
+    import_mode: str = "recent",
+    import_limit: int = 500,
+    prefetched: feedparser.FeedParserDict | None = None,
+) -> None:
     """Run an immediate fetch for a newly subscribed feed.
 
     import_mode "recent" (default): import only articles published within the retention
@@ -194,7 +238,8 @@ async def _initial_fetch(feed_id: int, import_mode: str = "recent", import_limit
                 if days:
                     published_cutoff = datetime.now(timezone.utc) - timedelta(days=days)
             await fetch_feed(
-                feed, session, initial_limit=initial_limit, published_cutoff=published_cutoff
+                feed, session, initial_limit=initial_limit, published_cutoff=published_cutoff,
+                prefetched=prefetched,
             )
     finally:
         _initial_fetch_in_progress.discard(feed_id)

@@ -53,6 +53,7 @@
 
   <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
+    {% if can_edit_interval %}
     <select name="fetch_interval_min"
             class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       <option value="">Default</option>
@@ -63,6 +64,16 @@
       {% endfor %}
     </select>
     <p class="text-xs text-gray-400 mt-1">How often this feed is checked for new articles. "Default" uses the server setting.</p>
+    {% else %}
+    <p class="text-sm text-gray-600">
+      {% if uf.feed.fetch_interval_min %}
+        Every {{ uf.feed.fetch_interval_min }} min
+      {% else %}
+        Every {{ default_interval_min }} min <span class="text-gray-400">(server default)</span>
+      {% endif %}
+    </p>
+    <p class="text-xs text-gray-400 mt-1">This is a shared feed — the fetch interval is managed by the server administrator.</p>
+    {% endif %}
   </div>
 
   <div>
@@ -82,7 +93,11 @@
     {% if uf.readable_auto_disabled %}
     <div class="mt-2 flex items-start gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
       <span class="flex-shrink-0">⚠</span>
-      <span>Automatically disabled — the site blocked content extraction. You can re-enable it above, but it may be disabled again.</span>
+      {% if uf.readable_auto_disabled_reason == 'full_content' %}
+      <span>Automatically disabled — this feed already delivers full articles, so extraction was turned off. You can re-enable it above if needed.</span>
+      {% else %}
+      <span>Automatically disabled — the site blocked extraction or returned no readable content (e.g. a bot-verification wall). You can re-enable it above, but it may be disabled again.</span>
+      {% endif %}
     </div>
     {% endif %}
   </div>
@@ -202,6 +217,14 @@
   {% if uf.feed.last_error %}
   <div class="px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
     <span class="font-medium">Last error:</span> {{ uf.feed.last_error }}
+    {% if next_fetch_at %}
+    <div class="mt-1 text-red-600/80">Next fetch
+      <time datetime="{{ next_fetch_at.isoformat() }}"
+            title="{{ next_fetch_at | localtime('long') }}">~ {{ next_fetch_at | localtime('short') }}</time>
+    </div>
+    {% elif uf.feed.status == 'disabled' %}
+    <div class="mt-1 text-red-600/80">No fetch scheduled — this feed was auto-disabled after repeated errors. Save changes to re-enable it.</div>
+    {% endif %}
   </div>
   {% endif %}
 

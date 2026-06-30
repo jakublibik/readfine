@@ -1,0 +1,10 @@
+{# Folder dropdown for the subscribe form. Rendered inline in feeds.html and
+   re-rendered out-of-band after folder create/rename/delete so the new list of
+   folders is immediately selectable without a page reload. #}
+<select name="folder_id" id="subscribe-folder-select"{% if oob %} hx-swap-oob="true"{% endif %}
+        class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+  <option value="">No folder</option>
+  {% for folder in folders %}
+    <option value="{{ folder.id }}"{% if selected_folder_id and folder.id == selected_folder_id %} selected{% endif %}>{{ folder.name }}</option>
+  {% endfor %}
+</select>

@@ -38,4 +38,26 @@ document.addEventListener('DOMContentLoaded', function () {
       activate('feeds');
     }
   });
+
+  // Folder create/rename/delete also re-renders the subscribe form's folder dropdown
+  // out-of-band. That replaces the <select> node, so the user's current choice would be
+  // lost — capture it before the swap and restore it after (unless that folder is gone).
+  var savedFolderValue = null;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    var cfg = evt.detail.requestConfig;
+    if (cfg && cfg.path && cfg.path.indexOf('/settings/folders') !== -1) {
+      var sel = document.getElementById('subscribe-folder-select');
+      savedFolderValue = sel ? sel.value : null;
+    }
+  });
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    var cfg = evt.detail.requestConfig;
+    if (cfg && cfg.path && cfg.path.indexOf('/settings/folders') !== -1 && savedFolderValue !== null) {
+      var sel = document.getElementById('subscribe-folder-select');
+      if (sel && Array.prototype.some.call(sel.options, function (o) { return o.value === savedFolderValue; })) {
+        sel.value = savedFolderValue;
+      }
+      savedFolderValue = null;
+    }
+  });
 });

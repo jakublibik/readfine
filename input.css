@@ -7,3 +7,27 @@
 
 .ai-loading-indicator { display: none; }
 .ai-loading-indicator.htmx-request { display: flex; }
+
+/* Article feed/readable content: media never overflows the reading panel */
+.article-body img { max-width: 100%; height: auto; }
+
+/* Layout tables (no header cells — e.g. Reddit RSS image+meta wrappers):
+   unwrap to normal block flow so the image sits above the text instead of
+   being forced side-by-side and overflowing. */
+.article-body table:not(:has(th)),
+.article-body table:not(:has(th)) > tbody,
+.article-body table:not(:has(th)) > tbody > tr,
+.article-body table:not(:has(th)) > tbody > tr > td {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+}
+
+/* Genuine data tables (with <th>): scroll horizontally instead of overflowing */
+.article-body table:has(th) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}

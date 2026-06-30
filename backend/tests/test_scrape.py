@@ -1,6 +1,6 @@
 """Tests for web scraping feed type: extract_article_links, generate_selector_prompt,
 fetch_scrape_feed (error handling), and subscribe_scrape service."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -34,6 +34,7 @@ def _make_scrape_feed(**kwargs) -> SimpleNamespace:
         "last_fetched_at": None,
         "last_fetch_duration_ms": None,
         "last_error": None,
+        "retry_after_until": None,
         "type_config": {"article_links_selector": "article.item h2 a"},
     }
     defaults.update(kwargs)
@@ -412,7 +413,11 @@ class TestFetchScrapeFeedSuccess:
         assert count == 3
 
     async def test_sets_feed_active_on_success(self):
-        feed = _make_scrape_feed(status="error", fetch_error_count=2)
+        feed = _make_scrape_feed(
+            status="error",
+            fetch_error_count=2,
+            retry_after_until=datetime.now(timezone.utc) + timedelta(hours=1),
+        )
         session = _make_session()
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
@@ -420,6 +425,7 @@ class TestFetchScrapeFeedSuccess:
         assert feed.status == "active"
         assert feed.fetch_error_count == 0
         assert feed.last_error is None
+        assert feed.retry_after_until is None
 
     async def test_extract_readable_false_sets_skipped(self):
         """Articles get readable_status='skipped' when extract_readable is False."""
@@ -505,6 +511,52 @@ class TestFetchScrapeFeedErrors:
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
             result = await fetch_scrape_feed(feed, session)
         assert result == 0
+
+
+def _scrape_http_error(status: int, headers: dict | None = None):
+    import httpx
+    request = httpx.Request("GET", "https://example.com/news")
+    response = httpx.Response(status, request=request, headers=headers or {})
+    return httpx.HTTPStatusError(str(status), request=request, response=response)
+
+
+def _scrape_update_values(session) -> dict:
+    stmt = session.execute.call_args[0][0]
+    return {col.name: val for col, val in stmt._values.items()}
+
+
+def _scrape_status_is_disabled(status_clause) -> bool:
+    from sqlalchemy.sql.elements import BindParameter
+    return isinstance(status_clause, BindParameter) and status_clause.value == "disabled"
+
+
+class TestFetchScrapeFeed429Transient:
+    """A 429 backs the scrape feed off instead of disabling it (403 still disables)."""
+
+    async def test_429_does_not_disable(self):
+        feed = _make_scrape_feed()
+        session = _make_session()
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(429)):
+            await fetch_scrape_feed(feed, session)
+        assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
+
+    async def test_429_sets_retry_after_until_from_header(self):
+        feed = _make_scrape_feed()
+        session = _make_session()
+        exc = _scrape_http_error(429, headers={"Retry-After": "600"})
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+            await fetch_scrape_feed(feed, session)
+        rau = _scrape_update_values(session)["retry_after_until"].value
+        assert rau is not None
+        assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
+
+    async def test_403_still_disables(self):
+        feed = _make_scrape_feed()
+        session = _make_session()
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(403)):
+            await fetch_scrape_feed(feed, session)
+        assert _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
 
 # ── subscribe_scrape service ──────────────────────────────────────────────────

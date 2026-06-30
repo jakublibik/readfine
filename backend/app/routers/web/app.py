@@ -483,25 +483,23 @@ async def htmx_refresh_feed(
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
 async def htmx_search_modal(
     request: Request,
+    scope: str | None = Query(None),
+    sort: str | None = Query(None),
+    status: str | None = Query(None),
+    labels: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db)
-
-    seen_folder_ids: set[int] = set()
-    folders: list[tuple[int, str]] = []
-    for uf in user_feeds:
-        if uf.folder_id and uf.folder_id not in seen_folder_ids:
-            seen_folder_ids.add(uf.folder_id)
-            folders.append((uf.folder_id, uf.folder.name))
-    folders.sort(key=lambda x: x[1].lower())
-
-    feeds = [(uf.feed_id, uf.custom_title or uf.feed.title) for uf in user_feeds]
-    feeds.sort(key=lambda x: x[1].lower())
+    user_labels = await list_labels(user, db)
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {
-        "folders": folders,
-        "feeds": feeds,
+        "user_feeds": user_feeds,
+        "labels": user_labels,
+        "scope_value": scope or None,
+        "sort_value": sort or None,
+        "status_value": status or None,
+        "label_value": labels or None,
     })
 
 
@@ -572,12 +570,16 @@ async def htmx_article_list(
     request: Request,
     feed_id: int | None = Query(None),
     folder_id: int | None = Query(None),
+    scope_include: str | None = Query(None),
     label_id: int | None = Query(None),
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
+    sort: str | None = Query(None),
+    read_status: str | None = Query(None),
+    label_filter: str | None = Query(None),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -587,7 +589,16 @@ async def htmx_article_list(
     )
     settings = settings_result.scalar_one_or_none()
 
+    # The search modal can submit with an empty query term as a pure filter view
+    # (scope / labels / status), so "search mode" is any of those, not just q.
+    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+
     sort_order = settings.default_sort_order if settings else "newest"
+    # Search has its own sort selector (relevance default); other views use the
+    # user's configured list sort. Without a query term relevance is meaningless,
+    # so list_articles' non-FTS branch treats "relevance" as newest.
+    if is_search:
+        sort_order = sort or "relevance"
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     label_display = settings.label_display if settings else "indicator"
@@ -596,8 +607,9 @@ async def htmx_article_list(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
-    if q or starred_only or archived_only:
-        # Search and state-based views always show everything
+    if is_search or starred_only or archived_only:
+        # Search uses its own status selector (read_status below); other
+        # state-based views always show everything.
         effective_unread_only = False
     elif unread_only:
         # Explicit "Unread" nav item — always filter
@@ -611,7 +623,8 @@ async def htmx_article_list(
         else:  # adaptive
             probe = await list_articles(
                 user=user, db=db,
-                feed_id=feed_id, folder_id=folder_id, label_id=label_id,
+                feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+                label_id=label_id,
                 labeled_only=labeled_only,
                 unread_only=True, limit=1,
             )
@@ -622,8 +635,11 @@ async def htmx_article_list(
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
+        scope_include=scope_include,
         label_id=label_id,
+        label_filter=label_filter,
         unread_only=effective_unread_only,
+        read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
@@ -675,6 +691,8 @@ async def htmx_article_list(
         filter_params["feed_id"] = feed_id
     if folder_id is not None:
         filter_params["folder_id"] = folder_id
+    if scope_include:
+        filter_params["scope_include"] = scope_include
     if label_id is not None:
         filter_params["label_id"] = label_id
     if effective_unread_only:
@@ -687,6 +705,13 @@ async def htmx_article_list(
         filter_params["labeled_only"] = "true"
     if q and q.strip():
         filter_params["q"] = q.strip()
+    if is_search:
+        # Carry the search/filter knobs into pagination, even with an empty query.
+        filter_params["sort"] = sort_order
+        if read_status:
+            filter_params["read_status"] = read_status
+        if label_filter:
+            filter_params["label_filter"] = label_filter
 
     extra_headers: dict[str, str] = {}
     if feed_id is not None:
@@ -719,7 +744,13 @@ async def htmx_article_list(
         starred_only=starred_only,
         archived_only=archived_only,
         search_query=q.strip() if q and q.strip() else None,
-        mark_read_on_scroll=mark_read_on_scroll,
+        filter_active=is_search,
+        # Text search uses offset pagination (ts_rank can't be keyset-paged). With a
+        # read-status filter, marking rows read on scroll shrinks the result set
+        # under the offset and skips articles, so disable mark-read-on-scroll for
+        # that case only. Plain text search (status=all) and the empty-query filter
+        # view (keyset pagination) are unaffected and keep it.
+        mark_read_on_scroll=mark_read_on_scroll and not (q and q.strip() and read_status),
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
@@ -738,12 +769,16 @@ async def htmx_article_list_more(
     request: Request,
     feed_id: int | None = Query(None),
     folder_id: int | None = Query(None),
+    scope_include: str | None = Query(None),
     label_id: int | None = Query(None),
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
+    sort: str | None = Query(None),
+    read_status: str | None = Query(None),
+    label_filter: str | None = Query(None),
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
@@ -755,7 +790,10 @@ async def htmx_article_list_more(
     )
     settings = settings_result.scalar_one_or_none()
 
+    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
     sort_order = settings.default_sort_order if settings else "newest"
+    if is_search:
+        sort_order = sort or "relevance"
     articles_per_page = settings.articles_per_page if settings else 50
     ua = request.headers.get("user-agent", "")
     is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
@@ -767,8 +805,11 @@ async def htmx_article_list_more(
         db=db,
         feed_id=feed_id,
         folder_id=folder_id,
+        scope_include=scope_include,
         label_id=label_id,
+        label_filter=label_filter,
         unread_only=unread_only,
+        read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
         labeled_only=labeled_only,
@@ -786,6 +827,8 @@ async def htmx_article_list_more(
         filter_params["feed_id"] = feed_id
     if folder_id is not None:
         filter_params["folder_id"] = folder_id
+    if scope_include:
+        filter_params["scope_include"] = scope_include
     if label_id is not None:
         filter_params["label_id"] = label_id
     if unread_only:
@@ -798,6 +841,12 @@ async def htmx_article_list_more(
         filter_params["labeled_only"] = "true"
     if q and q.strip():
         filter_params["q"] = q.strip()
+    if is_search:
+        filter_params["sort"] = sort_order
+        if read_status:
+            filter_params["read_status"] = read_status
+        if label_filter:
+            filter_params["label_filter"] = label_filter
 
     extra_ctx = {}
     if settings and getattr(settings, 'ai_chat_enabled', False):
@@ -843,8 +892,14 @@ async def htmx_article_detail(
         and trigger_row.readable_status == "skipped"
         and trigger_row.url
     ):
+        # Reset retry bookkeeping: a user-initiated open is a fresh attempt, so the
+        # article reads as "active" (spinner + poll) until this extraction resolves.
         await db.execute(
-            sa_update(Article).where(Article.id == article_id).values(readable_status="pending")
+            sa_update(Article).where(Article.id == article_id).values(
+                readable_status="pending",
+                readable_retries=0,
+                readable_next_retry_at=None,
+            )
         )
         await db.commit()
         asyncio.create_task(_extract_readable_bg(
@@ -1281,9 +1336,14 @@ async def htmx_extract_readable(
 
     apply_readable_result(article, content, error, http_status)
     await db.commit()
-    await db.refresh(article)
 
-    return _content_with_readtime_oob(request, article)
+    # Render from the full ArticleResponse (not the raw ORM row) so per-user fields
+    # — is_starred/is_archived/labels/readable_active — render correctly in the
+    # re-swapped content block; the ORM Article lacks them.
+    article_resp = await get_article(user, article_id, db)
+    if article_resp is None:
+        return HTMLResponse("")
+    return _content_with_readtime_oob(request, article_resp)
 
 
 def _ai_available(settings: UserSettings | None) -> bool:
@@ -1958,6 +2018,7 @@ async def catchup_page(
         })
 
     user_feeds_data = await list_user_feeds(user, db)
+    user_labels = await list_labels(user, db)
     saved_configs = (await db.execute(
         select(UserCatchupConfig)
         .where(UserCatchupConfig.user_id == user.id)
@@ -1996,6 +2057,7 @@ async def catchup_page(
         "catchup_available": True,
         "ai_scoring_available": _scoring_available(ai_on, settings),
         "user_feeds": user_feeds_data,
+        "labels": user_labels,
         "saved_configs": saved_configs,
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
         "period_descs": period_descs,
@@ -2008,7 +2070,7 @@ async def htmx_catchup_count(
     request: Request,
     period: str = Query("7days"),
     filter_status: str = Query("all"),
-    filter_labeled: bool = Query(False),
+    label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     article_limit: int = Query(500),
@@ -2024,7 +2086,7 @@ async def htmx_catchup_count(
     articles = await fetch_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
-        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     count = len(articles)
@@ -2041,7 +2103,7 @@ async def htmx_catchup_cost(
     include_snippet: bool = Query(True),
     period: str = Query("7days"),
     filter_status: str = Query("all"),
-    filter_labeled: bool = Query(False),
+    label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     user: User = Depends(get_current_user),
@@ -2062,7 +2124,7 @@ async def htmx_catchup_cost(
     articles = await fetch_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
-        filter_status=filter_status, filter_labeled=filter_labeled,
+        filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
     effective_count = min(len(articles), article_limit)
@@ -2085,7 +2147,7 @@ async def htmx_catchup_generate(
     request: Request,
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
@@ -2125,7 +2187,7 @@ async def htmx_catchup_generate(
         articles = await fetch_catchup_articles(
             user_id=user.id, tz_str=tz_str, db=db,
             period=period, scope_include=scope_include,
-            filter_status=filter_status, filter_labeled=filter_labeled,
+            filter_status=filter_status, label_filter=label_filter,
             filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
         )
     except Exception as exc:
@@ -2202,7 +2264,7 @@ async def htmx_catchup_config_create(
     scope_include: str | None = Form(None),
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
     model_slot: str = Form("fast"),
@@ -2241,7 +2303,7 @@ async def htmx_catchup_config_create(
         config.scope_include = scope_include
         config.period = period
         config.filter_status = filter_status
-        config.filter_labeled = filter_labeled
+        config.label_filter = label_filter
         config.filter_score_min = score_min_stored
         config.article_limit = article_limit
         config.model_slot = model_slot
@@ -2255,7 +2317,7 @@ async def htmx_catchup_config_create(
             scope_include=scope_include,
             period=period,
             filter_status=filter_status,
-            filter_labeled=filter_labeled,
+            label_filter=label_filter,
             filter_score_min=score_min_stored,
             article_limit=article_limit,
             model_slot=model_slot,
@@ -2276,7 +2338,7 @@ async def htmx_catchup_config_update(
     scope_include: str | None = Form(None),
     period: str = Form("7days"),
     filter_status: str = Form("all"),
-    filter_labeled: bool = Form(False),
+    label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
     model_slot: str = Form("fast"),
@@ -2308,7 +2370,7 @@ async def htmx_catchup_config_update(
     config.scope_include = scope_include
     config.period = period
     config.filter_status = filter_status
-    config.filter_labeled = filter_labeled
+    config.label_filter = label_filter
     config.filter_score_min = filter_score_min / 100 if filter_score_min is not None else None
     config.article_limit = article_limit
     config.model_slot = model_slot

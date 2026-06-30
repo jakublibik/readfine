@@ -58,11 +58,17 @@
                 {% endif %}
                 <span class="font-medium text-gray-900 truncate min-w-0">{{ uf.custom_title or uf.feed.title }}</span>
                 {% if uf.readable_auto_disabled %}
-                  <span title="Full content extraction was automatically disabled — the site blocked it." class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
+                  <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled — this feed already delivers full articles.{% else %}Full content extraction was automatically disabled — the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
                 <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+                {% if uf.feed.next_fetch_at %}
+                  <div class="text-xs text-gray-400 mt-0.5 pl-6">Next fetch
+                    <time datetime="{{ uf.feed.next_fetch_at.isoformat() }}"
+                          title="{{ uf.feed.next_fetch_at | localtime('long') }}">~ {{ uf.feed.next_fetch_at | localtime('short') }}</time>
+                  </div>
+                {% endif %}
               {% endif %}
             </td>
             <td class="px-1.5 py-2">
@@ -150,3 +156,7 @@
     </div>
   {% endif %}
 </div>
+{% if with_folder_oob %}
+  {% set oob = true %}
+  {% include "settings/partials/folder_select.html" %}
+{% endif %}

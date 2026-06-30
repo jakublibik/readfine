@@ -1,0 +1,57 @@
+{#
+  Reusable label filter (collapsible).
+
+  A checkbox list with a catch-all "Any label" option plus individual labels.
+  Behaves like the scope selector: the catch-all is mutually exclusive with the
+  specific items. Empty selection = no label filtering. The hidden input holds a
+  JSON array, e.g. ["any"] or ["label:3","label:5"].
+
+  Collapsed by default; the panel auto-expands when a value is present (handled
+  in label-selector.js). Pass collapsible=false to render the panel always open
+  with no toggle (e.g. Catch me up, where it sits inline like the scope selector).
+
+  Variables expected in context:
+    labels       — list of objects with .id, .name, .color
+    label_value  — currently selected filter as JSON string or None
+    input_name   — name attribute for the hidden input (default: "label_filter")
+    selector_id  — unique ID prefix (default: "label-filter")
+    collapsible  — whether to show the collapse toggle (default: true)
+#}
+{% set input_name = input_name | default("label_filter") %}
+{% set selector_id = selector_id | default("label-filter") %}
+{% set collapsible = collapsible if collapsible is defined else true %}
+
+<div class="label-selector" data-selector-id="{{ selector_id }}">
+  <input type="hidden" name="{{ input_name }}" id="{{ selector_id }}-value" value="{{ label_value or '' }}">
+
+  {% if collapsible %}
+  <button type="button" id="{{ selector_id }}-toggle" data-label-toggle="{{ selector_id }}"
+          class="text-xs font-medium text-gray-600 hover:text-gray-800 bg-transparent border-0 cursor-pointer p-0 flex items-center gap-1">
+    <svg id="{{ selector_id }}-arrow" class="w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+    </svg>
+    Labels
+    <span id="{{ selector_id }}-summary" class="text-gray-400 font-normal"></span>
+  </button>
+  {% endif %}
+
+  <div id="{{ selector_id }}-panel" class="{% if collapsible %}hidden mt-2{% endif %}">
+    <div class="border border-gray-200 rounded max-h-44 overflow-y-auto p-2 space-y-0.5 bg-gray-50">
+      <label class="flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer py-0.5">
+        <input type="checkbox" id="{{ selector_id }}-any" class="rounded label-any-cb" data-selector="{{ selector_id }}">
+        Any label
+      </label>
+      {% if labels %}
+      <hr class="border-gray-200 my-1">
+      {% for l in labels %}
+      <label class="flex items-center gap-2 text-sm text-gray-600 cursor-pointer py-0.5">
+        <input type="checkbox" class="rounded label-item-cb" data-selector="{{ selector_id }}"
+               value="label:{{ l.id }}">
+        <span class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color: {{ l.color }}"></span>
+        {{ l.name }}
+      </label>
+      {% endfor %}
+      {% endif %}
+    </div>
+  </div>
+</div>

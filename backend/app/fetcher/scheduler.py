@@ -1,7 +1,10 @@
 """APScheduler integration: periodic RSS feed fetching and readable extraction."""
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
+from typing import TypeVar
+from urllib.parse import urlparse
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
@@ -14,6 +17,63 @@ from app.models.settings import AppSettings
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="UTC")
+
+# Concurrency limits for a single scheduler fetch round.
+_GLOBAL_FETCH_CONCURRENCY = 10
+# Max simultaneous requests to one host. 1 fully serializes same-host feeds so a
+# site (e.g. several Reddit feeds) is polled politely from our single IP instead
+# of in a burst that trips HTTP 429. Tune here if a more parallel host appears.
+_PER_HOST_CONCURRENCY = 1
+
+_T = TypeVar("_T")
+
+
+def _host_key(url: str) -> str:
+    """Normalize a feed URL to a host key for per-host throttling.
+
+    Lower-cased hostname with a leading ``www.`` stripped, so ``www.reddit.com``
+    and ``reddit.com`` share one throttle. Falls back to the raw URL when there is
+    no parseable host.
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host or url
+
+
+async def _run_throttled(
+    items: Sequence[_T],
+    worker: Callable[[_T], Awaitable[None]],
+    *,
+    global_limit: int,
+    per_host_limit: int,
+    host_of: Callable[[_T], str],
+) -> list:
+    """Run ``worker(item)`` for every item, bounded by a global concurrency limit
+    and a per-host limit.
+
+    The per-host gate is acquired *outside* the global one, so an item waiting on a
+    busy host does not hold a global slot (no starvation of the global pool). The
+    per-host semaphores live only for this call — throttling is scoped to one fetch
+    round, which is exactly the burst we want to flatten. Mirrors
+    ``asyncio.gather(..., return_exceptions=True)``.
+    """
+    global_sem = asyncio.Semaphore(global_limit)
+    host_sems: dict[str, asyncio.Semaphore] = {}
+
+    def _host_sem(host: str) -> asyncio.Semaphore:
+        sem = host_sems.get(host)
+        if sem is None:
+            sem = asyncio.Semaphore(per_host_limit)
+            host_sems[host] = sem
+        return sem
+
+    async def _run(item: _T) -> None:
+        async with _host_sem(host_of(item)):
+            async with global_sem:
+                await worker(item)
+
+    return await asyncio.gather(*[_run(item) for item in items], return_exceptions=True)
 
 
 def _slot_matches(effective_interval_min: int, minute: int) -> bool:
@@ -37,6 +97,65 @@ def _slot_matches(effective_interval_min: int, minute: int) -> bool:
         return sub_period == 15
     # minute == 30
     return sub_period in (15, 30)
+
+
+def _ceil_to_slot(dt: datetime) -> datetime:
+    """Round *dt* up to the next scheduler slot (:00/:15/:30/:45)."""
+    floored = dt.replace(second=0, microsecond=0)
+    rem = floored.minute % 15
+    if rem == 0 and floored == dt:
+        return floored
+    return floored - timedelta(minutes=rem) + timedelta(minutes=15)
+
+
+def compute_next_fetch_at(
+    feed: Feed,
+    *,
+    default_interval_min: int,
+    min_interval_min: int,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Predict when the scheduler will next attempt to fetch *feed*.
+
+    Mirrors the due-feed query in :func:`_fetch_due_feeds` so the UI can show a
+    feed's next fetch without persisting it. Returns a timezone-aware datetime,
+    or ``None`` when no fetch is scheduled — paused/disabled feeds and feeds with
+    no subscribers are never queried by the scheduler.
+    """
+    now = now or datetime.now(timezone.utc)
+    if feed.subscriber_count <= 0 or feed.status not in ("active", "error"):
+        return None
+
+    effective_interval_min = max(
+        feed.fetch_interval_min or default_interval_min, min_interval_min
+    )
+
+    if feed.last_fetched_at is None:
+        due = now
+    elif feed.status == "error":
+        backoff_min = (
+            24 * 60
+            if feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
+            else max(15, default_interval_min * 2)
+        )
+        due = feed.last_fetched_at + timedelta(minutes=backoff_min)
+    else:  # active
+        due = feed.last_fetched_at + timedelta(minutes=effective_interval_min)
+
+    # A server-requested Retry-After (HTTP 429) defers the feed further.
+    if feed.retry_after_until is not None and feed.retry_after_until > due:
+        due = feed.retry_after_until
+
+    # The scheduler fires only at :00/:15/:30/:45, filtering by sub-period, and
+    # counts a feed as due up to the 2-minute grace early. Snap to the first
+    # qualifying slot at or after that point.
+    target = max(due - timedelta(minutes=2), now)
+    slot = _ceil_to_slot(target)
+    for _ in range(8):
+        if _slot_matches(effective_interval_min, slot.minute):
+            return slot
+        slot += timedelta(minutes=15)
+    return slot
 
 
 async def _fetch_due_feeds() -> None:
@@ -88,6 +207,12 @@ async def _fetch_due_feeds() -> None:
             select(Feed).where(
                 Feed.subscriber_count > 0,
                 *slot_conditions,
+                # Honor a server-requested Retry-After (HTTP 429): skip the feed
+                # until retry_after_until passes, regardless of interval/backoff.
+                or_(
+                    Feed.retry_after_until.is_(None),
+                    Feed.retry_after_until < func.now() + grace,
+                ),
                 or_(
                     and_(
                         Feed.status == "active",
@@ -128,31 +253,32 @@ async def _fetch_due_feeds() -> None:
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
     from app.services.feed import _initial_fetch_in_progress
 
-    semaphore = asyncio.Semaphore(10)
-
     async def _fetch_one(feed_id: int) -> None:
-        async with semaphore:
-            if feed_id in _initial_fetch_in_progress:
-                logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
-                return
-            async with db.async_session_factory() as session:
-                feed_in_session = await session.get(Feed, feed_id)
-                if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
-                    if feed_in_session.feed_type == "scrape":
-                        from app.fetcher.scrape import fetch_scrape_feed
-                        await fetch_scrape_feed(
-                            feed_in_session, session,
-                            published_cutoff=cutoff_by_feed.get(feed_id),
-                        )
-                    else:
-                        await fetch_feed(
-                            feed_in_session, session,
-                            published_cutoff=cutoff_by_feed.get(feed_id),
-                        )
+        if feed_id in _initial_fetch_in_progress:
+            logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
+            return
+        async with db.async_session_factory() as session:
+            feed_in_session = await session.get(Feed, feed_id)
+            if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
+                if feed_in_session.feed_type == "scrape":
+                    from app.fetcher.scrape import fetch_scrape_feed
+                    await fetch_scrape_feed(
+                        feed_in_session, session,
+                        published_cutoff=cutoff_by_feed.get(feed_id),
+                    )
+                else:
+                    await fetch_feed(
+                        feed_in_session, session,
+                        published_cutoff=cutoff_by_feed.get(feed_id),
+                    )
 
     fetch_start = datetime.now(timezone.utc)
-    results = await asyncio.gather(
-        *[_fetch_one(feed.id) for feed in feeds], return_exceptions=True
+    results = await _run_throttled(
+        feeds,
+        lambda f: _fetch_one(f.id),
+        global_limit=_GLOBAL_FETCH_CONCURRENCY,
+        per_host_limit=_PER_HOST_CONCURRENCY,
+        host_of=lambda f: _host_key(f.feed_url),
     )
     for feed, result in zip(feeds, results):
         if isinstance(result, BaseException):
