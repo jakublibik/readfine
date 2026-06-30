@@ -16,6 +16,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   read), and choose the sort (relevance / newest / oldest). Leaving the text empty
   applies the filters on their own. Search moved from the user menu to an icon in
   the sidebar.
+- Feeds are now fetched conditionally: Readfine remembers each feed's `ETag` /
+  `Last-Modified` and sends them back on the next poll, so an unchanged feed answers
+  `304 Not Modified` with no body and the download and parse are skipped entirely.
+  Less bandwidth, and lighter on rate-limited sites.
 
 ### Fixed
 
@@ -28,6 +32,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   "Test" step caches the fetched feed briefly and Subscribe reuses it for both the
   title and the initial article import, so rate-limited sites (e.g. Reddit) no
   longer return 429 mid-subscribe.
+- When several feeds share a host (e.g. multiple Reddit subreddits), a scheduled
+  fetch no longer requests them all at once. Requests to a given host are now
+  serialized within a fetch round — different hosts still run in parallel — which
+  flattens the burst that made some of those feeds return HTTP 429.
 - Readable extraction that returns no usable content — e.g. a Reddit article page
   that serves a bot-verification wall (HTTP 200) instead of the article — is no
   longer saved as a blank "successful" extraction that rendered an empty body. Such
