@@ -25,6 +25,7 @@ from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import (
     TRANSIENT_HTTP_STATUSES,
     async_validate_feed_url,
+    fetch_url_conditional,
     fetch_url_with_ssrf_check,
     parse_retry_after,
     redact_url,
@@ -101,6 +102,7 @@ async def fetch_feed(
     feed_url = feed.feed_url
 
     try:
+        resp = None
         if prefetched is not None:
             parsed = prefetched
         else:
@@ -109,10 +111,23 @@ async def fetch_feed(
             if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
                 auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
             loop = asyncio.get_running_loop()
-            content = await loop.run_in_executor(
-                None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
+            resp = await loop.run_in_executor(
+                None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
+                feed.etag, feed.last_modified,
             )
-            parsed = await loop.run_in_executor(None, feedparser.parse, content)
+            if resp.status_code == 304:
+                # Unchanged since last fetch — no body to parse. Record a successful
+                # poll and keep the stored validators.
+                feed.last_fetched_at = datetime.now(timezone.utc)
+                feed.last_fetch_duration_ms = int(time.monotonic() * 1000) - start_ms
+                feed.status = "active"
+                feed.last_error = None
+                feed.fetch_error_count = 0
+                feed.retry_after_until = None
+                await db.commit()
+                logger.info("Feed %d not modified (304)", feed_id)
+                return 0
+            parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
 
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
@@ -126,6 +141,14 @@ async def fetch_feed(
         feed.last_error = None
         feed.fetch_error_count = 0
         feed.retry_after_until = None
+        # Update validators from this 200, but keep the last-known ones when the
+        # response omits a header (some CDNs send ETag only intermittently) so we
+        # don't lose the ability to make conditional requests.
+        if resp is not None:
+            if resp.etag:
+                feed.etag = resp.etag
+            if resp.last_modified:
+                feed.last_modified = resp.last_modified
 
         latest_pub = _latest_published(parsed.entries)
         if latest_pub:

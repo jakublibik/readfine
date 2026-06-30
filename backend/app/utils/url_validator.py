@@ -4,6 +4,7 @@ import ipaddress
 import socket
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+from typing import NamedTuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -124,6 +125,40 @@ async def async_validate_feed_url(url: str) -> None:
     await loop.run_in_executor(None, validate_feed_url, url)
 
 
+def _resolve_response(
+    url: str,
+    auth=None,
+    timeout: int = 30,
+    headers: dict | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> httpx.Response:
+    """Fetch a URL following redirects, validating every hop against SSRF.
+
+    Returns the final response after ``raise_for_status()``. A 304 Not Modified is
+    returned without raising (httpx classifies 304 as a redirect status yet it has
+    no ``Location``, so it is treated as a terminal response here, for conditional
+    requests).
+    """
+    current_url = url
+    with httpx.Client(timeout=timeout, follow_redirects=False, auth=auth, headers=headers) as client:
+        for _ in range(max_redirects + 1):
+            response = client.get(current_url)
+            # Only an actual redirect (3xx with a Location) is followed; 304 has a
+            # redirect-class status but no Location, so it falls through as terminal.
+            if not response.has_redirect_location:
+                if response.status_code != 304:
+                    response.raise_for_status()
+                return response
+            redirect_url = response.headers.get("location", "")
+            if redirect_url and not redirect_url.startswith(("http://", "https://")):
+                redirect_url = urljoin(current_url, redirect_url)
+            validate_feed_url(redirect_url)
+            current_url = redirect_url
+    raise httpx.TooManyRedirects(
+        f"Too many redirects (max {max_redirects})", request=response.request
+    )
+
+
 def fetch_url_with_ssrf_check(
     url: str,
     auth=None,
@@ -132,18 +167,49 @@ def fetch_url_with_ssrf_check(
     max_redirects: int = _MAX_REDIRECTS,
 ) -> str:
     """Synchronous HTTP fetch with SSRF-safe redirect validation on every hop."""
-    current_url = url
-    with httpx.Client(timeout=timeout, follow_redirects=False, auth=auth, headers=headers) as client:
-        for _ in range(max_redirects + 1):
-            response = client.get(current_url)
-            if not response.is_redirect:
-                response.raise_for_status()
-                return response.text
-            redirect_url = response.headers.get("location", "")
-            if redirect_url and not redirect_url.startswith(("http://", "https://")):
-                redirect_url = urljoin(current_url, redirect_url)
-            validate_feed_url(redirect_url)
-            current_url = redirect_url
-    raise httpx.TooManyRedirects(
-        f"Too many redirects (max {max_redirects})", request=response.request
+    return _resolve_response(url, auth, timeout, headers, max_redirects).text
+
+
+class ConditionalResponse(NamedTuple):
+    """Result of a conditional HTTP fetch.
+
+    ``status_code`` is 304 when the server reports the resource is unchanged (in
+    which case ``text`` is empty); otherwise 200 with the body. ``etag`` and
+    ``last_modified`` are the validators returned by the server, to be stored and
+    sent back on the next fetch.
+    """
+    status_code: int
+    text: str
+    etag: str | None
+    last_modified: str | None
+
+
+def fetch_url_conditional(
+    url: str,
+    auth=None,
+    timeout: int = 30,
+    headers: dict | None = None,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> ConditionalResponse:
+    """SSRF-safe fetch that sends conditional-request validators.
+
+    When ``etag``/``last_modified`` are provided they are sent as ``If-None-Match``
+    / ``If-Modified-Since``; an unchanged resource then answers ``304 Not Modified``
+    with no body. 4xx/5xx (including 429) still raise via ``raise_for_status()``.
+    """
+    request_headers = dict(headers or {})
+    if etag:
+        request_headers["If-None-Match"] = etag
+    if last_modified:
+        request_headers["If-Modified-Since"] = last_modified
+    response = _resolve_response(url, auth, timeout, request_headers, max_redirects)
+    new_etag = response.headers.get("etag")
+    new_last_modified = response.headers.get("last-modified")
+    return ConditionalResponse(
+        status_code=response.status_code,
+        text=response.text,
+        etag=new_etag[:255] if new_etag else None,
+        last_modified=new_last_modified[:255] if new_last_modified else None,
     )

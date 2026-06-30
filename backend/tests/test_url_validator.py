@@ -1,15 +1,33 @@
 """Unit tests for SSRF-protection URL validator."""
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from unittest.mock import patch
 
 from app.utils.url_validator import (
     TRANSIENT_HTTP_STATUSES,
+    fetch_url_conditional,
     parse_retry_after,
     redact_url,
     validate_feed_url,
 )
+
+
+@contextmanager
+def _mock_httpx_client(handler):
+    """Patch the httpx.Client used by _resolve_response to use a MockTransport, so
+    tests exercise the REAL redirect/304/error handling instead of mocking it out."""
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_client(*args, transport=transport, **kwargs)
+
+    with patch("app.utils.url_validator.httpx.Client", factory):
+        yield
 
 
 class TestSchemeValidation:
@@ -158,6 +176,100 @@ class TestParseRetryAfter:
     def test_past_http_date_returns_none(self):
         past = (_NOW - timedelta(hours=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
         assert parse_retry_after(past, _NOW) is None
+
+
+class TestFetchUrlConditional:
+    """fetch_url_conditional: validator injection, 304 passthrough, validator extraction."""
+
+    def test_validators_sent_as_conditional_headers(self):
+        with patch("app.utils.url_validator._resolve_response",
+                   return_value=httpx.Response(304)) as mock_resolve:
+            fetch_url_conditional(
+                "https://example.com/feed.xml",
+                etag='"abc"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
+            )
+        headers = mock_resolve.call_args[0][3]
+        assert headers["If-None-Match"] == '"abc"'
+        assert headers["If-Modified-Since"] == "Mon, 01 Jan 2024 00:00:00 GMT"
+
+    def test_no_conditional_headers_without_validators(self):
+        with patch("app.utils.url_validator._resolve_response",
+                   return_value=httpx.Response(200)) as mock_resolve:
+            fetch_url_conditional("https://example.com/feed.xml", headers={"User-Agent": "x"})
+        headers = mock_resolve.call_args[0][3]
+        assert "If-None-Match" not in headers
+        assert "If-Modified-Since" not in headers
+        assert headers["User-Agent"] == "x"
+
+    def test_304_passthrough(self):
+        with patch("app.utils.url_validator._resolve_response",
+                   return_value=httpx.Response(304)):
+            result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
+        assert result.status_code == 304
+        assert result.text == ""
+
+    def test_200_extracts_returned_validators(self):
+        resp = httpx.Response(
+            200, text="<rss/>",
+            headers={"ETag": '"new"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
+        )
+        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+            result = fetch_url_conditional("https://example.com/feed.xml")
+        assert result.status_code == 200
+        assert result.text == "<rss/>"
+        assert result.etag == '"new"'
+        assert result.last_modified == "Wed, 03 Jan 2024 00:00:00 GMT"
+
+    def test_long_validators_truncated_to_255(self):
+        resp = httpx.Response(200, headers={"ETag": "x" * 400})
+        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+            result = fetch_url_conditional("https://example.com/feed.xml")
+        assert len(result.etag) == 255
+
+
+class TestResolveResponseIntegration:
+    """End-to-end via a real httpx MockTransport — catches 304/redirect classification
+    bugs that mocking _resolve_response would hide."""
+
+    def test_304_returned_not_raised(self):
+        # Regression: httpx classifies 304 as a redirect status; it must NOT be
+        # followed as a redirect nor raised by raise_for_status.
+        def handler(request):
+            return httpx.Response(304)
+        with _mock_httpx_client(handler):
+            result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
+        assert result.status_code == 304
+        assert result.text == ""
+
+    def test_200_returns_body_and_validators(self):
+        def handler(request):
+            return httpx.Response(
+                200, text="<rss/>",
+                headers={"ETag": '"v2"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
+            )
+        with _mock_httpx_client(handler):
+            result = fetch_url_conditional("https://example.com/feed.xml")
+        assert result.status_code == 200
+        assert result.text == "<rss/>"
+        assert result.etag == '"v2"'
+
+    def test_429_raises_status_error(self):
+        def handler(request):
+            return httpx.Response(429, headers={"Retry-After": "60"})
+        with _mock_httpx_client(handler):
+            with pytest.raises(httpx.HTTPStatusError):
+                fetch_url_conditional("https://example.com/feed.xml")
+
+    def test_redirect_is_followed_with_ssrf_revalidation(self):
+        def handler(request):
+            if request.url.path == "/feed.xml":
+                return httpx.Response(301, headers={"Location": "https://example.com/final.xml"})
+            return httpx.Response(200, text="<rss/>ok")
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                result = fetch_url_conditional("https://example.com/feed.xml")
+        assert result.status_code == 200
+        assert "ok" in result.text
 
 
 class TestTransientHttpStatuses:

@@ -28,6 +28,10 @@ class Feed(Base):
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).
     retry_after_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # HTTP validators for conditional requests: sent back as If-None-Match /
+    # If-Modified-Since so an unchanged feed answers 304 Not Modified (no body).
+    etag: Mapped[str | None] = mapped_column(String(255))
+    last_modified: Mapped[str | None] = mapped_column(String(255))
     last_fetch_duration_ms: Mapped[int | None] = mapped_column(Integer)
     last_published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     fetch_interval_min: Mapped[int | None] = mapped_column(SmallInteger)
