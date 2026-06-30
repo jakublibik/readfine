@@ -718,3 +718,48 @@ class TestFetchFeedSuccessReset:
             await fetch_feed(feed, session)
 
         assert feed.retry_after_until is None
+
+
+class TestFetchFeedPrefetched:
+    """fetch_feed(prefetched=...) reuses an existing parse instead of downloading."""
+
+    async def test_prefetched_skips_network(self):
+        import feedparser
+        feed = _make_feed()
+        session = _make_session()
+        parsed = feedparser.FeedParserDict({"bozo": False, "entries": [], "feed": feedparser.FeedParserDict({})})
+
+        def _boom(*a, **k):
+            raise AssertionError("network fetch must not happen when prefetched is given")
+
+        with patch("app.fetcher.rss.fetch_url_with_ssrf_check", side_effect=_boom):
+            result = await fetch_feed(feed, session, prefetched=parsed)
+
+        assert result == 0
+        assert feed.status == "active"
+
+
+class TestFeedPreviewCache:
+    """Short-lived test→subscribe parse cache (keeps the add flow to one fetch)."""
+
+    def test_roundtrip(self):
+        import feedparser
+        from app.services.feed import cache_feed_preview, get_cached_feed_preview
+        parsed = feedparser.FeedParserDict({"entries": []})
+        cache_feed_preview("https://cache.example/feed", parsed)
+        assert get_cached_feed_preview("https://cache.example/feed") is parsed
+
+    def test_miss_returns_none(self):
+        from app.services.feed import get_cached_feed_preview
+        assert get_cached_feed_preview("https://cache.example/never-cached") is None
+
+    def test_expired_entry_evicted(self):
+        import feedparser
+        from app.services import feed as feed_svc
+        url = "https://cache.example/expired"
+        feed_svc.cache_feed_preview(url, feedparser.FeedParserDict({"entries": []}))
+        # force the stored expiry into the past
+        _, value = feed_svc._feed_preview_cache[url]
+        feed_svc._feed_preview_cache[url] = (0.0, value)
+        assert feed_svc.get_cached_feed_preview(url) is None
+        assert url not in feed_svc._feed_preview_cache

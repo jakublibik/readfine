@@ -43,7 +43,14 @@ from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
-from app.services.feed import cleanup_user_feeds, list_user_feeds, subscribe, subscribe_scrape, unsubscribe
+from app.services.feed import (
+    cache_feed_preview,
+    cleanup_user_feeds,
+    list_user_feeds,
+    subscribe,
+    subscribe_scrape,
+    unsubscribe,
+)
 from app.services.filter_service import (
     apply_filter_retroactively,
     create_filter,
@@ -309,6 +316,11 @@ async def settings_feeds_test(
 
     feed_title = parsed.feed.get("title") or url
     entry_count = len(parsed.entries)
+    # Cache this parse so a follow-up Subscribe reuses it instead of re-fetching
+    # (single network request per add — important for rate-limited sites). Public
+    # feeds only; auth'd fetches are user-specific and not shared.
+    if not has_auth:
+        cache_feed_preview(url, parsed)
     return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
         "feed_title": feed_title,
         "entry_count": entry_count,

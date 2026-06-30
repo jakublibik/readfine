@@ -83,22 +83,36 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     return parsed
 
 
-async def fetch_feed(feed: Feed, db: AsyncSession, initial_limit: int | None = None, published_cutoff: datetime | None = None) -> int:
-    """Fetch a feed and store new articles. Returns number of new articles saved."""
+async def fetch_feed(
+    feed: Feed,
+    db: AsyncSession,
+    initial_limit: int | None = None,
+    published_cutoff: datetime | None = None,
+    prefetched: feedparser.FeedParserDict | None = None,
+) -> int:
+    """Fetch a feed and store new articles. Returns number of new articles saved.
+
+    *prefetched*: an already-fetched+parsed feed (e.g. from the subscribe/test step)
+    to reuse instead of downloading again — keeps the subscribe flow to a single
+    network request for rate-limited sites.
+    """
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
 
     try:
-        await async_validate_feed_url(feed_url)
-        auth = None
-        if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
-            auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
-        loop = asyncio.get_running_loop()
-        content = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
-        )
-        parsed = await loop.run_in_executor(None, feedparser.parse, content)
+        if prefetched is not None:
+            parsed = prefetched
+        else:
+            await async_validate_feed_url(feed_url)
+            auth = None
+            if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
+                auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
+            loop = asyncio.get_running_loop()
+            content = await loop.run_in_executor(
+                None, fetch_url_with_ssrf_check, feed_url, auth, _TIMEOUT, _HEADERS
+            )
+            parsed = await loop.run_in_executor(None, feedparser.parse, content)
 
         if parsed.bozo and not parsed.entries:
             raise ValueError(f"Feed parse error: {parsed.bozo_exception}")

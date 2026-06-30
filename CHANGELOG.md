@@ -24,6 +24,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   error tier and is only disabled after the usual run of consecutive failures. When
   the server sends a `Retry-After` header, the scheduler waits at least that long
   before re-fetching.
+- Adding a feed now costs a single network request instead of up to three. The
+  "Test" step caches the fetched feed briefly and Subscribe reuses it for both the
+  title and the initial article import, so rate-limited sites (e.g. Reddit) no
+  longer return 429 mid-subscribe.
 
 ## [0.10.1] - 2026-06-27
 
