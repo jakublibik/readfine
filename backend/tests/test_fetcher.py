@@ -1,4 +1,5 @@
 """Unit tests for fetch scheduler, interval quantization, and article helpers."""
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -13,7 +14,9 @@ from app.fetcher.rss import (
     _normalize_guid,
     _normalize_url,
     _safe_url,
+    _save_articles,
     _struct_to_dt,
+    _url_dedup_keys,
     fetch_feed,
 )
 from app.fetcher.scheduler import compute_next_fetch_at, _slot_matches, create_scheduler
@@ -856,3 +859,169 @@ class TestFeedPreviewCache:
         feed_svc._feed_preview_cache[url] = (0.0, value)
         assert feed_svc.get_cached_feed_preview(url) is None
         assert url not in feed_svc._feed_preview_cache
+
+
+# ── _url_dedup_keys ───────────────────────────────────────────────────────────
+
+class TestUrlDedupKeys:
+    """Only URLs that uniquely identify one item in a batch may be a dedup key."""
+
+    def test_empty_iterable(self):
+        assert _url_dedup_keys([]) == set()
+
+    def test_all_falsy_ignored(self):
+        assert _url_dedup_keys([None, None, ""]) == set()
+
+    def test_unique_urls_all_kept(self):
+        urls = ["https://x/a", "https://x/b", "https://x/c"]
+        assert _url_dedup_keys(urls) == set(urls)
+
+    def test_shared_url_excluded(self):
+        # podcast pattern: every episode links to the same show page
+        shared = "https://show/the-daily"
+        assert _url_dedup_keys([shared, shared, shared]) == set()
+
+    def test_mix_keeps_unique_drops_shared(self):
+        shared = "https://show/pod"
+        unique = "https://news/article-1"
+        assert _url_dedup_keys([shared, shared, unique]) == {unique}
+
+    def test_falsy_do_not_count_toward_sharing(self):
+        # two real occurrences of the same url → shared; Nones are dropped, not counted
+        u = "https://x/a"
+        assert _url_dedup_keys([u, None, u, None]) == set()
+
+    def test_falsy_mixed_with_one_real_url_kept(self):
+        u = "https://x/a"
+        assert _url_dedup_keys([None, u, ""]) == {u}
+
+
+# ── _save_articles: GUID + URL dedup interaction ──────────────────────────────
+
+def _guid_hash(raw: str) -> str:
+    import hashlib
+    return hashlib.sha256(_normalize_guid(raw).encode()).hexdigest()
+
+
+def _scalars_result(values):
+    r = MagicMock()
+    r.scalars.return_value = list(values)
+    return r
+
+
+def _save_session(existing_hashes=(), existing_urls=()) -> AsyncMock:
+    """Mock AsyncSession for _save_articles.
+
+    Routes the two SELECTs by inspecting the statement: the guid_hash existence
+    query, then (only when there are URL dedup keys) the url existence query. Any
+    other statement (the unread_count UPDATE) gets a throwaway result.
+    """
+    eh, eu = list(existing_hashes), list(existing_urls)
+
+    async def _execute(stmt, *a, **k):
+        s = str(stmt)
+        if "guid_hash" in s:
+            return _scalars_result(eh)
+        if s.lstrip().upper().startswith("SELECT"):
+            return _scalars_result(eu)
+        return MagicMock()
+
+    db = AsyncMock()
+    db.add = MagicMock()
+    db.execute = AsyncMock(side_effect=_execute)
+    db.flush = AsyncMock()
+    return db
+
+
+@contextmanager
+def _patched_post_insert():
+    """Stub out the per-article post-insert work (filters, cross-feed dedup,
+    readable auto-disable) so _save_articles tests stay focused on dedup."""
+    with (
+        patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()),
+        patch("app.fetcher.rss._dedup_cross_feed", new=AsyncMock()),
+        patch("app.services.readable_service.maybe_disable_readable_for_feed", new=AsyncMock()),
+    ):
+        yield
+
+
+def _added_titles(db) -> list[str]:
+    return [call.args[0].title for call in db.add.call_args_list]
+
+
+class TestSaveArticlesDedup:
+    """_save_articles: secondary URL dedup must not collapse feeds that share a
+    single show/section link across distinct items (regression: podcast feeds)."""
+
+    feed = SimpleNamespace(id=22)
+
+    async def test_shared_url_new_guids_are_inserted(self):
+        # Regression: WSJ/NYT-style podcast feed — every episode links to the same
+        # show page. The shared URL already exists in the DB (from the first fetch),
+        # but each new episode has a unique GUID and must still be saved.
+        shared = "https://www.nytimes.com/the-daily"
+        parsed = SimpleNamespace(entries=[
+            {"id": "guid-old", "link": shared, "title": "Old episode"},
+            {"id": "guid-new1", "link": shared, "title": "New episode 1"},
+            {"id": "guid-new2", "link": shared, "title": "New episode 2"},
+        ])
+        db = _save_session(
+            existing_hashes={_guid_hash("guid-old")},
+            existing_urls={shared},  # ignored: shared URL is not a dedup key
+        )
+        with _patched_post_insert():
+            count = await _save_articles(self.feed, parsed, db)
+
+        assert count == 2
+        assert sorted(_added_titles(db)) == ["New episode 1", "New episode 2"]
+
+    async def test_rotated_guid_same_url_is_deduped(self):
+        # BBC-style: article re-published under a new GUID but the same per-article
+        # URL. The unique URL IS a dedup key, so the item is dropped.
+        url = "https://bbc.example/news/article-123"
+        parsed = SimpleNamespace(entries=[
+            {"id": "guid-rotated", "link": url, "title": "Rotated"},
+        ])
+        db = _save_session(existing_hashes=set(), existing_urls={url})
+        with _patched_post_insert():
+            count = await _save_articles(self.feed, parsed, db)
+
+        assert count == 0
+        assert _added_titles(db) == []
+
+    async def test_mixed_unique_urls_drops_only_existing(self):
+        dup = "https://bbc.example/a"
+        fresh = "https://bbc.example/b"
+        parsed = SimpleNamespace(entries=[
+            {"id": "g1", "link": dup, "title": "A (already in DB by url)"},
+            {"id": "g2", "link": fresh, "title": "B"},
+        ])
+        db = _save_session(existing_hashes=set(), existing_urls={dup})
+        with _patched_post_insert():
+            count = await _save_articles(self.feed, parsed, db)
+
+        assert count == 1
+        assert _added_titles(db) == ["B"]
+
+    async def test_existing_guid_is_skipped(self):
+        url = "https://x/a"
+        parsed = SimpleNamespace(entries=[
+            {"id": "g-known", "link": url, "title": "Known"},
+        ])
+        db = _save_session(existing_hashes={_guid_hash("g-known")}, existing_urls=set())
+        with _patched_post_insert():
+            count = await _save_articles(self.feed, parsed, db)
+
+        assert count == 0
+
+    async def test_entries_without_links_dedup_by_guid_only(self):
+        parsed = SimpleNamespace(entries=[
+            {"id": "g1", "title": "X"},
+            {"id": "g2", "title": "Y"},
+        ])
+        db = _save_session(existing_hashes=set(), existing_urls=set())
+        with _patched_post_insert():
+            count = await _save_articles(self.feed, parsed, db)
+
+        assert count == 2
+        assert sorted(_added_titles(db)) == ["X", "Y"]

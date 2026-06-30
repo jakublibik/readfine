@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -226,16 +226,20 @@ async def _save_articles(
     existing_hashes: set[str] = set(existing_result.scalars())
 
     # Secondary dedup by URL — catches feeds that rotate GUIDs on updates (e.g. BBC).
-    candidate_urls = [
+    # Only URLs that identify a single item in this batch are usable as a dedup key
+    # (see _url_dedup_keys): a link shared by several items is a section/show-level
+    # URL (e.g. podcast episodes all pointing at the show page), so deduping on it
+    # would silently drop every new item after the first, since the shared URL is
+    # already in the DB while each item's GUID is unique.
+    url_dedup_keys = _url_dedup_keys(
         _safe_url(e.get("link")) for e in candidates.values()
-        if _safe_url(e.get("link"))
-    ]
+    )
     existing_urls: set[str] = set()
-    if candidate_urls:
+    if url_dedup_keys:
         url_result = await db.execute(
             select(Article.url).where(
                 Article.feed_id == feed.id,
-                Article.url.in_(candidate_urls),
+                Article.url.in_(url_dedup_keys),
             )
         )
         existing_urls = set(url_result.scalars())
@@ -507,6 +511,20 @@ def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
     plain = nh3.clean(content, tags=set())
     words = len(re.findall(r"\w+", plain))
     return words, max(1, round(words / 200))
+
+
+def _url_dedup_keys(urls) -> set[str]:
+    """URLs usable as a secondary dedup key: those identifying exactly one item in
+    the batch.
+
+    A link shared by several items is a section/show-level URL (e.g. podcast
+    episodes all linking to the show page), not an article identifier. Deduping on
+    such a URL would drop every new item whose link already exists in the DB even
+    though its GUID is unique — so shared URLs are excluded here. Falsy URLs are
+    ignored.
+    """
+    counts = Counter(u for u in urls if u)
+    return {u for u, n in counts.items() if n == 1}
 
 
 def _struct_to_dt(t) -> datetime:
