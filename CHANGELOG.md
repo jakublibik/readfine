@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-30
+
 ### Added
 
 - Search is now also a filter view: alongside the text query you can scope to
@@ -20,8 +22,40 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   `Last-Modified` and sends them back on the next poll, so an unchanged feed answers
   `304 Not Modified` with no body and the download and parse are skipped entirely.
   Less bandwidth, and lighter on rate-limited sites.
+- Catch me up & briefings now have a dedicated label filter (any label / specific
+  labels, OR) shown alongside the feed scope, replacing the old "Labeled only"
+  relevance radio. The minimum-score filter is now an independent toggle (shown only
+  when scoring is configured) rather than bundled with labels. The "Since yesterday"
+  period is now labelled "Yesterday+".
+- Adding a feed lets you set its fetch interval from the subscribe form, and owners
+  of a private or solely-subscribed feed can change the interval when editing it.
+  Shared public feeds show the interval read-only (only an admin can change it).
+- Errored feeds now show when they will next be retried, both on the feed list and
+  the feed detail page; a feed auto-disabled after repeated failures says so
+  explicitly instead of leaving the next fetch ambiguous.
+
+### Changed
+
+- Switching between sections (Starred, Labeled, folders, feeds) now shows a brief
+  loading overlay over the article list, so the sidebar highlight no longer appears
+  to change before the list it points at has loaded.
+- Creating, renaming, or deleting a folder immediately updates the folder dropdown in
+  the add-feed form without a page reload.
 
 ### Fixed
+
+- Feeds where every item points at one shared link (e.g. a podcast whose episodes all
+  link to the show page) no longer have every new item after the first silently
+  dropped as a duplicate; items are now de-duplicated by links that actually identify
+  a single item, falling back to the unique GUID otherwise.
+- Reddit (and similar) article content built from a header-less layout table no longer
+  overflows the reading panel: such tables now stack the image above the text, images
+  are constrained to the column width, and genuine data tables scroll horizontally
+  instead of overflowing.
+- Text search combined with a read-status filter no longer skips results while
+  scrolling: mark-as-read-on-scroll is disabled for that specific case (where it
+  shifted the offset-paginated result set), leaving plain search and the filter view
+  unaffected.
 
 - A feed returning HTTP 429 (Too Many Requests) is no longer disabled on the first
   hit. 429 and 408 are now treated as transient: the feed backs off via the normal
