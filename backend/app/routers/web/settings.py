@@ -234,6 +234,7 @@ async def settings_feeds(
         "added": added,
         "purge_days": app_s.default_purge_after_days if app_s else None,
         "purge_count": app_s.default_purge_keep_count if app_s else None,
+        "default_fetch_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
     })
 
 
@@ -480,6 +481,7 @@ async def settings_scrape_setup(
         "fetch_error": fetch_error,
         "folders": folders,
         "ai_selector_available": ai_selector_available,
+        "default_fetch_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
     })
 
 
@@ -713,6 +715,7 @@ async def settings_scrape_subscribe(
             "folders": folders,
             "error": str(e),
             "ai_selector_available": ai_selector_available,
+            "default_fetch_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
         })
 
 
