@@ -476,7 +476,12 @@ async def htmx_refresh_feed(
     badge = _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
     toast_msg = error_msg[:150] if error_msg else "Feed refreshed"
     toast_type = "error" if error_msg else "ok"
-    headers = {"HX-Trigger": json.dumps({"showToast": {"msg": toast_msg, "type": toast_type}})}
+    trigger = {
+        "showToast": {"msg": toast_msg, "type": toast_type},
+        # Let the client reload the article list if this feed is being viewed.
+        "feedRefreshed": {"feed_id": feed_id},
+    }
+    headers = {"HX-Trigger": json.dumps(trigger)}
     return HTMLResponse(badge, headers=headers)
 
 
