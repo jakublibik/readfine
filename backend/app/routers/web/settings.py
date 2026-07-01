@@ -25,7 +25,7 @@ from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import is_valid_timezone
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, redact_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
 from app.fetcher.scrape import extract_article_links
@@ -396,6 +396,22 @@ async def settings_feeds_subscribe(
             error = "Access denied (403) — the server is likely blocking requests from this host (geo-block or datacenter IP block)."
         elif status == 401:
             error = "Authentication required (401). Try adding HTTP credentials."
+        elif status == 429:
+            # Reads Retry-After and x-ratelimit-reset (Reddit sends the latter, no
+            # Retry-After). Resets are often seconds, so show seconds under ~90s.
+            now = datetime.now(timezone.utc)
+            until = rate_limited_until(e.response.headers, now)
+            if until is not None:
+                secs = max(1, round((until - now).total_seconds()))
+                when = f"{secs} sec" if secs < 90 else f"about {round(secs / 60)} min"
+                error = (f"Too many requests (429) — the server is rate-limiting this host. "
+                         f"Try again in {when}.")
+            else:
+                error = ("Too many requests (429) — the server is rate-limiting this host. "
+                         "Try again in a few minutes.")
+        elif status in (500, 502, 503, 504):
+            error = (f"The feed server returned an error ({status}). "
+                     "It may be temporarily down — try again later.")
         else:
             error = f"HTTP error {status} when fetching the feed."
         try:
