@@ -23,10 +23,14 @@ from app.fetcher.rss import (
 from app.fetcher.scheduler import (
     compute_next_fetch_at,
     create_scheduler,
+    _cooldown_wait,
+    _COOLDOWN_BUFFER,
     _host_key,
+    _MAX_SINGLE_WAIT,
     _run_throttled,
     _slot_matches,
 )
+from app.fetcher import host_throttle
 from app.models.fetch_log import FetchLog
 from app.routers.web.admin import _quantize15
 from app.utils.url_validator import ConditionalResponse
@@ -44,6 +48,44 @@ class TestHostKey:
 
     def test_case_insensitive(self):
         assert _host_key("https://Reddit.COM/x") == "reddit.com"
+
+
+class TestCooldownWait:
+    """_cooldown_wait: wait a host cooldown out in-round vs. defer to the next round."""
+
+    NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    DEADLINE = NOW + timedelta(minutes=12)  # generous round budget
+
+    def test_no_cooldown_fetches_now(self):
+        assert _cooldown_wait(None, self.NOW, self.DEADLINE) == timedelta(0)
+
+    def test_expired_cooldown_fetches_now(self):
+        past = self.NOW - timedelta(seconds=5)
+        assert _cooldown_wait(past, self.NOW, self.DEADLINE) == timedelta(0)
+
+    def test_short_reset_waits_with_buffer(self):
+        until = self.NOW + timedelta(seconds=30)
+        # Reddit-shaped reset well inside budget → wait it out (reset + buffer).
+        assert _cooldown_wait(until, self.NOW, self.DEADLINE) == timedelta(seconds=30) + _COOLDOWN_BUFFER
+
+    def test_reddit_60s_reset_waits(self):
+        until = self.NOW + timedelta(seconds=60)
+        assert _cooldown_wait(until, self.NOW, self.DEADLINE) == timedelta(seconds=60) + _COOLDOWN_BUFFER
+
+    def test_at_single_wait_cap_still_waits(self):
+        until = self.NOW + _MAX_SINGLE_WAIT
+        assert _cooldown_wait(until, self.NOW, self.DEADLINE) == _MAX_SINGLE_WAIT + _COOLDOWN_BUFFER
+
+    def test_over_single_wait_cap_defers(self):
+        until = self.NOW + _MAX_SINGLE_WAIT + timedelta(seconds=1)
+        assert _cooldown_wait(until, self.NOW, self.DEADLINE) is None
+
+    def test_past_round_deadline_defers_even_if_under_cap(self):
+        # Late in the round: a short reset that still lands past the deadline defers,
+        # so we don't overrun the slot.
+        tight_deadline = self.NOW + timedelta(seconds=30)
+        until = self.NOW + timedelta(seconds=60)  # 60s < single-wait cap, but > deadline
+        assert _cooldown_wait(until, self.NOW, tight_deadline) is None
 
 
 class TestRunThrottled:
@@ -775,6 +817,65 @@ class TestFetchFeed429Transient:
         vals = _update_values(session)
         assert _status_is_disabled(vals["status"])
         assert vals["retry_after_until"].value is None
+
+
+class TestFetchFeedHostCooldown:
+    """fetch_feed arms the in-memory per-host cooldown from rate-limit headers, so
+    sibling feeds on the same host defer instead of bursting into 429."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def teardown_method(self):
+        host_throttle.clear()
+
+    async def test_429_reset_header_arms_cooldown_without_retry_after(self):
+        # Reddit-shaped 429: x-ratelimit-reset but no Retry-After.
+        feed = _make_feed()
+        session = _make_session()
+        exc = _http_error(429, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "45"})
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, session)
+        # Per-feed retry_after_until stays null (no Retry-After) — existing behavior.
+        assert _update_values(session)["retry_after_until"].value is None
+        # But the host cooldown is armed ~45s out.
+        until = host_throttle.blocked_until("example.com", before)
+        assert until is not None
+        assert before + timedelta(seconds=40) <= until <= before + timedelta(seconds=50)
+
+    async def test_200_with_ratelimit_headers_arms_cooldown(self):
+        import feedparser
+        feed = _make_feed()
+        session = _make_session()
+        parsed = feedparser.FeedParserDict(
+            {"bozo": False, "entries": [], "feed": feedparser.FeedParserDict({})}
+        )
+        until = datetime.now(timezone.utc) + timedelta(seconds=59)
+        resp = ConditionalResponse(200, "<rss/>", None, None, rate_limited_until=until)
+        with (
+            patch("app.fetcher.rss.fetch_url_conditional", return_value=resp),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+            patch("app.fetcher.rss._save_articles", return_value=0),
+        ):
+            await fetch_feed(feed, session)
+        assert host_throttle.blocked_until("example.com", datetime.now(timezone.utc)) == until
+
+    async def test_200_without_ratelimit_headers_no_cooldown(self):
+        import feedparser
+        feed = _make_feed()
+        session = _make_session()
+        parsed = feedparser.FeedParserDict(
+            {"bozo": False, "entries": [], "feed": feedparser.FeedParserDict({})}
+        )
+        resp = ConditionalResponse(200, "<rss/>", None, None)
+        with (
+            patch("app.fetcher.rss.fetch_url_conditional", return_value=resp),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+            patch("app.fetcher.rss._save_articles", return_value=0),
+        ):
+            await fetch_feed(feed, session)
+        assert host_throttle.blocked_until("example.com", datetime.now(timezone.utc)) is None
 
 
 class TestFetchFeedConditional:

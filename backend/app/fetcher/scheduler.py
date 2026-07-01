@@ -4,12 +4,13 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TypeVar
-from urllib.parse import urlparse
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
+from app.fetcher import host_throttle
+from app.fetcher.host_throttle import _host_key
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
@@ -24,21 +25,41 @@ _GLOBAL_FETCH_CONCURRENCY = 10
 # site (e.g. several Reddit feeds) is polled politely from our single IP instead
 # of in a burst that trips HTTP 429. Tune here if a more parallel host appears.
 _PER_HOST_CONCURRENCY = 1
+# Budget for waiting out per-host cooldowns *within* a fetch round. The round is
+# triggered every 15 min with max_instances=1, so it MUST finish before the next
+# slot or that slot is missed entirely — we stop starting new in-round waits after
+# this point (leaving ~3 min reserve) and defer the rest to the next round.
+_ROUND_BUDGET = timedelta(minutes=12)
+# Never tie a worker up on a single feed longer than this; a host asking for a
+# longer reset is deferred to the next round instead.
+_MAX_SINGLE_WAIT = timedelta(minutes=2)
+# Slack added to a cooldown wait so we fetch safely *after* the window resets.
+# Rate-limit `*-reset` values point at the window end but tend to undershoot it by
+# a second or two (e.g. Reddit's per-minute window: reset counts down to the next
+# :00 but lands ~1-3 s early), so a 1 s buffer still fetches inside the old window
+# and 429s. 5 s clears the boundary reliably; negligible at a ~60 s cadence.
+_COOLDOWN_BUFFER = timedelta(seconds=5)
 
 _T = TypeVar("_T")
 
 
-def _host_key(url: str) -> str:
-    """Normalize a feed URL to a host key for per-host throttling.
+def _cooldown_wait(
+    until: datetime | None, now: datetime, round_deadline: datetime
+) -> timedelta | None:
+    """Decide how to handle a host cooldown for a feed about to be fetched.
 
-    Lower-cased hostname with a leading ``www.`` stripped, so ``www.reddit.com``
-    and ``reddit.com`` share one throttle. Falls back to the raw URL when there is
-    no parseable host.
+    Returns:
+      * ``timedelta(0)`` — no active cooldown, fetch immediately.
+      * a positive ``timedelta`` — sleep this long (reset + buffer) then fetch.
+      * ``None`` — defer to the next round (the wait would blow the single-wait cap
+        or push past the round budget).
     """
-    host = (urlparse(url).hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    return host or url
+    if until is None or until <= now:
+        return timedelta(0)
+    wait = until - now
+    if until > round_deadline or wait > _MAX_SINGLE_WAIT:
+        return None
+    return wait + _COOLDOWN_BUFFER
 
 
 async def _run_throttled(
@@ -253,10 +274,27 @@ async def _fetch_due_feeds() -> None:
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
     from app.services.feed import _initial_fetch_in_progress
 
-    async def _fetch_one(feed_id: int) -> None:
+    async def _fetch_one(feed_id: int, feed_url: str) -> None:
         if feed_id in _initial_fetch_in_progress:
             logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
             return
+        # Per-host cooldown (bounded hybrid): wait the reset out in-round as long as
+        # it fits the round budget and the single-wait cap; otherwise defer the feed
+        # to the next round. Waiting (rather than deferring) lets a rate-limited host
+        # like Reddit drain several feeds per 15-min round instead of just one, while
+        # the budget keeps the round short enough not to miss the next slot.
+        now = datetime.now(timezone.utc)
+        host = _host_key(feed_url)
+        until = host_throttle.blocked_until(host, now)
+        delay = _cooldown_wait(until, now, round_deadline)
+        if delay is None:
+            logger.info(
+                "Scheduler: deferring feed %d — host %s cooling down %.0fs",
+                feed_id, host, (until - now).total_seconds(),
+            )
+            return
+        if delay:
+            await asyncio.sleep(delay.total_seconds())
         async with db.async_session_factory() as session:
             feed_in_session = await session.get(Feed, feed_id)
             if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
@@ -273,9 +311,10 @@ async def _fetch_due_feeds() -> None:
                     )
 
     fetch_start = datetime.now(timezone.utc)
+    round_deadline = fetch_start + _ROUND_BUDGET
     results = await _run_throttled(
         feeds,
-        lambda f: _fetch_one(f.id),
+        lambda f: _fetch_one(f.id, f.feed_url),
         global_limit=_GLOBAL_FETCH_CONCURRENCY,
         per_host_limit=_PER_HOST_CONCURRENCY,
         host_of=lambda f: _host_key(f.feed_url),

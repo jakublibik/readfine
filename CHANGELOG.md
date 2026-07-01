@@ -9,6 +9,18 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Changed
+
+- The fetcher now reads rate-limit response headers (`Retry-After`, `RateLimit-*`
+  and `X-RateLimit-*`) on both successful and 429 responses and applies a per-host
+  cooldown: once a host reports its budget is exhausted (e.g. Reddit's
+  `x-ratelimit-remaining: 0`), other feeds on that host wait out the reset instead
+  of bursting into repeated HTTP 429s. The wait happens within the fetch round (so a
+  rate-limited host drains several feeds per 15-min round) up to a round budget that
+  keeps the round short enough not to miss the next slot; anything past the budget
+  defers to the next round. Feeds on other hosts are unaffected and still fetch in
+  parallel.
+
 ## [0.11.0] - 2026-06-30
 
 ### Added

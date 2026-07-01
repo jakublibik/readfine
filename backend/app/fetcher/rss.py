@@ -28,9 +28,11 @@ from app.utils.url_validator import (
     fetch_url_conditional,
     fetch_url_with_ssrf_check,
     parse_retry_after,
+    rate_limited_until,
     redact_url,
     validate_feed_url,
 )
+from app.fetcher import host_throttle
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,8 @@ async def fetch_feed(
                 feed.fetch_error_count = 0
                 feed.retry_after_until = None
                 await db.commit()
+                if resp.rate_limited_until:
+                    host_throttle.note_rate_limited(host_throttle._host_key(feed_url), resp.rate_limited_until)
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
             parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
@@ -155,6 +159,8 @@ async def fetch_feed(
             feed.last_published_at = latest_pub
 
         await db.commit()
+        if resp is not None and resp.rate_limited_until:
+            host_throttle.note_rate_limited(host_throttle._host_key(feed_url), resp.rate_limited_until)
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
@@ -194,6 +200,13 @@ async def fetch_feed(
         retry_after_until = None
         if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
             retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
+            # Also arm the host-wide cooldown from any rate-limit headers (Reddit's
+            # 429 carries x-ratelimit-reset but no Retry-After) so sibling feeds on
+            # the same host defer instead of hammering into another 429.
+            host_throttle.note_rate_limited(
+                host_throttle._host_key(feed_url),
+                rate_limited_until(exc.response.headers, now),
+            )
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,
