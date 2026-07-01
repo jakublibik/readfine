@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 _cooldown: dict[str, datetime] = {}
 
 
-def _host_key(url: str) -> str:
+def host_key(url: str) -> str:
     """Normalize a feed URL to a host key for per-host throttling.
 
     Lower-cased hostname with a leading ``www.`` stripped, so ``www.reddit.com``

@@ -10,7 +10,7 @@ from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
 from app.fetcher import host_throttle
-from app.fetcher.host_throttle import _host_key
+from app.fetcher.host_throttle import host_key
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
@@ -69,6 +69,7 @@ async def _run_throttled(
     global_limit: int,
     per_host_limit: int,
     host_of: Callable[[_T], str],
+    on_host_ready: Callable[[_T], Awaitable[bool]] | None = None,
 ) -> list:
     """Run ``worker(item)`` for every item, bounded by a global concurrency limit
     and a per-host limit.
@@ -78,6 +79,11 @@ async def _run_throttled(
     per-host semaphores live only for this call — throttling is scoped to one fetch
     round, which is exactly the burst we want to flatten. Mirrors
     ``asyncio.gather(..., return_exceptions=True)``.
+
+    ``on_host_ready`` (optional) runs under the per-host gate but *before* the global
+    slot is taken; returning False skips the item (worker not run). Any waiting it
+    does therefore holds only the host gate, not a global slot — so a cooling-down
+    host can't tie up global capacity that healthy hosts could use.
     """
     global_sem = asyncio.Semaphore(global_limit)
     host_sems: dict[str, asyncio.Semaphore] = {}
@@ -91,6 +97,8 @@ async def _run_throttled(
 
     async def _run(item: _T) -> None:
         async with _host_sem(host_of(item)):
+            if on_host_ready is not None and not await on_host_ready(item):
+                return
             async with global_sem:
                 await worker(item)
 
@@ -349,27 +357,33 @@ async def _fetch_due_feeds() -> None:
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
     from app.services.feed import _initial_fetch_in_progress
 
-    async def _fetch_one(feed_id: int, feed_url: str) -> None:
-        if feed_id in _initial_fetch_in_progress:
-            logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
-            return
-        # Per-host cooldown (bounded hybrid): wait the reset out in-round as long as
-        # it fits the round budget and the single-wait cap; otherwise defer the feed
-        # to the next round. Waiting (rather than deferring) lets a rate-limited host
-        # like Reddit drain several feeds per 15-min round instead of just one, while
-        # the budget keeps the round short enough not to miss the next slot.
+    async def _await_host_ready(feed: Feed) -> bool:
+        """Per-host cooldown gate (bounded hybrid), run under the host semaphore but
+        before a global slot is taken. Wait the reset out in-round as long as it fits
+        the round budget and the single-wait cap; otherwise defer the feed to the next
+        round (return False). Waiting (rather than deferring) lets a rate-limited host
+        like Reddit drain several feeds per 15-min round instead of just one, while the
+        budget keeps the round short enough not to miss the next slot. Sleeping here
+        holds only the host gate, so it never ties up a global slot healthy hosts want.
+        """
         now = datetime.now(timezone.utc)
-        host = _host_key(feed_url)
+        host = host_key(feed.feed_url)
         until = host_throttle.blocked_until(host, now)
         delay = _cooldown_wait(until, now, round_deadline)
         if delay is None:
             logger.info(
                 "Scheduler: deferring feed %d — host %s cooling down %.0fs",
-                feed_id, host, (until - now).total_seconds(),
+                feed.id, host, (until - now).total_seconds(),
             )
-            return
+            return False
         if delay:
             await asyncio.sleep(delay.total_seconds())
+        return True
+
+    async def _fetch_one(feed_id: int) -> None:
+        if feed_id in _initial_fetch_in_progress:
+            logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
+            return
         async with db.async_session_factory() as session:
             feed_in_session = await session.get(Feed, feed_id)
             if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
@@ -389,10 +403,11 @@ async def _fetch_due_feeds() -> None:
     round_deadline = fetch_start + _ROUND_BUDGET
     results = await _run_throttled(
         feeds,
-        lambda f: _fetch_one(f.id, f.feed_url),
+        lambda f: _fetch_one(f.id),
         global_limit=_GLOBAL_FETCH_CONCURRENCY,
         per_host_limit=_PER_HOST_CONCURRENCY,
-        host_of=lambda f: _host_key(f.feed_url),
+        host_of=lambda f: host_key(f.feed_url),
+        on_host_ready=_await_host_ready,
     )
     for feed, result in zip(feeds, results):
         if isinstance(result, BaseException):

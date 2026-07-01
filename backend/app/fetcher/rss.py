@@ -128,7 +128,7 @@ async def fetch_feed(
                 feed.retry_after_until = None
                 await db.commit()
                 if resp.rate_limited_until:
-                    host_throttle.note_rate_limited(host_throttle._host_key(feed_url), resp.rate_limited_until)
+                    host_throttle.note_rate_limited(host_throttle.host_key(feed_url), resp.rate_limited_until)
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
             parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
@@ -160,7 +160,7 @@ async def fetch_feed(
 
         await db.commit()
         if resp is not None and resp.rate_limited_until:
-            host_throttle.note_rate_limited(host_throttle._host_key(feed_url), resp.rate_limited_until)
+            host_throttle.note_rate_limited(host_throttle.host_key(feed_url), resp.rate_limited_until)
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
@@ -204,7 +204,7 @@ async def fetch_feed(
             # 429 carries x-ratelimit-reset but no Retry-After) so sibling feeds on
             # the same host defer instead of hammering into another 429.
             host_throttle.note_rate_limited(
-                host_throttle._host_key(feed_url),
+                host_throttle.host_key(feed_url),
                 rate_limited_until(exc.response.headers, now),
             )
         await db.execute(

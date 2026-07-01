@@ -26,7 +26,6 @@ from app.fetcher.scheduler import (
     _cooldown_wait,
     _COOLDOWN_BUFFER,
     _feed_due_for_selection,
-    _host_key,
     _MAX_SINGLE_WAIT,
     _run_throttled,
     _slot_matches,
@@ -41,14 +40,14 @@ from app.utils.url_validator import ConditionalResponse
 
 class TestHostKey:
     def test_groups_www_and_bare(self):
-        assert _host_key("https://www.reddit.com/r/x.rss") == _host_key("https://reddit.com/r/y.rss")
-        assert _host_key("https://www.reddit.com/r/x.rss") == "reddit.com"
+        assert host_throttle.host_key("https://www.reddit.com/r/x.rss") == host_throttle.host_key("https://reddit.com/r/y.rss")
+        assert host_throttle.host_key("https://www.reddit.com/r/x.rss") == "reddit.com"
 
     def test_distinct_hosts_differ(self):
-        assert _host_key("https://a.example/feed") != _host_key("https://b.example/feed")
+        assert host_throttle.host_key("https://a.example/feed") != host_throttle.host_key("https://b.example/feed")
 
     def test_case_insensitive(self):
-        assert _host_key("https://Reddit.COM/x") == "reddit.com"
+        assert host_throttle.host_key("https://Reddit.COM/x") == "reddit.com"
 
 
 class TestFeedDueForSelection:
@@ -208,6 +207,45 @@ class TestRunThrottled:
             [1, 2, 3], worker, global_limit=10, per_host_limit=1, host_of=lambda i: "h"
         )
         assert any(isinstance(r, ValueError) for r in results)
+
+    async def test_on_host_ready_false_skips_worker(self):
+        ran = []
+
+        async def worker(item):
+            ran.append(item)
+
+        async def gate(item):
+            return item != 2  # defer item 2
+
+        await _run_throttled(
+            [1, 2, 3], worker, global_limit=10, per_host_limit=1,
+            host_of=lambda i: "h", on_host_ready=gate,
+        )
+        assert ran == [1, 3]
+
+    async def test_on_host_ready_wait_holds_no_global_slot(self):
+        # A gate that waits must not consume a global slot: with global_limit=1, a
+        # worker on another host still runs concurrently while the gate sleeps.
+        overlap = {"seen": False}
+        active = set()
+
+        async def gate(item):
+            if item[0] == "slow":
+                active.add("gate")
+                await asyncio.sleep(0.02)
+                active.discard("gate")
+            return True
+
+        async def worker(item):
+            if "gate" in active:
+                overlap["seen"] = True
+            await asyncio.sleep(0.005)
+
+        await _run_throttled(
+            [("slow", 0), ("fast", 1)], worker,
+            global_limit=1, per_host_limit=1, host_of=lambda i: i[0], on_host_ready=gate,
+        )
+        assert overlap["seen"] is True
 
 
 # ── _quantize15 ───────────────────────────────────────────────────────────────

@@ -255,7 +255,7 @@ async def fetch_scrape_feed(
         if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
             retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
             host_throttle.note_rate_limited(
-                host_throttle._host_key(feed_url),
+                host_throttle.host_key(feed_url),
                 rate_limited_until(exc.response.headers, now),
             )
         await db.execute(
