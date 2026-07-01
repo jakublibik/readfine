@@ -25,6 +25,7 @@ from app.fetcher.scheduler import (
     create_scheduler,
     _cooldown_wait,
     _COOLDOWN_BUFFER,
+    _feed_due_for_selection,
     _host_key,
     _MAX_SINGLE_WAIT,
     _run_throttled,
@@ -48,6 +49,72 @@ class TestHostKey:
 
     def test_case_insensitive(self):
         assert _host_key("https://Reddit.COM/x") == "reddit.com"
+
+
+class TestFeedDueForSelection:
+    """_feed_due_for_selection: the slot × due/overdue decision matrix. Overdue feeds
+    (past their scheduled time) are eligible at any tick, not just their own slot."""
+
+    NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def _due(self, *, minute, interval, status="active", last_offset=None,
+             retry_offset=None, error_backoff_min=120):
+        last = None if last_offset is None else self.NOW + last_offset
+        retry = None if retry_offset is None else self.NOW + retry_offset
+        return _feed_due_for_selection(
+            minute=minute, effective_interval_min=interval, status=status,
+            last_fetched_at=last, retry_after_until=retry,
+            error_backoff_min=error_backoff_min, now=self.NOW,
+        )
+
+    def test_hourly_due_at_top_of_hour(self):
+        assert self._due(minute=0, interval=60, last_offset=timedelta(hours=-2))
+
+    def test_hourly_overdue_recovers_off_slot(self):
+        # NEW: an overdue hourly feed is picked at :15 even though its slot is :00.
+        assert self._due(minute=15, interval=60, last_offset=timedelta(hours=-2))
+
+    def test_hourly_overdue_recovers_at_30_and_45(self):
+        assert self._due(minute=30, interval=60, last_offset=timedelta(minutes=-61))
+        assert self._due(minute=45, interval=60, last_offset=timedelta(hours=-2))
+
+    def test_hourly_fresh_not_due_off_slot(self):
+        assert not self._due(minute=15, interval=60, last_offset=timedelta(minutes=-1))
+
+    def test_hourly_recent_not_due_even_on_slot(self):
+        # Slot matches at :00 but the interval hasn't elapsed → never fetch early.
+        assert not self._due(minute=0, interval=60, last_offset=timedelta(minutes=-30))
+
+    def test_never_fetched_is_overdue(self):
+        assert self._due(minute=15, interval=60, last_offset=None)
+
+    def test_15min_feed_due_on_its_slots(self):
+        assert self._due(minute=15, interval=15, last_offset=timedelta(minutes=-20))
+        assert self._due(minute=30, interval=15, last_offset=timedelta(minutes=-20))
+
+    def test_15min_feed_fresh_not_due(self):
+        assert not self._due(minute=15, interval=15, last_offset=timedelta(minutes=-1))
+
+    def test_retry_after_blocks_even_when_overdue(self):
+        assert not self._due(minute=0, interval=60, last_offset=timedelta(hours=-2),
+                             retry_offset=timedelta(minutes=30))
+
+    def test_past_retry_after_does_not_block(self):
+        assert self._due(minute=0, interval=60, last_offset=timedelta(hours=-2),
+                         retry_offset=timedelta(minutes=-30))
+
+    def test_error_feed_overdue_recovers_off_slot(self):
+        # error backoff 120 min; last fetched 3 h ago → overdue → picked at :15.
+        assert self._due(minute=15, interval=60, status="error",
+                         last_offset=timedelta(hours=-3))
+
+    def test_error_feed_within_backoff_not_due(self):
+        assert not self._due(minute=15, interval=60, status="error",
+                             last_offset=timedelta(minutes=-30))
+
+    def test_paused_status_never_due(self):
+        assert not self._due(minute=0, interval=60, status="paused",
+                             last_offset=timedelta(hours=-2))
 
 
 class TestCooldownWait:

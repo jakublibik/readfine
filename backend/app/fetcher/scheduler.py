@@ -179,6 +179,127 @@ def compute_next_fetch_at(
     return slot
 
 
+_DUE_GRACE = timedelta(minutes=2)
+
+
+def _feed_due_for_selection(
+    *,
+    minute: int,
+    effective_interval_min: int,
+    status: str,
+    last_fetched_at: datetime | None,
+    retry_after_until: datetime | None,
+    error_backoff_min: int,
+    now: datetime,
+    grace: timedelta = _DUE_GRACE,
+) -> bool:
+    """Pure mirror of the :func:`_select_due_feeds` WHERE clause: would this feed be
+    picked at a scheduler tick landing on *minute*?
+
+    A feed is due when it is not deferred by a server ``Retry-After`` and its
+    per-status timer has elapsed (interval for ``active``, tiered backoff for
+    ``error``, both with a small *grace*). A due feed is selected when its sub-hour
+    period aligns with the tick's slot **or** it is already *overdue* — its scheduled
+    time is strictly in the past (no grace), meaning it missed its slot (deferred by
+    a host cooldown, a transient error, an app restart) and should recover at this
+    tick rather than wait a whole interval.
+
+    This documents the decision matrix and is unit-tested; the real query in
+    :func:`_select_due_feeds` is the source of truth and a DB test guards drift.
+    """
+    if retry_after_until is not None and retry_after_until >= now + grace:
+        return False
+    interval = timedelta(minutes=effective_interval_min)
+    backoff = timedelta(minutes=error_backoff_min)
+    if status == "active":
+        due = last_fetched_at is None or last_fetched_at + interval < now + grace
+        overdue = last_fetched_at is None or last_fetched_at + interval < now
+    elif status == "error":
+        due = last_fetched_at is not None and last_fetched_at + backoff < now + grace
+        overdue = last_fetched_at is not None and last_fetched_at + backoff < now
+    else:
+        return False
+    if not due:
+        return False
+    return _slot_matches(effective_interval_min, minute) or overdue
+
+
+async def _select_due_feeds(
+    session, now: datetime, *, default_interval: int, min_interval: int
+) -> list[Feed]:
+    """Select the feeds due for a fetch at *now* (the scheduler's selection query).
+
+    Factored out of :func:`_fetch_due_feeds` and parameterised on *now* (rather than
+    the DB clock) so the slot/overdue rule can be tested deterministically. See
+    :func:`_feed_due_for_selection` for the rule in prose.
+    """
+    error_backoff_min = max(15, default_interval * 2)
+    one_minute = literal_column("interval '1 minute'")
+    # per-feed interval clamped to the global minimum
+    effective_interval_min = func.greatest(
+        func.coalesce(Feed.fetch_interval_min, default_interval),
+        min_interval,
+    )
+    effective_interval = effective_interval_min * one_minute
+    # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
+    error_backoff = case(
+        (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
+        else_=literal_column(f"interval '{error_backoff_min} minutes'"),
+    )
+    due_cutoff = now + _DUE_GRACE
+
+    # Overdue: scheduled fetch strictly in the past (no grace) → eligible at any tick,
+    # bypassing the slot pre-filter so a missed feed recovers at the next 15-min tick.
+    overdue = or_(
+        and_(
+            Feed.status == "active",
+            or_(
+                Feed.last_fetched_at.is_(None),
+                Feed.last_fetched_at + effective_interval < now,
+            ),
+        ),
+        and_(
+            Feed.status == "error",
+            Feed.last_fetched_at + error_backoff < now,
+        ),
+    )
+
+    # Slot pre-filter — see _slot_matches(); overdue feeds skip it (recover ASAP).
+    minute = now.minute
+    if minute == 0:
+        slot_conditions = []  # top of the hour: consider every feed
+    elif minute in (15, 45):
+        slot_conditions = [or_(effective_interval_min % 60 == 15, overdue)]
+    else:  # :30 (and any other non-:00 minute)
+        slot_conditions = [or_((effective_interval_min % 60).in_([15, 30]), overdue)]
+
+    result = await session.execute(
+        select(Feed).where(
+            Feed.subscriber_count > 0,
+            *slot_conditions,
+            # Honor a server Retry-After (HTTP 429): skip until it passes.
+            or_(
+                Feed.retry_after_until.is_(None),
+                Feed.retry_after_until < due_cutoff,
+            ),
+            or_(
+                and_(
+                    Feed.status == "active",
+                    or_(
+                        Feed.last_fetched_at.is_(None),
+                        Feed.last_fetched_at + effective_interval < due_cutoff,
+                    ),
+                ),
+                and_(
+                    Feed.status == "error",
+                    Feed.last_fetched_at + error_backoff < due_cutoff,
+                ),
+            ),
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def _fetch_due_feeds() -> None:
     """Job: fetch all active feeds that are due for an update."""
     if db.async_session_factory is None:
@@ -199,57 +320,11 @@ async def _fetch_due_feeds() -> None:
         global_purge_days = (row[2] if row else None)
         now = datetime.now(timezone.utc)
 
-        # active: fetch when due; error: tiered backoff; paused/disabled: skip
-        error_backoff_min = max(15, default_interval * 2)
-        one_minute = literal_column("interval '1 minute'")
-        # per-feed interval clamped to global minimum
-        effective_interval_min = func.greatest(
-            func.coalesce(Feed.fetch_interval_min, default_interval),
-            min_interval,
+        # active: fetch when due; error: tiered backoff; paused/disabled: skip.
+        # Overdue feeds recover at any tick — see _select_due_feeds().
+        feeds = await _select_due_feeds(
+            session, now, default_interval=default_interval, min_interval=min_interval
         )
-        effective_interval = effective_interval_min * one_minute
-
-        # Slot pre-filter — see _slot_matches() for the full rule.
-        # TODO: make this behaviour configurable (app_settings flag) if needed.
-        minute = now.minute
-        if minute == 0:
-            slot_conditions = []
-        elif minute in (15, 45):
-            slot_conditions = [effective_interval_min % 60 == 15]
-        else:  # minute == 30
-            slot_conditions = [(effective_interval_min % 60).in_([15, 30])]
-        # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
-        error_backoff = case(
-            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
-            else_=literal_column(f"interval '{error_backoff_min} minutes'"),
-        )
-        grace = literal_column("interval '2 minutes'")
-        due_feeds = await session.execute(
-            select(Feed).where(
-                Feed.subscriber_count > 0,
-                *slot_conditions,
-                # Honor a server-requested Retry-After (HTTP 429): skip the feed
-                # until retry_after_until passes, regardless of interval/backoff.
-                or_(
-                    Feed.retry_after_until.is_(None),
-                    Feed.retry_after_until < func.now() + grace,
-                ),
-                or_(
-                    and_(
-                        Feed.status == "active",
-                        or_(
-                            Feed.last_fetched_at.is_(None),
-                            Feed.last_fetched_at + effective_interval < func.now() + grace,
-                        ),
-                    ),
-                    and_(
-                        Feed.status == "error",
-                        Feed.last_fetched_at + error_backoff < func.now() + grace,
-                    ),
-                ),
-            )
-        )
-        feeds = due_feeds.scalars().all()
 
         # Per-feed published_cutoff: MAX(COALESCE(user_feed.purge_after_days, global))
         # Matches the purge service logic so fetcher and purge stay consistent.

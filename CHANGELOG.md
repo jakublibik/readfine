@@ -20,6 +20,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   keeps the round short enough not to miss the next slot; anything past the budget
   defers to the next round. Feeds on other hosts are unaffected and still fetch in
   parallel.
+- A feed that misses its scheduled fetch — deferred by a host cooldown, a transient
+  error, or an app restart mid-round — now recovers at the next 15-min tick instead
+  of waiting a full interval for its slot to come round again. This also lets a
+  rate-limited host (e.g. Reddit) drain across all four ticks per hour rather than
+  only at the top of the hour, and keeps hourly feeds from drifting an hour late
+  when they get fetched a few minutes past the hour.
 
 ## [0.11.0] - 2026-06-30
 
