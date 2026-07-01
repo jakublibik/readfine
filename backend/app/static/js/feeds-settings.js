@@ -1,4 +1,16 @@
 document.addEventListener('DOMContentLoaded', function () {
+  // The success banner is driven by the ?added= param the subscribe POST redirects
+  // to. Strip it from the address bar so a manual page refresh doesn't re-show a
+  // stale "added successfully" banner — this load already rendered it server-side.
+  (function () {
+    var params = new URLSearchParams(window.location.search);
+    if (params.has('added')) {
+      params.delete('added');
+      var qs = params.toString();
+      history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+    }
+  })();
+
   var tabFeeds = document.getElementById('tab-feeds');
   var tabStats = document.getElementById('tab-stats');
   if (!tabFeeds || !tabStats) return;

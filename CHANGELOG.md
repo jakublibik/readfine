@@ -9,6 +9,40 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Changed
+
+- The fetcher now reads rate-limit response headers (`Retry-After`, `RateLimit-*`
+  and `X-RateLimit-*`) on both successful and 429 responses and applies a per-host
+  cooldown: once a host reports its budget is exhausted (e.g. Reddit's
+  `x-ratelimit-remaining: 0`), other feeds on that host wait out the reset instead
+  of bursting into repeated HTTP 429s. The wait happens within the fetch round (so a
+  rate-limited host drains several feeds per 15-min round) up to a round budget that
+  keeps the round short enough not to miss the next slot; anything past the budget
+  defers to the next round. Feeds on other hosts are unaffected and still fetch in
+  parallel.
+- A feed that misses its scheduled fetch — deferred by a host cooldown, a transient
+  error, or an app restart mid-round — now recovers at the next 15-min tick instead
+  of waiting a full interval for its slot to come round again. This also lets a
+  rate-limited host (e.g. Reddit) drain across all four ticks per hour rather than
+  only at the top of the hour, and keeps hourly feeds from drifting an hour late
+  when they get fetched a few minutes past the hour.
+- The per-feed refresh button (↻ in the sidebar) now reloads the article list when
+  you are viewing that feed, so newly fetched articles appear right away instead of
+  only after re-selecting the feed. Works across the 3-panel, 2-panel and mobile
+  layouts; refreshing a feed you are not currently viewing still just updates its
+  unread badge.
+- The fetch-interval selector now spells out the server default next to the
+  "Default" option (e.g. "Default (60 min)") on the subscribe, scrape-setup and
+  feed-edit forms, and wraps more cleanly on narrow/mobile layouts.
+- Adding a feed now shows specific messages for rate-limiting (HTTP 429 — including
+  when to retry, read from `Retry-After` / `X-RateLimit-Reset`) and temporary server
+  errors (5xx), instead of a bare "HTTP error {status}".
+
+### Fixed
+
+- The green "Feed added successfully" banner no longer reappears when you refresh the
+  Feeds settings page after subscribing.
+
 ## [0.11.0] - 2026-06-30
 
 ### Added

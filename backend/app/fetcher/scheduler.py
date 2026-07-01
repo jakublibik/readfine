@@ -4,12 +4,13 @@ import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TypeVar
-from urllib.parse import urlparse
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
+from app.fetcher import host_throttle
+from app.fetcher.host_throttle import host_key
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
@@ -24,21 +25,41 @@ _GLOBAL_FETCH_CONCURRENCY = 10
 # site (e.g. several Reddit feeds) is polled politely from our single IP instead
 # of in a burst that trips HTTP 429. Tune here if a more parallel host appears.
 _PER_HOST_CONCURRENCY = 1
+# Budget for waiting out per-host cooldowns *within* a fetch round. The round is
+# triggered every 15 min with max_instances=1, so it MUST finish before the next
+# slot or that slot is missed entirely — we stop starting new in-round waits after
+# this point (leaving ~3 min reserve) and defer the rest to the next round.
+_ROUND_BUDGET = timedelta(minutes=12)
+# Never tie a worker up on a single feed longer than this; a host asking for a
+# longer reset is deferred to the next round instead.
+_MAX_SINGLE_WAIT = timedelta(minutes=2)
+# Slack added to a cooldown wait so we fetch safely *after* the window resets.
+# Rate-limit `*-reset` values point at the window end but tend to undershoot it by
+# a second or two (e.g. Reddit's per-minute window: reset counts down to the next
+# :00 but lands ~1-3 s early), so a 1 s buffer still fetches inside the old window
+# and 429s. 5 s clears the boundary reliably; negligible at a ~60 s cadence.
+_COOLDOWN_BUFFER = timedelta(seconds=5)
 
 _T = TypeVar("_T")
 
 
-def _host_key(url: str) -> str:
-    """Normalize a feed URL to a host key for per-host throttling.
+def _cooldown_wait(
+    until: datetime | None, now: datetime, round_deadline: datetime
+) -> timedelta | None:
+    """Decide how to handle a host cooldown for a feed about to be fetched.
 
-    Lower-cased hostname with a leading ``www.`` stripped, so ``www.reddit.com``
-    and ``reddit.com`` share one throttle. Falls back to the raw URL when there is
-    no parseable host.
+    Returns:
+      * ``timedelta(0)`` — no active cooldown, fetch immediately.
+      * a positive ``timedelta`` — sleep this long (reset + buffer) then fetch.
+      * ``None`` — defer to the next round (the wait would blow the single-wait cap
+        or push past the round budget).
     """
-    host = (urlparse(url).hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    return host or url
+    if until is None or until <= now:
+        return timedelta(0)
+    wait = until - now
+    if until > round_deadline or wait > _MAX_SINGLE_WAIT:
+        return None
+    return wait + _COOLDOWN_BUFFER
 
 
 async def _run_throttled(
@@ -48,6 +69,7 @@ async def _run_throttled(
     global_limit: int,
     per_host_limit: int,
     host_of: Callable[[_T], str],
+    on_host_ready: Callable[[_T], Awaitable[bool]] | None = None,
 ) -> list:
     """Run ``worker(item)`` for every item, bounded by a global concurrency limit
     and a per-host limit.
@@ -57,6 +79,11 @@ async def _run_throttled(
     per-host semaphores live only for this call — throttling is scoped to one fetch
     round, which is exactly the burst we want to flatten. Mirrors
     ``asyncio.gather(..., return_exceptions=True)``.
+
+    ``on_host_ready`` (optional) runs under the per-host gate but *before* the global
+    slot is taken; returning False skips the item (worker not run). Any waiting it
+    does therefore holds only the host gate, not a global slot — so a cooling-down
+    host can't tie up global capacity that healthy hosts could use.
     """
     global_sem = asyncio.Semaphore(global_limit)
     host_sems: dict[str, asyncio.Semaphore] = {}
@@ -70,6 +97,8 @@ async def _run_throttled(
 
     async def _run(item: _T) -> None:
         async with _host_sem(host_of(item)):
+            if on_host_ready is not None and not await on_host_ready(item):
+                return
             async with global_sem:
                 await worker(item)
 
@@ -158,6 +187,127 @@ def compute_next_fetch_at(
     return slot
 
 
+_DUE_GRACE = timedelta(minutes=2)
+
+
+def _feed_due_for_selection(
+    *,
+    minute: int,
+    effective_interval_min: int,
+    status: str,
+    last_fetched_at: datetime | None,
+    retry_after_until: datetime | None,
+    error_backoff_min: int,
+    now: datetime,
+    grace: timedelta = _DUE_GRACE,
+) -> bool:
+    """Pure mirror of the :func:`_select_due_feeds` WHERE clause: would this feed be
+    picked at a scheduler tick landing on *minute*?
+
+    A feed is due when it is not deferred by a server ``Retry-After`` and its
+    per-status timer has elapsed (interval for ``active``, tiered backoff for
+    ``error``, both with a small *grace*). A due feed is selected when its sub-hour
+    period aligns with the tick's slot **or** it is already *overdue* — its scheduled
+    time is strictly in the past (no grace), meaning it missed its slot (deferred by
+    a host cooldown, a transient error, an app restart) and should recover at this
+    tick rather than wait a whole interval.
+
+    This documents the decision matrix and is unit-tested; the real query in
+    :func:`_select_due_feeds` is the source of truth and a DB test guards drift.
+    """
+    if retry_after_until is not None and retry_after_until >= now + grace:
+        return False
+    interval = timedelta(minutes=effective_interval_min)
+    backoff = timedelta(minutes=error_backoff_min)
+    if status == "active":
+        due = last_fetched_at is None or last_fetched_at + interval < now + grace
+        overdue = last_fetched_at is None or last_fetched_at + interval < now
+    elif status == "error":
+        due = last_fetched_at is not None and last_fetched_at + backoff < now + grace
+        overdue = last_fetched_at is not None and last_fetched_at + backoff < now
+    else:
+        return False
+    if not due:
+        return False
+    return _slot_matches(effective_interval_min, minute) or overdue
+
+
+async def _select_due_feeds(
+    session, now: datetime, *, default_interval: int, min_interval: int
+) -> list[Feed]:
+    """Select the feeds due for a fetch at *now* (the scheduler's selection query).
+
+    Factored out of :func:`_fetch_due_feeds` and parameterised on *now* (rather than
+    the DB clock) so the slot/overdue rule can be tested deterministically. See
+    :func:`_feed_due_for_selection` for the rule in prose.
+    """
+    error_backoff_min = max(15, default_interval * 2)
+    one_minute = literal_column("interval '1 minute'")
+    # per-feed interval clamped to the global minimum
+    effective_interval_min = func.greatest(
+        func.coalesce(Feed.fetch_interval_min, default_interval),
+        min_interval,
+    )
+    effective_interval = effective_interval_min * one_minute
+    # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
+    error_backoff = case(
+        (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
+        else_=literal_column(f"interval '{error_backoff_min} minutes'"),
+    )
+    due_cutoff = now + _DUE_GRACE
+
+    # Overdue: scheduled fetch strictly in the past (no grace) → eligible at any tick,
+    # bypassing the slot pre-filter so a missed feed recovers at the next 15-min tick.
+    overdue = or_(
+        and_(
+            Feed.status == "active",
+            or_(
+                Feed.last_fetched_at.is_(None),
+                Feed.last_fetched_at + effective_interval < now,
+            ),
+        ),
+        and_(
+            Feed.status == "error",
+            Feed.last_fetched_at + error_backoff < now,
+        ),
+    )
+
+    # Slot pre-filter — see _slot_matches(); overdue feeds skip it (recover ASAP).
+    minute = now.minute
+    if minute == 0:
+        slot_conditions = []  # top of the hour: consider every feed
+    elif minute in (15, 45):
+        slot_conditions = [or_(effective_interval_min % 60 == 15, overdue)]
+    else:  # :30 (and any other non-:00 minute)
+        slot_conditions = [or_((effective_interval_min % 60).in_([15, 30]), overdue)]
+
+    result = await session.execute(
+        select(Feed).where(
+            Feed.subscriber_count > 0,
+            *slot_conditions,
+            # Honor a server Retry-After (HTTP 429): skip until it passes.
+            or_(
+                Feed.retry_after_until.is_(None),
+                Feed.retry_after_until < due_cutoff,
+            ),
+            or_(
+                and_(
+                    Feed.status == "active",
+                    or_(
+                        Feed.last_fetched_at.is_(None),
+                        Feed.last_fetched_at + effective_interval < due_cutoff,
+                    ),
+                ),
+                and_(
+                    Feed.status == "error",
+                    Feed.last_fetched_at + error_backoff < due_cutoff,
+                ),
+            ),
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def _fetch_due_feeds() -> None:
     """Job: fetch all active feeds that are due for an update."""
     if db.async_session_factory is None:
@@ -178,57 +328,11 @@ async def _fetch_due_feeds() -> None:
         global_purge_days = (row[2] if row else None)
         now = datetime.now(timezone.utc)
 
-        # active: fetch when due; error: tiered backoff; paused/disabled: skip
-        error_backoff_min = max(15, default_interval * 2)
-        one_minute = literal_column("interval '1 minute'")
-        # per-feed interval clamped to global minimum
-        effective_interval_min = func.greatest(
-            func.coalesce(Feed.fetch_interval_min, default_interval),
-            min_interval,
+        # active: fetch when due; error: tiered backoff; paused/disabled: skip.
+        # Overdue feeds recover at any tick — see _select_due_feeds().
+        feeds = await _select_due_feeds(
+            session, now, default_interval=default_interval, min_interval=min_interval
         )
-        effective_interval = effective_interval_min * one_minute
-
-        # Slot pre-filter — see _slot_matches() for the full rule.
-        # TODO: make this behaviour configurable (app_settings flag) if needed.
-        minute = now.minute
-        if minute == 0:
-            slot_conditions = []
-        elif minute in (15, 45):
-            slot_conditions = [effective_interval_min % 60 == 15]
-        else:  # minute == 30
-            slot_conditions = [(effective_interval_min % 60).in_([15, 30])]
-        # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
-        error_backoff = case(
-            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
-            else_=literal_column(f"interval '{error_backoff_min} minutes'"),
-        )
-        grace = literal_column("interval '2 minutes'")
-        due_feeds = await session.execute(
-            select(Feed).where(
-                Feed.subscriber_count > 0,
-                *slot_conditions,
-                # Honor a server-requested Retry-After (HTTP 429): skip the feed
-                # until retry_after_until passes, regardless of interval/backoff.
-                or_(
-                    Feed.retry_after_until.is_(None),
-                    Feed.retry_after_until < func.now() + grace,
-                ),
-                or_(
-                    and_(
-                        Feed.status == "active",
-                        or_(
-                            Feed.last_fetched_at.is_(None),
-                            Feed.last_fetched_at + effective_interval < func.now() + grace,
-                        ),
-                    ),
-                    and_(
-                        Feed.status == "error",
-                        Feed.last_fetched_at + error_backoff < func.now() + grace,
-                    ),
-                ),
-            )
-        )
-        feeds = due_feeds.scalars().all()
 
         # Per-feed published_cutoff: MAX(COALESCE(user_feed.purge_after_days, global))
         # Matches the purge service logic so fetcher and purge stay consistent.
@@ -253,6 +357,29 @@ async def _fetch_due_feeds() -> None:
     logger.info("Scheduler: %d feeds due for fetch", len(feeds))
     from app.services.feed import _initial_fetch_in_progress
 
+    async def _await_host_ready(feed: Feed) -> bool:
+        """Per-host cooldown gate (bounded hybrid), run under the host semaphore but
+        before a global slot is taken. Wait the reset out in-round as long as it fits
+        the round budget and the single-wait cap; otherwise defer the feed to the next
+        round (return False). Waiting (rather than deferring) lets a rate-limited host
+        like Reddit drain several feeds per 15-min round instead of just one, while the
+        budget keeps the round short enough not to miss the next slot. Sleeping here
+        holds only the host gate, so it never ties up a global slot healthy hosts want.
+        """
+        now = datetime.now(timezone.utc)
+        host = host_key(feed.feed_url)
+        until = host_throttle.blocked_until(host, now)
+        delay = _cooldown_wait(until, now, round_deadline)
+        if delay is None:
+            logger.info(
+                "Scheduler: deferring feed %d — host %s cooling down %.0fs",
+                feed.id, host, (until - now).total_seconds(),
+            )
+            return False
+        if delay:
+            await asyncio.sleep(delay.total_seconds())
+        return True
+
     async def _fetch_one(feed_id: int) -> None:
         if feed_id in _initial_fetch_in_progress:
             logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
@@ -273,12 +400,14 @@ async def _fetch_due_feeds() -> None:
                     )
 
     fetch_start = datetime.now(timezone.utc)
+    round_deadline = fetch_start + _ROUND_BUDGET
     results = await _run_throttled(
         feeds,
         lambda f: _fetch_one(f.id),
         global_limit=_GLOBAL_FETCH_CONCURRENCY,
         per_host_limit=_PER_HOST_CONCURRENCY,
-        host_of=lambda f: _host_key(f.feed_url),
+        host_of=lambda f: host_key(f.feed_url),
+        on_host_ready=_await_host_ready,
     )
     for feed, result in zip(feeds, results):
         if isinstance(result, BaseException):

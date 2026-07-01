@@ -338,6 +338,18 @@ document.body.addEventListener('showToast', function (e) {
   showToast(e.detail.msg, e.detail.type);
 });
 
+// A manual feed refresh finished — if that feed is the one currently displayed,
+// reload the article list so newly fetched items appear without re-clicking it.
+document.body.addEventListener('feedRefreshed', function (e) {
+  var feedId = e.detail && e.detail.feed_id;
+  if (!feedId || !_activeNavGet) return;
+  // Anchor to a full param value so feed_id=5 doesn't match feed_id=50.
+  var re = new RegExp('[?&]feed_id=' + feedId + '(?:&|$)');
+  if (re.test(_activeNavGet)) {
+    htmx.ajax('GET', _activeNavGet, { target: '#article-list', swap: 'innerHTML' });
+  }
+});
+
 document.body.addEventListener('htmx:sendError', function (e) {
   if (!e.detail.target || e.detail.target.id !== 'article-list') return;
   if (!_navSnapshot) return;

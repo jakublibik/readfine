@@ -15,10 +15,36 @@ While the project is `0.x` (API/schema not yet stable):
 | MINOR | `0.9.0 → 0.10.0`| New features **and/or** breaking changes (DB migrations, env/config changes). Normal pre-1.0 cadence. |
 | MAJOR | `→ 1.0.0`       | First stability commitment.                                                                   |
 
-`master` is production. You do **not** bump on every merge to `dev` — you bump when you
-cut a release (merge `dev → master`). Multiple `dev` merges batch into one versioned
-release. To pick the bump, read `CHANGELOG.md` `[Unreleased]`: any migration / breaking
-change / new feature → minor; fixes only → patch.
+## Deploy vs. release
+
+`master` is the **production trunk**, not a release branch. Two distinct events:
+
+- **Deploy** = merge `dev → master` and pull on the server. Master is continuously
+  deployable and normally sits ahead of the last tag by several commits. You do **not**
+  bump the version or cut a changelog section to deploy — a hotfix or a finished chunk
+  can ship straight away. Pushing to master without a tag is expected, not a mistake.
+- **Release** = a tag + dated `CHANGELOG` section cut over commits that are *already* on
+  master, when a larger chunk is done and you want a labelled milestone. Multiple deploys
+  batch into one versioned release.
+
+**Changelog at both events.** Before a **deploy** (merge to master), confirm every
+notable change in the batch is already in `CHANGELOG.md` `[Unreleased]` (see the
+per-commit rule in `CLAUDE.local.md`) — deploying is the last chance to catch a missed
+entry while the context is fresh. At **release**, that `[Unreleased]` list is what you
+move into the dated section, so keeping it current as you go makes the release a rename,
+not an archaeology dig.
+
+**Gate: before any merge to `master`, verify on staging first** (`staging.readfine.app`,
+`./deploy-staging.sh dev`). Staging tracks `dev`, so it exercises exactly what you're about
+to merge.
+
+`git describe --tags` tells you how far master is ahead of the last release at any time.
+
+## When to cut a release
+
+You do **not** bump on every merge to `master`. Bump when you cut a release (tag) over
+what's already deployed. To pick the bump, read `CHANGELOG.md` `[Unreleased]`: any
+migration / breaking change / new feature → minor; fixes only → patch.
 
 ## Pre-release checklist
 
@@ -42,9 +68,11 @@ landing copy are version-independent, so leave them unless the UI/feature set mo
 - [ ] `backend/app/templates/help.html` (`/help`) — new features, FAQ entries
 - [ ] OpenAPI / API docs — if the API surface changed
 
-**Ship**
+**Ship** — the feature code is usually already deployed on master; a release adds the
+version label on top.
 
-- [ ] Commit on `dev`, then merge `dev → master`
+- [ ] Commit the bump + changelog on `dev`, verify on staging, then merge `dev → master`
+- [ ] Deploy to production (pull master) if the bump commit or any batched change isn't
+      live yet; purge stale CDN cache if needed
 - [ ] Tag the release: `git tag vX.Y.Z && git push --tags`
 - [ ] Create a GitHub release from the tag (paste the `CHANGELOG.md` section)
-- [ ] Deploy to production and purge any stale CDN cache if needed

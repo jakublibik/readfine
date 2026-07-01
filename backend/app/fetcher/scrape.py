@@ -17,11 +17,13 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
+from app.fetcher import host_throttle
 from app.utils.url_validator import (
     TRANSIENT_HTTP_STATUSES,
     async_validate_feed_url,
     fetch_url_with_ssrf_check,
     parse_retry_after,
+    rate_limited_until,
     redact_url,
 )
 
@@ -252,6 +254,10 @@ async def fetch_scrape_feed(
         retry_after_until = None
         if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
             retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
+            host_throttle.note_rate_limited(
+                host_throttle.host_key(feed_url),
+                rate_limited_until(exc.response.headers, now),
+            )
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,
