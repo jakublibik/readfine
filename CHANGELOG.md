@@ -26,6 +26,22 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   rate-limited host (e.g. Reddit) drain across all four ticks per hour rather than
   only at the top of the hour, and keeps hourly feeds from drifting an hour late
   when they get fetched a few minutes past the hour.
+- The per-feed refresh button (↻ in the sidebar) now reloads the article list when
+  you are viewing that feed, so newly fetched articles appear right away instead of
+  only after re-selecting the feed. Works across the 3-panel, 2-panel and mobile
+  layouts; refreshing a feed you are not currently viewing still just updates its
+  unread badge.
+- The fetch-interval selector now spells out the server default next to the
+  "Default" option (e.g. "Default (60 min)") on the subscribe, scrape-setup and
+  feed-edit forms, and wraps more cleanly on narrow/mobile layouts.
+- Adding a feed now shows specific messages for rate-limiting (HTTP 429 — including
+  when to retry, read from `Retry-After` / `X-RateLimit-Reset`) and temporary server
+  errors (5xx), instead of a bare "HTTP error {status}".
+
+### Fixed
+
+- The green "Feed added successfully" banner no longer reappears when you refresh the
+  Feeds settings page after subscribing.
 
 ## [0.11.0] - 2026-06-30
 

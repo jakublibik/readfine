@@ -27,6 +27,13 @@ While the project is `0.x` (API/schema not yet stable):
   master, when a larger chunk is done and you want a labelled milestone. Multiple deploys
   batch into one versioned release.
 
+**Changelog at both events.** Before a **deploy** (merge to master), confirm every
+notable change in the batch is already in `CHANGELOG.md` `[Unreleased]` (see the
+per-commit rule in `CLAUDE.local.md`) — deploying is the last chance to catch a missed
+entry while the context is fresh. At **release**, that `[Unreleased]` list is what you
+move into the dated section, so keeping it current as you go makes the release a rename,
+not an archaeology dig.
+
 **Gate: before any merge to `master`, verify on staging first** (`staging.readfine.app`,
 `./deploy-staging.sh dev`). Staging tracks `dev`, so it exercises exactly what you're about
 to merge.
