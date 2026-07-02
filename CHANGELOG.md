@@ -11,6 +11,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- An HTTP 403 from a feed no longer disables it on the first hit. Reddit and
+  YouTube return 403 as a transient anti-bot / rate-adjacent block (datacenter IP,
+  generic user-agent) far more often than as a permanent denial, so 403 now backs
+  off through the error tier and is disabled only after several consecutive
+  failures — the same treatment as 408/429 and 5xx. Genuinely permanent 4xx (400,
+  401, 404, 410) still disable immediately.
 - The fetcher now reads rate-limit response headers (`Retry-After`, `RateLimit-*`
   and `X-RateLimit-*`) on both successful and 429 responses and applies a per-host
   cooldown: once a host reports its budget is exhausted (e.g. Reddit's

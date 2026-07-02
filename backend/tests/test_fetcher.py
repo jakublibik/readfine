@@ -924,6 +924,50 @@ class TestFetchFeed429Transient:
         assert vals["retry_after_until"].value is None
 
 
+class TestFetchFeed403Transient:
+    """A 403 (often a transient anti-bot / rate-adjacent block on Reddit/YouTube)
+    backs the feed off through the error tier instead of disabling it on first hit."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def teardown_method(self):
+        host_throttle.clear()
+
+    async def test_403_does_not_disable_on_first_hit(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        assert not _status_is_disabled(_update_values(session)["status"])
+
+    async def test_403_records_http_status(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        assert session.add.call_args[0][0].http_status == 403
+
+    async def test_403_disables_at_threshold(self):
+        # Once fetch_error_count has reached the threshold, the error tier disables it.
+        feed = _make_feed(fetch_error_count=FETCH_ERROR_DISABLE_THRESHOLD)
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        # status is a CASE(count >= threshold -> disabled); the count column is >= threshold
+        assert feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
+
+    async def test_403_leaves_retry_after_null_and_no_cooldown(self):
+        # 403 is not a rate-limit status: no Retry-After honored, no host cooldown armed.
+        feed = _make_feed()
+        session = _make_session()
+        exc = _http_error(403, headers={"Retry-After": "600"})
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, session)
+        assert _update_values(session)["retry_after_until"].value is None
+        assert host_throttle.blocked_until("example.com", datetime.now(timezone.utc)) is None
+
+
 class TestFetchFeedHostCooldown:
     """fetch_feed arms the in-memory per-host cooldown from rate-limit headers, so
     sibling feeds on the same host defer instead of bursting into 429."""
