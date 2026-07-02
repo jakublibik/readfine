@@ -499,8 +499,8 @@ class TestFetchScrapeFeedErrors:
         feed = _make_scrape_feed()
         session = _make_session()
         request = httpx.Request("GET", feed.feed_url)
-        response = httpx.Response(403, request=request)
-        exc = httpx.HTTPStatusError("403", request=request, response=response)
+        response = httpx.Response(404, request=request)
+        exc = httpx.HTTPStatusError("404", request=request, response=response)
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
             await fetch_scrape_feed(feed, session)
         assert session.execute.called
@@ -531,7 +531,8 @@ def _scrape_status_is_disabled(status_clause) -> bool:
 
 
 class TestFetchScrapeFeed429Transient:
-    """A 429 backs the scrape feed off instead of disabling it (403 still disables)."""
+    """403/408/429 back the scrape feed off through the error tier instead of
+    disabling it on the first hit; genuinely permanent 4xx still disable."""
 
     async def test_429_does_not_disable(self):
         feed = _make_scrape_feed()
@@ -551,10 +552,26 @@ class TestFetchScrapeFeed429Transient:
         assert rau is not None
         assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
 
-    async def test_403_still_disables(self):
+    async def test_403_does_not_disable_on_first_hit(self):
         feed = _make_scrape_feed()
         session = _make_session()
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(403)):
+            await fetch_scrape_feed(feed, session)
+        assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
+
+    async def test_403_leaves_retry_after_null(self):
+        # 403 carries no rate-limit signal: no Retry-After honored.
+        feed = _make_scrape_feed()
+        session = _make_session()
+        exc = _scrape_http_error(403, headers={"Retry-After": "600"})
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+            await fetch_scrape_feed(feed, session)
+        assert _scrape_update_values(session)["retry_after_until"].value is None
+
+    async def test_permanent_4xx_still_disables(self):
+        feed = _make_scrape_feed()
+        session = _make_session()
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(404)):
             await fetch_scrape_feed(feed, session)
         assert _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
