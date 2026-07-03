@@ -380,21 +380,31 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
 // duration of the request so the two don't visibly desync. The pagination
 // "load-more" sentinel targets itself (not #article-list), so it's excluded by
 // the target check and doesn't trigger the overlay.
+// Delay showing the overlay so quick (local/cached) loads don't flash a spinner.
+// Only requests that outlast the threshold get the overlay; faster ones swap in
+// before it ever appears.
+var _LIST_LOADING_DELAY_MS = 150;
+var _listLoadingTimer = null;
 function _showListLoading() {
-  var list = document.getElementById('article-list');
-  if (!list || list.querySelector('.article-list-loading')) return;
-  var ov = document.createElement('div');
-  ov.className = 'article-list-loading absolute inset-0 z-20 bg-white/80 dark:bg-gray-800/80';
-  ov.innerHTML =
-    '<div class="sticky top-0 flex items-center justify-center" style="height:55vh">' +
-      '<svg class="w-6 h-6 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">' +
-        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
-        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>' +
-      '</svg>' +
-    '</div>';
-  list.appendChild(ov);
+  if (_listLoadingTimer) return;
+  _listLoadingTimer = setTimeout(function () {
+    _listLoadingTimer = null;
+    var list = document.getElementById('article-list');
+    if (!list || list.querySelector('.article-list-loading')) return;
+    var ov = document.createElement('div');
+    ov.className = 'article-list-loading absolute inset-0 z-20 bg-white/80';
+    ov.innerHTML =
+      '<div class="sticky top-0 flex items-center justify-center" style="height:55vh">' +
+        '<svg class="w-6 h-6 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">' +
+          '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+          '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>' +
+        '</svg>' +
+      '</div>';
+    list.appendChild(ov);
+  }, _LIST_LOADING_DELAY_MS);
 }
 function _hideListLoading() {
+  if (_listLoadingTimer) { clearTimeout(_listLoadingTimer); _listLoadingTimer = null; }
   var list = document.getElementById('article-list');
   if (!list) return;
   var ov = list.querySelector('.article-list-loading');
