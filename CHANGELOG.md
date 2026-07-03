@@ -49,6 +49,17 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The green "Feed added successfully" banner no longer reappears when you refresh the
   Feeds settings page after subscribing.
 
+### Security
+
+- Filter `regex` conditions are now evaluated under a per-match timeout, closing a
+  denial-of-service hole: the previous create-time heuristic could be bypassed by a
+  catastrophic-backtracking pattern (e.g. `([a-z]+)*`), and because matching ran
+  synchronously on the event loop during fetch, filter test and retroactive apply —
+  and CPython's `re` neither times out nor releases the GIL — a single crafted filter
+  could freeze the whole app for every user. Evaluation now uses the `regex` module
+  with a hard timeout (a timed-out pattern is treated as "no match"); existing filter
+  behaviour is unchanged.
+
 ## [0.11.0] - 2026-06-30
 
 ### Added
