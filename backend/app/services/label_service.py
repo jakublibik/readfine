@@ -1,5 +1,5 @@
 """Label service: CRUD + article label assignment."""
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -17,7 +17,7 @@ async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
     result = await db.execute(
         select(Label)
         .where(Label.user_id == user.id)
-        .order_by(Label.position, Label.name)
+        .order_by(Label.position, func.lower(Label.name))
     )
     return [LabelResponse.model_validate(label) for label in result.scalars()]
 

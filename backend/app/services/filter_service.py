@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 _AI_CONDITION_FIELDS = frozenset({"ai_score"})
 _AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 
+# Canonical filter ordering. Every place that lists or executes filters must use
+# this same ordering, so the settings list shows filters in the exact order they
+# run (position ties are common — the form defaults to 0 — and `stop_on_match`
+# makes execution order user-visible). `Filter.id` breaks name ties.
+FILTER_ORDER = (Filter.position, func.lower(Filter.name), Filter.id)
+
 _REGEX_MAX_LEN = 200
 # Fast create-time UX reject for a few obviously dangerous shapes. This is NOT a
 # security boundary (it is easily bypassed, e.g. `([a-z]+)*`); the real guard is
@@ -156,7 +162,7 @@ async def list_filters(user_id: int, db: AsyncSession) -> list[FilterResponse]:
         select(Filter)
         .where(Filter.user_id == user_id)
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position, Filter.name)
+        .order_by(*FILTER_ORDER)
     )
     return [FilterResponse.model_validate(f) for f in result.scalars()]
 
@@ -546,7 +552,7 @@ async def apply_filters_to_new_articles(
             Filter.is_active == True,
         )
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     filters_by_user: dict[int, list[Filter]] = {}
     for f in filters_result.scalars():
@@ -627,7 +633,7 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
         select(Filter)
         .where(Filter.user_id.in_(user_ids), Filter.is_active == True)  # noqa: E712
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     filters_by_user: dict[int, list[Filter]] = {}
     for f in filters_result.scalars():

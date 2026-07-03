@@ -1214,7 +1214,7 @@ async def htmx_toggle_article_label(
         select(Label.id, Label.name, Label.color)
         .join(ArticleLabel, ArticleLabel.label_id == Label.id)
         .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user.id)
-        .order_by(Label.position, Label.name)
+        .order_by(Label.position, func.lower(Label.name))
     )).all()
     assigned_labels = [{"id": r[0], "name": r[1], "color": r[2]} for r in assigned_labels_rows]
     assigned: set[int] = {l["id"] for l in assigned_labels}

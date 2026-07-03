@@ -314,7 +314,7 @@ async def list_articles(
             select(ArticleLabel.article_id, Label.id, Label.name, Label.color)
             .join(Label, Label.id == ArticleLabel.label_id)
             .where(ArticleLabel.article_id.in_(article_ids), ArticleLabel.user_id == user.id)
-            .order_by(ArticleLabel.article_id, Label.position, Label.name)
+            .order_by(ArticleLabel.article_id, Label.position, func.lower(Label.name))
         )).all()
         for aid, lid, lname, lcolor in labels_rows:
             labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
@@ -350,7 +350,7 @@ async def _fetch_labels(article_id: int, user_id: int, db: AsyncSession) -> list
         select(ArticleLabel.label_id, Label.name, Label.color)
         .join(Label, Label.id == ArticleLabel.label_id)
         .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user_id)
-        .order_by(Label.position, Label.name)
+        .order_by(Label.position, func.lower(Label.name))
     )).all()
     return [{"id": r[0], "name": r[1], "color": r[2]} for r in rows]
 
@@ -420,7 +420,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
                     ArticleLabel.article_id == article_id,
                     ArticleLabel.user_id == user.id,
                 )
-                .order_by(Label.position, Label.name)
+                .order_by(Label.position, func.lower(Label.name))
             )).all()
         ],
     )

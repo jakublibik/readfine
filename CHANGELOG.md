@@ -46,8 +46,21 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The Feeds, Filters and Labels settings pages and the admin Users page now show the
   item count next to the page heading (matching the admin Feeds page), kept up to
   date as items are added or removed without a page reload.
+- Labels and filters now sort case-insensitively — in the settings lists, label
+  pickers and label chips alike. Previously the database collation ordered all
+  uppercase names before any lowercase one, so a new lowercase-named label or
+  filter appeared stuck at the end of the list instead of in its alphabetical
+  place.
+- The filter list shows a "priority N" badge on filters whose priority differs
+  from the default, so it is visible why a filter sorts (and runs) ahead of the
+  alphabetical order.
 
 ### Fixed
+
+- Filters sharing the same priority now run in a deterministic order — exactly the
+  order the Settings → Filters list shows (priority, then name). Previously the
+  execution order of equal-priority filters was left to the database, so a
+  "stop on match" filter could behave inconsistently between fetches.
 
 - The green "Feed added successfully" banner no longer reappears when you refresh the
   Feeds settings page after subscribing.
