@@ -455,12 +455,22 @@ function _syncMobileQuicklink() {
   if (bottomLink) bottomLink.textContent = text;
 }
 
-// Restore last-selected nav on page load; fall back to All Articles
+// Restore last-selected nav on page load; fall back to All Articles.
+// A ?view=starred|labeled deep-link (e.g. from the Stats page) overrides the
+// saved nav and is consumed from the URL, like ?open_article_id.
 function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
-  var saved;
-  try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
-  var url = saved || '/htmx/articles';
+  var url;
+  var view = window.location.search.match(/[?&]view=(starred|labeled)(?:&|$)/);
+  if (view) {
+    url = '/htmx/articles?' + view[1] + '_only=true';
+    try { localStorage.setItem('lastNavItem', url); } catch (e) {}
+    history.replaceState(null, '', window.location.pathname);
+  } else {
+    var saved;
+    try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
+    url = saved || '/htmx/articles';
+  }
   _activeNavGet = url;
   _syncMobileQuicklink();
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });

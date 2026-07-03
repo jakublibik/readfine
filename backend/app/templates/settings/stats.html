@@ -8,7 +8,7 @@
 
 {# ── Summary cards ─────────────────────────────────────────────────────────── #}
 <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-  <div class="bg-white border border-gray-200 rounded-lg p-4">
+  <a href="/app?view=labeled" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-xs text-gray-500 mb-1">Labeled unread</div>
     <div class="text-2xl font-bold text-gray-900">
       {% if reading.labeled_backlog > 0 %}{{ reading.labeled_backlog }}{% else %}—{% endif %}
@@ -16,8 +16,8 @@
     {% if reading.labeled_backlog > 0 %}
     <div class="text-xs text-gray-400 mt-0.5">unread articles</div>
     {% endif %}
-  </div>
-  <div class="bg-white border border-gray-200 rounded-lg p-4">
+  </a>
+  <a href="/app?view=starred" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-xs text-gray-500 mb-1">Starred to read</div>
     <div class="text-2xl font-bold text-gray-900">
       {% if reading.starred_backlog > 0 %}{{ reading.starred_backlog }}{% else %}—{% endif %}
@@ -25,7 +25,7 @@
     {% if reading.starred_backlog > 0 %}
     <div class="text-xs text-gray-400 mt-0.5">starred articles</div>
     {% endif %}
-  </div>
+  </a>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-xs text-gray-500 mb-1">Reading streak</div>
     <div class="text-2xl font-bold text-gray-900">
