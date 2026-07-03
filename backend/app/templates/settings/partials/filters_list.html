@@ -86,3 +86,6 @@
       <a href="/help#filters" class="text-blue-600 hover:underline">learn more</a>.</p>
   {% endif %}
 </div>
+{% if request.headers.get('hx-request') %}
+<span id="filters-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ filters | length }})</span>
+{% endif %}

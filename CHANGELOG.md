@@ -43,6 +43,9 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Adding a feed now shows specific messages for rate-limiting (HTTP 429 — including
   when to retry, read from `Retry-After` / `X-RateLimit-Reset`) and temporary server
   errors (5xx), instead of a bare "HTTP error {status}".
+- The Feeds, Filters and Labels settings pages and the admin Users page now show the
+  item count next to the page heading (matching the admin Feeds page), kept up to
+  date as items are added or removed without a page reload.
 
 ### Fixed
 

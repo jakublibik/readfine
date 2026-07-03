@@ -4,7 +4,10 @@
 {% block settings_main_width %}max-w-4xl{% endblock %}
 
 {% block settings_content %}
-<h1 class="text-xl font-semibold text-gray-900 mb-6">Feeds</h1>
+<h1 class="text-xl font-semibold text-gray-900 mb-6">
+  Feeds
+  <span id="feeds-count" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
+</h1>
 
 {% if added %}
 <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">

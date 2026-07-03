@@ -160,3 +160,6 @@
   {% set oob = true %}
   {% include "settings/partials/folder_select.html" %}
 {% endif %}
+{% if request.headers.get('hx-request') %}
+<span id="feeds-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
+{% endif %}
