@@ -133,3 +133,40 @@ async def test_label_filter_without_query(pg):
     ids = {i.id for i in items}
     assert a1.id in ids
     assert a2.id not in ids and a3.id not in ids
+
+
+async def test_label_view_shows_orphaned_feed_article(pg):
+    """Regression: a labelled article whose feed was deleted (feed_id NULL) still
+    appears in the label view. The sidebar badge counts it without a subscription
+    join, so the list must match — otherwise the badge shows N but the category is
+    empty. See list_articles' feed_optional path."""
+    user, token, (l1, _), (a1, a2, a3) = await _setup(pg)
+    # Orphan a1: simulate its feed being deleted (ondelete=SET NULL on feed_id).
+    a1.feed_id = None
+    await pg.flush()
+
+    items = await list_articles(user=user, db=pg, label_id=l1.id, limit=100)
+    assert {i.id for i in items} == {a1.id}
+
+
+async def test_label_view_isolates_tenants(pg):
+    """Dropping the subscription join must not leak another user's labelled article:
+    the label anchor (ArticleLabel.user_id) is what scopes the query."""
+    user, token, (l1, _), (a1, a2, a3) = await _setup(pg)
+    # Second user labels the same article under their own label — must not appear
+    # in the first user's label view.
+    other = User(email=f"o_{uuid.uuid4().hex[:8]}@test.invalid", password_hash="x", display_name="o")
+    pg.add(other)
+    await pg.flush()
+    ol = Label(user_id=other.id, name=f"OL-{uuid.uuid4().hex[:6]}", color="#333333")
+    pg.add(ol)
+    await pg.flush()
+    pg.add(ArticleLabel(user_id=other.id, article_id=a2.id, label_id=ol.id))
+    await pg.flush()
+
+    # First user's view of their own label is unaffected.
+    items = await list_articles(user=user, db=pg, label_id=l1.id, limit=100)
+    assert {i.id for i in items} == {a1.id}
+    # And the other user only sees the article they labelled.
+    items_other = await list_articles(user=other, db=pg, label_id=ol.id, limit=100)
+    assert {i.id for i in items_other} == {a2.id}

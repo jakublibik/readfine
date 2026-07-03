@@ -139,44 +139,39 @@ async def list_articles(
     cursor_id: int | None = None,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state."""
-    # Starred/archived views: UserFeed is optional (articles remain visible after unsubscribe)
-    is_state_view = starred_only or archived_only
-    if is_state_view:
+    # State/label views are anchored on user-owned state (star, archive, label)
+    # that outlives the feed subscription: the feed may be unsubscribed or deleted
+    # (Article.feed_id NULL), so the UserFeed/Feed joins must be optional. The
+    # user-scoping — and thus tenant isolation — comes from those anchors
+    # (UserArticleState.user_id / ArticleLabel.user_id below), never from the feed
+    # join, so dropping the subscription requirement here cannot leak other users'
+    # articles. Feed-browsing views instead require an active subscription.
+    feed_optional = starred_only or archived_only or label_id is not None or labeled_only
+    stmt = select(
+        Article,
+        UserArticleState,
+        Feed.title.label("feed_title"),
+        UserFeed.custom_title.label("custom_title"),
+    )
+    uas_join = (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id)
+    uf_join = (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id)
+    if feed_optional:
+        # UserArticleState stays an outer join: a labeled article may have no state
+        # row yet, and for starred/archived the `is_*` filters below make an outer
+        # join equivalent to an inner one.
         stmt = (
-            select(
-                Article,
-                UserArticleState,
-                Feed.title.label("feed_title"),
-                UserFeed.custom_title.label("custom_title"),
-            )
-            .join(
-                UserArticleState,
-                (UserArticleState.article_id == Article.id)
-                & (UserArticleState.user_id == user.id),
-            )
+            stmt
+            .outerjoin(UserArticleState, uas_join)
             .outerjoin(Feed, Feed.id == Article.feed_id)
-            .outerjoin(
-                UserFeed,
-                (UserFeed.feed_id == Article.feed_id)
-                & (UserFeed.user_id == user.id),
-            )
+            .outerjoin(UserFeed, uf_join)
         )
     else:
         # Normal view: user must be subscribed to the feed
         stmt = (
-            select(
-                Article,
-                UserArticleState,
-                Feed.title.label("feed_title"),
-                UserFeed.custom_title.label("custom_title"),
-            )
-            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+            stmt
+            .join(UserFeed, uf_join)
             .join(Feed, Feed.id == Article.feed_id)
-            .outerjoin(
-                UserArticleState,
-                (UserArticleState.article_id == Article.id)
-                & (UserArticleState.user_id == user.id),
-            )
+            .outerjoin(UserArticleState, uas_join)
         )
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
