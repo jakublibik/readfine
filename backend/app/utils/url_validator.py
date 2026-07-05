@@ -127,6 +127,16 @@ def rate_limited_until(headers, now: datetime) -> datetime | None:
     return min(until, now + _RATE_LIMIT_MAX)
 
 
+def format_retry_in(until: datetime, now: datetime) -> str:
+    """Human 'try again in …' phrase for a cooldown expiry.
+
+    Rate-limit resets are often just seconds (Reddit's ``x-ratelimit-reset``), so
+    show seconds under ~90s and minutes above. Callers embed this in a 429 message.
+    """
+    secs = max(1, round((until - now).total_seconds()))
+    return f"{secs} sec" if secs < 90 else f"about {round(secs / 60)} min"
+
+
 def redact_url(url: str) -> str:
     """Strip credentials and query string from a URL for safe logging.
 

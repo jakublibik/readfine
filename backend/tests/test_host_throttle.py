@@ -1,12 +1,14 @@
 """Tests for the general rate-limit-header layer: rate_limited_until() parsing and
 the in-memory per-host cooldown."""
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from app.fetcher import host_throttle
-from app.utils.url_validator import rate_limited_until
+from app.fetcher.rss import cooldown_until
+from app.utils.url_validator import format_retry_in, rate_limited_until
 
 NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -96,3 +98,93 @@ class TestHostCooldown:
 
     def test_unknown_host_returns_none(self):
         assert host_throttle.blocked_until("example.com", NOW) is None
+
+
+class TestBlockBreather:
+    """The 403 breather gates the scheduler (include_block=True) only, never the
+    default (manual-facing) lookup."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def test_block_hidden_from_default_lookup(self):
+        host_throttle.note_block("reddit.com", NOW + timedelta(seconds=60))
+        assert host_throttle.blocked_until("reddit.com", NOW) is None
+
+    def test_block_visible_with_include_block(self):
+        until = NOW + timedelta(seconds=60)
+        host_throttle.note_block("reddit.com", until)
+        assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) == until
+
+    def test_rate_limit_gates_both_lookups(self):
+        until = NOW + timedelta(seconds=30)
+        host_throttle.note_rate_limited("reddit.com", until)
+        assert host_throttle.blocked_until("reddit.com", NOW) == until
+        assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) == until
+
+    def test_include_block_returns_later_of_the_two(self):
+        host_throttle.note_rate_limited("reddit.com", NOW + timedelta(seconds=30))
+        host_throttle.note_block("reddit.com", NOW + timedelta(seconds=90))
+        assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) == NOW + timedelta(seconds=90)
+        # ...but the manual-facing lookup still only sees the 30s rate-limit cooldown
+        assert host_throttle.blocked_until("reddit.com", NOW) == NOW + timedelta(seconds=30)
+
+    def test_clear_drops_block_breather(self):
+        host_throttle.note_block("reddit.com", NOW + timedelta(seconds=60))
+        host_throttle.clear()
+        assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) is None
+
+
+def _feed(feed_url="https://www.reddit.com/r/rss/.rss", retry_after_until=None):
+    return SimpleNamespace(feed_url=feed_url, retry_after_until=retry_after_until)
+
+
+class TestCooldownUntil:
+    """cooldown_until() gates manual fetches on the per-feed retry_after_until (DB)
+    and the per-host in-memory throttle, returning the later of the two."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def test_no_cooldown_returns_none(self):
+        assert cooldown_until(_feed(), NOW) is None
+
+    def test_per_feed_retry_after(self):
+        until = NOW + timedelta(minutes=5)
+        assert cooldown_until(_feed(retry_after_until=until), NOW) == until
+
+    def test_expired_per_feed_ignored(self):
+        assert cooldown_until(_feed(retry_after_until=NOW - timedelta(seconds=1)), NOW) is None
+
+    def test_ignores_403_block_breather(self):
+        # A 403 anti-bot breather must not block a manual refresh (cooldown_until is
+        # the manual-facing gate) — only real rate-limit cooldowns do.
+        host_throttle.note_block(host_throttle.host_key("https://reddit.com/x"), NOW + timedelta(seconds=60))
+        assert cooldown_until(_feed(), NOW) is None
+
+    def test_host_throttle_from_sibling_feed(self):
+        # A sibling feed's 429 armed the host cooldown; this feed has no retry_after_until.
+        until = NOW + timedelta(seconds=90)
+        host_throttle.note_rate_limited(host_throttle.host_key("https://reddit.com/r/x/.rss"), until)
+        assert cooldown_until(_feed(), NOW) == until
+
+    def test_returns_later_of_the_two(self):
+        feed_until = NOW + timedelta(seconds=30)
+        host_until = NOW + timedelta(seconds=120)
+        host_throttle.note_rate_limited(host_throttle.host_key("https://www.reddit.com/x"), host_until)
+        assert cooldown_until(_feed(retry_after_until=feed_until), NOW) == host_until
+        # ...and the reverse ordering also picks the later one
+        assert cooldown_until(_feed(retry_after_until=host_until + timedelta(seconds=10)), NOW) \
+            == host_until + timedelta(seconds=10)
+
+
+class TestFormatRetryIn:
+    def test_seconds_under_90(self):
+        assert format_retry_in(NOW + timedelta(seconds=59), NOW) == "59 sec"
+
+    def test_minutes_at_or_above_90(self):
+        assert format_retry_in(NOW + timedelta(seconds=120), NOW) == "about 2 min"
+
+    def test_floor_of_one_second(self):
+        # An already-elapsed cooldown never renders "0 sec".
+        assert format_retry_in(NOW, NOW) == "1 sec"

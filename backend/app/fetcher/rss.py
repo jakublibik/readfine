@@ -87,6 +87,25 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
     return parsed
 
 
+def cooldown_until(feed: Feed, now: datetime) -> datetime | None:
+    """Latest active rate-limit cooldown for a *manual* fetch of this feed, or None.
+
+    Combines the per-feed ``retry_after_until`` (set on 429/408, persisted in the DB)
+    with the per-host in-memory throttle (armed when *any* feed on the same host was
+    rate-limited). Manual fetch paths consult this to avoid hammering into a known 429
+    window; the scheduler enforces the same via its own gates. Returns the later of the
+    two, or None when neither is active. Does not cover bare 403s — those carry no reset
+    time, so a manual fetch retries and may see 403 again.
+    """
+    candidates = []
+    if feed.retry_after_until is not None and feed.retry_after_until > now:
+        candidates.append(feed.retry_after_until)
+    host_until = host_throttle.blocked_until(host_throttle.host_key(feed.feed_url), now)
+    if host_until is not None:
+        candidates.append(host_until)
+    return max(candidates) if candidates else None
+
+
 async def fetch_feed(
     feed: Feed,
     db: AsyncSession,
@@ -209,6 +228,19 @@ async def fetch_feed(
                 host_throttle.host_key(feed_url),
                 rate_limited_until(exc.response.headers, now),
             )
+        elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
+            # A 403 with a real rate-limit signal is a genuine throttle → arm the
+            # rate-limit cooldown (gates the scheduler *and* manual refreshes). A bare
+            # anti-bot 403 (no usable timing) gets only the fixed breather, which paces
+            # the scheduler but never blocks a manual refresh — the user asked to retry
+            # and the block is often transient. retry_after_until stays null either way,
+            # so the per-feed error tier still drives the eventual disable.
+            host = host_throttle.host_key(feed_url)
+            signal = rate_limited_until(exc.response.headers, now)
+            if signal is not None:
+                host_throttle.note_rate_limited(host, signal)
+            else:
+                host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,

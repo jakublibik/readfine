@@ -1,5 +1,6 @@
 """Web routes for the admin panel."""
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -394,6 +395,19 @@ async def admin_force_fetch(
 ):
     feed = await get_feed(db, feed_id)
     if feed:
+        from app.fetcher.rss import cooldown_until
+        from app.utils.url_validator import format_retry_in
+        now = datetime.now(timezone.utc)
+        cd = cooldown_until(feed, now)
+        if cd is not None:
+            # Known rate-limit window — don't hammer into another 429; the admin
+            # button is no override, so surface the wait instead of fetching.
+            resp = await _feeds_response(request, db, user)
+            resp.headers["HX-Trigger"] = json.dumps({"showToast": {
+                "msg": f"Rate-limited — try again in {format_retry_in(cd, now)}.",
+                "type": "warning",
+            }})
+            return resp
         if feed.feed_type == "scrape":
             from app.fetcher.scrape import fetch_scrape_feed
             await fetch_scrape_feed(feed, db)
@@ -401,6 +415,17 @@ async def admin_force_fetch(
             from app.fetcher.rss import fetch_feed
             await fetch_feed(feed, db)
         await log_audit(db, user.id, "feed_force_fetch", target_type="feed", target_id=feed_id)
+        # A live 429 during the fetch just armed a cooldown but stored the raw
+        # httpx error — surface the timed message (only on failure).
+        now2 = datetime.now(timezone.utc)
+        cd2 = cooldown_until(feed, now2)
+        if feed.last_error and cd2 is not None:
+            resp = await _feeds_response(request, db, user)
+            resp.headers["HX-Trigger"] = json.dumps({"showToast": {
+                "msg": f"Rate-limited — try again in {format_retry_in(cd2, now2)}.",
+                "type": "warning",
+            }})
+            return resp
     return await _feeds_response(request, db, user)
 
 

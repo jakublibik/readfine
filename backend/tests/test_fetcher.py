@@ -28,7 +28,6 @@ from app.fetcher.scheduler import (
     _feed_due_for_selection,
     _MAX_SINGLE_WAIT,
     _run_throttled,
-    _slot_matches,
 )
 from app.fetcher import host_throttle
 from app.models.fetch_log import FetchLog
@@ -51,68 +50,75 @@ class TestHostKey:
 
 
 class TestFeedDueForSelection:
-    """_feed_due_for_selection: the slot × due/overdue decision matrix. Overdue feeds
-    (past their scheduled time) are eligible at any tick, not just their own slot."""
+    """_feed_due_for_selection: a feed is due once its per-status timer has elapsed
+    (with grace), independent of which 15-min tick this is — there is no wall-clock
+    slot alignment, so feeds ride their own phase and spread across the hour."""
 
     NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
-    def _due(self, *, minute, interval, status="active", last_offset=None,
+    def _due(self, *, interval=60, status="active", last_offset=None,
              retry_offset=None, error_backoff_min=120):
         last = None if last_offset is None else self.NOW + last_offset
         retry = None if retry_offset is None else self.NOW + retry_offset
         return _feed_due_for_selection(
-            minute=minute, effective_interval_min=interval, status=status,
+            effective_interval_min=interval, status=status,
             last_fetched_at=last, retry_after_until=retry,
             error_backoff_min=error_backoff_min, now=self.NOW,
         )
 
-    def test_hourly_due_at_top_of_hour(self):
-        assert self._due(minute=0, interval=60, last_offset=timedelta(hours=-2))
+    def test_hourly_due_once_interval_elapsed(self):
+        assert self._due(interval=60, last_offset=timedelta(minutes=-61))
 
-    def test_hourly_overdue_recovers_off_slot(self):
-        # NEW: an overdue hourly feed is picked at :15 even though its slot is :00.
-        assert self._due(minute=15, interval=60, last_offset=timedelta(hours=-2))
+    def test_hourly_due_within_grace_before_interval(self):
+        # 2-min grace: a feed whose interval elapses just after now is already due,
+        # so it is picked at this tick rather than slipping to the next one.
+        assert self._due(interval=60, last_offset=timedelta(minutes=-59))
 
-    def test_hourly_overdue_recovers_at_30_and_45(self):
-        assert self._due(minute=30, interval=60, last_offset=timedelta(minutes=-61))
-        assert self._due(minute=45, interval=60, last_offset=timedelta(hours=-2))
+    def test_hourly_not_due_before_grace_window(self):
+        # 55 min elapsed on a 60-min feed → still >2 min from due → not yet.
+        assert not self._due(interval=60, last_offset=timedelta(minutes=-55))
 
-    def test_hourly_fresh_not_due_off_slot(self):
-        assert not self._due(minute=15, interval=60, last_offset=timedelta(minutes=-1))
+    def test_hourly_recent_not_due(self):
+        assert not self._due(interval=60, last_offset=timedelta(minutes=-30))
 
-    def test_hourly_recent_not_due_even_on_slot(self):
-        # Slot matches at :00 but the interval hasn't elapsed → never fetch early.
-        assert not self._due(minute=0, interval=60, last_offset=timedelta(minutes=-30))
+    def test_due_is_tick_independent(self):
+        # The rule no longer reads the wall-clock minute: an elapsed hourly feed is
+        # due at any tick, and a fresh one at none. (Slot alignment is gone.)
+        assert self._due(interval=60, last_offset=timedelta(hours=-2))
+        assert not self._due(interval=60, last_offset=timedelta(minutes=-1))
 
-    def test_never_fetched_is_overdue(self):
-        assert self._due(minute=15, interval=60, last_offset=None)
+    def test_never_fetched_is_due(self):
+        assert self._due(interval=60, last_offset=None)
 
-    def test_15min_feed_due_on_its_slots(self):
-        assert self._due(minute=15, interval=15, last_offset=timedelta(minutes=-20))
-        assert self._due(minute=30, interval=15, last_offset=timedelta(minutes=-20))
+    def test_15min_feed_due_after_interval(self):
+        assert self._due(interval=15, last_offset=timedelta(minutes=-20))
 
     def test_15min_feed_fresh_not_due(self):
-        assert not self._due(minute=15, interval=15, last_offset=timedelta(minutes=-1))
+        assert not self._due(interval=15, last_offset=timedelta(minutes=-1))
 
-    def test_retry_after_blocks_even_when_overdue(self):
-        assert not self._due(minute=0, interval=60, last_offset=timedelta(hours=-2),
+    def test_retry_after_blocks_even_when_due(self):
+        assert not self._due(interval=60, last_offset=timedelta(hours=-2),
                              retry_offset=timedelta(minutes=30))
 
     def test_past_retry_after_does_not_block(self):
-        assert self._due(minute=0, interval=60, last_offset=timedelta(hours=-2),
+        assert self._due(interval=60, last_offset=timedelta(hours=-2),
                          retry_offset=timedelta(minutes=-30))
 
-    def test_error_feed_overdue_recovers_off_slot(self):
-        # error backoff 120 min; last fetched 3 h ago → overdue → picked at :15.
-        assert self._due(minute=15, interval=60, status="error",
+    def test_error_feed_due_after_backoff(self):
+        # error backoff 120 min; last fetched 3 h ago → past backoff → due.
+        assert self._due(interval=60, status="error",
                          last_offset=timedelta(hours=-3))
 
     def test_error_feed_within_backoff_not_due(self):
-        assert not self._due(minute=15, interval=60, status="error",
+        assert not self._due(interval=60, status="error",
                              last_offset=timedelta(minutes=-30))
 
+    def test_error_feed_never_fetched_not_due(self):
+        # An error feed with no last_fetched_at has no backoff anchor → not selected.
+        assert not self._due(interval=60, status="error", last_offset=None)
+
     def test_paused_status_never_due(self):
-        assert not self._due(minute=0, interval=60, status="paused",
+        assert not self._due(interval=60, status="paused",
                              last_offset=timedelta(hours=-2))
 
 
@@ -333,72 +339,6 @@ class TestSchedulerTrigger:
         assert max(15, 1 * 2) == 15
 
 
-# ── _slot_matches ─────────────────────────────────────────────────────────────
-
-class TestSlotMatches:
-    """Slot pre-filter: which intervals fire at which minute marks."""
-
-    # :00 — all intervals fire
-    def test_00_fires_all_intervals(self):
-        for interval in (15, 30, 60, 90, 120, 180, 360, 720, 1440):
-            assert _slot_matches(interval, 0), f"interval={interval} should fire at :00"
-
-    # :15 — only 15-min feeds (sub_period == 15)
-    def test_15_fires_15min(self):
-        assert _slot_matches(15, 15) is True
-
-    def test_15_skips_30min(self):
-        assert _slot_matches(30, 15) is False
-
-    def test_15_skips_60min(self):
-        assert _slot_matches(60, 15) is False
-
-    def test_15_skips_90min(self):
-        assert _slot_matches(90, 15) is False
-
-    def test_15_skips_120min(self):
-        assert _slot_matches(120, 15) is False
-
-    # :30 — 15-min and 30-min feeds, including 90-min (sub_period in {15, 30})
-    def test_30_fires_15min(self):
-        assert _slot_matches(15, 30) is True
-
-    def test_30_fires_30min(self):
-        assert _slot_matches(30, 30) is True
-
-    def test_30_fires_90min(self):
-        # 90 % 60 == 30 → should fire at :30
-        assert _slot_matches(90, 30) is True
-
-    def test_30_skips_60min(self):
-        assert _slot_matches(60, 30) is False
-
-    def test_30_skips_120min(self):
-        assert _slot_matches(120, 30) is False
-
-    def test_30_skips_180min(self):
-        assert _slot_matches(180, 30) is False
-
-    # :45 — same as :15 (only 15-min feeds)
-    def test_45_fires_15min(self):
-        assert _slot_matches(15, 45) is True
-
-    def test_45_skips_30min(self):
-        assert _slot_matches(30, 45) is False
-
-    def test_45_skips_90min(self):
-        assert _slot_matches(90, 45) is False
-
-    def test_45_skips_60min(self):
-        assert _slot_matches(60, 45) is False
-
-    # symmetry: :15 and :45 behave identically for all standard intervals
-    def test_15_and_45_symmetric(self):
-        for interval in (15, 30, 60, 90, 120, 180):
-            assert _slot_matches(interval, 15) == _slot_matches(interval, 45), \
-                f"interval={interval}: :15 and :45 should behave the same"
-
-
 # ── compute_next_fetch_at ─────────────────────────────────────────────────────
 
 def _sched_feed(**kwargs) -> SimpleNamespace:
@@ -419,14 +359,35 @@ class TestComputeNextFetchAt:
 
     DEFAULTS = dict(default_interval_min=60, min_interval_min=15)
 
-    def test_active_uses_interval_snapped_to_slot(self):
-        # 60-min feed last fetched at 13:00 → due 14:00, fires at the :00 slot.
+    def test_active_uses_interval_snapped_to_tick(self):
+        # 60-min feed last fetched at 13:00 → due 14:00, which is itself a tick.
         feed = _sched_feed(
             last_fetched_at=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
         )
         now = datetime(2026, 1, 15, 13, 30, tzinfo=timezone.utc)
         nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
         assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+
+    def test_off_phase_hourly_fires_at_next_tick_not_top_of_hour(self):
+        # Key behaviour: an hourly feed no longer waits for :00. Last fetched 13:20
+        # → due 14:20 → fetched at the 14:30 tick (grace snaps 14:18 up to :30),
+        # not deferred to 15:00.
+        feed = _sched_feed(
+            last_fetched_at=datetime(2026, 1, 15, 13, 20, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 14, 30, tzinfo=timezone.utc)
+
+    def test_grace_pulls_forward_to_earlier_tick(self):
+        # Due 14:16 → target 14:14 (grace) → snaps up to 14:15, matching the
+        # selection query which counts the feed due at the 14:15 tick.
+        feed = _sched_feed(
+            last_fetched_at=datetime(2026, 1, 15, 13, 16, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 14, 15, tzinfo=timezone.utc)
 
     def test_error_uses_double_default_backoff(self):
         # error feed, count below threshold → backoff max(15, 60*2) = 120 min.
@@ -472,15 +433,15 @@ class TestComputeNextFetchAt:
         feed = _sched_feed(subscriber_count=0)
         assert compute_next_fetch_at(feed, **self.DEFAULTS) is None
 
-    def test_overdue_active_feed_returns_next_future_slot(self):
-        # Last fetched long ago → due in the past; predicted fetch is the next slot.
+    def test_overdue_active_feed_returns_next_future_tick(self):
+        # Last fetched long ago → due in the past; predicted fetch is the next tick,
+        # no longer forced to the top of the hour.
         feed = _sched_feed(
             last_fetched_at=datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc),
         )
         now = datetime(2026, 1, 15, 13, 7, tzinfo=timezone.utc)
         nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
-        # 60-min feed only fires at :00, so the next eligible slot is 14:00.
-        assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+        assert nxt == datetime(2026, 1, 15, 13, 15, tzinfo=timezone.utc)
 
     def test_15min_feed_fires_at_quarter_slots(self):
         feed = _sched_feed(
@@ -957,15 +918,38 @@ class TestFetchFeed403Transient:
         # status is a CASE(count >= threshold -> disabled); the count column is >= threshold
         assert feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
 
-    async def test_403_leaves_retry_after_null_and_no_cooldown(self):
-        # 403 is not a rate-limit status: no Retry-After honored, no host cooldown armed.
+    async def test_403_arms_scheduler_only_breather_not_manual(self):
+        # A bare anti-bot 403 (Retry-After: 0, no RateLimit-*) leaves retry_after_until
+        # null and arms only the 403 breather: it paces the scheduler (include_block)
+        # but must NOT block a manual refresh (default blocked_until stays None).
         feed = _make_feed()
         session = _make_session()
-        exc = _http_error(403, headers={"Retry-After": "600"})
+        before = datetime.now(timezone.utc)
+        exc = _http_error(403, headers={"Retry-After": "0"})
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
             await fetch_feed(feed, session)
         assert _update_values(session)["retry_after_until"].value is None
-        assert host_throttle.blocked_until("example.com", datetime.now(timezone.utc)) is None
+        # manual-facing lookup: not blocked
+        assert host_throttle.blocked_until("example.com", before) is None
+        # scheduler-facing lookup: 60s breather armed
+        sched = host_throttle.blocked_until("example.com", before, include_block=True)
+        assert sched is not None
+        expected = before + host_throttle.FALLBACK_BLOCK_COOLDOWN
+        assert abs((sched - expected).total_seconds()) < 2
+
+    async def test_403_with_real_ratelimit_signal_gates_everyone(self):
+        # If a 403 carries a usable rate-limit signal it's a genuine throttle: arm the
+        # rate-limit cooldown (remaining=0 + reset=30 → 30s), which the default
+        # blocked_until — used by manual refreshes — also honors.
+        feed = _make_feed()
+        session = _make_session()
+        before = datetime.now(timezone.utc)
+        exc = _http_error(403, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "30"})
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, session)
+        until = host_throttle.blocked_until("example.com", before)  # gates manual too
+        assert until is not None
+        assert abs((until - (before + timedelta(seconds=30))).total_seconds()) < 2
 
 
 class TestFetchFeedHostCooldown:

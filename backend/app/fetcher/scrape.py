@@ -260,6 +260,16 @@ async def fetch_scrape_feed(
                 host_throttle.host_key(feed_url),
                 rate_limited_until(exc.response.headers, now),
             )
+        elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
+            # Real signal → rate-limit cooldown (gates everyone); bare anti-bot 403 →
+            # fixed breather that only paces the scheduler, not manual refreshes.
+            # See rss.fetch_feed for the full rationale.
+            host = host_throttle.host_key(feed_url)
+            signal = rate_limited_until(exc.response.headers, now)
+            if signal is not None:
+                host_throttle.note_rate_limited(host, signal)
+            else:
+                host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,

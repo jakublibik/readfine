@@ -26,12 +26,23 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   keeps the round short enough not to miss the next slot; anything past the budget
   defers to the next round. Feeds on other hosts are unaffected and still fetch in
   parallel.
-- A feed that misses its scheduled fetch — deferred by a host cooldown, a transient
-  error, or an app restart mid-round — now recovers at the next 15-min tick instead
-  of waiting a full interval for its slot to come round again. This also lets a
-  rate-limited host (e.g. Reddit) drain across all four ticks per hour rather than
-  only at the top of the hour, and keeps hourly feeds from drifting an hour late
-  when they get fetched a few minutes past the hour.
+- Manually refreshing a feed (the sidebar ↻ and the admin "force fetch") now respects
+  a known rate-limit window instead of firing another request straight into an HTTP
+  429: when the host is still cooling down it shows "Rate-limited — try again in …"
+  (seconds or minutes, read from the server's reset headers). A bare HTTP 403 anti-bot
+  block is treated differently — only the background scheduler paces itself on those,
+  while an explicit manual refresh is still allowed to retry, since such blocks are
+  often transient.
+- Feeds are now fetched at whichever of the four 15-min ticks (:00/:15/:30/:45)
+  first follows their refresh interval, rather than being pinned to the top of the
+  hour by interval. This spreads fetch load across the hour on each feed's own phase
+  instead of piling every hourly feed onto :00, and improves freshness: an hourly
+  feed fetched a few minutes past the hour used to wait until the next :00 (up to
+  ~2 h between fetches) and now refreshes about an hour later as intended. Feeds that
+  miss a scheduled fetch — deferred by a host cooldown, a transient error, or an app
+  restart mid-round — likewise recover at the next tick instead of waiting a full
+  interval, and a rate-limited host (e.g. Reddit) drains across all four ticks per
+  hour rather than only at the top of the hour.
 - The per-feed refresh button (↻ in the sidebar) now reloads the article list when
   you are viewing that feed, so newly fetched articles appear right away instead of
   only after re-selecting the feed. Works across the 3-panel, 2-panel and mobile
