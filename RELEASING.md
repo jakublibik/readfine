@@ -38,6 +38,19 @@ not an archaeology dig.
 `./deploy-staging.sh dev`). Staging tracks `dev`, so it exercises exactly what you're about
 to merge.
 
+**Deploy steps (merge `dev → master`):**
+
+1. **Sync `master` to origin first.** `git fetch origin` and confirm local `master`
+   equals `origin/master` (`git rev-list --left-right --count master...origin/master`
+   → `0 0`) before merging. Someone (or an earlier deploy) may have pushed to master
+   since you last touched it; merging onto a stale local `master` produces a merge
+   built on the wrong base that won't fast-forward on push. Never `--force` master to
+   fix this — reset local `master` to `origin/master` and re-merge.
+2. `git checkout master && git merge --no-ff dev`, then `git push origin master`.
+3. **Confirm CI is green on `master` before the server pulls** (`gh run list --branch
+   master --limit 1`). A red deploy commit — e.g. a stale `tailwind.css` that skipped
+   `npm run build` — must be fixed on `dev` and re-merged, not pulled to production.
+
 `git describe --tags` tells you how far master is ahead of the last release at any time.
 
 ## When to cut a release
