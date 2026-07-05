@@ -39,6 +39,11 @@ _MAX_SINGLE_WAIT = timedelta(minutes=2)
 # :00 but lands ~1-3 s early), so a 1 s buffer still fetches inside the old window
 # and 429s. 5 s clears the boundary reliably; negligible at a ~60 s cadence.
 _COOLDOWN_BUFFER = timedelta(seconds=5)
+# A feed counts as due up to this long before its nominal next-fetch time, so a feed
+# whose timer elapses a minute or two after a tick is still picked at that tick
+# instead of slipping a whole 15-min slot. Keep the selection query, its pure mirror
+# (_feed_due_for_selection), and the UI prediction (compute_next_fetch_at) in sync.
+_DUE_GRACE = timedelta(minutes=2)
 
 _T = TypeVar("_T")
 
@@ -105,31 +110,8 @@ async def _run_throttled(
     return await asyncio.gather(*[_run(item) for item in items], return_exceptions=True)
 
 
-def _slot_matches(effective_interval_min: int, minute: int) -> bool:
-    """Return True if a feed with *effective_interval_min* should be evaluated at *minute*.
-
-    The scheduler fires at :00/:15/:30/:45. Each slot checks only feeds whose
-    sub-hour period (interval % 60) aligns with that minute:
-      :00  — all feeds
-      :15/:45 — only 15-min feeds (sub_period == 15)
-      :30  — 15-min and 30-min feeds, including 90-min (sub_period in {15, 30})
-
-    Supported intervals are aligned to 15/30/60 (the UI offers
-    [15,30,60,90,120,180,360,720,1440]). A value with sub_period not in {15,30}
-    — e.g. 45 — would only be evaluated at :00; this is acceptable because such
-    intervals are not selectable in the UI.
-    """
-    if minute == 0:
-        return True
-    sub_period = effective_interval_min % 60
-    if minute in (15, 45):
-        return sub_period == 15
-    # minute == 30
-    return sub_period in (15, 30)
-
-
 def _ceil_to_slot(dt: datetime) -> datetime:
-    """Round *dt* up to the next scheduler slot (:00/:15/:30/:45)."""
+    """Round *dt* up to the next scheduler tick (:00/:15/:30/:45)."""
     floored = dt.replace(second=0, microsecond=0)
     rem = floored.minute % 15
     if rem == 0 and floored == dt:
@@ -175,24 +157,15 @@ def compute_next_fetch_at(
     if feed.retry_after_until is not None and feed.retry_after_until > due:
         due = feed.retry_after_until
 
-    # The scheduler fires only at :00/:15/:30/:45, filtering by sub-period, and
-    # counts a feed as due up to the 2-minute grace early. Snap to the first
-    # qualifying slot at or after that point.
-    target = max(due - timedelta(minutes=2), now)
-    slot = _ceil_to_slot(target)
-    for _ in range(8):
-        if _slot_matches(effective_interval_min, slot.minute):
-            return slot
-        slot += timedelta(minutes=15)
-    return slot
-
-
-_DUE_GRACE = timedelta(minutes=2)
+    # The scheduler fires every 15 min at :00/:15/:30/:45 and counts a feed due up
+    # to _DUE_GRACE early. The feed fetches at the first such tick at or after its
+    # due time — any tick, no longer forced onto the top of the hour.
+    target = max(due - _DUE_GRACE, now)
+    return _ceil_to_slot(target)
 
 
 def _feed_due_for_selection(
     *,
-    minute: int,
     effective_interval_min: int,
     status: str,
     last_fetched_at: datetime | None,
@@ -202,17 +175,16 @@ def _feed_due_for_selection(
     grace: timedelta = _DUE_GRACE,
 ) -> bool:
     """Pure mirror of the :func:`_select_due_feeds` WHERE clause: would this feed be
-    picked at a scheduler tick landing on *minute*?
+    picked at a scheduler tick at *now*?
 
     A feed is due when it is not deferred by a server ``Retry-After`` and its
     per-status timer has elapsed (interval for ``active``, tiered backoff for
-    ``error``, both with a small *grace*). A due feed is selected when its sub-hour
-    period aligns with the tick's slot **or** it is already *overdue* — its scheduled
-    time is strictly in the past (no grace), meaning it missed its slot (deferred by
-    a host cooldown, a transient error, an app restart) and should recover at this
-    tick rather than wait a whole interval.
+    ``error``, both with a small *grace*). There is no wall-clock slot alignment: a
+    due feed is picked at whichever of the four ticks first follows its timer, so
+    feeds spread across the hour on their own natural phase instead of piling up at
+    :00.
 
-    This documents the decision matrix and is unit-tested; the real query in
+    This documents the rule and is unit-tested; the real query in
     :func:`_select_due_feeds` is the source of truth and a DB test guards drift.
     """
     if retry_after_until is not None and retry_after_until >= now + grace:
@@ -220,16 +192,10 @@ def _feed_due_for_selection(
     interval = timedelta(minutes=effective_interval_min)
     backoff = timedelta(minutes=error_backoff_min)
     if status == "active":
-        due = last_fetched_at is None or last_fetched_at + interval < now + grace
-        overdue = last_fetched_at is None or last_fetched_at + interval < now
-    elif status == "error":
-        due = last_fetched_at is not None and last_fetched_at + backoff < now + grace
-        overdue = last_fetched_at is not None and last_fetched_at + backoff < now
-    else:
-        return False
-    if not due:
-        return False
-    return _slot_matches(effective_interval_min, minute) or overdue
+        return last_fetched_at is None or last_fetched_at + interval < now + grace
+    if status == "error":
+        return last_fetched_at is not None and last_fetched_at + backoff < now + grace
+    return False
 
 
 async def _select_due_feeds(
@@ -238,7 +204,7 @@ async def _select_due_feeds(
     """Select the feeds due for a fetch at *now* (the scheduler's selection query).
 
     Factored out of :func:`_fetch_due_feeds` and parameterised on *now* (rather than
-    the DB clock) so the slot/overdue rule can be tested deterministically. See
+    the DB clock) so the due rule can be tested deterministically. See
     :func:`_feed_due_for_selection` for the rule in prose.
     """
     error_backoff_min = max(15, default_interval * 2)
@@ -256,35 +222,12 @@ async def _select_due_feeds(
     )
     due_cutoff = now + _DUE_GRACE
 
-    # Overdue: scheduled fetch strictly in the past (no grace) → eligible at any tick,
-    # bypassing the slot pre-filter so a missed feed recovers at the next 15-min tick.
-    overdue = or_(
-        and_(
-            Feed.status == "active",
-            or_(
-                Feed.last_fetched_at.is_(None),
-                Feed.last_fetched_at + effective_interval < now,
-            ),
-        ),
-        and_(
-            Feed.status == "error",
-            Feed.last_fetched_at + error_backoff < now,
-        ),
-    )
-
-    # Slot pre-filter — see _slot_matches(); overdue feeds skip it (recover ASAP).
-    minute = now.minute
-    if minute == 0:
-        slot_conditions = []  # top of the hour: consider every feed
-    elif minute in (15, 45):
-        slot_conditions = [or_(effective_interval_min % 60 == 15, overdue)]
-    else:  # :30 (and any other non-:00 minute)
-        slot_conditions = [or_((effective_interval_min % 60).in_([15, 30]), overdue)]
-
+    # A feed is due whenever its per-status timer has elapsed (with grace); it is then
+    # fetched at whichever 15-min tick this is. No wall-clock slot alignment — feeds
+    # ride their own phase and spread across the hour. See _feed_due_for_selection().
     result = await session.execute(
         select(Feed).where(
             Feed.subscriber_count > 0,
-            *slot_conditions,
             # Honor a server Retry-After (HTTP 429): skip until it passes.
             or_(
                 Feed.retry_after_until.is_(None),
@@ -329,7 +272,7 @@ async def _fetch_due_feeds() -> None:
         now = datetime.now(timezone.utc)
 
         # active: fetch when due; error: tiered backoff; paused/disabled: skip.
-        # Overdue feeds recover at any tick — see _select_due_feeds().
+        # A due feed is picked at any 15-min tick — see _select_due_feeds().
         feeds = await _select_due_feeds(
             session, now, default_interval=default_interval, min_interval=min_interval
         )
@@ -368,7 +311,9 @@ async def _fetch_due_feeds() -> None:
         """
         now = datetime.now(timezone.utc)
         host = host_key(feed.feed_url)
-        until = host_throttle.blocked_until(host, now)
+        # include_block: the scheduler also backs off on the 403 anti-bot breather
+        # (manual refreshes don't — see host_throttle module docstring).
+        until = host_throttle.blocked_until(host, now, include_block=True)
         delay = _cooldown_wait(until, now, round_deadline)
         if delay is None:
             logger.info(

@@ -66,3 +66,6 @@
     <p class="text-sm text-gray-400">No labels yet. Add one above.</p>
   {% endif %}
 </div>
+{% if request.headers.get('hx-request') %}
+<span id="labels-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ labels | length }})</span>
+{% endif %}

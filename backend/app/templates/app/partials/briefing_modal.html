@@ -64,6 +64,7 @@
         {% else %}
           UTC &mdash; <a href="/settings/preferences" class="underline">set timezone in Settings → Preferences</a>
         {% endif %}
+        &mdash; delivery may be up to 15 minutes later.
       </p>
     </div>
 
@@ -75,7 +76,7 @@
                value="{% if config.briefing_recipients %}{{ config.briefing_recipients | parse_json_list | join(', ') }}{% endif %}"
                placeholder="email1@example.com, email2@example.com"
                class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included.</p>
+        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included. Additional recipients are added as Bcc, so they can't see each other.</p>
       </div>
     </details>
 

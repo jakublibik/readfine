@@ -137,6 +137,14 @@ def create_app() -> FastAPI:
             "style-src 'self' 'unsafe-inline'; "
             "connect-src 'self';"
         )
+        # Authenticated HTML (full pages and HTMX partials) must never be cached: on
+        # a shared browser, back/forward or bfcache could otherwise show a previous
+        # user's rendered page after an account switch (CWE-525). no-store also
+        # disables bfcache in Chrome/Firefox. Static assets are served under /static
+        # with non-text/html content types, so they stay cacheable.
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Cookie"
         return response
 
     # Health check — dedicated endpoint for uptime/monitoring probes. Unauthenticated

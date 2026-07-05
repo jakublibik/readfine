@@ -62,8 +62,16 @@
             <button hx-post="/admin/feeds/{{ f.id }}/force-fetch"
                     hx-target="#feeds-table"
                     hx-swap="outerHTML"
-                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+                    hx-indicator="#force-fetch-spinner-{{ f.id }}"
+                    hx-disabled-elt="this"
+                    class="flex w-full items-center gap-2 px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
               Force fetch
+              <svg id="force-fetch-spinner-{{ f.id }}"
+                   class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
+                   xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+              </svg>
             </button>
             {% if f.status in ('active', 'paused') %}
             <button hx-post="/admin/feeds/{{ f.id }}/pause"

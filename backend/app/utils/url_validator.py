@@ -12,9 +12,17 @@ import httpx
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 10
 
-# HTTP statuses that signal a *transient* failure (rate limit / timeout) rather
-# than a permanent one. Feeds returning these back off instead of being disabled.
+# HTTP statuses that carry rate-limit / timeout semantics: we read their
+# Retry-After / RateLimit-* headers and arm the per-host cooldown from them.
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
+
+# 4xx statuses that should NOT disable a feed on the first hit; instead the feed
+# backs off through the error tier and is disabled only after
+# FETCH_ERROR_DISABLE_THRESHOLD consecutive failures. Superset of the rate-limit
+# statuses plus 403: Reddit/YouTube return 403 as a transient anti-bot /
+# rate-adjacent block (datacenter IP, generic UA) far more often than as a
+# permanent denial, so retrying beats disabling on a single 403.
+RETRYABLE_HTTP_STATUSES = TRANSIENT_HTTP_STATUSES | {403}
 
 # Bounds for an honored Retry-After delay: never retry sooner than this, never
 # wait longer than this regardless of what the server asks for.
@@ -117,6 +125,16 @@ def rate_limited_until(headers, now: datetime) -> datetime | None:
             return None
         until = now + timedelta(seconds=reset)
     return min(until, now + _RATE_LIMIT_MAX)
+
+
+def format_retry_in(until: datetime, now: datetime) -> str:
+    """Human 'try again in …' phrase for a cooldown expiry.
+
+    Rate-limit resets are often just seconds (Reddit's ``x-ratelimit-reset``), so
+    show seconds under ~90s and minutes above. Callers embed this in a 429 message.
+    """
+    secs = max(1, round((until - now).total_seconds()))
+    return f"{secs} sec" if secs < 90 else f"about {round(secs / 60)} min"
 
 
 def redact_url(url: str) -> str:

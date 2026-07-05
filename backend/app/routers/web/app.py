@@ -446,10 +446,18 @@ async def htmx_refresh_feed(
         return HTMLResponse("", status_code=404)
 
     from app.database import async_session_factory
+    from app.fetcher.rss import cooldown_until
+    from app.utils.url_validator import format_retry_in
+    cooldown_msg = None
     async with async_session_factory() as fetch_session:
         feed_obj = await fetch_session.get(Feed, feed_id)
         if feed_obj:
-            if feed_obj.feed_type == "scrape":
+            now = datetime.now(timezone.utc)
+            cd = cooldown_until(feed_obj, now)
+            if cd is not None:
+                # Known rate-limit window — don't hammer into another 429.
+                cooldown_msg = f"Rate-limited — try again in {format_retry_in(cd, now)}."
+            elif feed_obj.feed_type == "scrape":
                 from app.fetcher.scrape import fetch_scrape_feed
                 try:
                     await fetch_scrape_feed(feed_obj, fetch_session)
@@ -460,7 +468,15 @@ async def htmx_refresh_feed(
                 await fetch_feed(feed_obj, fetch_session)
 
     await db.refresh(feed)
-    error_msg = feed.last_error or None
+    error_msg = cooldown_msg or feed.last_error or None
+    # A live 429 during the fetch just armed a cooldown but stored only the raw
+    # httpx error — replace that with the timed message (only on failure, so a
+    # successful fetch that merely exhausted the budget stays a success).
+    if cooldown_msg is None and feed.last_error:
+        now2 = datetime.now(timezone.utc)
+        cd2 = cooldown_until(feed, now2)
+        if cd2 is not None:
+            error_msg = f"Rate-limited — try again in {format_retry_in(cd2, now2)}."
 
     unread = await db.scalar(
         select(func.count(Article.id))
@@ -1214,7 +1230,7 @@ async def htmx_toggle_article_label(
         select(Label.id, Label.name, Label.color)
         .join(ArticleLabel, ArticleLabel.label_id == Label.id)
         .where(ArticleLabel.article_id == article_id, ArticleLabel.user_id == user.id)
-        .order_by(Label.position, Label.name)
+        .order_by(Label.position, func.lower(Label.name))
     )).all()
     assigned_labels = [{"id": r[0], "name": r[1], "color": r[2]} for r in assigned_labels_rows]
     assigned: set[int] = {l["id"] for l in assigned_labels}

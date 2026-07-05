@@ -160,6 +160,26 @@ class TestRegex:
         cond = make_condition("title", "regex", "breaking")
         assert _matches_condition(cond, article, None) is True
 
+    def test_catastrophic_pattern_times_out_instead_of_hanging(self):
+        # A catastrophic-backtracking pattern that bypasses the create-time
+        # heuristic must not freeze evaluation: it is capped by the per-match
+        # timeout and treated as "no match" rather than hanging the event loop.
+        import time
+        article = make_article(title="a" * 60 + "!")
+        cond = make_condition("title", "regex", r"(a|a|a)+$")
+        start = time.monotonic()
+        result = _matches_condition(cond, article, None)
+        elapsed = time.monotonic() - start
+        assert result is False
+        assert elapsed < 1.0  # bounded by _REGEX_MATCH_TIMEOUT_S, not exponential
+
+    def test_large_input_still_matches(self):
+        # The input cap is a safety net far above any real article; a legitimate
+        # match near the start of a large body still succeeds.
+        article = make_article(content="Breaking: " + "x" * 500_000)
+        cond = make_condition("content", "regex", r"^Breaking")
+        assert _matches_condition(cond, article, None) is True
+
 
 class TestValidatePublishedAt:
     def test_valid_date(self):

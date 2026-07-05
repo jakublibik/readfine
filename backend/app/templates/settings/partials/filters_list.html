@@ -27,6 +27,9 @@
             {% if is_ai %}
               <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score</span>
             {% endif %}
+            {% if f.position %}
+              <span class="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">priority {{ f.position }}</span>
+            {% endif %}
             {% if not f.is_active %}
               <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
             {% endif %}
@@ -86,3 +89,6 @@
       <a href="/help#filters" class="text-blue-600 hover:underline">learn more</a>.</p>
   {% endif %}
 </div>
+{% if request.headers.get('hx-request') %}
+<span id="filters-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ filters | length }})</span>
+{% endif %}

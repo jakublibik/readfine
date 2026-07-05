@@ -19,6 +19,7 @@ from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
+    RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
     async_validate_feed_url,
     fetch_url_with_ssrf_check,
@@ -233,12 +234,13 @@ async def fetch_scrape_feed(
         await db.rollback()
         logger.error("Error scraping feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        # 429/408 are transient (rate limit / timeout): back off via the normal
-        # error tier instead of disabling on first hit. Other 4xx stay permanent.
+        # 403/408/429 back off via the normal error tier instead of disabling on the
+        # first hit (403 is usually a transient anti-bot / rate-adjacent block on
+        # Reddit/YouTube, not a permanent denial). Other 4xx stay permanent.
         is_permanent_4xx = (
             http_status is not None
             and 400 <= http_status < 500
-            and http_status not in TRANSIENT_HTTP_STATUSES
+            and http_status not in RETRYABLE_HTTP_STATUSES
         )
         db.add(FetchLog(
             feed_id=feed_id,
@@ -258,6 +260,16 @@ async def fetch_scrape_feed(
                 host_throttle.host_key(feed_url),
                 rate_limited_until(exc.response.headers, now),
             )
+        elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
+            # Real signal → rate-limit cooldown (gates everyone); bare anti-bot 403 →
+            # fixed breather that only paces the scheduler, not manual refreshes.
+            # See rss.fetch_feed for the full rationale.
+            host = host_throttle.host_key(feed_url)
+            signal = rate_limited_until(exc.response.headers, now)
+            if signal is not None:
+                host_throttle.note_rate_limited(host, signal)
+            else:
+                host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
                 status=new_status,

@@ -57,8 +57,12 @@ def send_html_email(
     subject: str,
     html_body: str,
     plain_body: str,
+    bcc: list[str] | None = None,
 ) -> None:
     """Send a multipart HTML+plain email to one or more recipients.
+
+    ``bcc`` addresses receive the message but are not exposed in any header, so
+    recipients cannot see them (or each other, if only bcc is used).
 
     Raises:
         ValueError: if SMTP is not configured
@@ -67,6 +71,7 @@ def send_html_email(
     if not s.smtp_host or not s.smtp_from_email:
         raise ValueError("SMTP not configured (missing host or from address)")
 
+    bcc = bcc or []
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = s.smtp_from_email
@@ -74,7 +79,8 @@ def send_html_email(
     msg.attach(MIMEText(plain_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    _smtp_send(s, to_list, msg.as_string())
+    # Envelope carries both To and Bcc; the message headers only list To.
+    _smtp_send(s, to_list + bcc, msg.as_string())
 
 
 def _smtp_send(s: AppSettings, recipients: list[str], raw_message: str) -> None:

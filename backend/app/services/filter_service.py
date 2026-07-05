@@ -4,6 +4,9 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from functools import lru_cache
+
+import regex as _regex
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +23,38 @@ logger = logging.getLogger(__name__)
 _AI_CONDITION_FIELDS = frozenset({"ai_score"})
 _AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 
+# Canonical filter ordering. Every place that lists or executes filters must use
+# this same ordering, so the settings list shows filters in the exact order they
+# run (position ties are common — the form defaults to 0 — and `stop_on_match`
+# makes execution order user-visible). `Filter.id` breaks name ties.
+FILTER_ORDER = (Filter.position, func.lower(Filter.name), Filter.id)
+
 _REGEX_MAX_LEN = 200
-# Patterns that commonly cause catastrophic backtracking
+# Fast create-time UX reject for a few obviously dangerous shapes. This is NOT a
+# security boundary (it is easily bypassed, e.g. `([a-z]+)*`); the real guard is
+# the evaluation-time timeout below, which bounds any pattern regardless of shape.
 _REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w\+\)\{)")
+
+# Evaluation-time ReDoS guard. User-supplied filter regexes run synchronously on
+# the event loop during fetch (apply_filters_to_new_articles), filter test, and
+# retroactive apply. CPython's stdlib `re` has no timeout and does not release the
+# GIL while matching, so a catastrophic-backtracking pattern would freeze the whole
+# process for every user. The third-party `regex` module supports a per-match
+# ``timeout`` (raising ``TimeoutError``), so a pathological pattern is capped instead
+# of hanging. The input is also truncated as a belt-and-suspenders safety net — the
+# cap is far larger than any real article body, so legitimate matches are unaffected.
+_REGEX_MATCH_TIMEOUT_S = 0.1
+_REGEX_INPUT_CAP = 1_000_000
+
+
+@lru_cache(maxsize=512)
+def _compile_user_regex(pattern: str):
+    """Compile a user filter regex once and cache it (evaluate_filter runs per
+    article). Returns the compiled pattern, or None if it does not compile."""
+    try:
+        return _regex.compile(pattern, _regex.IGNORECASE)
+    except _regex.error:
+        return None
 
 # Retroactive apply: commit every N articles to keep transactions short; chunk
 # bulk scoring inserts to keep statements bounded.
@@ -130,7 +162,7 @@ async def list_filters(user_id: int, db: AsyncSession) -> list[FilterResponse]:
         select(Filter)
         .where(Filter.user_id == user_id)
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position, Filter.name)
+        .order_by(*FILTER_ORDER)
     )
     return [FilterResponse.model_validate(f) for f in result.scalars()]
 
@@ -306,9 +338,19 @@ def _eval_op(op: str, val: str, field_value) -> bool:
                 return False
         return str(field_value) == val
     if op == "regex":
+        compiled = _compile_user_regex(val)
+        if compiled is None:
+            return False
+        text = str(field_value)
+        if len(text) > _REGEX_INPUT_CAP:
+            text = text[:_REGEX_INPUT_CAP]
         try:
-            return bool(re.search(val, str(field_value), re.IGNORECASE))
-        except re.error:
+            return bool(compiled.search(text, timeout=_REGEX_MATCH_TIMEOUT_S))
+        except TimeoutError:
+            logger.warning(
+                "filter regex timed out after %.2fs (pattern=%r) — treated as no match",
+                _REGEX_MATCH_TIMEOUT_S, val[:100],
+            )
             return False
     if op in ("gt", "lt"):
         if isinstance(field_value, datetime):
@@ -510,7 +552,7 @@ async def apply_filters_to_new_articles(
             Filter.is_active == True,
         )
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     filters_by_user: dict[int, list[Filter]] = {}
     for f in filters_result.scalars():
@@ -591,7 +633,7 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
         select(Filter)
         .where(Filter.user_id.in_(user_ids), Filter.is_active == True)  # noqa: E712
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     filters_by_user: dict[int, list[Filter]] = {}
     for f in filters_result.scalars():

@@ -19,7 +19,7 @@ from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.feed import subscribe, subscribe_scrape
-from app.services.filter_service import create_filter
+from app.services.filter_service import FILTER_ORDER, create_filter
 from app.utils.datetime_format import is_valid_timezone
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     user_feeds = feeds_result.all()
 
     labels_result = await db.execute(
-        select(Label).where(Label.user_id == user.id).order_by(Label.position, Label.name)
+        select(Label).where(Label.user_id == user.id).order_by(Label.position, func.lower(Label.name))
     )
     labels = labels_result.scalars().all()
 
@@ -103,7 +103,7 @@ async def export_opml(user: User, db: AsyncSession) -> str:
         select(Filter)
         .where(Filter.user_id == user.id)
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     filters = filters_result.scalars().all()
 

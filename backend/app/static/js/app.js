@@ -380,21 +380,31 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
 // duration of the request so the two don't visibly desync. The pagination
 // "load-more" sentinel targets itself (not #article-list), so it's excluded by
 // the target check and doesn't trigger the overlay.
+// Delay showing the overlay so quick (local/cached) loads don't flash a spinner.
+// Only requests that outlast the threshold get the overlay; faster ones swap in
+// before it ever appears.
+var _LIST_LOADING_DELAY_MS = 150;
+var _listLoadingTimer = null;
 function _showListLoading() {
-  var list = document.getElementById('article-list');
-  if (!list || list.querySelector('.article-list-loading')) return;
-  var ov = document.createElement('div');
-  ov.className = 'article-list-loading absolute inset-0 z-20 bg-white/80 dark:bg-gray-800/80';
-  ov.innerHTML =
-    '<div class="sticky top-0 flex items-center justify-center" style="height:55vh">' +
-      '<svg class="w-6 h-6 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">' +
-        '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
-        '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>' +
-      '</svg>' +
-    '</div>';
-  list.appendChild(ov);
+  if (_listLoadingTimer) return;
+  _listLoadingTimer = setTimeout(function () {
+    _listLoadingTimer = null;
+    var list = document.getElementById('article-list');
+    if (!list || list.querySelector('.article-list-loading')) return;
+    var ov = document.createElement('div');
+    ov.className = 'article-list-loading absolute inset-0 z-20 bg-white/80';
+    ov.innerHTML =
+      '<div class="sticky top-0 flex items-center justify-center" style="height:55vh">' +
+        '<svg class="w-6 h-6 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">' +
+          '<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>' +
+          '<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>' +
+        '</svg>' +
+      '</div>';
+    list.appendChild(ov);
+  }, _LIST_LOADING_DELAY_MS);
 }
 function _hideListLoading() {
+  if (_listLoadingTimer) { clearTimeout(_listLoadingTimer); _listLoadingTimer = null; }
   var list = document.getElementById('article-list');
   if (!list) return;
   var ov = list.querySelector('.article-list-loading');
@@ -455,12 +465,22 @@ function _syncMobileQuicklink() {
   if (bottomLink) bottomLink.textContent = text;
 }
 
-// Restore last-selected nav on page load; fall back to All Articles
+// Restore last-selected nav on page load; fall back to All Articles.
+// A ?view=starred|labeled deep-link (e.g. from the Stats page) overrides the
+// saved nav and is consumed from the URL, like ?open_article_id.
 function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
-  var saved;
-  try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
-  var url = saved || '/htmx/articles';
+  var url;
+  var view = window.location.search.match(/[?&]view=(starred|labeled)(?:&|$)/);
+  if (view) {
+    url = '/htmx/articles?' + view[1] + '_only=true';
+    try { localStorage.setItem('lastNavItem', url); } catch (e) {}
+    history.replaceState(null, '', window.location.pathname);
+  } else {
+    var saved;
+    try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
+    url = saved || '/htmx/articles';
+  }
   _activeNavGet = url;
   _syncMobileQuicklink();
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
@@ -2159,6 +2179,107 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       _pendingShareTitle = title;
       htmx.ajax('POST', '/htmx/articles/' + id + '/share', { target: '#share-btn-' + id, swap: 'outerHTML' });
     }
+  });
+
+  // Copy article: title + source + body as rich HTML with a plain-text fallback.
+  // Writes both text/html and text/plain to the clipboard so rich editors (Docs,
+  // Word, email) paste formatting + images, while plain fields get clean text.
+  function _htmlEscape(s) {
+    return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // Rewrite relative img/href URLs to absolute (against the article's own URL) so
+  // images and links still resolve once pasted outside the app.
+  function _absolutizeUrls(el, base) {
+    if (!base) return;
+    el.querySelectorAll('img[src]').forEach(function (img) {
+      var raw = img.getAttribute('src');
+      try { img.setAttribute('src', new URL(raw, base).href); } catch (e) {}
+    });
+    el.querySelectorAll('a[href]').forEach(function (a) {
+      var raw = a.getAttribute('href');
+      try { a.setAttribute('href', new URL(raw, base).href); } catch (e) {}
+    });
+  }
+
+  // Mirror the stylesheet's table handling in the copied markup: layout tables
+  // (no <th> — e.g. Reddit's image+meta wrappers) are rendered as stacked blocks
+  // via CSS, so unwrap their cells into <div>s here too; genuine data tables
+  // (with <th>) are kept intact.
+  function _unwrapLayoutTables(root) {
+    root.querySelectorAll('table').forEach(function (table) {
+      if (!table.parentNode || table.querySelector('th')) return;
+      var frag = document.createDocumentFragment();
+      table.querySelectorAll('td').forEach(function (td) {
+        var div = document.createElement('div');
+        while (td.firstChild) div.appendChild(td.firstChild);
+        frag.appendChild(div);
+      });
+      table.replaceWith(frag);
+    });
+  }
+
+  function _copyPlainFallback(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(function () { _showShareToast('Article copied'); })
+        .catch(function () { if (_execCopy(text)) _showShareToast('Article copied'); });
+    } else if (_execCopy(text)) {
+      _showShareToast('Article copied');
+    }
+  }
+
+  function _copyArticle(html, text) {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      try {
+        var item = new ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' })
+        });
+        navigator.clipboard.write([item])
+          .then(function () { _showShareToast('Article copied'); })
+          .catch(function () { _copyPlainFallback(text); });
+        return;
+      } catch (e) { /* fall through to plain */ }
+    }
+    _copyPlainFallback(text);
+  }
+
+  document.addEventListener('click', function (e) {
+    var trigger = e.target.closest('[data-copy-article]');
+    if (!trigger) return;
+    var root = trigger.closest('article[data-article-id]');
+    if (!root) return;
+    var body = root.querySelector('.article-body');
+    if (!body) return;
+
+    var title = root.dataset.title || '';
+    var url = root.dataset.url || '';
+    var feed = root.dataset.feedTitle || '';
+
+    var clone = body.cloneNode(true);
+    _unwrapLayoutTables(clone);
+    _absolutizeUrls(clone, url);
+
+    var header = '';
+    if (title) {
+      header += url ? '<h1><a href="' + _htmlEscape(url) + '">' + _htmlEscape(title) + '</a></h1>'
+                    : '<h1>' + _htmlEscape(title) + '</h1>';
+    }
+    var srcBits = [];
+    if (feed) srcBits.push(_htmlEscape(feed));
+    if (url) srcBits.push('<a href="' + _htmlEscape(url) + '">' + _htmlEscape(url) + '</a>');
+    if (srcBits.length) header += '<p>' + srcBits.join(' &middot; ') + '</p>';
+    var html = header + clone.innerHTML;
+
+    var textLines = [];
+    if (title) textLines.push(title);
+    var srcLine = [feed, url].filter(Boolean).join(' · ');
+    if (srcLine) textLines.push(srcLine);
+    textLines.push('');
+    textLines.push(body.innerText || body.textContent || '');
+    _copyArticle(html, textLines.join('\n'));
   });
 
   // After share token generated: complete pending share

@@ -9,8 +9,24 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- A "Copy" action on the article ··· menu (desktop) and the bottom action bar
+  (mobile) copies the article — title, source and body — to the clipboard as both
+  rich HTML and plain text, so it pastes with formatting and images into rich
+  editors and as clean text everywhere else. Relative image/link URLs are made
+  absolute so they still resolve once pasted.
+- The Stats backlog cards (labeled and starred) now link straight into the reader's
+  matching view, so you can jump from the count to the actual articles.
+
 ### Changed
 
+- An HTTP 403 from a feed no longer disables it on the first hit. Reddit and
+  YouTube return 403 as a transient anti-bot / rate-adjacent block (datacenter IP,
+  generic user-agent) far more often than as a permanent denial, so 403 now backs
+  off through the error tier and is disabled only after several consecutive
+  failures — the same treatment as 408/429 and 5xx. Genuinely permanent 4xx (400,
+  401, 404, 410) still disable immediately.
 - The fetcher now reads rate-limit response headers (`Retry-After`, `RateLimit-*`
   and `X-RateLimit-*`) on both successful and 429 responses and applies a per-host
   cooldown: once a host reports its budget is exhausted (e.g. Reddit's
@@ -20,12 +36,23 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   keeps the round short enough not to miss the next slot; anything past the budget
   defers to the next round. Feeds on other hosts are unaffected and still fetch in
   parallel.
-- A feed that misses its scheduled fetch — deferred by a host cooldown, a transient
-  error, or an app restart mid-round — now recovers at the next 15-min tick instead
-  of waiting a full interval for its slot to come round again. This also lets a
-  rate-limited host (e.g. Reddit) drain across all four ticks per hour rather than
-  only at the top of the hour, and keeps hourly feeds from drifting an hour late
-  when they get fetched a few minutes past the hour.
+- Manually refreshing a feed (the sidebar ↻ and the admin "force fetch") now respects
+  a known rate-limit window instead of firing another request straight into an HTTP
+  429: when the host is still cooling down it shows "Rate-limited — try again in …"
+  (seconds or minutes, read from the server's reset headers). A bare HTTP 403 anti-bot
+  block is treated differently — only the background scheduler paces itself on those,
+  while an explicit manual refresh is still allowed to retry, since such blocks are
+  often transient.
+- Feeds are now fetched at whichever of the four 15-min ticks (:00/:15/:30/:45)
+  first follows their refresh interval, rather than being pinned to the top of the
+  hour by interval. This spreads fetch load across the hour on each feed's own phase
+  instead of piling every hourly feed onto :00, and improves freshness: an hourly
+  feed fetched a few minutes past the hour used to wait until the next :00 (up to
+  ~2 h between fetches) and now refreshes about an hour later as intended. Feeds that
+  miss a scheduled fetch — deferred by a host cooldown, a transient error, or an app
+  restart mid-round — likewise recover at the next tick instead of waiting a full
+  interval, and a rate-limited host (e.g. Reddit) drains across all four ticks per
+  hour rather than only at the top of the hour.
 - The per-feed refresh button (↻ in the sidebar) now reloads the article list when
   you are viewing that feed, so newly fetched articles appear right away instead of
   only after re-selecting the feed. Works across the 3-panel, 2-panel and mobile
@@ -37,11 +64,56 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Adding a feed now shows specific messages for rate-limiting (HTTP 429 — including
   when to retry, read from `Retry-After` / `X-RateLimit-Reset`) and temporary server
   errors (5xx), instead of a bare "HTTP error {status}".
+- The Feeds, Filters and Labels settings pages and the admin Users page now show the
+  item count next to the page heading (matching the admin Feeds page), kept up to
+  date as items are added or removed without a page reload.
+- Labels and filters now sort case-insensitively — in the settings lists, label
+  pickers and label chips alike. Previously the database collation ordered all
+  uppercase names before any lowercase one, so a new lowercase-named label or
+  filter appeared stuck at the end of the list instead of in its alphabetical
+  place.
+- The filter list shows a "priority N" badge on filters whose priority differs
+  from the default, so it is visible why a filter sorts (and runs) ahead of the
+  alphabetical order.
+- Briefings sent to extra recipients now address the account owner in the visible
+  `To:` and put the additional recipients in `Bcc`, so co-subscribers can no longer
+  see each other's email addresses. The modal also notes that delivery can lag the
+  scheduled time by up to 15 min (the scheduler tick interval).
+- The admin "force fetch" button now shows a spinner and blocks double-clicks while
+  the synchronous fetch runs, instead of appearing to do nothing for several seconds.
 
 ### Fixed
 
+- Filters sharing the same priority now run in a deterministic order — exactly the
+  order the Settings → Filters list shows (priority, then name). Previously the
+  execution order of equal-priority filters was left to the database, so a
+  "stop on match" filter could behave inconsistently between fetches.
+
 - The green "Feed added successfully" banner no longer reappears when you refresh the
   Feeds settings page after subscribing.
+- Articles carrying a label now stay visible in their label view even after their
+  feed is deleted or unsubscribed. The label view used to inner-join the feed and so
+  hide such articles, leaving the sidebar label badge showing a count for an
+  apparently empty category.
+- The article-list loading overlay now matches the neutral dark-mode background
+  instead of a blue-tinted grey, and is delayed slightly so quick (cached) loads no
+  longer flash a spinner.
+
+### Security
+
+- Filter `regex` conditions are now evaluated under a per-match timeout, closing a
+  denial-of-service hole: the previous create-time heuristic could be bypassed by a
+  catastrophic-backtracking pattern (e.g. `([a-z]+)*`), and because matching ran
+  synchronously on the event loop during fetch, filter test and retroactive apply —
+  and CPython's `re` neither times out nor releases the GIL — a single crafted filter
+  could freeze the whole app for every user. Evaluation now uses the `regex` module
+  with a hard timeout (a timed-out pattern is treated as "no match"); existing filter
+  behaviour is unchanged.
+- Authenticated HTML responses (full pages and HTMX partials) are now sent with
+  `Cache-Control: no-store` and `Vary: Cookie`, so a shared browser can no longer
+  show one user's rendered page to the next after an account switch — previously the
+  back/forward cache (bfcache) could surface the prior user's content (CWE-525).
+  Static assets stay cacheable.
 
 ## [0.11.0] - 2026-06-30
 

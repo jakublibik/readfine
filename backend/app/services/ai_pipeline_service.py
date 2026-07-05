@@ -48,7 +48,7 @@ async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) 
 
     from app.models.feed import UserFeed
     from app.models.filter import Filter
-    from app.services.filter_service import _apply_ai_filters_for_state, is_ai_filter
+    from app.services.filter_service import FILTER_ORDER, _apply_ai_filters_for_state, is_ai_filter
 
     state = await db.scalar(
         select(UserArticleState).where(
@@ -63,7 +63,7 @@ async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) 
         select(Filter)
         .where(Filter.user_id == user_id, Filter.is_active == True)  # noqa: E712
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(Filter.position)
+        .order_by(*FILTER_ORDER)
     )
     ai_filters = [f for f in filters_result.scalars().all() if is_ai_filter(f)]
 

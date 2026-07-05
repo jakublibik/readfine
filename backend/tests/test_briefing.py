@@ -378,7 +378,7 @@ class TestSendBriefing:
                                        folder_id=None, ai_score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
-        def capture_send(s, to_list, subject, html_body, plain_body):
+        def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
             sent_subject.append(subject)
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -401,7 +401,7 @@ class TestSendBriefing:
         assert sent_subject[0].startswith("[TEST]")
 
     @pytest.mark.asyncio
-    async def test_extra_recipients_included_in_to_list(self, mock_db):
+    async def test_extra_recipients_sent_as_bcc(self, mock_db):
         from app.services.briefing_service import send_briefing
         config = make_config(
             briefing_recipients=json.dumps(["extra1@test.com", "extra2@test.com"])
@@ -409,14 +409,16 @@ class TestSendBriefing:
         user = make_user()
         app_settings = make_app_settings()
         captured_to = []
+        captured_bcc = []
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
                                        folder_id=None, ai_score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
-        def capture_send(s, to_list, subject, html_body, plain_body):
+        def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
             captured_to.extend(to_list)
+            captured_bcc.extend(bcc or [])
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
@@ -434,10 +436,12 @@ class TestSendBriefing:
                                            return_value="<html>...</html>"):
                                     await send_briefing(config, user, mock_db, app_settings)
 
-        assert "user@test.com" in captured_to
-        assert "extra1@test.com" in captured_to
-        assert "extra2@test.com" in captured_to
-        assert len(captured_to) == 3
+        # Account owner is the only visible recipient; extras go to Bcc so
+        # subscribers can't see each other.
+        assert captured_to == ["user@test.com"]
+        assert "extra1@test.com" in captured_bcc
+        assert "extra2@test.com" in captured_bcc
+        assert len(captured_bcc) == 2
 
     @pytest.mark.asyncio
     async def test_malformed_recipients_json_falls_back_to_empty(self, mock_db):
@@ -452,7 +456,7 @@ class TestSendBriefing:
                                        folder_id=None, ai_score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
-        def capture_send(s, to_list, subject, html_body, plain_body):
+        def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
             captured_to.extend(to_list)
 
         with patch("app.services.briefing_service.fetch_catchup_articles",

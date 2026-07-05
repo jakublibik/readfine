@@ -7,6 +7,7 @@ import pytest
 from unittest.mock import patch
 
 from app.utils.url_validator import (
+    RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
     fetch_url_conditional,
     parse_retry_after,
@@ -278,5 +279,21 @@ class TestTransientHttpStatuses:
         assert 408 in TRANSIENT_HTTP_STATUSES
 
     def test_permanent_statuses_excluded(self):
+        # 403 is not a rate-limit/timeout status → not "transient" for header handling
         for status in (400, 401, 403, 404, 410, 500, 503):
             assert status not in TRANSIENT_HTTP_STATUSES
+
+
+class TestRetryableHttpStatuses:
+    def test_403_408_429_are_retryable(self):
+        # 403 backs off through the error tier instead of disabling on first hit
+        assert 403 in RETRYABLE_HTTP_STATUSES
+        assert 408 in RETRYABLE_HTTP_STATUSES
+        assert 429 in RETRYABLE_HTTP_STATUSES
+
+    def test_transient_is_a_subset(self):
+        assert TRANSIENT_HTTP_STATUSES <= RETRYABLE_HTTP_STATUSES
+
+    def test_permanent_4xx_still_excluded(self):
+        for status in (400, 401, 404, 410):
+            assert status not in RETRYABLE_HTTP_STATUSES

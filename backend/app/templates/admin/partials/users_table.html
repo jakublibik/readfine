@@ -84,3 +84,6 @@
     {% endfor %}
   </tbody>
 </table>
+{% if request.headers.get('hx-request') %}
+<span id="users-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ users | length }})</span>
+{% endif %}
