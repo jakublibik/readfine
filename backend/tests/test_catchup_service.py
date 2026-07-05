@@ -80,14 +80,27 @@ class TestPeriodToStartDt:
         expected = (now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=7))
         assert result == expected.astimezone(timezone.utc)
 
-    def test_timezone_offset(self):
-        """UTC+2 midnight should be 2 hours before UTC midnight."""
+    @pytest.mark.parametrize("frozen_now, expected_diff_hours", [
+        # Freeze "now" at midday UTC so both zones anchor to the same calendar day —
+        # the flakiness came from comparing two "today" midnights that could land on
+        # different dates near the UTC day boundary (~22:00–24:00 UTC).
+        (datetime(2024, 6, 15, 12, 0, tzinfo=timezone.utc), 2),   # DST → Prague UTC+2
+        (datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc), 1),   # no DST → Prague UTC+1
+    ])
+    def test_timezone_offset(self, monkeypatch, frozen_now, expected_diff_hours):
+        """Prague midnight, expressed in UTC, is 1h (winter) / 2h (summer) before UTC midnight."""
+        import app.services.catchup_service as mod
+
+        class _FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen_now.astimezone(tz) if tz else frozen_now
+
+        monkeypatch.setattr(mod, "datetime", _FrozenDatetime)
         result_utc = _period_to_start_dt("today", "UTC")
         result_tz = _period_to_start_dt("today", "Europe/Prague")
-        # Prague (UTC+1/+2) midnight is earlier in UTC than UTC midnight
-        # The difference is 1 or 2 hours depending on DST
         diff_hours = (result_utc - result_tz).total_seconds() / 3600
-        assert 1 <= diff_hours <= 2
+        assert diff_hours == expected_diff_hours
 
     def test_invalid_timezone_falls_back_to_utc(self):
         result_invalid = _period_to_start_dt("today", "Invalid/Zone")
