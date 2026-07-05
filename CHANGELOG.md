@@ -9,6 +9,16 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- A "Copy" action on the article ··· menu (desktop) and the bottom action bar
+  (mobile) copies the article — title, source and body — to the clipboard as both
+  rich HTML and plain text, so it pastes with formatting and images into rich
+  editors and as clean text everywhere else. Relative image/link URLs are made
+  absolute so they still resolve once pasted.
+- The Stats backlog cards (labeled and starred) now link straight into the reader's
+  matching view, so you can jump from the count to the actual articles.
+
 ### Changed
 
 - An HTTP 403 from a feed no longer disables it on the first hit. Reddit and
@@ -65,6 +75,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The filter list shows a "priority N" badge on filters whose priority differs
   from the default, so it is visible why a filter sorts (and runs) ahead of the
   alphabetical order.
+- Briefings sent to extra recipients now address the account owner in the visible
+  `To:` and put the additional recipients in `Bcc`, so co-subscribers can no longer
+  see each other's email addresses. The modal also notes that delivery can lag the
+  scheduled time by up to 15 min (the scheduler tick interval).
+- The admin "force fetch" button now shows a spinner and blocks double-clicks while
+  the synchronous fetch runs, instead of appearing to do nothing for several seconds.
 
 ### Fixed
 
@@ -75,6 +91,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - The green "Feed added successfully" banner no longer reappears when you refresh the
   Feeds settings page after subscribing.
+- Articles carrying a label now stay visible in their label view even after their
+  feed is deleted or unsubscribed. The label view used to inner-join the feed and so
+  hide such articles, leaving the sidebar label badge showing a count for an
+  apparently empty category.
+- The article-list loading overlay now matches the neutral dark-mode background
+  instead of a blue-tinted grey, and is delayed slightly so quick (cached) loads no
+  longer flash a spinner.
 
 ### Security
 
@@ -86,6 +109,11 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   could freeze the whole app for every user. Evaluation now uses the `regex` module
   with a hard timeout (a timed-out pattern is treated as "no match"); existing filter
   behaviour is unchanged.
+- Authenticated HTML responses (full pages and HTMX partials) are now sent with
+  `Cache-Control: no-store` and `Vary: Cookie`, so a shared browser can no longer
+  show one user's rendered page to the next after an account switch — previously the
+  back/forward cache (bfcache) could surface the prior user's content (CWE-525).
+  Static assets stay cacheable.
 
 ## [0.11.0] - 2026-06-30
 
