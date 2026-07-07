@@ -96,6 +96,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   scheduled time by up to 15 min (the scheduler tick interval).
 - The admin "force fetch" button now shows a spinner and blocks double-clicks while
   the synchronous fetch runs, instead of appearing to do nothing for several seconds.
+- The Settings → AI cost estimates now cover the current Anthropic, OpenAI and Google
+  model families, and a configured model that isn't in the built-in price list is
+  estimated from a typical model for its provider — shown with a "~" and a note under
+  the table — instead of appearing as an unknown or zero cost.
+- The Trend column in the AI cost table now tracks estimated cost rather than the raw
+  number of operations, and the Fast/Quality/Total rows show a trend too (previously
+  blank), so the arrows reflect what actually moves your spend — e.g. longer articles
+  costing more even at the same number of runs.
 
 ### Fixed
 
@@ -113,6 +121,9 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The article-list loading overlay now matches the neutral dark-mode background
   instead of a blue-tinted grey, and is delayed slightly so quick (cached) loads no
   longer flash a spinner.
+- The AI cost table's total is no longer silently understated when a model slot uses a
+  model missing from the price list: that slot used to be added to the total as $0,
+  making the grand total look complete while omitting part of the cost.
 
 ### Security
 
