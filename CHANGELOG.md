@@ -115,6 +115,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Collapsing or expanding the sidebar is now instant. It previously refetched the
+  whole sidebar from the server on every toggle — so the old layout lingered
+  (briefly squished into the new width) until the request came back. The collapsed
+  rail and the full sidebar are now both rendered up front and the toggle just
+  switches between them client-side, with no round-trip. The same applies to the
+  mobile "collapsible" sidebar's open/close.
 - Toast notifications (e.g. a feed's error message when you open it, or a manual
   refresh result) no longer render at roughly half-width on mobile. They now stretch
   edge-to-edge with a small gutter on narrow screens and stay centred with a sensible

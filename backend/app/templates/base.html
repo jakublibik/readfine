@@ -14,6 +14,20 @@
       .prose h4 { font-size: 1.0em !important; margin-top: 1.0em; margin-bottom: 0.4em; }
       .article-row { transition: opacity 150ms ease; }
       html.sidebar-unpinned #sidebar { width: 3rem; }
+      /* Collapse/expand: both the rail and full sidebar are always rendered; CSS shows
+         one so toggling needs no refetch. Default = full; rail wins when collapsed. */
+      #sidebar-rail { display: none; }
+      html:not([data-bucket="small"]).sidebar-unpinned #sidebar-full { display: none; }
+      html:not([data-bucket="small"]).sidebar-unpinned #sidebar-rail { display: flex; }
+      html[data-bucket="small"][data-sidebar-mode="collapsible"]:not(.mobile-sidebar-open) #sidebar-full { display: none; }
+      html[data-bucket="small"][data-sidebar-mode="collapsible"]:not(.mobile-sidebar-open) #sidebar-rail { display: flex; }
+      /* Freeze both blocks at their final widths and clip the overflow, so while the
+         panel animates between rail (3rem) and full (15rem) width the content doesn't
+         reflow (wrap/unwrap, or drift while centred) frame by frame — the panel just
+         reveals the already-laid-out content anchored at the left edge. */
+      #sidebar { overflow-x: hidden; }
+      #sidebar-full { width: 15rem; }
+      #sidebar-rail { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
       html[data-bucket="small"] .article-row:hover { background-color: transparent !important; }
       .article-row .expand-indicator { visibility: hidden; }
