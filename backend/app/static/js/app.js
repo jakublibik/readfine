@@ -323,9 +323,12 @@ function showToast(msg, type) {
   var toast = document.createElement('div');
   toast.id = id;
   toast.textContent = msg;
-  toast.style.cssText = 'position:fixed;bottom:4rem;left:50%;transform:translateX(-50%);' +
-    'background:' + bg + ';color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
-    'font-size:0.8rem;z-index:9999;max-width:90vw;word-break:break-word;pointer-events:none;';
+  // Anchor with both left+right so the box stretches edge-to-edge (minus a small
+  // gutter) on narrow screens; max-width + margin:auto caps and centers it on wider
+  // ones. Without this a fixed block shrinks to its text and looks half-width on mobile.
+  toast.style.cssText = 'position:fixed;bottom:4rem;left:0.75rem;right:0.75rem;margin-inline:auto;' +
+    'max-width:24rem;background:' + bg + ';color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
+    'font-size:0.8rem;z-index:9999;word-break:break-word;pointer-events:none;text-align:center;';
   document.body.appendChild(toast);
   setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4000);
 }

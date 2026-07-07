@@ -115,6 +115,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Toast notifications (e.g. a feed's error message when you open it, or a manual
+  refresh result) no longer render at roughly half-width on mobile. They now stretch
+  edge-to-edge with a small gutter on narrow screens and stay centred with a sensible
+  max-width on wider ones.
 - Filters sharing the same priority now run in a deterministic order — exactly the
   order the Settings → Filters list shows (priority, then name). Previously the
   execution order of equal-priority filters was left to the database, so a
