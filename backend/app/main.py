@@ -51,6 +51,11 @@ async def lifespan(app: FastAPI):
                 bool(row.feedback_enabled and row.smtp_host and row.smtp_from_email)
             )
 
+    # Hydrate the learned per-host fetch spacing so it survives restarts/deploys.
+    from app.services.host_rate_limit_service import load_into_memory
+    async with db.async_session_factory() as session:
+        await load_into_memory(session)
+
     from app.fetcher.scheduler import create_scheduler
     sched = create_scheduler()
     sched.start()
@@ -59,6 +64,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     sched.shutdown(wait=True)
+    from app.services.host_rate_limit_service import flush
+    async with db.async_session_factory() as session:
+        await flush(session)
     await db.engine.dispose()
 
 

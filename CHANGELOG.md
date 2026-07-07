@@ -18,6 +18,11 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   absolute so they still resolve once pasted.
 - The Stats backlog cards (labeled and starred) now link straight into the reader's
   matching view, so you can jump from the count to the actual articles.
+- Admin → Feeds gained a "Rate limits" view (shown when any exist) listing the fetch
+  pace Readfine has learned for each host — host, spacing, how it was learned and when
+  — each with a Clear action to reset it. Errored feeds in the admin table now also
+  show their predicted next fetch, and a feed with no per-feed interval override shows
+  the effective default interval instead of a blank dash.
 
 ### Changed
 
@@ -43,6 +48,16 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   block is treated differently — only the background scheduler paces itself on those,
   while an explicit manual refresh is still allowed to retry, since such blocks are
   often transient.
+- Readfine now learns a sustainable fetch pace for each host and spaces its requests
+  accordingly, rather than only backing off after a host reports its budget already
+  exhausted. It reads the pace precisely from a host's rate-limit headers on successful
+  responses, and tightens it further when a host still answers with repeated HTTP 429s;
+  the learned pace only ever tightens (so it doesn't oscillate) and is capped so a feed
+  can't stall indefinitely. This stops aggressive hosts such as Reddit — where a burst
+  of same-host feeds fetched back-to-back would trip a 403/429 — from being throttled.
+  The learned pace is stored and survives restarts and deploys (so a host isn't
+  re-probed into a rate limit on every restart), and manual refreshes respect it too,
+  showing "try again in …" instead of firing into a known gap.
 - Feeds are now fetched at whichever of the four 15-min ticks (:00/:15/:30/:45)
   first follows their refresh interval, rather than being pinned to the top of the
   hour by interval. This spreads fetch load across the hour on each feed's own phase

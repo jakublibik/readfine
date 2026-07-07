@@ -1011,6 +1011,56 @@ class TestFetchFeedHostCooldown:
         assert host_throttle.blocked_until("example.com", datetime.now(timezone.utc)) is None
 
 
+class TestFetchFeedLearnedSpacing:
+    """fetch_feed feeds the learned per-host spacing store: precise learning from a
+    200's RateLimit-* headers, tightening on repeated 429s."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def teardown_method(self):
+        host_throttle.clear()
+
+    async def test_200_headers_learn_spacing(self):
+        import feedparser
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        parsed = feedparser.FeedParserDict(
+            {"bozo": False, "entries": [], "feed": feedparser.FeedParserDict({})}
+        )
+        resp = ConditionalResponse(200, "<rss/>", None, None, spacing_seconds=8.0)
+        with (
+            patch("app.fetcher.rss.fetch_url_conditional", return_value=resp),
+            patch("app.fetcher.rss.feedparser.parse", return_value=parsed),
+            patch("app.fetcher.rss._save_articles", return_value=0),
+        ):
+            await fetch_feed(feed, _make_session())
+        assert host_throttle.effective_spacing("reddit.com") == 8.0
+
+    async def test_lone_429_bumps_streak_without_tightening(self):
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(429)):
+            await fetch_feed(feed, _make_session())
+        assert host_throttle._spacing["reddit.com"].consecutive_429 == 1
+        assert host_throttle.effective_spacing("reddit.com") == host_throttle.GLOBAL_MIN_SPACING
+
+    async def test_two_429s_tighten_spacing(self):
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        exc = _http_error(429, headers={"Retry-After": "600"})
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, _make_session())
+            await fetch_feed(feed, _make_session())
+        assert host_throttle._spacing["reddit.com"].source == "429"
+        assert host_throttle.effective_spacing("reddit.com") > host_throttle.GLOBAL_MIN_SPACING
+
+    async def test_403_does_not_tighten_spacing(self):
+        # A bare anti-bot 403 is not a throttle signal — no ratchet.
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, _make_session())
+            await fetch_feed(feed, _make_session())
+        assert "reddit.com" not in host_throttle._spacing
+
+
 class TestFetchFeedConditional:
     """fetch_feed: ETag / If-Modified-Since conditional requests + 304 handling."""
 

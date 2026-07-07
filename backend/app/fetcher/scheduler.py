@@ -343,6 +343,14 @@ async def _fetch_due_feeds() -> None:
                         feed_in_session, session,
                         published_cutoff=cutoff_by_feed.get(feed_id),
                     )
+                # Pace the host after this fetch: a scheduler breather at the learned
+                # gap, plus a manual-visible cooldown when a real limit was learned (so
+                # the next same-host feed this round — and manual refreshes — hold off
+                # instead of hammering into a known rate-limit gap). The fetch above just
+                # refreshed the learned value for this host.
+                host_throttle.arm_after_fetch(
+                    host_key(feed_in_session.feed_url), datetime.now(timezone.utc)
+                )
 
     fetch_start = datetime.now(timezone.utc)
     round_deadline = fetch_start + _ROUND_BUDGET
@@ -366,6 +374,9 @@ async def _fetch_due_feeds() -> None:
         n = await dedup_cross_feed_global(fetch_start, session)
         if n:
             logger.info("Post-gather dedup: marked %d (user, article) pairs as read", n)
+        # Persist any learned per-host spacing changed this round (batched write-back).
+        from app.services.host_rate_limit_service import flush
+        await flush(session)
 
 
 async def _process_readable() -> None:
