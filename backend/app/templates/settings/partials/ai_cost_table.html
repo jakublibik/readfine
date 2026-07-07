@@ -30,10 +30,16 @@
         <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.input_tokens) }}</td>
         <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ "{:,}".format(op.output_tokens) }}</td>
         <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">
-          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% if op.est_cost is not none %}{% if op.is_estimated %}~{% endif %}${{ "%.4f"|format(op.est_cost) }}
           {% else %}<span class="text-gray-400 text-xs">—</span>{% endif %}
         </td>
-        <td class="py-1"></td>
+        <td class="py-1 text-right">
+          {% if op.trend_pct is not none %}
+            {% if op.trend_pct > 5 %}<span class="text-red-500 text-xs">↑{{ op.trend_pct|abs }}%</span>
+            {% elif op.trend_pct < -5 %}<span class="text-green-600 text-xs">↓{{ op.trend_pct|abs }}%</span>
+            {% else %}<span class="text-gray-400 text-xs">→</span>{% endif %}
+          {% else %}<span class="text-gray-300 text-xs">—</span>{% endif %}
+        </td>
       </tr>
       {% else %}
       <tr {% if op.is_placeholder %}class="opacity-40"{% endif %}>
@@ -53,7 +59,7 @@
         <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
         <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.output_tokens) }}</td>
         <td class="py-2 text-right text-gray-600">
-          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% if op.est_cost is not none %}{% if op.is_estimated %}~{% endif %}${{ "%.4f"|format(op.est_cost) }}
           {% else %}<span class="text-gray-400 text-xs">unknown model</span>{% endif %}
         </td>
         <td class="py-2 text-right">
@@ -68,7 +74,7 @@
         <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.input_tokens) }}</td>
         <td class="py-2 text-right text-gray-600">{{ "{:,}".format(op.output_tokens) }}</td>
         <td class="py-2 text-right text-gray-600">
-          {% if op.est_cost is not none %}${{ "%.4f"|format(op.est_cost) }}
+          {% if op.est_cost is not none %}{% if op.is_estimated %}~{% endif %}${{ "%.4f"|format(op.est_cost) }}
           {% else %}<span class="text-gray-400 text-xs">unknown model</span>{% endif %}
         </td>
         <td class="py-2 text-right">
@@ -85,4 +91,7 @@
     </tbody>
   </table>
   </div>
+  {% if cost_stats.operations | selectattr("is_estimated") | list %}
+  <p class="mt-2 text-xs text-gray-400">~ Estimated — a configured model isn't in the price list; its cost is approximated using a typical model for the provider.</p>
+  {% endif %}
 </div>

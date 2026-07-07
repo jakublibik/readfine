@@ -5,13 +5,16 @@ import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
 from app.database import get_db
+from app.fetcher import host_throttle
+from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.user import User
+from app.services.host_rate_limit_service import flush as flush_host_rate_limits
 from app.services.admin_service import (
     clear_feed_error,
     create_invitation,
@@ -20,6 +23,7 @@ from app.services.admin_service import (
     get_app_settings,
     get_dashboard_stats,
     get_feed,
+    group_feeds_by_host,
     list_audit_logs,
     list_feeds_with_stats,
     list_fetch_logs,
@@ -329,27 +333,103 @@ async def admin_revoke_invitation(
 
 # ── Feeds ─────────────────────────────────────────────────────────────────────
 
+def _norm_group(group: str | None) -> str:
+    return "host" if group == "host" else "az"
+
+
+async def _feeds_context(db, group: str = "az") -> dict:
+    """Feeds list annotated for the admin table: predicted next fetch for errored
+    feeds (mirrors settings) and the effective default interval for feeds without a
+    per-feed override. When ``group == "host"`` the rows are also grouped by fetch
+    host for the admin table's grouped view."""
+    feeds = await list_feeds_with_stats(db)
+    s = await get_app_settings(db)
+    default_interval = (s.default_fetch_interval_min or 60)
+    min_interval = (s.min_fetch_interval_min or 15)
+    for item in feeds:
+        f = item["feed"]
+        f.next_fetch_at = (
+            compute_next_fetch_at(
+                f, default_interval_min=default_interval, min_interval_min=min_interval
+            )
+            if f.status == "error"
+            else None
+        )
+    group = _norm_group(group)
+    return {
+        "feeds": feeds,
+        "feed_groups": group_feeds_by_host(feeds) if group == "host" else None,
+        "group_mode": group,
+        "default_interval_min": max(default_interval, min_interval),
+        "has_rate_limits": bool(host_throttle.all_spacing()),
+    }
+
+
 @router.get("/feeds", response_class=HTMLResponse)
 async def admin_feeds(
+    request: Request,
+    group: str = Query("az"),
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    return templates.TemplateResponse(request, "admin/feeds.html", await _feeds_context(db, group))
+
+
+@router.get("/feeds/table", response_class=HTMLResponse)
+async def admin_feeds_table(
+    request: Request,
+    group: str = Query("az"),
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Feeds table partial only — used by the A–Z / By-host view toggle."""
+    return templates.TemplateResponse(
+        request, "admin/partials/feeds_table.html", await _feeds_context(db, group)
+    )
+
+
+# ── Learned per-host rate-limit spacing ───────────────────────────────────────
+
+@router.get("/rate-limits", response_class=HTMLResponse)
+async def admin_rate_limits(
+    request: Request,
+    user: User = Depends(require_admin),
+):
+    return templates.TemplateResponse(
+        request, "admin/partials/rate_limits_modal.html",
+        {"spacings": host_throttle.all_spacing(), "now": datetime.now(timezone.utc)},
+    )
+
+
+@router.post("/rate-limits/{host}/clear", response_class=HTMLResponse)
+async def admin_clear_rate_limit(
+    host: str,
     request: Request,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    feeds = await list_feeds_with_stats(db)
-    return templates.TemplateResponse(request, "admin/feeds.html", {"feeds": feeds})
+    if host_throttle.clear_spacing(host):
+        await flush_host_rate_limits(db)
+        await log_audit(db, user.id, "rate_limit_clear", target_type="host", detail={"host": host})
+    return templates.TemplateResponse(
+        request, "admin/partials/rate_limits_modal.html",
+        {"spacings": host_throttle.all_spacing(), "now": datetime.now(timezone.utc)},
+    )
 
 
 # ── Feed actions ──────────────────────────────────────────────────────────────
 
-async def _feeds_response(request: Request, db, user) -> HTMLResponse:
-    feeds = await list_feeds_with_stats(db)
-    return templates.TemplateResponse(request, "admin/partials/feeds_table.html", {"feeds": feeds})
+async def _feeds_response(request: Request, db, user, group: str = "az") -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "admin/partials/feeds_table.html", await _feeds_context(db, group)
+    )
 
 
 @router.post("/feeds/{feed_id}/pause", response_class=HTMLResponse)
 async def admin_toggle_feed_pause(
     feed_id: int,
     request: Request,
+    group: str = Query("az"),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -357,39 +437,42 @@ async def admin_toggle_feed_pause(
     if feed:
         await log_audit(db, user.id, "feed_pause_toggle", target_type="feed", target_id=feed_id,
                         detail={"status": feed.status})
-    return await _feeds_response(request, db, user)
+    return await _feeds_response(request, db, user, group)
 
 
 @router.post("/feeds/{feed_id}/clear-error", response_class=HTMLResponse)
 async def admin_clear_feed_error(
     feed_id: int,
     request: Request,
+    group: str = Query("az"),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     cleared = await clear_feed_error(db, feed_id)
     if cleared:
         await log_audit(db, user.id, "feed_clear_error", target_type="feed", target_id=feed_id)
-    return await _feeds_response(request, db, user)
+    return await _feeds_response(request, db, user, group)
 
 
 @router.delete("/feeds/{feed_id}", response_class=HTMLResponse)
 async def admin_delete_feed(
     feed_id: int,
     request: Request,
+    group: str = Query("az"),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     deleted = await delete_feed(db, feed_id)
     if deleted:
         await log_audit(db, user.id, "feed_delete", target_type="feed", target_id=feed_id)
-    return await _feeds_response(request, db, user)
+    return await _feeds_response(request, db, user, group)
 
 
 @router.post("/feeds/{feed_id}/force-fetch", response_class=HTMLResponse)
 async def admin_force_fetch(
     feed_id: int,
     request: Request,
+    group: str = Query("az"),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -402,7 +485,7 @@ async def admin_force_fetch(
         if cd is not None:
             # Known rate-limit window — don't hammer into another 429; the admin
             # button is no override, so surface the wait instead of fetching.
-            resp = await _feeds_response(request, db, user)
+            resp = await _feeds_response(request, db, user, group)
             resp.headers["HX-Trigger"] = json.dumps({"showToast": {
                 "msg": f"Rate-limited — try again in {format_retry_in(cd, now)}.",
                 "type": "warning",
@@ -420,13 +503,13 @@ async def admin_force_fetch(
         now2 = datetime.now(timezone.utc)
         cd2 = cooldown_until(feed, now2)
         if feed.last_error and cd2 is not None:
-            resp = await _feeds_response(request, db, user)
+            resp = await _feeds_response(request, db, user, group)
             resp.headers["HX-Trigger"] = json.dumps({"showToast": {
                 "msg": f"Rate-limited — try again in {format_retry_in(cd2, now2)}.",
                 "type": "warning",
             }})
             return resp
-    return await _feeds_response(request, db, user)
+    return await _feeds_response(request, db, user, group)
 
 
 # ── Fetch logs ────────────────────────────────────────────────────────────────

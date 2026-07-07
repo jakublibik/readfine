@@ -127,6 +127,30 @@ def rate_limited_until(headers, now: datetime) -> datetime | None:
     return min(until, now + _RATE_LIMIT_MAX)
 
 
+def spacing_from_headers(headers, now: datetime) -> float | None:
+    """Derive a sustainable per-request spacing (seconds) from ``RateLimit-*`` headers.
+
+    Unlike :func:`rate_limited_until` (which fires only when the budget is exhausted),
+    this reads the *live* allowance on any response — ``spacing = reset / remaining``,
+    i.e. the seconds to spread the remaining calls evenly over the remaining window.
+    A host reporting ``remaining=10, reset=60`` yields 6s; ``remaining=1, reset=60``
+    yields 60s. Returns ``None`` when the headers are absent or unusable.
+
+    ``*-reset`` is delta-seconds unless it looks like a unix epoch (same convention as
+    :func:`rate_limited_until`). ``remaining`` is floored to 1 so an exhausted budget
+    maps to the full reset window rather than dividing by zero.
+    """
+    reset = _as_float(_first_header(headers, _RESET_HEADERS))
+    remaining = _as_float(_first_header(headers, _REMAINING_HEADERS))
+    if reset is None or remaining is None:
+        return None
+    seconds = (reset - now.timestamp()) if reset >= _EPOCH_THRESHOLD else reset
+    if seconds <= 0:
+        return None
+    spacing = seconds / max(remaining, 1.0)
+    return spacing if spacing > 0 else None
+
+
 def format_retry_in(until: datetime, now: datetime) -> str:
     """Human 'try again in …' phrase for a cooldown expiry.
 
@@ -267,6 +291,9 @@ class ConditionalResponse(NamedTuple):
     # When set, the host asked us to hold off until this UTC instant (derived from
     # Retry-After / RateLimit-* headers). None when the response carried no such signal.
     rate_limited_until: datetime | None = None
+    # Sustainable per-request spacing (seconds) advertised by live RateLimit-* headers
+    # (reset / remaining), for learned per-host pacing. None when not advertised.
+    spacing_seconds: float | None = None
 
 
 def fetch_url_conditional(
@@ -292,10 +319,12 @@ def fetch_url_conditional(
     response = _resolve_response(url, auth, timeout, request_headers, max_redirects)
     new_etag = response.headers.get("etag")
     new_last_modified = response.headers.get("last-modified")
+    now = datetime.now(timezone.utc)
     return ConditionalResponse(
         status_code=response.status_code,
         text=response.text,
         etag=new_etag[:255] if new_etag else None,
         last_modified=new_last_modified[:255] if new_last_modified else None,
-        rate_limited_until=rate_limited_until(response.headers, datetime.now(timezone.utc)),
+        rate_limited_until=rate_limited_until(response.headers, now),
+        spacing_seconds=spacing_from_headers(response.headers, now),
     )

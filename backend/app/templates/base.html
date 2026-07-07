@@ -14,6 +14,20 @@
       .prose h4 { font-size: 1.0em !important; margin-top: 1.0em; margin-bottom: 0.4em; }
       .article-row { transition: opacity 150ms ease; }
       html.sidebar-unpinned #sidebar { width: 3rem; }
+      /* Collapse/expand: both the rail and full sidebar are always rendered; CSS shows
+         one so toggling needs no refetch. Default = full; rail wins when collapsed. */
+      #sidebar-rail { display: none; }
+      html:not([data-bucket="small"]).sidebar-unpinned #sidebar-full { display: none; }
+      html:not([data-bucket="small"]).sidebar-unpinned #sidebar-rail { display: flex; }
+      html[data-bucket="small"][data-sidebar-mode="collapsible"]:not(.mobile-sidebar-open) #sidebar-full { display: none; }
+      html[data-bucket="small"][data-sidebar-mode="collapsible"]:not(.mobile-sidebar-open) #sidebar-rail { display: flex; }
+      /* Freeze both blocks at their final widths and clip the overflow, so while the
+         panel animates between rail (3rem) and full (15rem) width the content doesn't
+         reflow (wrap/unwrap, or drift while centred) frame by frame — the panel just
+         reveals the already-laid-out content anchored at the left edge. */
+      #sidebar { overflow-x: hidden; }
+      #sidebar-full { width: 15rem; }
+      #sidebar-rail { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
       html[data-bucket="small"] .article-row:hover { background-color: transparent !important; }
       .article-row .expand-indicator { visibility: hidden; }
@@ -63,13 +77,19 @@
         transform: translateX(0); visibility: visible; pointer-events: auto;
       }
 
-      /* Collapsible: sidebar visible as rail */
-      html[data-bucket="small"][data-sidebar-mode="collapsible"] #sidebar { display: block; width: 3rem !important; }
-
-      /* Collapsible: overlay on open */
-      html[data-bucket="small"][data-sidebar-mode="collapsible"].mobile-sidebar-open #sidebar {
+      /* Collapsible: sidebar is a fixed rail on the left — kept out of flow (like the
+         hideable overlay) so the article list is always full width and just padded to
+         clear the rail. Opening the overlay only widens this same fixed panel, so the
+         list never reflows on open/close. */
+      html[data-bucket="small"][data-sidebar-mode="collapsible"] #sidebar {
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
-        width: 15rem !important; z-index: 30; overflow-y: auto;
+        width: 3rem !important; z-index: 30; overflow-y: auto;
+      }
+      html[data-bucket="small"][data-sidebar-mode="collapsible"] #article-list { padding-left: 3rem; }
+
+      /* Collapsible: overlay on open — widen the same fixed panel */
+      html[data-bucket="small"][data-sidebar-mode="collapsible"].mobile-sidebar-open #sidebar {
+        width: 15rem !important;
       }
 
       #mobile-sidebar-backdrop { display: none; }

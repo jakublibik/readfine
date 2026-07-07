@@ -3,10 +3,33 @@
 {% set active = "feeds" %}
 
 {% block admin_content %}
-<h1 class="text-xl font-semibold text-gray-900 mb-6">
-  Feeds
-  <span class="text-sm font-normal text-gray-400">({{ feeds | length }})</span>
-</h1>
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <div class="flex items-center gap-3">
+    <h1 class="text-xl font-semibold text-gray-900 leading-none">
+      Feeds
+      <span class="text-sm font-normal text-gray-400">({{ feeds | length }})</span>
+    </h1>
+    {% if feeds %}
+    <div class="flex items-center gap-1 text-sm">
+      <button type="button" data-feeds-group="az"
+              hx-get="/admin/feeds/table?group=az" hx-target="#feeds-table" hx-swap="outerHTML"
+              class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if group_mode != 'host' else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">A–Z</button>
+      <button type="button" data-feeds-group="host"
+              hx-get="/admin/feeds/table?group=host" hx-target="#feeds-table" hx-swap="outerHTML"
+              class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if group_mode == 'host' else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">By host</button>
+    </div>
+    {% endif %}
+  </div>
+  {% if has_rate_limits %}
+  <button type="button" data-action="open-rate-limits"
+          hx-get="/admin/rate-limits"
+          hx-target="#rate-limits-content"
+          hx-swap="outerHTML"
+          class="text-sm px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50">
+    Rate limits
+  </button>
+  {% endif %}
+</div>
 
 {% if feeds %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -14,5 +37,43 @@
 </div>
 {% else %}
 <p class="text-sm text-gray-400">No feeds yet.</p>
+{% endif %}
+
+{% if has_rate_limits %}
+{# Rate-limits modal overlay #}
+<div id="rate-limits-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+     aria-modal="true" role="dialog">
+  <div class="absolute inset-0 bg-black/40" data-action="close-rate-limits"></div>
+  <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-2xl mx-4 max-h-[85vh] overflow-y-auto">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+      <h2 class="text-sm font-semibold text-gray-800">Learned rate limits</h2>
+      <button data-action="close-rate-limits" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="px-5 py-4">
+      <div id="rate-limits-content"></div>
+    </div>
+  </div>
+</div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var overlay = document.getElementById('rate-limits-overlay');
+  if (!overlay) return;
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-action="open-rate-limits"]')) {
+      overlay.classList.remove('hidden');
+    } else if (e.target.closest('[data-action="close-rate-limits"]')) {
+      overlay.classList.add('hidden');
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') overlay.classList.add('hidden');
+  });
+})();
+</script>
 {% endif %}
 {% endblock %}

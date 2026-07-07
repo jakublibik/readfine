@@ -2151,14 +2151,15 @@ async def htmx_catchup_cost(
     effective_count = min(len(articles), article_limit)
 
     input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet)
-    cost = _calc_cost(model, input_tokens, output_tokens)
+    cost, cost_estimated = _calc_cost(model, provider, input_tokens, output_tokens)
     if cost is None:
         return HTMLResponse("")
 
     slot_label = "fast" if model_slot == "fast" else "quality"
+    est_note = " · model not in price list, approximated" if cost_estimated else ""
     return HTMLResponse(
         f'<span class="text-gray-500 text-sm">Estimated cost: ~${cost:.4f} '
-        f'<span class="text-gray-400">({effective_count} articles × {slot_label} model)</span></span>'
+        f'<span class="text-gray-400">({effective_count} articles × {slot_label} model{est_note})</span></span>'
     )
 
 

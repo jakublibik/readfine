@@ -53,26 +53,39 @@ SUPPORTED_PROVIDERS = list(PROVIDER_DOCS_URLS.keys())
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
-# Last updated: 2026-05-27
+# Last updated: 2026-07-07
 # Anthropic: https://www.anthropic.com/pricing
 # OpenAI:    https://openai.com/api/pricing
 # Gemini:    https://ai.google.dev/gemini-api/docs/pricing
 _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     # Anthropic
-    "claude-haiku-4-5": 0.80,
+    "claude-haiku-4-5": 1.00,
     "claude-haiku-3-5": 0.80,
+    "claude-sonnet-5": 3.00,  # standard; intro $2 in/$10 out through 2026-08-31
     "claude-sonnet-4-6": 3.00,
     "claude-sonnet-3-5": 3.00,
-    "claude-opus-4-7": 15.00,
+    "claude-opus-4-8": 5.00,
+    "claude-opus-4-7": 5.00,
+    "claude-opus-4-6": 5.00,
+    "claude-fable-5": 10.00,
     # OpenAI
     "gpt-4o-mini": 0.15,
     "gpt-4o": 2.50,
+    "gpt-5.5": 5.00,
+    "gpt-5.4": 2.50,
+    "gpt-5.4-mini": 0.75,
+    "gpt-5.4-nano": 0.20,
     # Gemini
     "gemini-2.0-flash": 0.10,
     "gemini-2.0-flash-lite": 0.075,
     "gemini-1.5-flash": 0.075,
     "gemini-1.5-pro": 1.25,
     "gemini-2.5-pro": 1.25,
+    "gemini-2.5-flash": 0.30,
+    "gemini-2.5-flash-lite": 0.10,
+    "gemini-3.5-flash": 1.50,
+    "gemini-3.1-flash-lite": 0.25,
+    "gemini-3.1-pro-preview": 2.00,
 }
 
 # Map versioned IDs → alias so cost lookup works for both input formats
@@ -86,18 +99,41 @@ _MODEL_ALIAS_MAP: dict[str, str] = {
 
 # Output token cost = input cost × multiplier (output is more expensive than input)
 _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
-    "claude-haiku-4-5": 4.00,
-    "claude-haiku-3-5": 4.00,
+    "claude-haiku-4-5": 5.00,
+    "claude-haiku-3-5": 5.00,
+    "claude-sonnet-5": 5.00,
     "claude-sonnet-4-6": 5.00,
     "claude-sonnet-3-5": 5.00,
+    "claude-opus-4-8": 5.00,
     "claude-opus-4-7": 5.00,
+    "claude-opus-4-6": 5.00,
+    "claude-fable-5": 5.00,
     "gpt-4o-mini": 4.00,
     "gpt-4o": 4.00,
+    "gpt-5.5": 6.00,  # $5.00 in / $30.00 out
+    "gpt-5.4": 6.00,  # $2.50 in / $15.00 out
+    "gpt-5.4-mini": 6.00,  # $0.75 in / $4.50 out
+    "gpt-5.4-nano": 6.25,  # $0.20 in / $1.25 out
     "gemini-2.0-flash": 4.00,
     "gemini-2.0-flash-lite": 4.00,
     "gemini-1.5-flash": 4.00,
     "gemini-1.5-pro": 4.00,
-    "gemini-2.5-pro": 4.00,
+    "gemini-2.5-pro": 8.00,
+    "gemini-2.5-flash": 2.50 / 0.30,  # $0.30 in / $2.50 out
+    "gemini-2.5-flash-lite": 4.00,  # $0.10 in / $0.40 out
+    "gemini-3.5-flash": 6.00,  # $1.50 in / $9.00 out
+    "gemini-3.1-flash-lite": 6.00,  # $0.25 in / $1.50 out
+    "gemini-3.1-pro-preview": 6.00,  # $2.00 in / $12.00 out
+}
+
+# When the configured model isn't in the catalog above (the model field is free
+# text), estimate its cost using a representative mid-tier model for the provider.
+# Cost rows priced this way are flagged is_estimated → rendered with a "~" prefix
+# and a table note.
+_PROVIDER_FALLBACK_MODEL: dict[str, str] = {
+    "anthropic": "claude-sonnet-5",
+    "openai": "gpt-5.4",
+    "gemini": "gemini-2.5-flash",
 }
 
 # ── key management ────────────────────────────────────────────────────────────

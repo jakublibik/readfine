@@ -188,3 +188,114 @@ class TestFormatRetryIn:
     def test_floor_of_one_second(self):
         # An already-elapsed cooldown never renders "0 sec".
         assert format_retry_in(NOW, NOW) == "1 sec"
+
+
+class TestLearnedSpacing:
+    def setup_method(self):
+        host_throttle.clear()
+
+    def test_unknown_host_gets_global_floor(self):
+        assert host_throttle.effective_spacing("example.com") == host_throttle.GLOBAL_MIN_SPACING
+
+    def test_success_learns_precise_spacing(self):
+        host_throttle.record_success("reddit.com", NOW, 6.0)
+        assert host_throttle.effective_spacing("reddit.com") == 6.0
+
+    def test_success_ratchets_up_never_down(self):
+        host_throttle.record_success("reddit.com", NOW, 30.0)
+        # A later, more permissive reading (smaller spacing) must NOT loosen us.
+        host_throttle.record_success("reddit.com", NOW, 5.0)
+        assert host_throttle.effective_spacing("reddit.com") == 30.0
+
+    def test_learned_below_floor_still_floored(self):
+        host_throttle.record_success("reddit.com", NOW, 0.5)
+        assert host_throttle.effective_spacing("reddit.com") == host_throttle.GLOBAL_MIN_SPACING
+
+    def test_lone_429_does_not_tighten(self):
+        host_throttle.record_success("reddit.com", NOW, 6.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        # Debounce: a single 429 only bumps the streak, spacing unchanged.
+        assert host_throttle.effective_spacing("reddit.com") == 6.0
+        assert host_throttle._spacing["reddit.com"].consecutive_429 == 1
+
+    def test_two_consecutive_429_tighten_with_margin(self):
+        host_throttle.record_success("reddit.com", NOW, 6.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        # max(6, 60, floor) * 1.15
+        assert host_throttle.effective_spacing("reddit.com") == pytest.approx(69.0)
+        assert host_throttle._spacing["reddit.com"].source == "429"
+
+    def test_429_without_retry_after_uses_existing_and_floor(self):
+        host_throttle.record_rate_limited("reddit.com", NOW)
+        host_throttle.record_rate_limited("reddit.com", NOW)
+        # No existing spacing, no Retry-After → floor * margin.
+        assert host_throttle.effective_spacing("reddit.com") == pytest.approx(
+            host_throttle.GLOBAL_MIN_SPACING * host_throttle.SPACING_MARGIN
+        )
+
+    def test_success_resets_429_streak_but_keeps_spacing(self):
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        tightened = host_throttle.effective_spacing("reddit.com")
+        # A clean success (no headers) clears the streak but never loosens the gap.
+        host_throttle.record_success("reddit.com", NOW)
+        assert host_throttle._spacing["reddit.com"].consecutive_429 == 0
+        assert host_throttle.effective_spacing("reddit.com") == tightened
+
+    def test_streak_must_be_consecutive(self):
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)  # streak 1
+        host_throttle.record_success("reddit.com", NOW)             # resets streak
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)  # streak 1 again, no tighten
+        assert host_throttle._spacing["reddit.com"].consecutive_429 == 1
+        assert host_throttle._spacing["reddit.com"].seconds == 0.0
+
+    def test_spacing_capped_at_max(self):
+        host_throttle.record_rate_limited("reddit.com", NOW, 100000.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 100000.0)
+        assert host_throttle.effective_spacing("reddit.com") == host_throttle.MAX_SPACING
+
+    def test_manual_override_and_clear(self):
+        host_throttle.set_manual_spacing("reddit.com", 45.0, NOW)
+        assert host_throttle.effective_spacing("reddit.com") == 45.0
+        assert host_throttle._spacing["reddit.com"].source == "manual"
+        assert host_throttle.clear_spacing("reddit.com") is True
+        assert host_throttle.effective_spacing("reddit.com") == host_throttle.GLOBAL_MIN_SPACING
+        assert host_throttle.clear_spacing("reddit.com") is False
+
+    def test_all_spacing_sorted_desc(self):
+        host_throttle.record_success("a.com", NOW, 5.0)
+        host_throttle.record_success("b.com", NOW, 50.0)
+        hosts = [s.host for s in host_throttle.all_spacing()]
+        assert hosts == ["b.com", "a.com"]
+
+    def test_load_spacing_replaces_store(self):
+        host_throttle.record_success("old.com", NOW, 5.0)
+        host_throttle.load_spacing([host_throttle.LearnedSpacing("new.com", 9.0, "200", NOW, 0)])
+        assert "old.com" not in host_throttle._spacing
+        assert host_throttle.effective_spacing("new.com") == 9.0
+
+    def test_arm_after_fetch_unknown_host_paces_scheduler_only(self):
+        host_throttle.arm_after_fetch("example.com", NOW)
+        # Manual (include_block=False) is not gated by the bare floor...
+        assert host_throttle.blocked_until("example.com", NOW) is None
+        # ...but the scheduler is, at the global floor.
+        assert host_throttle.blocked_until("example.com", NOW, include_block=True) == (
+            NOW + timedelta(seconds=host_throttle.GLOBAL_MIN_SPACING)
+        )
+
+    def test_arm_after_fetch_learned_gates_manual(self):
+        host_throttle.record_success("reddit.com", NOW, 60.0)
+        host_throttle.arm_after_fetch("reddit.com", NOW)
+        # A real learned limit holds off manual refreshes too (with the "try again" msg).
+        assert host_throttle.blocked_until("reddit.com", NOW) == NOW + timedelta(seconds=60)
+
+    def test_arm_after_fetch_learned_below_floor_still_gates_manual_at_learned(self):
+        host_throttle.record_success("reddit.com", NOW, 1.0)
+        host_throttle.arm_after_fetch("reddit.com", NOW)
+        # Manual is gated at the learned 1s (not the 2s floor)...
+        assert host_throttle.blocked_until("reddit.com", NOW) == NOW + timedelta(seconds=1)
+        # ...while the scheduler still paces at the floor.
+        assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) == (
+            NOW + timedelta(seconds=host_throttle.GLOBAL_MIN_SPACING)
+        )

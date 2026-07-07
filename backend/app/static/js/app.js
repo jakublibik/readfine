@@ -323,9 +323,12 @@ function showToast(msg, type) {
   var toast = document.createElement('div');
   toast.id = id;
   toast.textContent = msg;
-  toast.style.cssText = 'position:fixed;bottom:4rem;left:50%;transform:translateX(-50%);' +
-    'background:' + bg + ';color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
-    'font-size:0.8rem;z-index:9999;max-width:90vw;word-break:break-word;pointer-events:none;';
+  // Anchor with both left+right so the box stretches edge-to-edge (minus a small
+  // gutter) on narrow screens; max-width + margin:auto caps and centers it on wider
+  // ones. Without this a fixed block shrinks to its text and looks half-width on mobile.
+  toast.style.cssText = 'position:fixed;bottom:4rem;left:0.75rem;right:0.75rem;margin-inline:auto;' +
+    'max-width:24rem;background:' + bg + ';color:#fff;padding:0.5rem 1rem;border-radius:0.5rem;' +
+    'font-size:0.8rem;z-index:9999;word-break:break-word;pointer-events:none;text-align:center;';
   document.body.appendChild(toast);
   setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4000);
 }
@@ -649,20 +652,20 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   window._articleListMutationObserver = mutObs;
 });
 
-// Sidebar pin toggle — localStorage + CSS class, no server state
+// Sidebar pin toggle — fully client-side. Both the rail and the full sidebar are
+// always in the DOM, so this just flips the state class + width and CSS swaps which
+// block is shown. No server round-trip → instant collapse/expand.
 document.body.addEventListener('click', function (e) {
   if (!e.target.closest('[data-action="toggle-sidebar-pin"]')) return;
   var next = !window._sidebarPinned;
   window._sidebarPinned = next;
   try { localStorage.setItem('sidebarPinned', next ? 'true' : 'false'); } catch (err) {}
-  var html = document.documentElement;
-  html.classList.toggle('sidebar-unpinned', !next);
+  document.documentElement.classList.toggle('sidebar-unpinned', !next);
   var sidebar = document.getElementById('sidebar');
   if (sidebar) {
     sidebar.classList.toggle('w-60', next);
     sidebar.classList.toggle('w-12', !next);
   }
-  htmx.trigger(document.body, 'sidebarRefresh');
 });
 
 // Focus pw-error element when present (password change error in preferences)
@@ -1616,42 +1619,6 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   }
 });
 
-// In collapsible mode the sidebar is dropped to opacity:0 during a refresh to hide
-// the rail↔overlay content swap, then restored once the refresh settles. That restore
-// MUST be guaranteed: the sidebar holds its own (only) toggle button, so if opacity
-// stays 0 the whole sidebar — and the way out of it — becomes invisible, locking the
-// user out until a full page reload. Normal restore is on afterSettle; the error
-// handlers below cover a failed request, and the watchdog covers the case where no
-// request settles or even fires at all.
-var _sidebarOpacityTimer = null;
-
-function _restoreSidebarOpacity(sb) {
-  sb = sb || document.getElementById('sidebar');
-  if (_sidebarOpacityTimer) { clearTimeout(_sidebarOpacityTimer); _sidebarOpacityTimer = null; }
-  if (!sb || sb.style.opacity !== '0') return;
-  sb.style.transition = 'opacity 150ms ease';
-  sb.style.opacity = '1';
-  setTimeout(function () { sb.style.transition = ''; sb.style.opacity = ''; }, 160);
-}
-
-function _hideSidebarForRefresh(sb) {
-  if (!sb) return;
-  sb.style.transition = 'none';
-  sb.style.opacity = '0';
-  if (_sidebarOpacityTimer) clearTimeout(_sidebarOpacityTimer);
-  // Backstop: force the sidebar visible again even if the refresh never settles.
-  _sidebarOpacityTimer = setTimeout(function () { _restoreSidebarOpacity(sb); }, 1500);
-}
-
-// Sidebar refresh failed (network/server error) — restore visibility immediately
-// instead of waiting for the watchdog, so the rail never lingers invisible.
-document.body.addEventListener('htmx:sendError', function (e) {
-  if (e.detail.target && e.detail.target.id === 'sidebar') _restoreSidebarOpacity(e.detail.target);
-});
-document.body.addEventListener('htmx:responseError', function (e) {
-  if (e.detail.target && e.detail.target.id === 'sidebar') _restoreSidebarOpacity(e.detail.target);
-});
-
 // HTMX settle can re-apply server classes and drop client-added "collapsed".
 // Re-apply once more after settle to keep sections collapsed after sidebar refresh.
 document.body.addEventListener('htmx:afterSettle', function (e) {
@@ -1662,7 +1629,6 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     var newScroll = sb.querySelector('#sidebar-scroll');
     if (newScroll) newScroll.scrollTop = window._sidebarScroll;
   }
-  _restoreSidebarOpacity(sb);
 });
 
 restoreSidebarCollapse(false);
@@ -1895,7 +1861,6 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 // ── Mobile navigation (small bucket) ──────────────────────────────────────
 (function () {
   function isMobile() { return document.documentElement.dataset.bucket === 'small'; }
-  function isCollapsible() { return document.documentElement.dataset.sidebarMode === 'collapsible'; }
 
   // Restore title bar text after page refresh
   document.addEventListener('DOMContentLoaded', function () {
@@ -1908,16 +1873,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 
   function openSidebarOverlay() {
-    if (isCollapsible()) _hideSidebarForRefresh(document.getElementById('sidebar'));
+    // Collapsible mode swaps rail↔full purely by toggling this class now (both are
+    // always rendered and CSS picks one), so no sidebarRefresh/opacity dance is needed.
     document.documentElement.classList.add('mobile-sidebar-open');
     history.pushState({ mobileSidebarOpen: true }, '');
-    if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   function closeSidebarOverlay() {
-    if (isCollapsible()) _hideSidebarForRefresh(document.getElementById('sidebar'));
     document.documentElement.classList.remove('mobile-sidebar-open');
-    if (isCollapsible()) { htmx.trigger(document.body, 'sidebarRefresh'); }
   }
 
   // Exposed so global handlers (e.g. search submit) can dismiss the mobile
@@ -2955,3 +2918,45 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   refresh();
 })();
 
+
+// ── Admin feeds: remember A–Z / By-host grouping (per device, localStorage) ──
+// The toggle sits next to the page heading (outside the swapped table partial),
+// so its active state is managed here rather than re-rendered on swap.
+(function () {
+  var ACTIVE = ['bg-blue-50', 'border-blue-300', 'text-blue-700'];
+  var INACTIVE = ['border-gray-200', 'text-gray-600', 'hover:border-gray-300'];
+  function readMode() {
+    try { return localStorage.getItem('admin_feeds_group'); } catch (e) { return null; }
+  }
+  function setToggleActive(mode) {
+    document.querySelectorAll('[data-feeds-group]').forEach(function (b) {
+      var on = b.dataset.feedsGroup === mode;
+      ACTIVE.forEach(function (c) { b.classList.toggle(c, on); });
+      INACTIVE.forEach(function (c) { b.classList.toggle(c, !on); });
+    });
+  }
+  // Persist the choice + reflect it on the toggle when clicked (htmx does the swap).
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-feeds-group]');
+    if (!btn) return;
+    var mode = btn.dataset.feedsGroup;
+    try { localStorage.setItem('admin_feeds_group', mode); } catch (err) {}
+    setToggleActive(mode);
+  });
+  // Apply the remembered grouping on load (the server renders A–Z by default
+  // because it can't read localStorage on a full page navigation).
+  function applyRemembered() {
+    var el = document.getElementById('feeds-table');
+    if (!el || !window.htmx) return;
+    if (readMode() === 'host' && el.dataset.groupMode !== 'host') {
+      setToggleActive('host');
+      window.htmx.ajax('GET', '/admin/feeds/table?group=host',
+                       { target: '#feeds-table', swap: 'outerHTML' });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyRemembered);
+  } else {
+    applyRemembered();
+  }
+})();

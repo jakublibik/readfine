@@ -12,8 +12,44 @@ from app.utils.url_validator import (
     fetch_url_conditional,
     parse_retry_after,
     redact_url,
+    spacing_from_headers,
     validate_feed_url,
 )
+
+_NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestSpacingFromHeaders:
+    def _h(self, **kw):
+        return httpx.Headers({k.replace("_", "-"): str(v) for k, v in kw.items()})
+
+    def test_reset_over_remaining(self):
+        # 10 calls left over a 60s window → 6s apart.
+        assert spacing_from_headers(self._h(ratelimit_remaining=10, ratelimit_reset=60), _NOW) == 6.0
+
+    def test_single_call_window_equals_reset(self):
+        assert spacing_from_headers(self._h(ratelimit_remaining=1, ratelimit_reset=60), _NOW) == 60.0
+
+    def test_exhausted_budget_floors_remaining_to_one(self):
+        # remaining=0 → spread the full reset window rather than dividing by zero.
+        assert spacing_from_headers(self._h(ratelimit_remaining=0, ratelimit_reset=30), _NOW) == 30.0
+
+    def test_legacy_x_spelling(self):
+        h = self._h(**{"x-ratelimit-remaining": 4, "x-ratelimit-reset": 40})
+        assert spacing_from_headers(h, _NOW) == 10.0
+
+    def test_reset_as_epoch(self):
+        epoch = int(_NOW.timestamp()) + 120
+        h = self._h(ratelimit_remaining=2, ratelimit_reset=epoch)
+        assert spacing_from_headers(h, _NOW) == 60.0
+
+    def test_missing_headers_returns_none(self):
+        assert spacing_from_headers(self._h(), _NOW) is None
+        assert spacing_from_headers(self._h(ratelimit_remaining=5), _NOW) is None
+
+    def test_expired_reset_returns_none(self):
+        past = int(_NOW.timestamp()) - 10
+        assert spacing_from_headers(self._h(ratelimit_remaining=5, ratelimit_reset=past), _NOW) is None
 
 
 @contextmanager

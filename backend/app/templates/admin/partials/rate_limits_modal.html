@@ -1,0 +1,51 @@
+<div id="rate-limits-content">
+  <p class="text-xs text-gray-500 mb-4">
+    Readfine learns a minimum gap between fetches for hosts that rate-limit us (HTTP 429),
+    so it stops hammering into the limit. Values only tighten automatically; loosening a
+    host again means clearing it here so Readfine re-learns from scratch.
+  </p>
+
+  {% if spacings %}
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="border-b border-gray-200">
+        <tr>
+          <th class="text-left py-1.5 pr-2 text-xs font-medium text-gray-500">Host</th>
+          <th class="text-right px-2 py-1.5 text-xs font-medium text-gray-500">Spacing</th>
+          <th class="text-left px-2 py-1.5 text-xs font-medium text-gray-500">Source</th>
+          <th class="text-left px-2 py-1.5 text-xs font-medium text-gray-500">Learned</th>
+          <th class="py-1.5"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-gray-100">
+        {% for s in spacings %}
+        <tr>
+          <td class="py-2 pr-2 font-medium text-gray-900 break-all">{{ s.host }}</td>
+          <td class="px-2 py-2 text-right text-gray-700 tabular-nums whitespace-nowrap">
+            {% if s.seconds >= 60 %}{{ (s.seconds / 60) | round(1) }}m{% else %}{{ s.seconds | round | int }}s{% endif %}
+          </td>
+          <td class="px-2 py-2">
+            <span class="px-1.5 py-0.5 text-xs rounded font-mono
+              {% if s.source == '429' %}bg-amber-100 text-amber-700
+              {% elif s.source == 'manual' %}bg-blue-100 text-blue-700
+              {% else %}bg-gray-100 text-gray-500{% endif %}">{{ s.source }}</span>
+          </td>
+          <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
+            <time datetime="{{ s.learned_at.isoformat() }}"
+                  title="{{ s.learned_at | localtime('long') }}">{{ s.learned_at | localtime('short') }}</time>
+          </td>
+          <td class="py-2 text-right">
+            <button hx-post="/admin/rate-limits/{{ s.host }}/clear"
+                    hx-target="#rate-limits-content"
+                    hx-swap="outerHTML"
+                    class="text-xs text-red-600 hover:text-red-700">Clear</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-sm text-gray-400 py-4 text-center">No learned rate limits.</p>
+  {% endif %}
+</div>

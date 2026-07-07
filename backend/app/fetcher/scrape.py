@@ -227,6 +227,9 @@ async def fetch_scrape_feed(
         feed.fetch_error_count = 0
         feed.retry_after_until = None
         await db.commit()
+        # Scrape success carries no RateLimit-* headers (fetch returns HTML only), so
+        # this just clears any pending 429 streak for the host.
+        host_throttle.record_success(host_throttle.host_key(feed_url), datetime.now(timezone.utc))
         logger.info("Scrape feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
@@ -256,10 +259,12 @@ async def fetch_scrape_feed(
         retry_after_until = None
         if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
             retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
-            host_throttle.note_rate_limited(
-                host_throttle.host_key(feed_url),
-                rate_limited_until(exc.response.headers, now),
-            )
+            host = host_throttle.host_key(feed_url)
+            signal = rate_limited_until(exc.response.headers, now)
+            host_throttle.note_rate_limited(host, signal)
+            if http_status == 429:
+                retry_after_s = (signal - now).total_seconds() if signal else None
+                host_throttle.record_rate_limited(host, now, retry_after_s)
         elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
             # Real signal → rate-limit cooldown (gates everyone); bare anti-bot 403 →
             # fixed breather that only paces the scheduler, not manual refreshes.

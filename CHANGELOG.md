@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-07
+
 ### Added
 
 - A "Copy" action on the article ··· menu (desktop) and the bottom action bar
@@ -18,6 +20,19 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   absolute so they still resolve once pasted.
 - The Stats backlog cards (labeled and starred) now link straight into the reader's
   matching view, so you can jump from the count to the actual articles.
+- Admin → Feeds gained a "Rate limits" view (shown when any exist) listing the fetch
+  pace Readfine has learned for each host — host, spacing, how it was learned and when
+  — each with a Clear action to reset it. Errored feeds in the admin table now also
+  show their predicted next fetch, and a feed with no per-feed interval override shows
+  the effective default interval instead of a blank dash.
+- Admin → Feeds gained a "By host / A–Z" toggle that groups the feed list by fetch host
+  (so all of a site's feeds — e.g. every Reddit feed — sit together under a host header
+  with a count) instead of one flat alphabetical list. Groups sort alphabetically by host,
+  single-feed hosts collapse into an "Other" bucket, and any host (or the Other bucket)
+  containing an errored feed floats to the top so problems stay visible. Feeds within a
+  group — and the flat A–Z list itself — now order by status first (errored, then disabled,
+  then paused, then active) and then by name, so feeds needing attention surface in both
+  views. The choice is remembered per browser and preserved across feed actions.
 
 ### Changed
 
@@ -43,6 +58,16 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   block is treated differently — only the background scheduler paces itself on those,
   while an explicit manual refresh is still allowed to retry, since such blocks are
   often transient.
+- Readfine now learns a sustainable fetch pace for each host and spaces its requests
+  accordingly, rather than only backing off after a host reports its budget already
+  exhausted. It reads the pace precisely from a host's rate-limit headers on successful
+  responses, and tightens it further when a host still answers with repeated HTTP 429s;
+  the learned pace only ever tightens (so it doesn't oscillate) and is capped so a feed
+  can't stall indefinitely. This stops aggressive hosts such as Reddit — where a burst
+  of same-host feeds fetched back-to-back would trip a 403/429 — from being throttled.
+  The learned pace is stored and survives restarts and deploys (so a host isn't
+  re-probed into a rate limit on every restart), and manual refreshes respect it too,
+  showing "try again in …" instead of firing into a known gap.
 - Feeds are now fetched at whichever of the four 15-min ticks (:00/:15/:30/:45)
   first follows their refresh interval, rather than being pinned to the top of the
   hour by interval. This spreads fetch load across the hour on each feed's own phase
@@ -81,9 +106,29 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   scheduled time by up to 15 min (the scheduler tick interval).
 - The admin "force fetch" button now shows a spinner and blocks double-clicks while
   the synchronous fetch runs, instead of appearing to do nothing for several seconds.
+- The Settings → AI cost estimates now cover the current Anthropic, OpenAI and Google
+  model families, and a configured model that isn't in the built-in price list is
+  estimated from a typical model for its provider — shown with a "~" and a note under
+  the table — instead of appearing as an unknown or zero cost.
+- The Trend column in the AI cost table now tracks estimated cost rather than the raw
+  number of operations, and the Fast/Quality/Total rows show a trend too (previously
+  blank), so the arrows reflect what actually moves your spend — e.g. longer articles
+  costing more even at the same number of runs.
 
 ### Fixed
 
+- Collapsing or expanding the sidebar is now instant. It previously refetched the
+  whole sidebar from the server on every toggle — so the old layout lingered
+  (briefly squished into the new width) until the request came back. The collapsed
+  rail and the full sidebar are now both rendered up front and the toggle just
+  switches between them client-side, with no round-trip. The same applies to the
+  mobile "collapsible" sidebar's open/close, where opening the overlay no longer
+  reflows the article-list text (the rail is now a fixed strip, so the list keeps
+  a constant width).
+- Toast notifications (e.g. a feed's error message when you open it, or a manual
+  refresh result) no longer render at roughly half-width on mobile. They now stretch
+  edge-to-edge with a small gutter on narrow screens and stay centred with a sensible
+  max-width on wider ones.
 - Filters sharing the same priority now run in a deterministic order — exactly the
   order the Settings → Filters list shows (priority, then name). Previously the
   execution order of equal-priority filters was left to the database, so a
@@ -98,6 +143,9 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The article-list loading overlay now matches the neutral dark-mode background
   instead of a blue-tinted grey, and is delayed slightly so quick (cached) loads no
   longer flash a spinner.
+- The AI cost table's total is no longer silently understated when a model slot uses a
+  model missing from the price list: that slot used to be added to the total as $0,
+  making the grand total look complete while omitting part of the cost.
 
 ### Security
 

@@ -147,8 +147,10 @@ async def fetch_feed(
                 feed.fetch_error_count = 0
                 feed.retry_after_until = None
                 await db.commit()
+                host = host_throttle.host_key(feed_url)
                 if resp.rate_limited_until:
-                    host_throttle.note_rate_limited(host_throttle.host_key(feed_url), resp.rate_limited_until)
+                    host_throttle.note_rate_limited(host, resp.rate_limited_until)
+                host_throttle.record_success(host, datetime.now(timezone.utc), resp.spacing_seconds)
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
             parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
@@ -179,8 +181,11 @@ async def fetch_feed(
             feed.last_published_at = latest_pub
 
         await db.commit()
-        if resp is not None and resp.rate_limited_until:
-            host_throttle.note_rate_limited(host_throttle.host_key(feed_url), resp.rate_limited_until)
+        if resp is not None:
+            host = host_throttle.host_key(feed_url)
+            if resp.rate_limited_until:
+                host_throttle.note_rate_limited(host, resp.rate_limited_until)
+            host_throttle.record_success(host, datetime.now(timezone.utc), resp.spacing_seconds)
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 
@@ -224,10 +229,14 @@ async def fetch_feed(
             # Also arm the host-wide cooldown from any rate-limit headers (Reddit's
             # 429 carries x-ratelimit-reset but no Retry-After) so sibling feeds on
             # the same host defer instead of hammering into another 429.
-            host_throttle.note_rate_limited(
-                host_throttle.host_key(feed_url),
-                rate_limited_until(exc.response.headers, now),
-            )
+            host = host_throttle.host_key(feed_url)
+            signal = rate_limited_until(exc.response.headers, now)
+            host_throttle.note_rate_limited(host, signal)
+            if http_status == 429:
+                # Ratchet the learned spacing tighter (429 only — 408 is a timeout,
+                # not a throttle). Retry-After is a lower bound, not a per-request gap.
+                retry_after_s = (signal - now).total_seconds() if signal else None
+                host_throttle.record_rate_limited(host, now, retry_after_s)
         elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
             # A 403 with a real rate-limit signal is a genuine throttle → arm the
             # rate-limit cooldown (gates the scheduler *and* manual refreshes). A bare
