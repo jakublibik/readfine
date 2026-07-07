@@ -23,6 +23,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   — each with a Clear action to reset it. Errored feeds in the admin table now also
   show their predicted next fetch, and a feed with no per-feed interval override shows
   the effective default interval instead of a blank dash.
+- Admin → Feeds gained a "By host / A–Z" toggle that groups the feed list by fetch host
+  (so all of a site's feeds — e.g. every Reddit feed — sit together under a host header
+  with a count) instead of one flat alphabetical list. Groups sort alphabetically by host,
+  single-feed hosts collapse into an "Other" bucket, and any host (or the Other bucket)
+  containing an errored feed floats to the top so problems stay visible. Feeds within a
+  group — and the flat A–Z list itself — now order by status first (errored, then disabled,
+  then paused, then active) and then by name, so feeds needing attention surface in both
+  views. The choice is remembered per browser and preserved across feed actions.
 
 ### Changed
 

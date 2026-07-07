@@ -2955,3 +2955,45 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   refresh();
 })();
 
+
+// ── Admin feeds: remember A–Z / By-host grouping (per device, localStorage) ──
+// The toggle sits next to the page heading (outside the swapped table partial),
+// so its active state is managed here rather than re-rendered on swap.
+(function () {
+  var ACTIVE = ['bg-blue-50', 'border-blue-300', 'text-blue-700'];
+  var INACTIVE = ['border-gray-200', 'text-gray-600', 'hover:border-gray-300'];
+  function readMode() {
+    try { return localStorage.getItem('admin_feeds_group'); } catch (e) { return null; }
+  }
+  function setToggleActive(mode) {
+    document.querySelectorAll('[data-feeds-group]').forEach(function (b) {
+      var on = b.dataset.feedsGroup === mode;
+      ACTIVE.forEach(function (c) { b.classList.toggle(c, on); });
+      INACTIVE.forEach(function (c) { b.classList.toggle(c, !on); });
+    });
+  }
+  // Persist the choice + reflect it on the toggle when clicked (htmx does the swap).
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-feeds-group]');
+    if (!btn) return;
+    var mode = btn.dataset.feedsGroup;
+    try { localStorage.setItem('admin_feeds_group', mode); } catch (err) {}
+    setToggleActive(mode);
+  });
+  // Apply the remembered grouping on load (the server renders A–Z by default
+  // because it can't read localStorage on a full page navigation).
+  function applyRemembered() {
+    var el = document.getElementById('feeds-table');
+    if (!el || !window.htmx) return;
+    if (readMode() === 'host' && el.dataset.groupMode !== 'host') {
+      setToggleActive('host');
+      window.htmx.ajax('GET', '/admin/feeds/table?group=host',
+                       { target: '#feeds-table', swap: 'outerHTML' });
+    }
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyRemembered);
+  } else {
+    applyRemembered();
+  }
+})();

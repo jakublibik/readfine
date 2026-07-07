@@ -3,11 +3,23 @@
 {% set active = "feeds" %}
 
 {% block admin_content %}
-<div class="flex items-center justify-between mb-6">
-  <h1 class="text-xl font-semibold text-gray-900">
-    Feeds
-    <span class="text-sm font-normal text-gray-400">({{ feeds | length }})</span>
-  </h1>
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6">
+  <div class="flex items-center gap-3">
+    <h1 class="text-xl font-semibold text-gray-900 leading-none">
+      Feeds
+      <span class="text-sm font-normal text-gray-400">({{ feeds | length }})</span>
+    </h1>
+    {% if feeds %}
+    <div class="flex items-center gap-1 text-sm">
+      <button type="button" data-feeds-group="az"
+              hx-get="/admin/feeds/table?group=az" hx-target="#feeds-table" hx-swap="outerHTML"
+              class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if group_mode != 'host' else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">A–Z</button>
+      <button type="button" data-feeds-group="host"
+              hx-get="/admin/feeds/table?group=host" hx-target="#feeds-table" hx-swap="outerHTML"
+              class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if group_mode == 'host' else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">By host</button>
+    </div>
+    {% endif %}
+  </div>
   {% if has_rate_limits %}
   <button type="button" data-action="open-rate-limits"
           hx-get="/admin/rate-limits"

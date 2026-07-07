@@ -1,4 +1,102 @@
-<div id="feeds-table" class="overflow-x-auto">
+{% macro feed_row(item, default_interval_min, gq) %}
+{% set f = item.feed %}
+<tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
+  <td class="px-3 py-2 max-w-[280px]">
+    <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
+    <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
+       class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
+    {% if f.status == 'error' and f.last_error %}
+    <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
+    {% if f.next_fetch_at %}
+    <div class="text-xs text-gray-400 mt-0.5">Next fetch
+      <time datetime="{{ f.next_fetch_at.isoformat() }}"
+            title="{{ f.next_fetch_at | localtime('long') }}">~ {{ f.next_fetch_at | localtime('short') }}</time>
+    </div>
+    {% endif %}
+    {% endif %}
+  </td>
+  <td class="px-2 py-2">
+    <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
+  </td>
+  <td class="px-2 py-2">
+    {% if f.status == 'active' %}
+      <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+    {% elif f.status == 'error' %}
+      <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">error</span>
+    {% else %}
+      <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
+    {% endif %}
+  </td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
+  <td class="px-2 py-2 text-right text-gray-500">
+    {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-400" title="Default (no per-feed override)">{{ default_interval_min }}m</span>{% endif %}
+  </td>
+  <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
+    {% if f.last_fetched_at %}
+      <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at | localtime('short') }}</time>
+      {% if f.last_fetch_duration_ms is not none %}
+      <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
+      {% endif %}
+    {% else %}<span class="text-gray-300">—</span>{% endif %}
+  </td>
+  <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
+    {% if f.last_published_at %}
+      <time datetime="{{ f.last_published_at.isoformat() }}">{{ f.last_published_at | localtime('short') }}</time>
+    {% else %}<span class="text-gray-300">—</span>{% endif %}
+  </td>
+  <td class="px-2 py-2 text-right">
+    <div class="relative inline-block">
+      <button data-menu-toggle class="text-gray-400 hover:text-gray-600 px-1">···</button>
+      <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36 text-left">
+        <button hx-post="/admin/feeds/{{ f.id }}/force-fetch{{ gq }}"
+                hx-target="#feeds-table"
+                hx-swap="outerHTML"
+                hx-indicator="#force-fetch-spinner-{{ f.id }}"
+                hx-disabled-elt="this"
+                class="flex w-full items-center gap-2 px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+          Force fetch
+          <svg id="force-fetch-spinner-{{ f.id }}"
+               class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
+               xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+          </svg>
+        </button>
+        {% if f.status in ('active', 'paused') %}
+        <button hx-post="/admin/feeds/{{ f.id }}/pause{{ gq }}"
+                hx-target="#feeds-table"
+                hx-swap="outerHTML"
+                class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+          {{ "Unpause" if f.status == 'paused' else "Pause" }}
+        </button>
+        {% endif %}
+        {% if f.status == 'error' %}
+        <button hx-post="/admin/feeds/{{ f.id }}/clear-error{{ gq }}"
+                hx-target="#feeds-table"
+                hx-swap="outerHTML"
+                class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+          Clear error
+        </button>
+        {% endif %}
+        {% if f.subscriber_count == 0 %}
+        <div class="border-t border-gray-100 mt-1 pt-1">
+          <button type="button"
+                  class="swap-confirm block w-full text-left px-4 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                  data-confirm-text="Confirm delete"
+                  data-confirm-class="block w-full text-left px-4 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                  hx-delete="/admin/feeds/{{ f.id }}{{ gq }}"
+                  hx-target="#feeds-table"
+                  hx-swap="outerHTML">Delete</button>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </td>
+</tr>
+{% endmacro %}
+{% set gq = '?group=' + group_mode %}
+<div id="feeds-table" class="overflow-x-auto" data-group-mode="{{ group_mode }}">
 <table class="w-full text-sm">
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
@@ -14,105 +112,23 @@
     </tr>
   </thead>
   <tbody class="divide-y divide-gray-100">
-    {% for item in feeds %}
-    {% set f = item.feed %}
-    <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
-      <td class="px-3 py-2 max-w-[280px]">
-        <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
-        <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
-           class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
-        {% if f.status == 'error' and f.last_error %}
-        <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
-        {% if f.next_fetch_at %}
-        <div class="text-xs text-gray-400 mt-0.5">Next fetch
-          <time datetime="{{ f.next_fetch_at.isoformat() }}"
-                title="{{ f.next_fetch_at | localtime('long') }}">~ {{ f.next_fetch_at | localtime('short') }}</time>
-        </div>
-        {% endif %}
-        {% endif %}
-      </td>
-      <td class="px-2 py-2">
-        <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
-      </td>
-      <td class="px-2 py-2">
-        {% if f.status == 'active' %}
-          <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
-        {% elif f.status == 'error' %}
-          <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">error</span>
-        {% else %}
-          <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
-        {% endif %}
-      </td>
-      <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
-      <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
-      <td class="px-2 py-2 text-right text-gray-500">
-        {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-400" title="Default (no per-feed override)">{{ default_interval_min }}m</span>{% endif %}
-      </td>
-      <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
-        {% if f.last_fetched_at %}
-          <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at | localtime('short') }}</time>
-          {% if f.last_fetch_duration_ms is not none %}
-          <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
-          {% endif %}
-        {% else %}<span class="text-gray-300">—</span>{% endif %}
-      </td>
-      <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
-        {% if f.last_published_at %}
-          <time datetime="{{ f.last_published_at.isoformat() }}">{{ f.last_published_at | localtime('short') }}</time>
-        {% else %}<span class="text-gray-300">—</span>{% endif %}
-      </td>
-      <td class="px-2 py-2 text-right">
-        <div class="relative inline-block">
-          <button data-menu-toggle class="text-gray-400 hover:text-gray-600 px-1">···</button>
-          <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36 text-left">
-            <button hx-post="/admin/feeds/{{ f.id }}/force-fetch"
-                    hx-target="#feeds-table"
-                    hx-swap="outerHTML"
-                    hx-indicator="#force-fetch-spinner-{{ f.id }}"
-                    hx-disabled-elt="this"
-                    class="flex w-full items-center gap-2 px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-              Force fetch
-              <svg id="force-fetch-spinner-{{ f.id }}"
-                   class="htmx-indicator animate-spin h-4 w-4 text-gray-400"
-                   xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-              </svg>
-            </button>
-            {% if f.status in ('active', 'paused') %}
-            <button hx-post="/admin/feeds/{{ f.id }}/pause"
-                    hx-target="#feeds-table"
-                    hx-swap="outerHTML"
-                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-              {{ "Unpause" if f.status == 'paused' else "Pause" }}
-            </button>
-            {% endif %}
-            {% if f.status == 'error' %}
-            <button hx-post="/admin/feeds/{{ f.id }}/clear-error"
-                    hx-target="#feeds-table"
-                    hx-swap="outerHTML"
-                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-              Clear error
-            </button>
-            {% endif %}
-            {% if f.subscriber_count == 0 %}
-            <div class="border-t border-gray-100 mt-1 pt-1">
-              <button type="button"
-                      class="swap-confirm block w-full text-left px-4 py-1.5 text-sm text-red-600 hover:bg-red-50"
-                      data-confirm-text="Confirm delete"
-                      data-confirm-class="block w-full text-left px-4 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700"
-                      hx-delete="/admin/feeds/{{ f.id }}"
-                      hx-target="#feeds-table"
-                      hx-swap="outerHTML">Delete</button>
-            </div>
-            {% endif %}
-          </div>
-        </div>
-      </td>
-    </tr>
+    {% if group_mode == 'host' %}
+      {% for g in feed_groups %}
+      <tr class="{% if g.has_error %}bg-red-50{% else %}bg-gray-50{% endif %}">
+        <td colspan="9" class="px-3 py-1.5 text-xs font-medium {% if g.has_error %}text-red-700{% else %}text-gray-500{% endif %}">
+          {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count }}</span>
+        </td>
+      </tr>
+      {% for item in g.feeds %}{{ feed_row(item, default_interval_min, gq) }}{% endfor %}
+      {% else %}
+      <tr><td colspan="9" class="px-4 py-6 text-center text-gray-400 text-sm">No feeds yet.</td></tr>
+      {% endfor %}
     {% else %}
-    <tr><td colspan="10" class="px-4 py-6 text-center text-gray-400 text-sm">No feeds yet.</td></tr>
-    {% endfor %}
+      {% for item in feeds %}{{ feed_row(item, default_interval_min, gq) }}
+      {% else %}
+      <tr><td colspan="9" class="px-4 py-6 text-center text-gray-400 text-sm">No feeds yet.</td></tr>
+      {% endfor %}
+    {% endif %}
   </tbody>
 </table>
 </div>

@@ -3,7 +3,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -207,18 +207,81 @@ async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     return True
 
 
+# Admin feed sort priority: surface feeds that need attention first — broken
+# (error) → auto-killed (disabled) → intentionally off (paused) → active. Applied
+# both to the flat A–Z list and within each host group so the two views agree.
+_STATUS_PRIORITY = {"error": 0, "disabled": 1, "paused": 2, "active": 3}
+
+
 async def list_feeds_with_stats(db: AsyncSession) -> list[dict]:
     article_counts = (
         select(Article.feed_id, func.count(Article.id).label("article_count"))
         .group_by(Article.feed_id)
         .subquery()
     )
+    status_priority = case(_STATUS_PRIORITY, value=Feed.status, else_=len(_STATUS_PRIORITY))
     rows = (await db.execute(
         select(Feed, func.coalesce(article_counts.c.article_count, 0))
         .outerjoin(article_counts, article_counts.c.feed_id == Feed.id)
-        .order_by(Feed.status.desc(), func.lower(Feed.title))
+        .order_by(status_priority, func.lower(Feed.title))
     )).all()
     return [{"feed": row[0], "article_count": row[1]} for row in rows]
+
+
+def _feed_sort_key(item: dict) -> tuple:
+    """Within a group: status priority (see _STATUS_PRIORITY), then title A–Z."""
+    f = item["feed"]
+    return (_STATUS_PRIORITY.get(f.status, len(_STATUS_PRIORITY)), (f.title or "").lower())
+
+
+def group_feeds_by_host(items: list[dict]) -> list[dict]:
+    """Group admin feed rows by their fetch host (same key as the rate-limit view).
+
+    Hosts with ≥2 feeds become a named group; single-feed hosts collapse into an
+    "Other" bucket, split into an errors bucket and a clean bucket. Ordering:
+    named-with-error (A–Z host) → Other·errors → named-clean (A–Z host) → Other.
+    """
+    from app.fetcher.host_throttle import host_key  # noqa: PLC0415
+
+    by_host: dict[str, list[dict]] = {}
+    for it in items:
+        by_host.setdefault(host_key(it["feed"].feed_url) or "", []).append(it)
+
+    named: list[dict] = []
+    other_error: list[dict] = []
+    other_clean: list[dict] = []
+    for host, feeds in by_host.items():
+        if len(feeds) >= 2:
+            feeds = sorted(feeds, key=_feed_sort_key)
+            named.append({
+                "kind": "named",
+                "host": host,
+                "label": host or "(unknown host)",
+                "count": len(feeds),
+                "has_error": any(x["feed"].status == "error" for x in feeds),
+                "feeds": feeds,
+            })
+        elif feeds[0]["feed"].status == "error":
+            other_error.append(feeds[0])
+        else:
+            other_clean.append(feeds[0])
+
+    named.sort(key=lambda g: g["host"])
+    ordered: list[dict] = [g for g in named if g["has_error"]]
+    if other_error:
+        ordered.append({
+            "kind": "other_errors", "host": "", "label": "Other · errors",
+            "count": len(other_error), "has_error": True,
+            "feeds": sorted(other_error, key=_feed_sort_key),
+        })
+    ordered += [g for g in named if not g["has_error"]]
+    if other_clean:
+        ordered.append({
+            "kind": "other", "host": "", "label": "Other",
+            "count": len(other_clean), "has_error": False,
+            "feeds": sorted(other_clean, key=_feed_sort_key),
+        })
+    return ordered
 
 
 async def get_dashboard_stats(db: AsyncSession) -> dict:
