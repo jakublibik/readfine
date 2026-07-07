@@ -23,6 +23,12 @@
            class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
         {% if f.status == 'error' and f.last_error %}
         <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
+        {% if f.next_fetch_at %}
+        <div class="text-xs text-gray-400 mt-0.5">Next fetch
+          <time datetime="{{ f.next_fetch_at.isoformat() }}"
+                title="{{ f.next_fetch_at | localtime('long') }}">~ {{ f.next_fetch_at | localtime('short') }}</time>
+        </div>
+        {% endif %}
         {% endif %}
       </td>
       <td class="px-2 py-2">
@@ -40,7 +46,7 @@
       <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
       <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
       <td class="px-2 py-2 text-right text-gray-500">
-        {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-300">—</span>{% endif %}
+        {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-400" title="Default (no per-feed override)">{{ default_interval_min }}m</span>{% endif %}
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
         {% if f.last_fetched_at %}

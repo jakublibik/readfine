@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
 from app.database import get_db
+from app.fetcher import host_throttle
+from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.user import User
+from app.services.host_rate_limit_service import flush as flush_host_rate_limits
 from app.services.admin_service import (
     clear_feed_error,
     create_invitation,
@@ -329,21 +332,74 @@ async def admin_revoke_invitation(
 
 # ── Feeds ─────────────────────────────────────────────────────────────────────
 
+async def _feeds_context(db) -> dict:
+    """Feeds list annotated for the admin table: predicted next fetch for errored
+    feeds (mirrors settings) and the effective default interval for feeds without a
+    per-feed override."""
+    feeds = await list_feeds_with_stats(db)
+    s = await get_app_settings(db)
+    default_interval = (s.default_fetch_interval_min or 60)
+    min_interval = (s.min_fetch_interval_min or 15)
+    for item in feeds:
+        f = item["feed"]
+        f.next_fetch_at = (
+            compute_next_fetch_at(
+                f, default_interval_min=default_interval, min_interval_min=min_interval
+            )
+            if f.status == "error"
+            else None
+        )
+    return {
+        "feeds": feeds,
+        "default_interval_min": max(default_interval, min_interval),
+        "has_rate_limits": bool(host_throttle.all_spacing()),
+    }
+
+
 @router.get("/feeds", response_class=HTMLResponse)
 async def admin_feeds(
     request: Request,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    feeds = await list_feeds_with_stats(db)
-    return templates.TemplateResponse(request, "admin/feeds.html", {"feeds": feeds})
+    return templates.TemplateResponse(request, "admin/feeds.html", await _feeds_context(db))
+
+
+# ── Learned per-host rate-limit spacing ───────────────────────────────────────
+
+@router.get("/rate-limits", response_class=HTMLResponse)
+async def admin_rate_limits(
+    request: Request,
+    user: User = Depends(require_admin),
+):
+    return templates.TemplateResponse(
+        request, "admin/partials/rate_limits_modal.html",
+        {"spacings": host_throttle.all_spacing(), "now": datetime.now(timezone.utc)},
+    )
+
+
+@router.post("/rate-limits/{host}/clear", response_class=HTMLResponse)
+async def admin_clear_rate_limit(
+    host: str,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    if host_throttle.clear_spacing(host):
+        await flush_host_rate_limits(db)
+        await log_audit(db, user.id, "rate_limit_clear", target_type="host", detail={"host": host})
+    return templates.TemplateResponse(
+        request, "admin/partials/rate_limits_modal.html",
+        {"spacings": host_throttle.all_spacing(), "now": datetime.now(timezone.utc)},
+    )
 
 
 # ── Feed actions ──────────────────────────────────────────────────────────────
 
 async def _feeds_response(request: Request, db, user) -> HTMLResponse:
-    feeds = await list_feeds_with_stats(db)
-    return templates.TemplateResponse(request, "admin/partials/feeds_table.html", {"feeds": feeds})
+    return templates.TemplateResponse(
+        request, "admin/partials/feeds_table.html", await _feeds_context(db)
+    )
 
 
 @router.post("/feeds/{feed_id}/pause", response_class=HTMLResponse)
