@@ -120,7 +120,9 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   (briefly squished into the new width) until the request came back. The collapsed
   rail and the full sidebar are now both rendered up front and the toggle just
   switches between them client-side, with no round-trip. The same applies to the
-  mobile "collapsible" sidebar's open/close.
+  mobile "collapsible" sidebar's open/close, where opening the overlay no longer
+  reflows the article-list text (the rail is now a fixed strip, so the list keeps
+  a constant width).
 - Toast notifications (e.g. a feed's error message when you open it, or a manual
   refresh result) no longer render at roughly half-width on mobile. They now stretch
   edge-to-edge with a small gutter on narrow screens and stay centred with a sensible
