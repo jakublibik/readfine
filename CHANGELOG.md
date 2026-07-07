@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-07
+
 ### Added
 
 - A "Copy" action on the article ··· menu (desktop) and the bottom action bar
