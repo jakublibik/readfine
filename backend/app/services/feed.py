@@ -15,6 +15,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
+from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
@@ -383,7 +384,7 @@ async def _initial_fetch_scrape(feed_id: int) -> None:
         _initial_fetch_in_progress.discard(feed_id)
 
 
-async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
+async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeCleanupResult:
     """Remove a user's subscription with full lifecycle cleanup.
 
     1. Deletes UserArticleState rows for non-starred, non-archived articles.
@@ -391,6 +392,9 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
     3. Decrements subscriber_count on the Feed.
     4. If subscriber_count reaches 0: deletes orphan articles (not starred/archived
        by anyone) and the Feed itself if no articles remain.
+    5. Strips the feed from the user's filter/catchup/briefing scopes.
+
+    Returns the scope-cleanup report (filters deactivated / briefings disabled).
     """
     result = await db.execute(
         select(UserFeed).where(UserFeed.id == user_feed_id, UserFeed.user_id == user.id)
@@ -452,7 +456,12 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> None:
             # Always delete the feed — no subscribers remain
             await db.delete(feed)
 
+    # Strip this feed from the user's filter/catchup/briefing scopes so it does
+    # not dangle after the subscription is gone.
+    cleanup = await strip_scope_references(db, kind="feed", ref_id=feed_id, user_id=user.id)
+
     await db.commit()
+    return cleanup
 
 
 async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:

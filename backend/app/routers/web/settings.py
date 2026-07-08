@@ -69,6 +69,7 @@ from app.services.label_service import (
     update_label,
 )
 from app.services.opml import MAX_UPLOAD_BYTES, ImportResult, export_opml, import_opml
+from app.services.scope_cleanup import strip_scope_references
 from app.services.stats_service import (
     get_feed_stats,
     get_reading_stats,
@@ -850,8 +851,9 @@ async def settings_feed_delete(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    cleanup = None
     try:
-        await unsubscribe(user, user_feed_id, db)
+        cleanup = await unsubscribe(user, user_feed_id, db)
     except ValueError:
         pass
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
@@ -859,6 +861,7 @@ async def settings_feed_delete(
         "user_feeds": user_feeds,
         "folders": folders,
         "article_counts": article_counts,
+        "scope_cleanup": cleanup,
     })
 
 
@@ -899,7 +902,9 @@ async def settings_folder_delete(
         select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
     )
     folder = result.scalar_one_or_none()
+    cleanup = None
     if folder:
+        cleanup = await strip_scope_references(db, kind="folder", ref_id=folder_id, user_id=user.id)
         await db.delete(folder)
         await db.commit()
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
@@ -908,6 +913,7 @@ async def settings_folder_delete(
         "folders": folders,
         "article_counts": article_counts,
         "with_folder_oob": True,
+        "scope_cleanup": cleanup,
     })
 
 

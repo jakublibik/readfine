@@ -21,6 +21,7 @@ from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
 from app.models.user import User, UserCatchupConfig
+from app.services.scope_cleanup import strip_scope_references
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +278,10 @@ async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     feed = await db.get(Feed, feed_id)
     if not feed or feed.subscriber_count > 0:
         return False
+    # Strip any lingering references to this feed from every user's filter and
+    # catchup/briefing scopes (self-service unsubscribe already cleans its own,
+    # so this mainly clears legacy dangling refs). No user is present to report to.
+    await strip_scope_references(db, kind="feed", ref_id=feed_id, user_id=None)
     await db.execute(delete(Article).where(Article.feed_id == feed_id))
     await db.delete(feed)
     await db.commit()

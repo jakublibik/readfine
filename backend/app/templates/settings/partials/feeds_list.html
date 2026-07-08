@@ -1,4 +1,22 @@
 <div id="feeds-list">
+  {% if scope_cleanup and scope_cleanup.has_changes %}
+    <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 space-y-1">
+      {% if scope_cleanup.deactivated_filters %}
+        <p>Deactivated {{ scope_cleanup.deactivated_filters | length }}
+          filter{{ 's' if scope_cleanup.deactivated_filters | length != 1 }}
+          scoped only to what you just removed:
+          <span class="font-semibold">{{ scope_cleanup.deactivated_filters | join(', ') }}</span>.
+          Re-scope and re-enable in Filters if still needed.</p>
+      {% endif %}
+      {% if scope_cleanup.disabled_briefings %}
+        <p>Disabled the briefing on {{ scope_cleanup.disabled_briefings | length }}
+          digest{{ 's' if scope_cleanup.disabled_briefings | length != 1 }}
+          scoped only to what you just removed:
+          <span class="font-semibold">{{ scope_cleanup.disabled_briefings | join(', ') }}</span>.
+          Left as all-feeds would have sent much larger emails — re-scope to re-enable.</p>
+      {% endif %}
+    </div>
+  {% endif %}
   {% if user_feeds %}
     {% set ns = namespace(current_folder=none) %}
     <div class="overflow-x-auto">
