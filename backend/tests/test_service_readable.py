@@ -8,6 +8,8 @@ import pytest
 from app.services.readable_service import (
     apply_readable_result,
     extract_readable,
+    _dedupe_images,
+    _find_published_date,
     _extract_with_trafilatura,
     _extract_with_readability,
     _has_visible_content,
@@ -21,7 +23,7 @@ from app.services.readable_service import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _make_article(retries=0, status="pending"):
+def _make_article(retries=0, status="pending", published_at=None):
     return SimpleNamespace(
         id=1,
         readable_content=None,
@@ -32,6 +34,7 @@ def _make_article(retries=0, status="pending"):
         readable_failed_at=None,
         word_count=None,
         estimated_read_min=None,
+        published_at=published_at,
     )
 
 
@@ -71,6 +74,88 @@ class TestApplyReadableResultSuccess:
         article = _make_article()
         apply_readable_result(article, content, None, None)
         assert article.estimated_read_min == 2
+
+
+# ── published_at backfill ─────────────────────────────────────────────────────
+
+class TestPublishedAtBackfill:
+    _DATE = datetime(2026, 3, 14, tzinfo=timezone.utc)
+
+    def test_backfills_when_missing(self):
+        article = _make_article(published_at=None)
+        apply_readable_result(article, "<p>body</p>", None, None, self._DATE)
+        assert article.published_at == self._DATE
+
+    def test_never_overrides_existing(self):
+        existing = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        article = _make_article(published_at=existing)
+        apply_readable_result(article, "<p>body</p>", None, None, self._DATE)
+        assert article.published_at == existing
+
+    def test_ignored_on_failure(self):
+        # No content → failure branch never touches published_at.
+        article = _make_article(published_at=None)
+        apply_readable_result(article, None, "HTTP 500", 500, self._DATE)
+        assert article.published_at is None
+
+    def test_none_date_leaves_missing(self):
+        article = _make_article(published_at=None)
+        apply_readable_result(article, "<p>body</p>", None, None, None)
+        assert article.published_at is None
+
+
+class TestFindPublishedDate:
+    def _page(self, iso: str) -> str:
+        return (f'<html><head><meta property="article:published_time" '
+                f'content="{iso}"></head><body>text</body></html>')
+
+    def test_parses_date_as_utc_midnight(self):
+        dt = _find_published_date(self._page("2026-03-14T10:30:00Z"),
+                                  "https://example.com/a")
+        assert dt == datetime(2026, 3, 14, tzinfo=timezone.utc)
+
+    def test_returns_none_when_absent(self):
+        html = "<html><body>no date anywhere</body></html>"
+        assert _find_published_date(html, "https://example.com/a") is None
+
+    def test_rejects_far_future_date(self):
+        dt = _find_published_date(self._page("2099-01-01"), "https://example.com/a")
+        assert dt is None
+
+    def test_swallows_htmldate_errors(self):
+        with patch("htmldate.find_date", side_effect=RuntimeError("boom")):
+            assert _find_published_date("<html></html>", "https://example.com/a") is None
+
+
+class TestDedupeImages:
+    def _count(self, html):
+        return html.count("<img")
+
+    def test_collapses_same_filename_different_path(self):
+        # Same file re-uploaded under different paths (aktualne.cz/economia case):
+        # dedup keys on the filename, so all three collapse to the first.
+        html = (
+            '<img src="https://m.cz/a/b/photo.jpg"/>'
+            '<p>text</p>'
+            '<img src="https://m.cz/c/d/photo.jpg"/>'
+            '<img src="https://m.cz/c/d/photo.jpg"/>'
+        )
+        out = _dedupe_images(html)
+        assert self._count(out) == 1
+        assert "/a/b/photo.jpg" in out  # first occurrence kept
+        assert "<p>text</p>" in out
+
+    def test_keeps_distinct_images(self):
+        html = (
+            '<img src="https://m.cz/one.jpg"/>'
+            '<img src="https://m.cz/two.jpg"/>'
+        )
+        assert self._count(_dedupe_images(html)) == 2
+
+    def test_ignores_srcless_img(self):
+        html = '<img alt="x"/><img alt="y"/>'
+        # No src → no dedup key → left untouched, no crash.
+        assert self._count(_dedupe_images(html)) == 2
 
 
 # ── apply_readable_result — empty / whitespace content ────────────────────────
@@ -128,10 +213,11 @@ class TestExtractReadableCollapse:
             patch("app.services.readable_service._extract_with_trafilatura",
                   return_value="<div>   </div>"),
         ):
-            content, error, status = extract_readable("https://example.com/a")
+            content, error, status, published_at = extract_readable("https://example.com/a")
         assert content is None
         assert error == _EMPTY_CONTENT_MSG
         assert status is None
+        assert published_at is None
 
     def test_real_content_passes_through(self):
         with (
@@ -140,7 +226,7 @@ class TestExtractReadableCollapse:
             patch("app.services.readable_service._extract_with_trafilatura",
                   return_value="<p>Genuine article body</p>"),
         ):
-            content, error, status = extract_readable("https://example.com/a")
+            content, error, status, published_at = extract_readable("https://example.com/a")
         assert error is None
         assert content is not None
         assert "Genuine article body" in content

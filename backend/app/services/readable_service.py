@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urlsplit
 
 import httpx
 import nh3
@@ -195,6 +196,28 @@ def _has_visible_content(html: str) -> bool:
     return soup.find(_MEDIA_TAGS) is not None
 
 
+def _dedupe_images(html: str) -> str:
+    """
+    Drop repeated images that point at the same file. News CMSs emit the same photo
+    several times (lead + inline + responsive <picture> renditions), and trafilatura
+    extracts each one, so the readable body shows the same picture two or three times
+    (seen on aktualne.cz / economia). Keys on the URL filename — not the full src — so
+    different upload paths of one file (…/47/48/<uuid>/foo.jpg vs …/47/37/<uuid>/foo.jpg)
+    collapse too. Keeps the first occurrence.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    seen: set[str] = set()
+    for img in soup.find_all("img"):
+        key = urlsplit(img.get("src") or "").path.rsplit("/", 1)[-1].lower()
+        if not key:
+            continue
+        if key in seen:
+            img.decompose()
+        else:
+            seen.add(key)
+    return str(soup)
+
+
 def _drop_empty_blocks(html: str) -> str:
     """Remove block elements with no text and no media, left empty by sanitization."""
     soup = BeautifulSoup(html, "html.parser")
@@ -211,11 +234,44 @@ def _drop_empty_blocks(html: str) -> str:
     return str(soup)
 
 
+def _find_published_date(html: str, url: str) -> Optional[datetime]:
+    """
+    Best-effort publication date scraped from the article page via htmldate.
+    Used to backfill Article.published_at for feeds whose listing carries no date
+    (e.g. sites without <time datetime> in their cards). htmldate is date-granular
+    — it discards time-of-day — so the result is that date at midnight UTC.
+    Returns None when no date is found or it parses implausibly.
+    """
+    try:
+        from htmldate import find_date
+        # original_date=False (htmldate's default) leans on the page's own metadata
+        # (JSON-LD datePublished, meta tags) for the primary article date. Do NOT use
+        # original_date=True here: it favours the *oldest* date anywhere on the page,
+        # which on news sites grabs a related-article link's date (seen on denik.cz:
+        # a 2024/2026 mismatch) instead of the article's own publication date.
+        raw = find_date(html, url=url, original_date=False)  # default format '%Y-%m-%d'
+    except Exception as exc:
+        logger.debug("htmldate find_date failed for %s: %s", url, exc)
+        return None
+    if not raw:
+        return None
+    try:
+        dt = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    # Reject implausible future dates (clock skew / malformed markup) that would
+    # otherwise sort to the top of the reading list.
+    if dt > datetime.now(timezone.utc) + timedelta(days=1):
+        return None
+    return dt
+
+
 def apply_readable_result(
     article: Article,
     content: Optional[str],
     error: Optional[str],
     http_status: Optional[int],
+    published_at: Optional[datetime] = None,
 ) -> bool:
     """Apply extraction result to article fields. Returns True if HTTP 403."""
     # Whitespace-only content is treated as no content: storing it would mark the
@@ -228,6 +284,10 @@ def apply_readable_result(
         words = len(re.findall(r"\w+", plain))
         article.word_count = words
         article.estimated_read_min = max(1, round(words / 200))
+        # Backfill the publication date from the article page only when the feed
+        # listing gave us none — never override a date we already trust.
+        if published_at is not None and article.published_at is None:
+            article.published_at = published_at
         return False
 
     article.readable_error = error
@@ -251,14 +311,15 @@ def apply_readable_result(
 
 
 def extract_readable(url: str, auth_user: Optional[str] = None,
-                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int]]:
+                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int], Optional[datetime]]:
     """
     Download URL and extract readable HTML.
-    Returns (sanitized HTML, error_message, http_status_code). On success, only the first element is set.
+    Returns (sanitized HTML, error_message, http_status_code, published_at). On success,
+    the first element is set and published_at may carry a date scraped from the page.
     """
     html, fetch_error, http_status = _fetch_html(url, auth_user, auth_pass)
     if not html:
-        return None, fetch_error, http_status
+        return None, fetch_error, http_status, None
 
     video_figures = _collect_video_figures(html)
     content = _extract_with_trafilatura(html, url)
@@ -266,17 +327,17 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
         content = _extract_with_readability(html)
     if not content:
         logger.warning("readable extraction yielded no content for %s", url)
-        return None, _EMPTY_CONTENT_MSG, None
+        return None, _EMPTY_CONTENT_MSG, None, None
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
     from app.utils.parsing import rewrite_relative_urls
-    final = rewrite_relative_urls(_drop_empty_blocks(_sanitize(content)), url)
+    final = rewrite_relative_urls(_drop_empty_blocks(_dedupe_images(_sanitize(content))), url)
     if not _has_visible_content(final):
         # Extraction produced markup that sanitized down to nothing usable.
         logger.warning("readable extraction collapsed to empty content for %s", url)
-        return None, _EMPTY_CONTENT_MSG, None
-    return final, None, None
+        return None, _EMPTY_CONTENT_MSG, None, None
+    return final, None, None, _find_published_date(html, url)
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -347,11 +408,11 @@ async def process_pending_readable(db: AsyncSession) -> int:
 
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
         try:
-            content, error, http_status = await loop.run_in_executor(
+            content, error, http_status, published_at = await loop.run_in_executor(
                 None, extract_readable, article.url, auth_user, auth_pass
             )
         except Exception as exc:
-            content, error, http_status = None, str(exc)[:200], None
+            content, error, http_status, published_at = None, str(exc)[:200], None, None
             logger.warning("readable extraction error for article %d: %s", article.id, exc)
 
         # Re-check status — on-demand extraction may have already processed this article
@@ -360,7 +421,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        is_403 = apply_readable_result(article, content, error, http_status)
+        is_403 = apply_readable_result(article, content, error, http_status, published_at)
         is_empty = content is None and error == _EMPTY_CONTENT_MSG
         from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if content:

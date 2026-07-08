@@ -55,11 +55,11 @@ async def _extract_readable_bg(
 
     loop = asyncio.get_running_loop()
     try:
-        content, error, http_status = await loop.run_in_executor(
+        content, error, http_status, published_at = await loop.run_in_executor(
             None, extract_readable, url, auth_user, auth_pass
         )
     except Exception as exc:
-        content, error, http_status = None, str(exc)[:200], None
+        content, error, http_status, published_at = None, str(exc)[:200], None, None
         logger.warning("readable bg: extraction error for article %d: %s", article_id, exc)
 
     async with async_session_factory() as db:
@@ -68,7 +68,7 @@ async def _extract_readable_bg(
         )).scalar_one_or_none()
         if not article:
             return
-        apply_readable_result(article, content, error, http_status)
+        apply_readable_result(article, content, error, http_status, published_at)
         # Mirror the batch readable path: once readable finishes, complete any
         # label-deferred AI pipeline (scoring/filters/summary). run_pipeline_for_
         # article_all_users is label-scoped — it only runs for users who labeled
@@ -1007,7 +1007,12 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
         f'<span id="article-meta-readtime-{article.id}" class="shrink-0"'
         f' hx-swap-oob="true">{read_time}</span>'
     )
-    return HTMLResponse(content_html + oob)
+    # Refresh the publication date too: readable extraction may have backfilled
+    # published_at (via htmldate) since the detail was first rendered.
+    date_oob = templates.env.get_template("app/partials/article_meta_date.html").render(
+        request=request, article=article, oob=True
+    )
+    return HTMLResponse(content_html + oob + date_oob)
 
 
 def _read_response(request: Request, article, density: str, label_display: str, **_) -> HTMLResponse:
@@ -1351,11 +1356,11 @@ async def htmx_extract_readable(
             logger.warning("readable: decrypt failed for article %d", article.id)
 
     loop = asyncio.get_running_loop()
-    content, error, http_status = await loop.run_in_executor(
+    content, error, http_status, published_at = await loop.run_in_executor(
         None, extract_readable, article.url, auth_user, auth_pass
     )
 
-    apply_readable_result(article, content, error, http_status)
+    apply_readable_result(article, content, error, http_status, published_at)
     await db.commit()
 
     # Render from the full ArticleResponse (not the raw ORM row) so per-user fields

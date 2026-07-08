@@ -323,9 +323,10 @@ async def _save_scrape_articles(
     new_articles: list[Article] = []
     for url, title, pub_at, excerpt in links:
         # Skip dated links older than the purge cutoff — prevents re-inserting
-        # purgeable articles (mirrors rss.py). Undated links (pub_at is None) get
-        # fetched_at below and can't be cutoff-filtered, so they may re-cycle
-        # after purge; fully solving that would require URL tombstones.
+        # purgeable articles (mirrors rss.py). Undated links (pub_at is None) store
+        # published_at=None (ordering/purge fall back to fetched_at via coalesce, as
+        # in rss.py) and can't be cutoff-filtered, so they may re-cycle after purge;
+        # fully solving that would require URL tombstones.
         if published_cutoff is not None and pub_at is not None and pub_at < published_cutoff:
             continue
         gh = guid_hash_map[url]
@@ -349,7 +350,11 @@ async def _save_scrape_articles(
             content=content_html,
             content_source="feed" if content_html else "skipped",
             readable_status="skipped",
-            published_at=pub_at or fetched_at,
+            # None when the listing carried no date — matches rss.py; ordering and
+            # purge fall back to fetched_at via coalesce, and readable extraction
+            # (auto on labeled articles, on-demand otherwise) backfills the real
+            # publication date from the article page via htmldate.
+            published_at=pub_at,
             fetched_at=fetched_at,
         ))
 
