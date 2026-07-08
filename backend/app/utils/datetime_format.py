@@ -41,6 +41,7 @@ def format_local(
     Formats:
       - ``short``: today → ``HH:MM``; this year → ``DD.MM. HH:MM``; older → ``DD.MM.YYYY HH:MM``
       - ``date``:  ``Mon D, YYYY`` (e.g. ``Jun 2, 2026``)
+      - ``numdate``: ``DD.MM.YYYY`` (zero-padded, no time)
       - ``long``:  ``D. M. YYYY HH:MM``
     """
     if dt is None:
@@ -55,6 +56,9 @@ def format_local(
 
     if fmt == "date":
         return f"{_MONTHS[dt.month]} {dt.day}, {dt.year}"
+    if fmt == "numdate":
+        pad = lambda n: str(n).zfill(2)
+        return f"{pad(dt.day)}.{pad(dt.month)}.{dt.year}"
     if fmt == "long":
         return f"{dt.day}. {dt.month}. {dt.year} {dt.strftime('%H:%M')}"
 

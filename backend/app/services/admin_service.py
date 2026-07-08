@@ -3,13 +3,21 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.article import Article
+from app.models.article import (
+    AiUsageLog,
+    Article,
+    ArticleAiChat,
+    ArticleAiJob,
+    GeneralChatLog,
+    UserArticleState,
+)
 from app.models.auth import Invitation
 from app.models.feed import Feed, UserFeed
+from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
 from app.models.user import User
@@ -42,32 +50,81 @@ async def update_app_settings(db: AsyncSession, data: dict) -> AppSettings:
 
 
 async def list_users(db: AsyncSession) -> list[dict]:
-    feed_counts = (
-        select(UserFeed.user_id, func.count(UserFeed.feed_id).label("feed_count"))
-        .group_by(UserFeed.user_id)
-        .subquery()
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+
+    async def _counts(stmt) -> dict[int, int]:
+        return {row[0]: row[1] for row in (await db.execute(stmt)).all()}
+
+    feed_counts = await _counts(
+        select(UserFeed.user_id, func.count(UserFeed.feed_id)).group_by(UserFeed.user_id)
     )
-    article_counts = (
-        select(UserFeed.user_id, func.count(Article.id).label("article_count"))
+    article_counts = await _counts(
+        select(UserFeed.user_id, func.count(Article.id))
         .join(Article, Article.feed_id == UserFeed.feed_id)
         .group_by(UserFeed.user_id)
-        .subquery()
     )
-    rows = (await db.execute(
-        select(User, func.coalesce(feed_counts.c.feed_count, 0), func.coalesce(article_counts.c.article_count, 0))
-        .outerjoin(feed_counts, feed_counts.c.user_id == User.id)
-        .outerjoin(article_counts, article_counts.c.user_id == User.id)
-        .order_by(User.created_at.desc())
-    )).all()
-    now = datetime.now(timezone.utc)
+    filter_counts = await _counts(
+        select(Filter.user_id, func.count(Filter.id)).group_by(Filter.user_id)
+    )
+    # Genuine reading engagement (not is_read): dwell >= 30s, opened the link, or ever starred.
+    read_counts = await _counts(
+        select(UserArticleState.user_id, func.count())
+        .where(
+            or_(
+                UserArticleState.dwell_seconds >= 30,
+                UserArticleState.link_opened.is_(True),
+                UserArticleState.ever_starred.is_(True),
+            )
+        )
+        .group_by(UserArticleState.user_id)
+    )
+
+    # AI usage aggregated across all sources, as (last-30d, all-time) per user.
+    ai_recent: dict[int, int] = {}
+    ai_total: dict[int, int] = {}
+
+    async def _ai_counts(model, ts_col, *conds) -> None:
+        stmt = select(
+            model.user_id,
+            func.count().filter(ts_col >= cutoff),
+            func.count(),
+        ).group_by(model.user_id)
+        for cond in conds:
+            stmt = stmt.where(cond)
+        for uid, recent, total in (await db.execute(stmt)).all():
+            ai_recent[uid] = ai_recent.get(uid, 0) + recent
+            ai_total[uid] = ai_total.get(uid, 0) + total
+
+    await _ai_counts(ArticleAiJob, ArticleAiJob.created_at, ArticleAiJob.status == "success")
+    await _ai_counts(AiUsageLog, AiUsageLog.created_at)
+    await _ai_counts(ArticleAiChat, ArticleAiChat.created_at)
+    await _ai_counts(GeneralChatLog, GeneralChatLog.created_at)
+
+    users = (
+        await db.execute(select(User).order_by(User.created_at.desc()))
+    ).scalars().all()
     result = []
-    for row in rows:
-        user = row[0]
+    for user in users:
         if user.last_active_at:
-            inactive_days = (now - user.last_active_at.replace(tzinfo=timezone.utc) if user.last_active_at.tzinfo is None else now - user.last_active_at).days
+            last_active = (
+                user.last_active_at.replace(tzinfo=timezone.utc)
+                if user.last_active_at.tzinfo is None
+                else user.last_active_at
+            )
+            inactive_days = (now - last_active).days
         else:
             inactive_days = None
-        result.append({"user": user, "feed_count": row[1], "article_count": row[2], "inactive_days": inactive_days})
+        result.append({
+            "user": user,
+            "feed_count": feed_counts.get(user.id, 0),
+            "article_count": article_counts.get(user.id, 0),
+            "filter_count": filter_counts.get(user.id, 0),
+            "read_count": read_counts.get(user.id, 0),
+            "ai_ops_recent": ai_recent.get(user.id, 0),
+            "ai_ops_total": ai_total.get(user.id, 0),
+            "inactive_days": inactive_days,
+        })
     return result
 
 
