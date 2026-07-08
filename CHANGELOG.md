@@ -12,10 +12,20 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 ### Added
 
 - Preferences → "Advance after mark all as read" (off by default): after you mark a feed, folder or label read from the sidebar, Readfine selects and opens the next one that still has unread articles, expanding a collapsed folder if needed. Feeds advance across folder boundaries; empty scopes are skipped, and the special views (All articles, Starred, Archived) are left alone.
+- Admin → Feeds: an "Edit" action on the table's ··· menu for shared feed fields (title, status, fetch interval, and the scrape article-links selector with a live preview). Per-subscriber preferences and feed credentials are intentionally left out, since an admin usually is not the subscriber.
+- Admin dashboard: a "Briefing errors" section listing catch-up configs whose scheduled briefing is currently failing (user, config, error, retries, next send). Configs with no scheduled retry, for example when SMTP is unconfigured, sort first and are flagged as needing manual attention; the entry clears once a send succeeds.
+- Admin → Users: per-user columns for genuine reads (dwell, link opens or stars, not just marked-read), filter count, and AI operations over the last 7 days and all time across summaries, scoring, context, chat and catch-up.
+
+### Changed
+
+- Readable extraction backfills an article's publication date from the article page when the feed listing carried no date, so undated articles sort and expire correctly instead of all landing at fetch time. It reads the page's structured `datePublished` (via htmldate) rather than the oldest date on the page, guards against implausible future dates, and never overrides a date the feed already provided. The reader's date updates once extraction finishes.
+- Deleting a feed subscription or folder now cleans up references to it left dangling in filter scopes and catch-up/briefing scopes. As a safeguard against silently widening, a filter or briefing whose scope would empty out is deactivated or disabled instead, and the affected filter and briefing names are surfaced in the feeds settings banner.
 
 ### Fixed
 
 - Marking a feed or folder read from the sidebar now refreshes the whole sidebar, so counts that share those articles (labels, other feeds) update right away instead of going stale until the next reload.
+- Readable extraction removes duplicate images: some news sites emit the same photo as several renditions (lead, inline, responsive) and each was extracted, so the body showed the same picture two or three times. Matching on the image filename now collapses them to a single copy.
+- Admin → Feeds: a host group that contains a failing feed no longer paints its entire header red, which overstated severity and blended into the group separator; only the host name turns red now.
 
 ## [0.12.0] - 2026-07-07
 
