@@ -294,6 +294,7 @@ async def htmx_sidebar(
         "pinned": pinned,
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
+        "mark_read_auto_advance": bool(settings and settings.mark_read_auto_advance),
     })
 
 

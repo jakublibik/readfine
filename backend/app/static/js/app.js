@@ -1633,6 +1633,75 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
 
 restoreSidebarCollapse(false);
 
+// ── Auto-advance: after marking a feed/folder/label read, open the next one
+// with unread (opt-in via the sidebar's data-auto-advance flag). ────────────
+function _autoAdvanceParam(hx) {
+  if (/[?&]feed_id=/.test(hx)) return 'feed_id';
+  if (/[?&]folder_id=/.test(hx)) return 'folder_id';
+  if (/[?&]label_id=/.test(hx)) return 'label_id';
+  return null; // special rows (All / Starred / Archived / Labels header)
+}
+
+// Un-collapse a section so the target row is visible and stays open after the
+// sidebarRefresh re-render (which restores collapse state from localStorage).
+function _expandCollapsible(key) {
+  var content = document.getElementById('collapse-' + key);
+  var toggle = document.querySelector('.collapse-toggle[data-collapse="' + key + '"]');
+  if (content) content.classList.remove('collapsed');
+  if (toggle) toggle.classList.remove('is-collapsed');
+  try { localStorage.removeItem('sidebar_col_' + key); } catch (err) {}
+}
+
+// Returns true if it navigated to a next scope; false if none applied.
+function _markReadAutoAdvance(clickedRow) {
+  var full = document.getElementById('sidebar-full');
+  if (!full || !full.hasAttribute('data-auto-advance') || !clickedRow) return false;
+  var clickedA = clickedRow.querySelector('.nav-item[hx-get]');
+  if (!clickedA) return false;
+  var param = _autoAdvanceParam(clickedA.getAttribute('hx-get') || '');
+  if (!param) return false;
+
+  // Same-kind rows in visual order (feeds cross folder boundaries).
+  var rows = Array.from(full.querySelectorAll('.mark-read-row')).filter(function (r) {
+    var a = r.querySelector('.nav-item[hx-get]');
+    return a && new RegExp('[?&]' + param + '=').test(a.getAttribute('hx-get') || '');
+  });
+  var start = rows.indexOf(clickedRow);
+  if (start === -1) return false;
+
+  var nextRow = null;
+  for (var i = start + 1; i < rows.length; i++) {
+    // Unread badge is the pill variant (.rounded-full); total badge is not.
+    if (rows[i].querySelector('.mark-read-badge.rounded-full')) { nextRow = rows[i]; break; }
+  }
+  if (!nextRow) return false;
+
+  var nextA = nextRow.querySelector('.nav-item[hx-get]');
+  var url = nextA.getAttribute('hx-get');
+
+  // Expand any collapsed ancestor section (feed inside a folder, label list)…
+  var anc = nextRow.parentElement ? nextRow.parentElement.closest('.collapsible') : null;
+  while (anc) {
+    if (anc.id && anc.id.indexOf('collapse-') === 0) _expandCollapsible(anc.id.slice(9));
+    anc = anc.parentElement ? anc.parentElement.closest('.collapsible') : null;
+  }
+  // …and, when advancing to a folder, open the folder itself.
+  if (param === 'folder_id') {
+    var m = url.match(/[?&]folder_id=(\d+)/);
+    if (m) _expandCollapsible('folder-' + m[1]);
+  }
+
+  _saveNavSnapshot();
+  document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
+  nextA.classList.add('active');
+  _activeNavGet = url;
+  try { localStorage.setItem('lastNavItem', url); } catch (err) {}
+  _syncMobileQuicklink();
+  nextRow.scrollIntoView({ block: 'nearest' });
+  htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
+  return true;
+}
+
 // ── Sidebar mark-all-as-read: refresh sidebar + article list after action ──
 document.body.addEventListener('htmx:afterRequest', function (e) {
   if (!e.detail.elt || e.detail.elt.dataset.action !== 'mark-read') return;
@@ -1647,6 +1716,14 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
     var badge = row.querySelector('.mark-read-badge');
     if (badge) badge.outerHTML = e.detail.xhr.responseText;
   }
+  // Marking a feed/folder read also changes sibling counts (labels, other feeds
+  // sharing an article). The endpoint sends HX-Trigger: sidebarRefresh, but that
+  // event races the POST inside #sidebar's hx-sync="this:abort" context and gets
+  // dropped, leaving those counts stale. Re-trigger once the request has fully
+  // settled so the whole sidebar recomputes.
+  setTimeout(function () { htmx.trigger(document.body, 'sidebarRefresh'); }, 0);
+  // Opt-in: jump to the next unread feed/folder/label instead of just refreshing.
+  if (_markReadAutoAdvance(row)) return;
   var active = document.querySelector('.nav-item.active[hx-get]');
   var url = active ? active.getAttribute('hx-get') : '/htmx/articles';
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
