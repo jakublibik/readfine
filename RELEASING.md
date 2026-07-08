@@ -65,6 +65,8 @@ migration / breaking change / new feature → minor; fixes only → patch.
 
 - [ ] Decide the bump (patch vs minor) from the `[Unreleased]` contents
 - [ ] Bump the version in `backend/pyproject.toml` **and** `package.json` (keep in sync)
+- [ ] Refresh the lockfile so its `readfine` self-reference matches: `cd backend && uv lock`,
+      then stage `backend/uv.lock` alongside the bump (easy to forget — it lags silently otherwise)
 - [ ] `CHANGELOG.md`: move `[Unreleased]` notes into a new dated `[X.Y.Z]` section
 
 **Code & assets**
