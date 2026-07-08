@@ -114,7 +114,7 @@
   <tbody class="divide-y divide-gray-100">
     {% if group_mode == 'host' %}
       {% for g in feed_groups %}
-      <tr class="{% if g.has_error %}bg-red-50{% else %}bg-gray-50{% endif %}">
+      <tr class="bg-gray-50">
         <td colspan="9" class="px-3 py-1.5 text-xs font-medium {% if g.has_error %}text-red-700{% else %}text-gray-500{% endif %}">
           {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count }}</span>
         </td>
