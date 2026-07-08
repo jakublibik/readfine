@@ -1,7 +1,7 @@
 {% macro feed_row(item, default_interval_min, gq) %}
 {% set f = item.feed %}
 <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
-  <td class="px-3 py-2 max-w-[280px]">
+  <td class="px-3 py-2 w-full max-w-0">
     <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
     <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
@@ -49,6 +49,13 @@
     <div class="relative inline-block">
       <button data-menu-toggle class="text-gray-400 hover:text-gray-600 px-1">···</button>
       <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36 text-left">
+        <button hx-get="/admin/feeds/{{ f.id }}/edit{{ gq }}"
+                hx-target="#feed-edit-content"
+                hx-swap="innerHTML"
+                data-action="open-feed-edit"
+                class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+          Edit
+        </button>
         <button hx-post="/admin/feeds/{{ f.id }}/force-fetch{{ gq }}"
                 hx-target="#feeds-table"
                 hx-swap="outerHTML"
@@ -100,14 +107,14 @@
 <table class="w-full text-sm">
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
-      <th class="text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Type</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Status</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Subs</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Articles</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Interval</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Last fetch</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Last published</th>
+      <th class="w-full text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Type</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Status</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Subs</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Articles</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Interval</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last fetch</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last published</th>
       <th class="px-2 py-2"></th>
     </tr>
   </thead>

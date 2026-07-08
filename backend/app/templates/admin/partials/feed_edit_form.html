@@ -1,0 +1,80 @@
+{% set gq = '?group=' + group_mode %}
+<form hx-post="/admin/feeds/{{ feed.id }}/edit{{ gq }}"
+      hx-target="#feeds-table"
+      hx-swap="outerHTML"
+      class="space-y-4">
+
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
+    <input type="text" name="title" value="{{ feed.title }}" maxlength="255"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <p class="text-xs text-gray-400 mt-1">Shown to subscribers who haven't set a custom title.</p>
+  </div>
+
+  <div class="flex gap-3">
+    <div class="flex-1">
+      <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+      <select name="status"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        {% for s in ['active', 'paused', 'disabled'] %}
+        <option value="{{ s }}" {% if feed.status == s %}selected{% endif %}>{{ s | capitalize }}</option>
+        {% endfor %}
+        {% if feed.status == 'error' %}
+        <option value="error" selected>Error (set by fetcher)</option>
+        {% endif %}
+      </select>
+      {% if feed.status in ('error', 'disabled') %}
+      <p class="text-xs text-gray-400 mt-1">Set to Active to clear the error and resume fetching.</p>
+      {% endif %}
+    </div>
+
+    <div class="flex-1">
+      <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
+      <select name="fetch_interval_min"
+              class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <option value="">Default ({{ default_interval_min }} min)</option>
+        {% for m in [15,30,60,90,120,180,360,720,1440] %}
+        <option value="{{ m }}" {% if feed.fetch_interval_min == m %}selected{% endif %}>{{ m }} min</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  {% if feed.feed_type == 'scrape' %}
+  <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>
+    <input type="text" name="article_links_selector"
+           value="{{ feed.type_config.article_links_selector if feed.type_config else '' }}"
+           placeholder="e.g. article.b-item h3 a"
+           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    <input type="hidden" name="url" value="{{ feed.feed_url }}">
+    <div class="mt-2">
+      <span class="inline-flex items-center gap-1.5">
+        <button type="button"
+                hx-post="/settings/feeds/scrape-preview"
+                hx-include="closest form"
+                hx-target="#admin-scrape-preview"
+                hx-indicator="#admin-preview-spinner"
+                class="px-3 py-1.5 border border-gray-300 text-gray-600 text-sm rounded hover:bg-gray-50 whitespace-nowrap">
+          Preview
+        </button>
+        <svg id="admin-preview-spinner" class="htmx-indicator animate-spin h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
+      </span>
+    </div>
+    <p class="text-xs text-gray-400 mt-1">Leave blank to keep the current selector. Use Preview to test it against the live page.</p>
+    <div id="admin-scrape-preview" class="mt-2"></div>
+  </div>
+  {% endif %}
+
+  <div class="flex items-center gap-3 pt-1">
+    <button type="submit"
+            class="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+      Save changes
+    </button>
+    <button type="button" data-action="close-feed-edit"
+            class="text-sm text-gray-500 hover:underline">Cancel</button>
+  </div>
+</form>

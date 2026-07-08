@@ -274,6 +274,46 @@ async def clear_feed_error(db: AsyncSession, feed_id: int) -> Feed | None:
     return feed
 
 
+# Statuses an admin may set manually from the feed-edit form. 'error' is
+# excluded — it's set by the fetcher, not chosen; use 'disabled' to turn a feed
+# off by hand.
+_ADMIN_EDITABLE_STATUSES = ("active", "paused", "disabled")
+
+
+async def update_feed_admin(
+    db: AsyncSession,
+    feed_id: int,
+    *,
+    title: str,
+    fetch_interval_min: int | None,
+    status: str,
+    article_links_selector: str | None = None,
+) -> Feed | None:
+    """Update feed-wide fields from the admin panel. Only touches columns that
+    belong to the shared ``Feed`` (never per-user ``UserFeed`` preferences)."""
+    feed = await db.get(Feed, feed_id)
+    if not feed:
+        return None
+    title = (title or "").strip()
+    if title:
+        feed.title = title[:255]
+    feed.fetch_interval_min = fetch_interval_min
+    if status in _ADMIN_EDITABLE_STATUSES:
+        # Bringing a feed back to active from a broken/off state clears the
+        # error trail so the scheduler resumes cleanly (mirrors clear_feed_error).
+        if status == "active" and feed.status in ("error", "disabled"):
+            feed.last_error = None
+            feed.fetch_error_count = 0
+        feed.status = status
+    if feed.feed_type == "scrape" and article_links_selector is not None:
+        sel = article_links_selector.strip()
+        if sel:
+            feed.type_config = {**(feed.type_config or {}), "article_links_selector": sel}
+    await db.commit()
+    await db.refresh(feed)
+    return feed
+
+
 async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     feed = await db.get(Feed, feed_id)
     if not feed or feed.subscriber_count > 0:

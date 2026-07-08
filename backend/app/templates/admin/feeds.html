@@ -39,6 +39,51 @@
 <p class="text-sm text-gray-400">No feeds yet.</p>
 {% endif %}
 
+{# Feed-edit modal overlay #}
+<div id="feed-edit-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+     aria-modal="true" role="dialog">
+  <div class="absolute inset-0 bg-black/40" data-action="close-feed-edit"></div>
+  <div class="relative bg-white rounded-xl shadow-2xl w-full max-w-lg mx-4 max-h-[85vh] overflow-y-auto overscroll-contain">
+    <div class="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+      <h2 class="text-sm font-semibold text-gray-800">Edit feed</h2>
+      <button data-action="close-feed-edit" class="text-gray-400 hover:text-gray-600">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="px-5 py-4">
+      <div id="feed-edit-content"></div>
+    </div>
+  </div>
+</div>
+
+<script nonce="{{ request.state.csp_nonce }}">
+(function () {
+  var overlay = document.getElementById('feed-edit-overlay');
+  if (!overlay) return;
+  function open() {
+    overlay.classList.remove('hidden');
+    document.body.classList.add('overflow-hidden');
+  }
+  function close() {
+    overlay.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-action="open-feed-edit"]')) {
+      open();
+    } else if (e.target.closest('[data-action="close-feed-edit"]')) {
+      close();
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') close();
+  });
+  document.body.addEventListener('feedEditDone', close);
+})();
+</script>
+
 {% if has_rate_limits %}
 {# Rate-limits modal overlay #}
 <div id="rate-limits-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center"
