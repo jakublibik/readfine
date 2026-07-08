@@ -171,7 +171,7 @@
           {% if c.briefing_next_send_at %}
             <time class="text-gray-400" datetime="{{ c.briefing_next_send_at.isoformat() }}">{{ c.briefing_next_send_at | utctime('short') }}</time>
           {% else %}
-            <span class="text-amber-600 text-xs">no retry — needs manual fix</span>
+            <span class="text-amber-600 text-xs">no retry - needs manual fix</span>
           {% endif %}
         </td>
       </tr>

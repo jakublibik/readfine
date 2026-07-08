@@ -13,7 +13,7 @@
           digest{{ 's' if scope_cleanup.disabled_briefings | length != 1 }}
           scoped only to what you just removed:
           <span class="font-semibold">{{ scope_cleanup.disabled_briefings | join(', ') }}</span>.
-          Left as all-feeds would have sent much larger emails — re-scope to re-enable.</p>
+          Left as all-feeds would have sent much larger emails - re-scope to re-enable.</p>
       {% endif %}
     </div>
   {% endif %}
@@ -76,7 +76,7 @@
                 {% endif %}
                 <span class="font-medium text-gray-900 truncate min-w-0">{{ uf.custom_title or uf.feed.title }}</span>
                 {% if uf.readable_auto_disabled %}
-                  <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled — this feed already delivers full articles.{% else %}Full content extraction was automatically disabled — the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
+                  <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled - this feed already delivers full articles.{% else %}Full content extraction was automatically disabled - the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
@@ -133,7 +133,7 @@
     </table>
     </div>
   {% else %}
-    <p class="text-sm text-gray-400">No feeds yet. Subscribe to one above — paste an RSS/Atom URL, or a
+    <p class="text-sm text-gray-400">No feeds yet. Subscribe to one above - paste an RSS/Atom URL, or a
       website with no RSS to <a href="/help#scrape" class="text-blue-600 hover:underline">scrape</a> it.
       You can also <a href="/settings/opml" class="text-blue-600 hover:underline">import OPML</a> from another reader.</p>
   {% endif %}

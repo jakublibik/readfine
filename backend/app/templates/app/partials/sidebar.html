@@ -96,7 +96,7 @@
       <div class="relative" id="full-menu-container">
         <button data-action="toggle-user-menu"
                 class="relative w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 text-[10px] font-semibold cursor-pointer border-0 hover:bg-blue-300 flex-shrink-0"
-                title="{{ user.display_name }}{% if ai_error_fresh() %} — AI error, see Settings{% endif %}">
+                title="{{ user.display_name }}{% if ai_error_fresh() %} - AI error, see Settings{% endif %}">
           {{ user.display_name[0] | upper }}
           {% if ai_error_fresh() %}
           <span class="ai-error-badge absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500"></span>

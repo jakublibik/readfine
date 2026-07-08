@@ -7,13 +7,13 @@
 
 {% if s.registration_enabled and not s.smtp_host %}
 <div class="mb-6 p-3 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded text-sm">
-    <strong>Email verification is disabled</strong> — SMTP is not configured. New users will be registered without email verification.
+    <strong>Email verification is disabled</strong> - SMTP is not configured. New users will be registered without email verification.
 </div>
 {% endif %}
 
 {% if not legal_configured %}
 <div id="legal-warning" class="mb-6 p-3 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded text-sm {% if not s.registration_enabled %}hidden{% endif %}">
-    <strong>Legal pages incomplete</strong> — Fill in Operator name, Contact email, and Jurisdiction below before opening registration to users.
+    <strong>Legal pages incomplete</strong> - Fill in Operator name, Contact email, and Jurisdiction below before opening registration to users.
 </div>
 {% endif %}
 

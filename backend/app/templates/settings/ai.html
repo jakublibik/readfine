@@ -29,7 +29,7 @@
 {% elif keys_error %}
 <div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ keys_error }}</div>
 {% elif prefs_saved and content_limit_reset %}
-<div class="mb-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">AI settings saved. Content limit was invalid — reset to 20 000. Must be between 1 000 and 100 000.</div>
+<div class="mb-4 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">AI settings saved. Content limit was invalid - reset to 20 000. Must be between 1 000 and 100 000.</div>
 {% elif prefs_saved %}
 <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">AI settings saved.</div>
 {% elif prefs_error %}
@@ -69,7 +69,7 @@
   <p class="text-xs text-gray-500 mt-3">
     Your key is stored encrypted and used only for your own requests.
     <span class="text-amber-600">Note: Google's free Gemini tier may use your prompts and responses
-    to train its models — use a paid Gemini key to opt out.</span>
+    to train its models - use a paid Gemini key to opt out.</span>
   </p>
   <p class="text-xs text-gray-500 mt-1">
     Get an API key:
@@ -150,7 +150,7 @@
       </div>
       <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
       {% if s.ai_scoring_enabled_default and not s.ai_preference_text %}
-      <p class="text-xs text-amber-600 mt-1 ml-6">Scoring is enabled but no interest profile is set — articles will not be scored until you fill in the profile below.</p>
+      <p class="text-xs text-amber-600 mt-1 ml-6">Scoring is enabled but no interest profile is set - articles will not be scored until you fill in the profile below.</p>
       {% endif %}
     </div>
     <div class="ml-6">
@@ -184,7 +184,7 @@
           Enable chat
         </label>
       </div>
-      <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat — accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat - accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
     </div>
     <div>
       <label for="ai_content_limit" class="text-sm font-medium text-gray-700">Article content limit</label>
@@ -228,11 +228,11 @@
             class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
   <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
 
-  <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles — <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
+  <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles - <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
   <div id="pref-cold-start-warning">
     {% if pref_strong_count < 20 %}
     <p class="text-xs text-amber-600 mt-1 mb-1">
-      Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far — profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
+      Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far - profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
     </p>
     {% endif %}
   </div>
@@ -261,7 +261,7 @@
 {# ── Cost Estimate ─────────────────────────────────────────────────────────── #}
 <section>
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Usage &amp; cost estimate</h2>
-  <p class="text-xs text-gray-500 mb-3">Actual token counts from processed jobs. Cost estimates only — output tokens priced ~4–5× input.</p>
+  <p class="text-xs text-gray-500 mb-3">Actual token counts from processed jobs. Cost estimates only - output tokens priced ~4–5× input.</p>
   {% include "settings/partials/ai_cost_table.html" %}
 </section>
 
