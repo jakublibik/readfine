@@ -20,7 +20,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
-from app.models.user import User
+from app.models.user import User, UserCatchupConfig
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,25 @@ async def list_fetch_logs(db: AsyncSession, limit: int = 100) -> list[FetchLog]:
         .options(selectinload(FetchLog.feed))
         .order_by(FetchLog.failed_at.desc())
         .limit(limit)
+    )
+    return result.scalars().all()
+
+
+async def list_briefing_errors(db: AsyncSession) -> list[UserCatchupConfig]:
+    """Catch-up configs whose scheduled briefing currently has an unresolved error.
+
+    ``briefing_last_error`` is cleared on the next successful send
+    (``briefing_service``), so a non-null value means the briefing has not
+    recovered — the list only ever surfaces currently-broken configs. Configs
+    with ``briefing_next_send_at IS NULL`` have no auto-retry scheduled (e.g.
+    SMTP not configured, scope error) and need manual attention, so they sort
+    first.
+    """
+    result = await db.execute(
+        select(UserCatchupConfig)
+        .options(selectinload(UserCatchupConfig.user))
+        .where(UserCatchupConfig.briefing_last_error.is_not(None))
+        .order_by(UserCatchupConfig.briefing_next_send_at.asc().nulls_first())
     )
     return result.scalars().all()
 
@@ -380,6 +399,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
+    briefing_errors = await list_briefing_errors(db)
     return {
         "user_count": user_count,
         "active_user_count": active_user_count,
@@ -391,4 +411,5 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_failed": readable_failed,
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
+        "briefing_errors": briefing_errors,
     }
