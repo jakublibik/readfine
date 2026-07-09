@@ -27,6 +27,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Marking a feed or folder read from the sidebar now refreshes the whole sidebar, so counts that share those articles (labels, other feeds) update right away instead of going stale until the next reload.
 - Readable extraction removes duplicate images: some news sites emit the same photo as several renditions (lead, inline, responsive) and each was extracted, so the body showed the same picture two or three times. Matching on the image filename now collapses them to a single copy.
 - Admin → Feeds: a host group that contains a failing feed no longer paints its entire header red, which overstated severity and blended into the group separator; only the host name turns red now.
+- Scheduled fetching no longer crashes while arming per-host pacing: after a fetch committed, the scheduler re-read the feed's URL off an expired ORM object, which raised a `MissingGreenlet` error, failed the fetch, and skipped arming the adaptive per-host spacing. The spacing was therefore never enforced between same-host feeds, so hosts with several feeds (Reddit, YouTube) were fetched in bursts and more likely to answer 403. The URL is now captured before the fetch, so pacing is armed as intended.
+- A feed marked errored in the sidebar now clears its red indicator immediately when a manual refresh succeeds, instead of staying red until the next full page reload. The refresh only swapped the unread count, which sits apart from the error marker; it now updates the marker out-of-band from the feed's fresh status.
 
 ## [0.12.0] - 2026-07-07
 

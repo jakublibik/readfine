@@ -397,6 +397,23 @@ async def htmx_mark_folder_read(
 _BADGE_UNREAD = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{}</span>'
 _BADGE_TOTAL  = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{}</span>'
 
+# Sidebar feed error indicator — kept in sync with the markup in
+# app/partials/sidebar.html. The refresh endpoint returns this out-of-band so a
+# successful manual fetch that cleared Feed.status also clears the red bar,
+# which sits outside the swapped #feed-badge target.
+_FEED_ERROR_BAR = '<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{}"></span>'
+
+
+def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) -> str:
+    """Out-of-band fragment that re-renders the sidebar error indicator for a feed
+    from its current status (empty when healthy, red bar when error/disabled)."""
+    inner = (
+        _FEED_ERROR_BAR.format(html_module.escape(last_error or "Feed error"))
+        if status in ("error", "disabled")
+        else ""
+    )
+    return f'<span id="feed-error-{feed_id}" hx-swap-oob="true">{inner}</span>'
+
 
 async def _mark_read_total(
     user: User, db: AsyncSession,
@@ -491,6 +508,10 @@ async def htmx_refresh_feed(
     ) or 0
 
     badge = _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
+    # Refresh the sidebar error indicator out-of-band: it lives outside the swapped
+    # #feed-badge target, so a fetch that cleared Feed.status would otherwise leave
+    # the red bar stale until a full sidebar reload.
+    error_oob = _feed_error_oob(feed_id, feed.status, feed.last_error)
     toast_msg = error_msg[:150] if error_msg else "Feed refreshed"
     toast_type = "error" if error_msg else "ok"
     trigger = {
@@ -499,7 +520,7 @@ async def htmx_refresh_feed(
         "feedRefreshed": {"feed_id": feed_id},
     }
     headers = {"HX-Trigger": json.dumps(trigger)}
-    return HTMLResponse(badge, headers=headers)
+    return HTMLResponse(badge + error_oob, headers=headers)
 
 
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
