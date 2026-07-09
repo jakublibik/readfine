@@ -417,6 +417,18 @@ async def settings_feeds_subscribe(
             detected_feeds = await detect_feeds(url)
         except Exception:
             pass
+    except httpx.TimeoutException:
+        error = ("The feed server took too long to respond (timeout). "
+                 "It may be temporarily down or slow — try again later.")
+    except httpx.TransportError as e:
+        # Connection dropped / refused before any HTTP status (e.g. RemoteProtocolError
+        # "Server disconnected without sending a response"). CDNs like Cloudflare do
+        # this to throttle datacenter IPs instead of returning a 429, so distinguish it
+        # from a bad URL.
+        logger.warning("Transport error during feed subscribe (url=%s): %s", redact_url(url), e)
+        error = ("The feed server closed the connection without responding — it is likely "
+                 "blocking or rate-limiting requests from this host (common for datacenter "
+                 "IPs). Try again later.")
     except Exception as e:
         logger.error("Unexpected error during feed subscribe (url=%s): %s", redact_url(url), e)
         error = "Could not subscribe to feed. Please check the URL and try again."
