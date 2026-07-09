@@ -59,7 +59,7 @@
         {% if item.inactive_days is none %}
           <span class="text-gray-300">—</span>
         {% elif item.inactive_days == 0 %}
-          <span class="text-green-600 text-xs">today</span>
+          <span class="text-green-600 text-xs">&lt;24h</span>
         {% elif item.inactive_days <= 7 %}
           <span class="text-gray-500 text-xs">{{ item.inactive_days }}d</span>
         {% elif item.inactive_days <= 30 %}

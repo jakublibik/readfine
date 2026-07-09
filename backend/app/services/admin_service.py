@@ -81,7 +81,7 @@ async def list_users(db: AsyncSession) -> list[dict]:
         .group_by(UserArticleState.user_id)
     )
 
-    # AI usage aggregated across all sources, as (last-30d, all-time) per user.
+    # AI usage aggregated across all sources, as (last-7d, all-time) per user.
     ai_recent: dict[int, int] = {}
     ai_total: dict[int, int] = {}
 
