@@ -7,6 +7,7 @@ from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
 from app.schemas.feed import FolderCreate, FolderResponse, FolderUpdate
+from app.services.scope_cleanup import strip_scope_references
 
 router = APIRouter(prefix="/folders", tags=["folders"])
 
@@ -91,5 +92,6 @@ async def delete_folder(
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
 
+    await strip_scope_references(db, kind="folder", ref_id=folder_id, user_id=user.id)
     await db.delete(folder)
     await db.commit()

@@ -3,16 +3,25 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.article import Article
+from app.models.article import (
+    AiUsageLog,
+    Article,
+    ArticleAiChat,
+    ArticleAiJob,
+    GeneralChatLog,
+    UserArticleState,
+)
 from app.models.auth import Invitation
 from app.models.feed import Feed, UserFeed
+from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
-from app.models.user import User
+from app.models.user import User, UserCatchupConfig
+from app.services.scope_cleanup import strip_scope_references
 
 logger = logging.getLogger(__name__)
 
@@ -42,32 +51,81 @@ async def update_app_settings(db: AsyncSession, data: dict) -> AppSettings:
 
 
 async def list_users(db: AsyncSession) -> list[dict]:
-    feed_counts = (
-        select(UserFeed.user_id, func.count(UserFeed.feed_id).label("feed_count"))
-        .group_by(UserFeed.user_id)
-        .subquery()
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=7)
+
+    async def _counts(stmt) -> dict[int, int]:
+        return {row[0]: row[1] for row in (await db.execute(stmt)).all()}
+
+    feed_counts = await _counts(
+        select(UserFeed.user_id, func.count(UserFeed.feed_id)).group_by(UserFeed.user_id)
     )
-    article_counts = (
-        select(UserFeed.user_id, func.count(Article.id).label("article_count"))
+    article_counts = await _counts(
+        select(UserFeed.user_id, func.count(Article.id))
         .join(Article, Article.feed_id == UserFeed.feed_id)
         .group_by(UserFeed.user_id)
-        .subquery()
     )
-    rows = (await db.execute(
-        select(User, func.coalesce(feed_counts.c.feed_count, 0), func.coalesce(article_counts.c.article_count, 0))
-        .outerjoin(feed_counts, feed_counts.c.user_id == User.id)
-        .outerjoin(article_counts, article_counts.c.user_id == User.id)
-        .order_by(User.created_at.desc())
-    )).all()
-    now = datetime.now(timezone.utc)
+    filter_counts = await _counts(
+        select(Filter.user_id, func.count(Filter.id)).group_by(Filter.user_id)
+    )
+    # Genuine reading engagement (not is_read): dwell >= 30s, opened the link, or ever starred.
+    read_counts = await _counts(
+        select(UserArticleState.user_id, func.count())
+        .where(
+            or_(
+                UserArticleState.dwell_seconds >= 30,
+                UserArticleState.link_opened.is_(True),
+                UserArticleState.ever_starred.is_(True),
+            )
+        )
+        .group_by(UserArticleState.user_id)
+    )
+
+    # AI usage aggregated across all sources, as (last-7d, all-time) per user.
+    ai_recent: dict[int, int] = {}
+    ai_total: dict[int, int] = {}
+
+    async def _ai_counts(model, ts_col, *conds) -> None:
+        stmt = select(
+            model.user_id,
+            func.count().filter(ts_col >= cutoff),
+            func.count(),
+        ).group_by(model.user_id)
+        for cond in conds:
+            stmt = stmt.where(cond)
+        for uid, recent, total in (await db.execute(stmt)).all():
+            ai_recent[uid] = ai_recent.get(uid, 0) + recent
+            ai_total[uid] = ai_total.get(uid, 0) + total
+
+    await _ai_counts(ArticleAiJob, ArticleAiJob.created_at, ArticleAiJob.status == "success")
+    await _ai_counts(AiUsageLog, AiUsageLog.created_at)
+    await _ai_counts(ArticleAiChat, ArticleAiChat.created_at)
+    await _ai_counts(GeneralChatLog, GeneralChatLog.created_at)
+
+    users = (
+        await db.execute(select(User).order_by(User.created_at.desc()))
+    ).scalars().all()
     result = []
-    for row in rows:
-        user = row[0]
+    for user in users:
         if user.last_active_at:
-            inactive_days = (now - user.last_active_at.replace(tzinfo=timezone.utc) if user.last_active_at.tzinfo is None else now - user.last_active_at).days
+            last_active = (
+                user.last_active_at.replace(tzinfo=timezone.utc)
+                if user.last_active_at.tzinfo is None
+                else user.last_active_at
+            )
+            inactive_days = (now - last_active).days
         else:
             inactive_days = None
-        result.append({"user": user, "feed_count": row[1], "article_count": row[2], "inactive_days": inactive_days})
+        result.append({
+            "user": user,
+            "feed_count": feed_counts.get(user.id, 0),
+            "article_count": article_counts.get(user.id, 0),
+            "filter_count": filter_counts.get(user.id, 0),
+            "read_count": read_counts.get(user.id, 0),
+            "ai_ops_recent": ai_recent.get(user.id, 0),
+            "ai_ops_total": ai_total.get(user.id, 0),
+            "inactive_days": inactive_days,
+        })
     return result
 
 
@@ -143,6 +201,25 @@ async def list_fetch_logs(db: AsyncSession, limit: int = 100) -> list[FetchLog]:
     return result.scalars().all()
 
 
+async def list_briefing_errors(db: AsyncSession) -> list[UserCatchupConfig]:
+    """Catch-up configs whose scheduled briefing currently has an unresolved error.
+
+    ``briefing_last_error`` is cleared on the next successful send
+    (``briefing_service``), so a non-null value means the briefing has not
+    recovered — the list only ever surfaces currently-broken configs. Configs
+    with ``briefing_next_send_at IS NULL`` have no auto-retry scheduled (e.g.
+    SMTP not configured, scope error) and need manual attention, so they sort
+    first.
+    """
+    result = await db.execute(
+        select(UserCatchupConfig)
+        .options(selectinload(UserCatchupConfig.user))
+        .where(UserCatchupConfig.briefing_last_error.is_not(None))
+        .order_by(UserCatchupConfig.briefing_next_send_at.asc().nulls_first())
+    )
+    return result.scalars().all()
+
+
 async def list_audit_logs(db: AsyncSession, limit: int = 100) -> list[AuditLog]:
     result = await db.execute(
         select(AuditLog)
@@ -197,10 +274,54 @@ async def clear_feed_error(db: AsyncSession, feed_id: int) -> Feed | None:
     return feed
 
 
+# Statuses an admin may set manually from the feed-edit form. 'error' is
+# excluded — it's set by the fetcher, not chosen; use 'disabled' to turn a feed
+# off by hand.
+_ADMIN_EDITABLE_STATUSES = ("active", "paused", "disabled")
+
+
+async def update_feed_admin(
+    db: AsyncSession,
+    feed_id: int,
+    *,
+    title: str,
+    fetch_interval_min: int | None,
+    status: str,
+    article_links_selector: str | None = None,
+) -> Feed | None:
+    """Update feed-wide fields from the admin panel. Only touches columns that
+    belong to the shared ``Feed`` (never per-user ``UserFeed`` preferences)."""
+    feed = await db.get(Feed, feed_id)
+    if not feed:
+        return None
+    title = (title or "").strip()
+    if title:
+        feed.title = title[:255]
+    feed.fetch_interval_min = fetch_interval_min
+    if status in _ADMIN_EDITABLE_STATUSES:
+        # Bringing a feed back to active from a broken/off state clears the
+        # error trail so the scheduler resumes cleanly (mirrors clear_feed_error).
+        if status == "active" and feed.status in ("error", "disabled"):
+            feed.last_error = None
+            feed.fetch_error_count = 0
+        feed.status = status
+    if feed.feed_type == "scrape" and article_links_selector is not None:
+        sel = article_links_selector.strip()
+        if sel:
+            feed.type_config = {**(feed.type_config or {}), "article_links_selector": sel}
+    await db.commit()
+    await db.refresh(feed)
+    return feed
+
+
 async def delete_feed(db: AsyncSession, feed_id: int) -> bool:
     feed = await db.get(Feed, feed_id)
     if not feed or feed.subscriber_count > 0:
         return False
+    # Strip any lingering references to this feed from every user's filter and
+    # catchup/briefing scopes (self-service unsubscribe already cleans its own,
+    # so this mainly clears legacy dangling refs). No user is present to report to.
+    await strip_scope_references(db, kind="feed", ref_id=feed_id, user_id=None)
     await db.execute(delete(Article).where(Article.feed_id == feed_id))
     await db.delete(feed)
     await db.commit()
@@ -323,6 +444,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
+    briefing_errors = await list_briefing_errors(db)
     return {
         "user_count": user_count,
         "active_user_count": active_user_count,
@@ -334,4 +456,5 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_failed": readable_failed,
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
+        "briefing_errors": briefing_errors,
     }

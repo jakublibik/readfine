@@ -87,7 +87,7 @@
 </div>
 
 <!-- ── Full sidebar ───────────────────────────────────────────── -->
-<div id="sidebar-full" class="flex flex-col h-full">
+<div id="sidebar-full" class="flex flex-col h-full"{% if mark_read_auto_advance %} data-auto-advance="1"{% endif %}>
 
   <!-- Header -->
   <div class="flex items-center justify-between px-4 py-2.5 border-b border-gray-200">
@@ -96,7 +96,7 @@
       <div class="relative" id="full-menu-container">
         <button data-action="toggle-user-menu"
                 class="relative w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center text-blue-700 text-[10px] font-semibold cursor-pointer border-0 hover:bg-blue-300 flex-shrink-0"
-                title="{{ user.display_name }}{% if ai_error_fresh() %} — AI error, see Settings{% endif %}">
+                title="{{ user.display_name }}{% if ai_error_fresh() %} - AI error, see Settings{% endif %}">
           {{ user.display_name[0] | upper }}
           {% if ai_error_fresh() %}
           <span class="ai-error-badge absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500"></span>
@@ -288,9 +288,11 @@
         <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
            hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
            hx-push-url="false">
-          {% if uf.feed.status in ('error', 'disabled') %}
+          <span id="feed-error-{{ uf.feed_id }}">
+            {%- if uf.feed.status in ('error', 'disabled') -%}
             <span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ uf.feed.last_error or 'Feed error' }}"></span>
-          {% endif %}
+            {%- endif -%}
+          </span>
           <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
           <span id="feed-badge-{{ uf.feed_id }}">
             {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}

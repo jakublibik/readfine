@@ -55,11 +55,11 @@ async def _extract_readable_bg(
 
     loop = asyncio.get_running_loop()
     try:
-        content, error, http_status = await loop.run_in_executor(
+        content, error, http_status, published_at = await loop.run_in_executor(
             None, extract_readable, url, auth_user, auth_pass
         )
     except Exception as exc:
-        content, error, http_status = None, str(exc)[:200], None
+        content, error, http_status, published_at = None, str(exc)[:200], None, None
         logger.warning("readable bg: extraction error for article %d: %s", article_id, exc)
 
     async with async_session_factory() as db:
@@ -68,7 +68,7 @@ async def _extract_readable_bg(
         )).scalar_one_or_none()
         if not article:
             return
-        apply_readable_result(article, content, error, http_status)
+        apply_readable_result(article, content, error, http_status, published_at)
         # Mirror the batch readable path: once readable finishes, complete any
         # label-deferred AI pipeline (scoring/filters/summary). run_pipeline_for_
         # article_all_users is label-scoped — it only runs for users who labeled
@@ -294,6 +294,7 @@ async def htmx_sidebar(
         "pinned": pinned,
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
+        "mark_read_auto_advance": bool(settings and settings.mark_read_auto_advance),
     })
 
 
@@ -396,6 +397,23 @@ async def htmx_mark_folder_read(
 _BADGE_UNREAD = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{}</span>'
 _BADGE_TOTAL  = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{}</span>'
 
+# Sidebar feed error indicator — kept in sync with the markup in
+# app/partials/sidebar.html. The refresh endpoint returns this out-of-band so a
+# successful manual fetch that cleared Feed.status also clears the red bar,
+# which sits outside the swapped #feed-badge target.
+_FEED_ERROR_BAR = '<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{}"></span>'
+
+
+def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) -> str:
+    """Out-of-band fragment that re-renders the sidebar error indicator for a feed
+    from its current status (empty when healthy, red bar when error/disabled)."""
+    inner = (
+        _FEED_ERROR_BAR.format(html_module.escape(last_error or "Feed error"))
+        if status in ("error", "disabled")
+        else ""
+    )
+    return f'<span id="feed-error-{feed_id}" hx-swap-oob="true">{inner}</span>'
+
 
 async def _mark_read_total(
     user: User, db: AsyncSession,
@@ -490,6 +508,10 @@ async def htmx_refresh_feed(
     ) or 0
 
     badge = _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
+    # Refresh the sidebar error indicator out-of-band: it lives outside the swapped
+    # #feed-badge target, so a fetch that cleared Feed.status would otherwise leave
+    # the red bar stale until a full sidebar reload.
+    error_oob = _feed_error_oob(feed_id, feed.status, feed.last_error)
     toast_msg = error_msg[:150] if error_msg else "Feed refreshed"
     toast_type = "error" if error_msg else "ok"
     trigger = {
@@ -498,7 +520,7 @@ async def htmx_refresh_feed(
         "feedRefreshed": {"feed_id": feed_id},
     }
     headers = {"HX-Trigger": json.dumps(trigger)}
-    return HTMLResponse(badge, headers=headers)
+    return HTMLResponse(badge + error_oob, headers=headers)
 
 
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
@@ -1007,7 +1029,12 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
         f'<span id="article-meta-readtime-{article.id}" class="shrink-0"'
         f' hx-swap-oob="true">{read_time}</span>'
     )
-    return HTMLResponse(content_html + oob)
+    # Refresh the publication date too: readable extraction may have backfilled
+    # published_at (via htmldate) since the detail was first rendered.
+    date_oob = templates.env.get_template("app/partials/article_meta_date.html").render(
+        request=request, article=article, oob=True
+    )
+    return HTMLResponse(content_html + oob + date_oob)
 
 
 def _read_response(request: Request, article, density: str, label_display: str, **_) -> HTMLResponse:
@@ -1351,11 +1378,11 @@ async def htmx_extract_readable(
             logger.warning("readable: decrypt failed for article %d", article.id)
 
     loop = asyncio.get_running_loop()
-    content, error, http_status = await loop.run_in_executor(
+    content, error, http_status, published_at = await loop.run_in_executor(
         None, extract_readable, article.url, auth_user, auth_pass
     )
 
-    apply_readable_result(article, content, error, http_status)
+    apply_readable_result(article, content, error, http_status, published_at)
     await db.commit()
 
     # Render from the full ArticleResponse (not the raw ORM row) so per-user fields

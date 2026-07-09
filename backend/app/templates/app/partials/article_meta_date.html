@@ -1,0 +1,5 @@
+{#- Publication date for the detail meta row. Wrapped in a stable-id span (always
+    present, even when the date is unknown) so the readable-poll can OOB-refresh it
+    once htmldate backfills published_at. `display:contents` keeps the separator and
+    date as direct flex items of the parent meta row. -#}
+<span id="article-meta-date-{{ article.id }}" class="contents"{% if oob %} hx-swap-oob="true"{% endif %}>{% if article.published_at %}<span class="detail-meta-date-sep shrink-0">·</span><span class="detail-meta-date shrink-0"><time datetime="{{ article.published_at.isoformat() }}">{{ article.published_at | localtime('long') }}</time></span>{% endif %}</span>

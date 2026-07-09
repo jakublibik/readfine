@@ -9,159 +9,67 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- Preferences → "Advance after mark all as read" (off by default): after you mark a feed, folder or label read from the sidebar, Readfine selects and opens the next one that still has unread articles, expanding a collapsed folder if needed. Feeds advance across folder boundaries; empty scopes are skipped, and the special views (All articles, Starred, Archived) are left alone.
+- Admin → Feeds: an "Edit" action on the table's ··· menu for shared feed fields (title, status, fetch interval, and the scrape article-links selector with a live preview). Per-subscriber preferences and feed credentials are intentionally left out, since an admin usually is not the subscriber.
+- Admin dashboard: a "Briefing errors" section listing catch-up configs whose scheduled briefing is currently failing (user, config, error, retries, next send). Configs with no scheduled retry, for example when SMTP is unconfigured, sort first and are flagged as needing manual attention; the entry clears once a send succeeds.
+- Admin → Users: per-user columns for genuine reads (dwell, link opens or stars, not just marked-read), filter count, and AI operations over the last 7 days and all time across summaries, scoring, context, chat and catch-up.
+
+### Changed
+
+- Readable extraction backfills an article's publication date from the article page when the feed listing carried no date, so undated articles sort and expire correctly instead of all landing at fetch time. It reads the page's structured `datePublished` (via htmldate) rather than the oldest date on the page, guards against implausible future dates, and never overrides a date the feed already provided. The reader's date updates once extraction finishes.
+- Deleting a feed subscription or folder now cleans up references to it left dangling in filter scopes and catch-up/briefing scopes. As a safeguard against silently widening, a filter or briefing whose scope would empty out is deactivated or disabled instead, and the affected filter and briefing names are surfaced in the feeds settings banner.
+
+### Fixed
+
+- Readable extraction is no longer enabled for Tumblr feeds, which already deliver the full post in the feed. Extracting the page instead pulled in the likes/reblogs "notes" list as the body and duplicated the post text; Tumblr (and other feeds that advertise themselves as full-content via their `<generator>`) are now treated as full-content at subscribe time, so their feed content is shown as-is. Should extraction still run on a Tumblr page, the notes list and tracking pixels are stripped before extraction as a safeguard.
+- Marking a feed or folder read from the sidebar now refreshes the whole sidebar, so counts that share those articles (labels, other feeds) update right away instead of going stale until the next reload.
+- Readable extraction removes duplicate images: some news sites emit the same photo as several renditions (lead, inline, responsive) and each was extracted, so the body showed the same picture two or three times. Matching on the image filename now collapses them to a single copy.
+- Admin → Feeds: a host group that contains a failing feed no longer paints its entire header red, which overstated severity and blended into the group separator; only the host name turns red now.
+- Scheduled fetching no longer crashes while arming per-host pacing: after a fetch committed, the scheduler re-read the feed's URL off an expired ORM object, which raised a `MissingGreenlet` error, failed the fetch, and skipped arming the adaptive per-host spacing. The spacing was therefore never enforced between same-host feeds, so hosts with several feeds (Reddit, YouTube) were fetched in bursts and more likely to answer 403. The URL is now captured before the fetch, so pacing is armed as intended.
+- A feed marked errored in the sidebar now clears its red indicator immediately when a manual refresh succeeds, instead of staying red until the next full page reload. The refresh only swapped the unread count, which sits apart from the error marker; it now updates the marker out-of-band from the feed's fresh status.
+
 ## [0.12.0] - 2026-07-07
 
 ### Added
 
-- A "Copy" action on the article ··· menu (desktop) and the bottom action bar
-  (mobile) copies the article — title, source and body — to the clipboard as both
-  rich HTML and plain text, so it pastes with formatting and images into rich
-  editors and as clean text everywhere else. Relative image/link URLs are made
-  absolute so they still resolve once pasted.
-- The Stats backlog cards (labeled and starred) now link straight into the reader's
-  matching view, so you can jump from the count to the actual articles.
-- Admin → Feeds gained a "Rate limits" view (shown when any exist) listing the fetch
-  pace Readfine has learned for each host — host, spacing, how it was learned and when
-  — each with a Clear action to reset it. Errored feeds in the admin table now also
-  show their predicted next fetch, and a feed with no per-feed interval override shows
-  the effective default interval instead of a blank dash.
-- Admin → Feeds gained a "By host / A–Z" toggle that groups the feed list by fetch host
-  (so all of a site's feeds — e.g. every Reddit feed — sit together under a host header
-  with a count) instead of one flat alphabetical list. Groups sort alphabetically by host,
-  single-feed hosts collapse into an "Other" bucket, and any host (or the Other bucket)
-  containing an errored feed floats to the top so problems stay visible. Feeds within a
-  group — and the flat A–Z list itself — now order by status first (errored, then disabled,
-  then paused, then active) and then by name, so feeds needing attention surface in both
-  views. The choice is remembered per browser and preserved across feed actions.
+- **Copy article** action on the article ··· menu (desktop) and the bottom action bar (mobile). It copies the title, source and body to the clipboard as both rich HTML and plain text, so it pastes with formatting and images into rich editors and as clean text everywhere else. Relative image and link URLs are rewritten to absolute so they still resolve after pasting.
+- The Stats backlog cards (labeled and starred) now link straight into the matching reader view, so you can jump from a count to the actual articles.
+- Admin → Feeds: a "Rate limits" view (shown only when some exist) lists the fetch pace Readfine has learned per host, with the host, its spacing, and how and when that was learned, each with a Clear action. Errored feeds in the admin table also show their predicted next fetch, and a feed with no per-feed interval override shows the effective default instead of a blank dash.
+- Admin → Feeds: a "By host / A-Z" toggle that groups the feed list by fetch host, so all of a site's feeds (say, every Reddit feed) sit under one host header with a count instead of a flat alphabetical list. Hosts sort alphabetically, single-feed hosts fall into an "Other" bucket, and any host holding an errored feed floats to the top so problems stay visible. Within a group, and in the flat list, feeds now sort by status first (errored, disabled, paused, active) and then by name. The choice is remembered per browser.
 
 ### Changed
 
-- An HTTP 403 from a feed no longer disables it on the first hit. Reddit and
-  YouTube return 403 as a transient anti-bot / rate-adjacent block (datacenter IP,
-  generic user-agent) far more often than as a permanent denial, so 403 now backs
-  off through the error tier and is disabled only after several consecutive
-  failures — the same treatment as 408/429 and 5xx. Genuinely permanent 4xx (400,
-  401, 404, 410) still disable immediately.
-- The fetcher now reads rate-limit response headers (`Retry-After`, `RateLimit-*`
-  and `X-RateLimit-*`) on both successful and 429 responses and applies a per-host
-  cooldown: once a host reports its budget is exhausted (e.g. Reddit's
-  `x-ratelimit-remaining: 0`), other feeds on that host wait out the reset instead
-  of bursting into repeated HTTP 429s. The wait happens within the fetch round (so a
-  rate-limited host drains several feeds per 15-min round) up to a round budget that
-  keeps the round short enough not to miss the next slot; anything past the budget
-  defers to the next round. Feeds on other hosts are unaffected and still fetch in
-  parallel.
-- Manually refreshing a feed (the sidebar ↻ and the admin "force fetch") now respects
-  a known rate-limit window instead of firing another request straight into an HTTP
-  429: when the host is still cooling down it shows "Rate-limited — try again in …"
-  (seconds or minutes, read from the server's reset headers). A bare HTTP 403 anti-bot
-  block is treated differently — only the background scheduler paces itself on those,
-  while an explicit manual refresh is still allowed to retry, since such blocks are
-  often transient.
-- Readfine now learns a sustainable fetch pace for each host and spaces its requests
-  accordingly, rather than only backing off after a host reports its budget already
-  exhausted. It reads the pace precisely from a host's rate-limit headers on successful
-  responses, and tightens it further when a host still answers with repeated HTTP 429s;
-  the learned pace only ever tightens (so it doesn't oscillate) and is capped so a feed
-  can't stall indefinitely. This stops aggressive hosts such as Reddit — where a burst
-  of same-host feeds fetched back-to-back would trip a 403/429 — from being throttled.
-  The learned pace is stored and survives restarts and deploys (so a host isn't
-  re-probed into a rate limit on every restart), and manual refreshes respect it too,
-  showing "try again in …" instead of firing into a known gap.
-- Feeds are now fetched at whichever of the four 15-min ticks (:00/:15/:30/:45)
-  first follows their refresh interval, rather than being pinned to the top of the
-  hour by interval. This spreads fetch load across the hour on each feed's own phase
-  instead of piling every hourly feed onto :00, and improves freshness: an hourly
-  feed fetched a few minutes past the hour used to wait until the next :00 (up to
-  ~2 h between fetches) and now refreshes about an hour later as intended. Feeds that
-  miss a scheduled fetch — deferred by a host cooldown, a transient error, or an app
-  restart mid-round — likewise recover at the next tick instead of waiting a full
-  interval, and a rate-limited host (e.g. Reddit) drains across all four ticks per
-  hour rather than only at the top of the hour.
-- The per-feed refresh button (↻ in the sidebar) now reloads the article list when
-  you are viewing that feed, so newly fetched articles appear right away instead of
-  only after re-selecting the feed. Works across the 3-panel, 2-panel and mobile
-  layouts; refreshing a feed you are not currently viewing still just updates its
-  unread badge.
-- The fetch-interval selector now spells out the server default next to the
-  "Default" option (e.g. "Default (60 min)") on the subscribe, scrape-setup and
-  feed-edit forms, and wraps more cleanly on narrow/mobile layouts.
-- Adding a feed now shows specific messages for rate-limiting (HTTP 429 — including
-  when to retry, read from `Retry-After` / `X-RateLimit-Reset`) and temporary server
-  errors (5xx), instead of a bare "HTTP error {status}".
-- The Feeds, Filters and Labels settings pages and the admin Users page now show the
-  item count next to the page heading (matching the admin Feeds page), kept up to
-  date as items are added or removed without a page reload.
-- Labels and filters now sort case-insensitively — in the settings lists, label
-  pickers and label chips alike. Previously the database collation ordered all
-  uppercase names before any lowercase one, so a new lowercase-named label or
-  filter appeared stuck at the end of the list instead of in its alphabetical
-  place.
-- The filter list shows a "priority N" badge on filters whose priority differs
-  from the default, so it is visible why a filter sorts (and runs) ahead of the
-  alphabetical order.
-- Briefings sent to extra recipients now address the account owner in the visible
-  `To:` and put the additional recipients in `Bcc`, so co-subscribers can no longer
-  see each other's email addresses. The modal also notes that delivery can lag the
-  scheduled time by up to 15 min (the scheduler tick interval).
-- The admin "force fetch" button now shows a spinner and blocks double-clicks while
-  the synchronous fetch runs, instead of appearing to do nothing for several seconds.
-- The Settings → AI cost estimates now cover the current Anthropic, OpenAI and Google
-  model families, and a configured model that isn't in the built-in price list is
-  estimated from a typical model for its provider — shown with a "~" and a note under
-  the table — instead of appearing as an unknown or zero cost.
-- The Trend column in the AI cost table now tracks estimated cost rather than the raw
-  number of operations, and the Fast/Quality/Total rows show a trend too (previously
-  blank), so the arrows reflect what actually moves your spend — e.g. longer articles
-  costing more even at the same number of runs.
+- A single HTTP 403 no longer disables a feed. Reddit and YouTube return 403 as a transient anti-bot or rate-adjacent block (datacenter IP, generic user-agent) far more often than as a permanent denial, so 403 now backs off through the error tier like 408/429 and 5xx and only disables after several consecutive failures. Genuinely permanent 4xx (400, 401, 404, 410) still disable immediately.
+- The fetcher reads rate-limit headers (`Retry-After`, `RateLimit-*`, `X-RateLimit-*`) on both successful and 429 responses and applies a per-host cooldown. Once a host reports its budget is spent (for example Reddit's `x-ratelimit-remaining: 0`), other feeds on that host wait out the reset instead of hammering it with more 429s. The waiting happens inside the fetch round, up to a budget that keeps the round short enough not to miss the next slot; anything over that defers to the next round. Feeds on other hosts still fetch in parallel.
+- Manually refreshing a feed (the sidebar ↻ and the admin "force fetch") now respects a known rate-limit window instead of firing straight into another 429. While the host is cooling down it shows "Rate-limited, try again in …" (seconds or minutes, from the server's reset headers). A bare 403 anti-bot block is treated differently: only the background scheduler paces itself on those, since a manual retry often succeeds.
+- Readfine learns a sustainable fetch pace per host and spaces its requests accordingly, rather than only reacting once a host reports its budget already spent. It reads the pace from a host's rate-limit headers on successful responses and tightens it when the host keeps answering 429. The learned pace only ever tightens, so it never oscillates, and is capped so a feed can't stall forever. This keeps aggressive hosts like Reddit, where a burst of same-host feeds fetched back to back would trip a 403/429, from being throttled. The pace is stored and survives restarts and deploys, so a host isn't re-probed into a rate limit on every restart, and manual refreshes respect it too.
+- Feeds are fetched at whichever of the four 15-minute ticks (:00/:15/:30/:45) first follows their interval, instead of being pinned to the top of the hour. This spreads load across the hour on each feed's own phase rather than piling every hourly feed onto :00, and it improves freshness: an hourly feed first fetched a few minutes past the hour used to wait until the next :00 (up to ~2 h between fetches) and now refreshes about an hour later as intended. Feeds that miss a tick (a host cooldown, a transient error, a restart mid-round) recover at the next tick instead of waiting a full interval.
+- The per-feed refresh button (↻) now reloads the article list when you're viewing that feed, so newly fetched articles appear right away instead of only after re-selecting it. Refreshing a feed you're not viewing still just updates its unread badge.
+- The fetch-interval selector spells out the server default next to the "Default" option (for example "Default (60 min)") on the subscribe, scrape-setup and feed-edit forms, and wraps better on narrow screens.
+- Adding a feed now shows specific messages for rate-limiting (429, including when to retry) and temporary server errors (5xx) instead of a bare "HTTP error {status}".
+- The Feeds, Filters and Labels settings pages and the admin Users page show an item count next to the heading, kept current as items are added or removed without a reload.
+- Labels and filters sort case-insensitively everywhere now: settings lists, label pickers and chips. Previously the database collation put all uppercase names before any lowercase one, so a new lowercase label or filter got stuck at the end of the list.
+- The filter list shows a "priority N" badge on filters whose priority isn't the default, making it clear why a filter sorts and runs ahead of alphabetical order.
+- Briefings sent to extra recipients now put the account owner in `To:` and the additional recipients in `Bcc`, so co-subscribers no longer see each other's addresses. The modal also notes that delivery can lag the scheduled time by up to 15 minutes (the scheduler tick).
+- The admin "force fetch" button shows a spinner and blocks double-clicks while the synchronous fetch runs, instead of looking like it did nothing for several seconds.
+- Settings → AI cost estimates now cover the current Anthropic, OpenAI and Google model families. A configured model that isn't in the built-in price list is estimated from a typical model for its provider (shown with a "~" and a note under the table) instead of showing as unknown or zero.
+- The Trend column in the AI cost table tracks estimated cost rather than raw operation count, and the Fast/Quality/Total rows show a trend too (previously blank), so the arrows reflect what actually moves your spend, such as longer articles costing more at the same number of runs.
 
 ### Fixed
 
-- Collapsing or expanding the sidebar is now instant. It previously refetched the
-  whole sidebar from the server on every toggle — so the old layout lingered
-  (briefly squished into the new width) until the request came back. The collapsed
-  rail and the full sidebar are now both rendered up front and the toggle just
-  switches between them client-side, with no round-trip. The same applies to the
-  mobile "collapsible" sidebar's open/close, where opening the overlay no longer
-  reflows the article-list text (the rail is now a fixed strip, so the list keeps
-  a constant width).
-- Toast notifications (e.g. a feed's error message when you open it, or a manual
-  refresh result) no longer render at roughly half-width on mobile. They now stretch
-  edge-to-edge with a small gutter on narrow screens and stay centred with a sensible
-  max-width on wider ones.
-- Filters sharing the same priority now run in a deterministic order — exactly the
-  order the Settings → Filters list shows (priority, then name). Previously the
-  execution order of equal-priority filters was left to the database, so a
-  "stop on match" filter could behave inconsistently between fetches.
-
-- The green "Feed added successfully" banner no longer reappears when you refresh the
-  Feeds settings page after subscribing.
-- Articles carrying a label now stay visible in their label view even after their
-  feed is deleted or unsubscribed. The label view used to inner-join the feed and so
-  hide such articles, leaving the sidebar label badge showing a count for an
-  apparently empty category.
-- The article-list loading overlay now matches the neutral dark-mode background
-  instead of a blue-tinted grey, and is delayed slightly so quick (cached) loads no
-  longer flash a spinner.
-- The AI cost table's total is no longer silently understated when a model slot uses a
-  model missing from the price list: that slot used to be added to the total as $0,
-  making the grand total look complete while omitting part of the cost.
+- Collapsing and expanding the sidebar is instant now. It used to refetch the whole sidebar from the server on every toggle, so the old layout lingered, briefly squished into the new width, until the request returned. Both the collapsed rail and the full sidebar are rendered up front and the toggle just switches between them in the browser, with no round-trip. On the mobile "collapsible" sidebar, opening the overlay no longer reflows the article-list text either, because the rail is a fixed strip now and the list keeps a constant width.
+- Toast notifications (a feed's error when you open it, or a manual refresh result) no longer render at roughly half-width on mobile. They stretch edge to edge with a small gutter on narrow screens and stay centred with a sensible max-width on wider ones.
+- Filters that share a priority run in a fixed order now, exactly the order the Settings → Filters list shows (priority, then name). Their order used to be left to the database, so a "stop on match" filter could behave differently between fetches.
+- The green "Feed added successfully" banner no longer reappears when you refresh the Feeds settings page after subscribing.
+- Articles that carry a label stay visible in their label view even after their feed is deleted or unsubscribed. The view used to inner-join the feed and hide them, leaving the sidebar badge counting an apparently empty category.
+- The article-list loading overlay matches the neutral dark-mode background instead of a blue-tinted grey, and is delayed slightly so quick cached loads don't flash a spinner.
+- The AI cost table's total is no longer quietly understated when a model slot uses a model missing from the price list. That slot used to be added as $0, making the total look complete while dropping part of the cost.
 
 ### Security
 
-- Filter `regex` conditions are now evaluated under a per-match timeout, closing a
-  denial-of-service hole: the previous create-time heuristic could be bypassed by a
-  catastrophic-backtracking pattern (e.g. `([a-z]+)*`), and because matching ran
-  synchronously on the event loop during fetch, filter test and retroactive apply —
-  and CPython's `re` neither times out nor releases the GIL — a single crafted filter
-  could freeze the whole app for every user. Evaluation now uses the `regex` module
-  with a hard timeout (a timed-out pattern is treated as "no match"); existing filter
-  behaviour is unchanged.
-- Authenticated HTML responses (full pages and HTMX partials) are now sent with
-  `Cache-Control: no-store` and `Vary: Cookie`, so a shared browser can no longer
-  show one user's rendered page to the next after an account switch — previously the
-  back/forward cache (bfcache) could surface the prior user's content (CWE-525).
-  Static assets stay cacheable.
+- Filter `regex` conditions run under a per-match timeout now, closing a denial-of-service hole. The old create-time heuristic could be bypassed by a catastrophic-backtracking pattern (for example `([a-z]+)*`), and because matching ran synchronously on the event loop during fetch, filter tests and retroactive apply, and CPython's `re` neither times out nor releases the GIL, a single crafted filter could freeze the whole app for every user. Evaluation now uses the `regex` module with a hard timeout; a timed-out pattern counts as no match, and normal filter behaviour is unchanged.
 
 ## [0.11.0] - 2026-06-30
 

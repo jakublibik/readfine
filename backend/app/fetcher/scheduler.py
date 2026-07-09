@@ -332,6 +332,10 @@ async def _fetch_due_feeds() -> None:
         async with db.async_session_factory() as session:
             feed_in_session = await session.get(Feed, feed_id)
             if feed_in_session and feed_in_session.id not in _initial_fetch_in_progress:
+                # Capture the URL now: fetch_feed commits, which expires ORM
+                # attributes, and re-reading feed_url afterwards would trigger an
+                # implicit sync reload the async session forbids (MissingGreenlet).
+                feed_url = feed_in_session.feed_url
                 if feed_in_session.feed_type == "scrape":
                     from app.fetcher.scrape import fetch_scrape_feed
                     await fetch_scrape_feed(
@@ -349,7 +353,7 @@ async def _fetch_due_feeds() -> None:
                 # instead of hammering into a known rate-limit gap). The fetch above just
                 # refreshed the learned value for this host.
                 host_throttle.arm_after_fetch(
-                    host_key(feed_in_session.feed_url), datetime.now(timezone.utc)
+                    host_key(feed_url), datetime.now(timezone.utc)
                 )
 
     fetch_start = datetime.now(timezone.utc)

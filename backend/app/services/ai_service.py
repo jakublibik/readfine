@@ -297,7 +297,7 @@ async def verify_ai_slot(
         elif provider == "openai":
             resp = await client.chat.completions.create(
                 model=model,
-                max_tokens=5,
+                max_completion_tokens=_openai_max_tokens(model, 5),
                 messages=[{"role": "user", "content": "Hi"}],
             )
             _ = resp.choices
@@ -406,7 +406,8 @@ async def chat_with_article(
             openai_msgs.append({"role": "system", "content": system_prompt})
         openai_msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
         resp = await client.chat.completions.create(
-            model=model, max_tokens=600, messages=openai_msgs)
+            model=model, max_completion_tokens=_openai_max_tokens(model, 600),
+            messages=openai_msgs)
         return (
             _extract_text("openai", resp),
             resp.usage.prompt_tokens,
@@ -704,6 +705,23 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
 
 # ── internal ──────────────────────────────────────────────────────────────────
 
+# OpenAI's o-series and gpt-5 family are reasoning models: reasoning tokens
+# count against max_completion_tokens and are spent before any visible output,
+# so a tight cap (e.g. 10 for scoring) can yield an empty response. Give them
+# extra headroom on top of the desired output length. max_completion_tokens is
+# only a ceiling — unused tokens are not billed — so this is free for short
+# outputs on non-reasoning models, which keep their original cap unchanged.
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+_OPENAI_REASONING_BUDGET = 8000
+
+
+def _openai_max_tokens(model: str, max_tokens: int) -> int:
+    """Add reasoning headroom for OpenAI reasoning models; others unchanged."""
+    if (model or "").lower().startswith(_OPENAI_REASONING_PREFIXES):
+        return max_tokens + _OPENAI_REASONING_BUDGET
+    return max_tokens
+
+
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500
 ) -> tuple[str, int, int]:
@@ -718,7 +736,7 @@ async def _complete(
     elif provider == "openai":
         resp = await client.chat.completions.create(
             model=model,
-            max_tokens=max_tokens,
+            max_completion_tokens=_openai_max_tokens(model, max_tokens),
             messages=[{"role": "user", "content": prompt}],
         )
         return _extract_text("openai", resp), resp.usage.prompt_tokens, resp.usage.completion_tokens

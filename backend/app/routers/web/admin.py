@@ -34,6 +34,7 @@ from app.services.admin_service import (
     toggle_feed_pause,
     toggle_user_active,
     update_app_settings,
+    update_feed_admin,
 )
 from app.utils.crypto import encrypt
 from app.utils.parsing import clamp, safe_int
@@ -466,6 +467,55 @@ async def admin_delete_feed(
     if deleted:
         await log_audit(db, user.id, "feed_delete", target_type="feed", target_id=feed_id)
     return await _feeds_response(request, db, user, group)
+
+
+@router.get("/feeds/{feed_id}/edit", response_class=HTMLResponse)
+async def admin_feed_edit_form(
+    feed_id: int,
+    request: Request,
+    group: str = Query("az"),
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Feed-edit form for the admin modal — feed-wide fields only."""
+    feed = await get_feed(db, feed_id)
+    if not feed:
+        return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+    s = await get_app_settings(db)
+    return templates.TemplateResponse(request, "admin/partials/feed_edit_form.html", {
+        "feed": feed,
+        "group_mode": _norm_group(group),
+        "default_interval_min": (s.default_fetch_interval_min or 60),
+    })
+
+
+@router.post("/feeds/{feed_id}/edit", response_class=HTMLResponse)
+async def admin_feed_update(
+    feed_id: int,
+    request: Request,
+    group: str = Query("az"),
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    interval_raw = safe_int(form.get("fetch_interval_min"))
+    fetch_interval_min = _quantize15(interval_raw, 60) if interval_raw else None
+    feed = await update_feed_admin(
+        db, feed_id,
+        title=form.get("title", ""),
+        fetch_interval_min=fetch_interval_min,
+        status=form.get("status", ""),
+        article_links_selector=form.get("article_links_selector"),
+    )
+    if not feed:
+        return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+    await log_audit(db, user.id, "feed_edit", target_type="feed", target_id=feed_id,
+                    detail={"title": feed.title, "status": feed.status,
+                            "fetch_interval_min": feed.fetch_interval_min})
+    resp = await _feeds_response(request, db, user, group)
+    # Close the edit modal once the table has been re-rendered.
+    resp.headers["HX-Trigger"] = json.dumps({"feedEditDone": True})
+    return resp
 
 
 @router.post("/feeds/{feed_id}/force-fetch", response_class=HTMLResponse)

@@ -1,33 +1,36 @@
 <table class="w-full text-sm">
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
-      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">User</th>
-      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Role</th>
-      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Status</th>
-      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Feeds</th>
-      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Articles</th>
-      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last active</th>
-      <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Inactive days</th>
-      <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Joined</th>
-      <th class="px-4 py-2"></th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">User</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Role</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Status</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Feeds</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Articles</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Articles actually read: dwell ≥ 30s, link opened, or ever starred">Read</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Filters</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="AI operations: last 7 days / all time (summaries, scoring, context, chat, catch-up)">AI 7d/all</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Last active</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500" title="Days since last active">Idle</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Joined</th>
+      <th class="px-2 py-2"></th>
     </tr>
   </thead>
   <tbody class="divide-y divide-gray-100">
     {% for item in users %}
     {% set u = item.user %}
     <tr>
-      <td class="px-4 py-2">
+      <td class="px-2 py-2">
         <div class="font-medium text-gray-900">{{ u.display_name }}</div>
         <div class="text-xs text-gray-400">{{ u.email }}</div>
       </td>
-      <td class="px-4 py-2">
+      <td class="px-2 py-2">
         {% if u.role == "admin" %}
           <span class="px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700">admin</span>
         {% else %}
           <span class="text-gray-500">user</span>
         {% endif %}
       </td>
-      <td class="px-4 py-2">
+      <td class="px-2 py-2">
         {% if not u.email_verified %}
           <span class="px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-700">unverified</span>
         {% elif u.is_active %}
@@ -36,18 +39,27 @@
           <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">inactive</span>
         {% endif %}
       </td>
-      <td class="px-4 py-2 text-right text-gray-600">{{ item.feed_count }}</td>
-      <td class="px-4 py-2 text-right text-gray-600">{{ item.article_count }}</td>
-      <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+      <td class="px-2 py-2 text-right text-gray-600">{{ item.feed_count }}</td>
+      <td class="px-2 py-2 text-right text-gray-600">{{ item.article_count }}</td>
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count }}</td>
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}">{{ item.filter_count }}</td>
+      <td class="px-2 py-2 text-right whitespace-nowrap">
+        {% if item.ai_ops_total == 0 %}
+          <span class="text-gray-300">—</span>
+        {% else %}
+          <span class="{{ 'text-gray-700' if item.ai_ops_recent else 'text-gray-400' }}">{{ item.ai_ops_recent }}</span><span class="text-xs text-gray-400"> / {{ item.ai_ops_total }}</span>
+        {% endif %}
+      </td>
+      <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
         {% if u.last_active_at %}
           <time datetime="{{ u.last_active_at.isoformat() }}">{{ u.last_active_at | localtime('short') }}</time>
         {% else %}—{% endif %}
       </td>
-      <td class="px-4 py-2 text-right whitespace-nowrap">
+      <td class="px-2 py-2 text-left whitespace-nowrap">
         {% if item.inactive_days is none %}
           <span class="text-gray-300">—</span>
         {% elif item.inactive_days == 0 %}
-          <span class="text-green-600 text-xs">today</span>
+          <span class="text-green-600 text-xs">&lt;24h</span>
         {% elif item.inactive_days <= 7 %}
           <span class="text-gray-500 text-xs">{{ item.inactive_days }}d</span>
         {% elif item.inactive_days <= 30 %}
@@ -56,28 +68,33 @@
           <span class="text-red-500 text-xs">{{ item.inactive_days }}d</span>
         {% endif %}
       </td>
-      <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-        <time datetime="{{ u.created_at.isoformat() }}">{{ u.created_at | localtime('date') }}</time>
+      <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
+        <time datetime="{{ u.created_at.isoformat() }}">{{ u.created_at | localtime('numdate') }}</time>
       </td>
-      <td class="px-4 py-2 text-right">
+      <td class="px-2 py-2 text-right">
         {% if u.id != current_user.id %}
-          <div class="inline-flex gap-1">
+        <div class="relative inline-block">
+          <button data-menu-toggle class="text-gray-400 hover:text-gray-600 px-1">···</button>
+          <div data-menu class="hidden fixed bg-white border border-gray-200 rounded-lg shadow-lg z-50 py-1 min-w-36 text-left">
             <button hx-post="/admin/users/{{ u.id }}/activate"
                     hx-target="#users-table"
                     hx-swap="innerHTML"
-                    class="text-xs px-2 py-1 rounded border border-gray-200 hover:bg-gray-50 text-gray-600">
+                    class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
               {{ "Deactivate" if u.is_active else "Activate" }}
             </button>
             {% if not u.is_active or not u.email_verified %}
-            <button type="button"
-                    class="swap-confirm text-xs px-2 py-1 rounded border border-gray-200 hover:bg-red-50 text-red-500"
-                    data-confirm-text="Confirm delete"
-                    data-confirm-class="text-xs px-2 py-1 rounded border border-red-500 font-medium text-white bg-red-600 hover:bg-red-700"
-                    hx-delete="/admin/users/{{ u.id }}"
-                    hx-target="#users-table"
-                    hx-swap="innerHTML">Delete</button>
+            <div class="border-t border-gray-100 mt-1 pt-1">
+              <button type="button"
+                      class="swap-confirm block w-full text-left px-4 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                      data-confirm-text="Confirm delete"
+                      data-confirm-class="block w-full text-left px-4 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                      hx-delete="/admin/users/{{ u.id }}"
+                      hx-target="#users-table"
+                      hx-swap="innerHTML">Delete</button>
+            </div>
             {% endif %}
           </div>
+        </div>
         {% endif %}
       </td>
     </tr>

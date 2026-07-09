@@ -4,7 +4,7 @@
       <strong>{{ matched }}</strong> article{% if matched != 1 %}s{% endif %} currently match.
     </p>
     <p class="text-amber-700">
-      This is an AI filter — it applies to articles that already have a score.
+      This is an AI filter - it applies to articles that already have a score.
       Retroactive scoring is triggered by label filters, not by score conditions.
     </p>
     <div class="flex items-center gap-3">
@@ -21,7 +21,7 @@
     {% if scoring_count > 0 %}
       <p class="{% if scoring_count > 1000 %}text-red-700 font-medium{% else %}text-gray-600{% endif %}">
         Up to ~<strong>{{ scoring_count }}</strong> will be queued for AI scoring.
-        {% if scoring_count > 1000 %}That's a lot of AI calls — consider narrowing the filter scope.{% endif %}
+        {% if scoring_count > 1000 %}That's a lot of AI calls - consider narrowing the filter scope.{% endif %}
       </p>
       <div class="flex items-center gap-3 flex-wrap">
         <button hx-post="/settings/filters/{{ filter_id }}/apply"

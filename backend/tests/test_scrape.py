@@ -780,3 +780,18 @@ class TestSaveScrapeCutoff:
             count = await _save_scrape_articles(feed, self._links(), fetched_at, session, None)
 
         assert count == 3
+
+    async def test_undated_link_stores_null_published_at(self):
+        # Undated listings must store published_at=None (not fetched_at) so readable
+        # extraction can backfill the real date via htmldate; dated links keep theirs.
+        from app.fetcher.scrape import _save_scrape_articles
+        session = _make_session()
+        feed = _make_scrape_feed()
+        fetched_at = datetime(2024, 3, 20, tzinfo=timezone.utc)
+
+        with patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
+            await _save_scrape_articles(feed, self._links(), fetched_at, session, None)
+
+        added = {c.args[0].url: c.args[0] for c in session.add.call_args_list}
+        assert added["https://example.com/nodate"].published_at is None
+        assert added["https://example.com/new"].published_at == datetime(2024, 3, 10, tzinfo=timezone.utc)
