@@ -6,7 +6,12 @@ Blocked/empty/filtered provider responses must raise ProviderEmptyResponse
 import pytest
 from types import SimpleNamespace
 
-from app.services.ai_service import _extract_text, ProviderEmptyResponse
+from app.services.ai_service import (
+    _extract_text,
+    _openai_max_tokens,
+    _OPENAI_REASONING_BUDGET,
+    ProviderEmptyResponse,
+)
 
 
 def _anthropic(text):
@@ -61,3 +66,19 @@ class TestExtractTextEmpty:
 def test_unknown_provider_raises_value_error():
     with pytest.raises(ValueError):
         _extract_text("nope", SimpleNamespace())
+
+
+class TestOpenAIMaxTokens:
+    @pytest.mark.parametrize("model", [
+        "o1", "o1-mini", "o3-mini", "o4-mini",
+        "gpt-5", "GPT-5-mini", "gpt-5.4", "gpt-5.5", "gpt-5.1-mini",
+    ])
+    def test_reasoning_models_get_headroom(self, model):
+        assert _openai_max_tokens(model, 10) == 10 + _OPENAI_REASONING_BUDGET
+
+    @pytest.mark.parametrize("model", ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"])
+    def test_non_reasoning_models_unchanged(self, model):
+        assert _openai_max_tokens(model, 500) == 500
+
+    def test_none_model_unchanged(self):
+        assert _openai_max_tokens(None, 500) == 500
