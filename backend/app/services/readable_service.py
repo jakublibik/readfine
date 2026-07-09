@@ -87,6 +87,27 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
         return None, msg, None
 
 
+def _strip_pre_extraction_noise(html: str) -> str:
+    """Remove page chrome that extractors mistake for the main content.
+
+    Tumblr renders a large `<ol class="notes">` list of likes/reblogs (inside
+    `#notecontainer`). It is the biggest block on a short post, so trafilatura's
+    precision heuristics latch onto it and return the notes list *instead* of the
+    post body — and because that result is non-empty, the readability fallback never
+    runs. Dropping it before extraction lets the real post surface. We also drop
+    `<noscript>` here: Tumblr posts carry a tracking-pixel `<noscript>` that
+    readability keeps as escaped `<img>` text, which renders as garbage in the body.
+    """
+    if "notecontainer" not in html and 'class="notes"' not in html:
+        return html
+    soup = BeautifulSoup(html, "html.parser")
+    for el in soup.select("#notecontainer, ol.notes"):
+        el.decompose()
+    for el in soup.find_all("noscript"):
+        el.decompose()
+    return str(soup)
+
+
 def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
     import re
     result = trafilatura.extract(html, url=url, output_format="html",
@@ -322,6 +343,7 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
         return None, fetch_error, http_status, None
 
     video_figures = _collect_video_figures(html)
+    html = _strip_pre_extraction_noise(html)
     content = _extract_with_trafilatura(html, url)
     if not content:
         content = _extract_with_readability(html)

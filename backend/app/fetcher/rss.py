@@ -568,11 +568,27 @@ def _extract_image(entry) -> str | None:
     return None
 
 
+# Platforms whose feeds always carry the complete post body, so readable extraction
+# adds nothing and often makes things worse (Tumblr renders the post twice on the page
+# plus a large likes/reblogs "notes" list). Matched case-insensitively against the feed's
+# <generator>. These are microblogging platforms whose posts are usually well under the
+# word-count threshold below, so the length heuristic alone never catches them.
+_FULL_CONTENT_GENERATORS = ("tumblr",)
+
+
+def _is_known_full_content_platform(parsed: feedparser.FeedParserDict) -> bool:
+    generator = (parsed.feed.get("generator") or "").lower()
+    return any(g in generator for g in _FULL_CONTENT_GENERATORS)
+
+
 def is_full_content_feed(parsed: feedparser.FeedParserDict, sample: int = 5, threshold: int = 500) -> bool:
     """
     Heuristic: return True if the feed appears to deliver full article content.
-    Checks up to `sample` entries; returns True if the majority exceed `threshold` words.
+    Known full-content platforms (by <generator>) short-circuit to True; otherwise
+    checks up to `sample` entries and returns True if the majority exceed `threshold` words.
     """
+    if _is_known_full_content_platform(parsed):
+        return True
     counts = []
     for entry in parsed.entries[:sample]:
         content, _ = _extract_content(entry)

@@ -19,6 +19,7 @@ from app.fetcher.rss import (
     _struct_to_dt,
     _url_dedup_keys,
     fetch_feed,
+    is_full_content_feed,
 )
 from app.fetcher.scheduler import (
     compute_next_fetch_at,
@@ -621,6 +622,42 @@ class AttrDict(dict):
             return AttrDict(val) if isinstance(val, dict) else val
         except KeyError:
             raise AttributeError(key)
+
+
+# ── is_full_content_feed ──────────────────────────────────────────────────────
+
+class TestIsFullContentFeed:
+    def _parsed(self, generator=None, entries=None):
+        import feedparser
+        feed = feedparser.FeedParserDict()
+        if generator is not None:
+            feed["generator"] = generator
+        return feedparser.FeedParserDict({"feed": feed, "entries": entries or []})
+
+    def test_tumblr_generator_short_circuits_true(self):
+        # Tumblr posts are short (well under 500 words) but the feed carries the full
+        # body, so the generator must flag it as full-content regardless of length.
+        parsed = self._parsed(
+            generator="Tumblr (3.0; @someblog)",
+            entries=[AttrDict({"summary": "out of granola bars"})],
+        )
+        assert is_full_content_feed(parsed) is True
+
+    def test_generator_match_is_case_insensitive(self):
+        parsed = self._parsed(generator="TUMBLR", entries=[])
+        assert is_full_content_feed(parsed) is True
+
+    def test_unknown_generator_falls_back_to_word_count(self):
+        # No known platform + short entries → not full content.
+        parsed = self._parsed(
+            generator="WordPress",
+            entries=[AttrDict({"summary": "tiny"})],
+        )
+        assert is_full_content_feed(parsed) is False
+
+    def test_long_entries_still_full_content(self):
+        parsed = self._parsed(entries=[AttrDict({"summary": "word " * 600})])
+        assert is_full_content_feed(parsed) is True
 
 
 # ── _extract_content ──────────────────────────────────────────────────────────

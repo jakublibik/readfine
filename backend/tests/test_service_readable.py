@@ -12,6 +12,7 @@ from app.services.readable_service import (
     _find_published_date,
     _extract_with_trafilatura,
     _extract_with_readability,
+    _strip_pre_extraction_noise,
     _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
@@ -125,6 +126,30 @@ class TestFindPublishedDate:
     def test_swallows_htmldate_errors(self):
         with patch("htmldate.find_date", side_effect=RuntimeError("boom")):
             assert _find_published_date("<html></html>", "https://example.com/a") is None
+
+
+class TestStripPreExtractionNoise:
+    def test_drops_tumblr_notes_and_noscript(self):
+        # Tumblr's notes list is the biggest block on a short post; trafilatura
+        # grabs it as the "content" unless we remove it first.
+        html = (
+            '<div id="content"><p>the actual post</p></div>'
+            '<div id="notecontainer"><ol class="notes">'
+            '<li><a href="https://x.tumblr.com/">x</a>liked this</li>'
+            '</ol></div>'
+            '<noscript><img src="https://px.srvcs.tumblr.com/impixu"></noscript>'
+        )
+        out = _strip_pre_extraction_noise(html)
+        assert "the actual post" in out
+        assert "liked this" not in out
+        assert "notecontainer" not in out
+        assert "impixu" not in out
+
+    def test_passthrough_when_no_tumblr_markers(self):
+        # Non-Tumblr pages are returned untouched (noscript preserved for e.g.
+        # lazy-loaded <img> fallbacks).
+        html = '<article><p>hi</p><noscript><img src="/lazy.jpg"></noscript></article>'
+        assert _strip_pre_extraction_noise(html) == html
 
 
 class TestDedupeImages:

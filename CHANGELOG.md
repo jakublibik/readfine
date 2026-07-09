@@ -23,6 +23,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Readable extraction is no longer enabled for Tumblr feeds, which already deliver the full post in the feed. Extracting the page instead pulled in the likes/reblogs "notes" list as the body and duplicated the post text; Tumblr (and other feeds that advertise themselves as full-content via their `<generator>`) are now treated as full-content at subscribe time, so their feed content is shown as-is. Should extraction still run on a Tumblr page, the notes list and tracking pixels are stripped before extraction as a safeguard.
 - Marking a feed or folder read from the sidebar now refreshes the whole sidebar, so counts that share those articles (labels, other feeds) update right away instead of going stale until the next reload.
 - Readable extraction removes duplicate images: some news sites emit the same photo as several renditions (lead, inline, responsive) and each was extracted, so the body showed the same picture two or three times. Matching on the image filename now collapses them to a single copy.
 - Admin → Feeds: a host group that contains a failing feed no longer paints its entire header red, which overstated severity and blended into the group separator; only the host name turns red now.
