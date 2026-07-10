@@ -6,7 +6,7 @@ labels: bug
 assignees: ''
 ---
 
-<!-- Security issue? Do NOT file it here — see SECURITY.md. -->
+<!-- Security issue? Do NOT file it here; see SECURITY.md. -->
 
 ## Description
 

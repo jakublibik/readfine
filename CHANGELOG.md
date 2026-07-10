@@ -130,18 +130,18 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   longer return 429 mid-subscribe.
 - When several feeds share a host (e.g. multiple Reddit subreddits), a scheduled
   fetch no longer requests them all at once. Requests to a given host are now
-  serialized within a fetch round — different hosts still run in parallel — which
+  serialized within a fetch round (different hosts still run in parallel), which
   flattens the burst that made some of those feeds return HTTP 429.
-- Readable extraction that returns no usable content — e.g. a Reddit article page
-  that serves a bot-verification wall (HTTP 200) instead of the article — is no
+- Readable extraction that returns no usable content, e.g. a Reddit article page
+  that serves a bot-verification wall (HTTP 200) instead of the article, is no
   longer saved as a blank "successful" extraction that rendered an empty body. Such
   articles now show their original feed content, and a feed whose pages keep
   extracting nothing auto-disables full-content extraction after repeated empties
   (the same way persistent HTTP 403 blocks already did) instead of re-fetching every
   page forever.
 - The auto-disabled notice for full-content extraction now states why it was turned
-  off — the feed already delivers full articles, or the site blocked extraction /
-  returned no readable content — instead of always claiming the site blocked it.
+  off (the feed already delivers full articles, or the site blocked extraction /
+  returned no readable content) instead of always claiming the site blocked it.
 - The article view no longer flickers an endless "Extracting full content…" spinner
   for an article whose extraction failed and is waiting to retry; it shows the feed
   content quietly, and the spinner appears only while a first attempt is in flight.
@@ -154,7 +154,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - One-command local demo: `docker compose -f docker-compose.demo.yml up` brings the
   app up on `http://localhost:8000` with a seeded admin and no setup wizard, for
-  trying it out before a full install. Demo only — plain HTTP, `DEBUG=true`, and
+  trying it out before a full install. Demo only: plain HTTP, `DEBUG=true`, and
   hard-coded throwaway secrets; not for production. See README → Quick demo.
 
 ### Fixed
@@ -223,12 +223,12 @@ First public release. Self-hosted RSS reader with:
 - OPML import/export, including web-scraping feeds (round-trips via custom outline
   attributes) and Tiny Tiny RSS compatibility
 - `/healthz` endpoint (lightweight DB ping, GET + HEAD) for uptime/monitoring probes
-- `backup.sh` — off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
+- `backup.sh`: off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
   deduplicated, retention), with a Cloudflare R2 example config. See README → Backups.
 
 Notes for self-hosters:
 
-- **Registration is closed by default** on a fresh install — only the admin account
+- **Registration is closed by default** on a fresh install. Only the admin account
   exists; enable sign-ups in the admin panel to open the instance.
 - Shell scripts are pinned to LF line endings (`.gitattributes`) so `setup.sh` runs
   correctly when the repo is cloned/unzipped on Windows.

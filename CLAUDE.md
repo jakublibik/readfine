@@ -15,20 +15,20 @@ article scoring, and AI summaries, scoring and briefings.
 - Package manager: uv
 
 ## Technical decisions
-- **Dev environment**: hybrid — PostgreSQL in Docker, FastAPI run locally via uv
+- **Dev environment**: hybrid (PostgreSQL in Docker, FastAPI run locally via uv)
 - **CSRF**: the web is protected by `starlette_csrf.CSRFMiddleware` (double-submit
   cookie + `x-csrftoken` header; HTMX requests attach it via `csrf.js`). The API is
   exempt (it authenticates with a JWT in the `Authorization` header), as are the auth
   forms (`/login`, `/register`, `/logout`, `/reset-password`, `/resend-verification`)
 - **Git workflow**: `dev` = active development, `master` = production trunk and the
   GitHub default branch. New work branches off `dev`; deploying to production means
-  merging `dev → master` and pulling on the server — master is continuously deployable
+  merging `dev → master` and pulling on the server; master is continuously deployable
   and may sit ahead of the last release. A **version release is a separate event**: a
   tag + `CHANGELOG` section cut over commits already on master (see `RELEASING.md`), not
   a prerequisite for deploying. **Before any merge to `master`, verify on staging first.**
 
 ## Status
-Released and on the post-release `0.x` line — first public release was v0.9.0 (2026-06-20);
+Released and on the post-release `0.x` line. First public release was v0.9.0 (2026-06-20);
 for the current version and release notes see `CHANGELOG.md` (and `RELEASING.md` for the
 process). Implemented: RSS/Atom and
 web-scraping feeds, folders, scheduled fetching, readable extraction, 3-panel reading UI,
@@ -44,7 +44,7 @@ readfine.app.
   pipeline, briefing, scoring, purge), security-critical paths (crypto, rate limiting,
   URL/SSRF validation)
 - **Don't test**: CRUD routes (name/email/password/settings changes), admin UI, Jinja2
-  templates, simple static routes — low risk, reversible or trivial
+  templates, simple static routes (low risk, reversible or trivial)
 - A new feature gets a test if it is irreversible, security-critical, or contains non-trivial
   business logic
 
@@ -58,5 +58,5 @@ readfine.app.
 ## Before large changes
 - For non-trivial work (e.g. error handling, new features), propose at least two approaches
   with tradeoffs and wait for approval before implementing
-- Don't assume behavior is a bug — verify the current behavior is actually wrong before
+- Don't assume behavior is a bug; verify the current behavior is actually wrong before
   "fixing" it

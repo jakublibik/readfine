@@ -2,9 +2,9 @@
 
 A throwaway parallel instance for verifying that an update **builds, migrates,
 and runs on the server** before you promote the same commit to production. It
-catches "works on my dev machine, breaks on the server" issues — image build
+catches "works on my dev machine, breaks on the server" issues: image build
 differences, migration ordering, strict (`DEBUG=false`) config, missing system
-libraries — without touching production data.
+libraries. All without touching production data.
 
 It runs as its own Docker Compose project (`readfine-staging`) with its **own
 database volume**, fully isolated from the production stack on the same host.
@@ -34,12 +34,12 @@ The staging stack ships **no reverse proxy**: the app is published on
 `127.0.0.1:8001` only, so it is never public by accident. Put it behind your
 existing edge however you prefer, and **gate it** (it is not meant to be open):
 
-- **Reverse-proxy subdomain** — add a server block to your existing proxy that
+- **Reverse-proxy subdomain:** add a server block to your existing proxy that
   forwards your staging hostname to the app. From a containerised nginx, reach
   the host with `host.docker.internal` (add
   `extra_hosts: ["host.docker.internal:host-gateway"]` to that nginx service) and
   `proxy_pass http://host.docker.internal:8001`. In that case the app must NOT be
-  bound to loopback only, or the proxy container can't reach it — set
+  bound to loopback only, or the proxy container can't reach it. Set
   `STAGING_BIND=0.0.0.0` in `.env.staging` and keep the host/network firewall
   restricting inbound to 80/443 (+22) so 8001 stays private.
 - **Tunnel** (Cloudflare Tunnel, Tailscale, …) pointed at `localhost:8001`.
