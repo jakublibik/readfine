@@ -6,6 +6,7 @@ import pytest
 
 from app.utils.datetime_format import (
     format_local,
+    format_until,
     is_valid_timezone,
     available_timezone_list,
     timezone_groups,
@@ -13,6 +14,39 @@ from app.utils.datetime_format import (
 
 # Fixed reference "now" so relative formatting is deterministic.
 NOW = datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc)
+
+
+class TestFormatUntil:
+    def _at(self, **delta):
+        from datetime import timedelta
+        return format_until(NOW + timedelta(**delta), now=NOW)
+
+    def test_none_returns_none(self):
+        assert format_until(None, now=NOW) is None
+
+    def test_past_is_due(self):
+        assert self._at(minutes=-5) == "due"
+        assert self._at(seconds=0) == "due"
+
+    def test_minutes(self):
+        assert self._at(minutes=8) == "~8m"
+        assert self._at(minutes=59) == "~59m"
+
+    def test_hours(self):
+        assert self._at(minutes=60) == "~1h"
+        assert self._at(minutes=90) == "~2h"   # rounds to nearest hour
+        assert self._at(hours=23) == "~23h"
+
+    def test_days(self):
+        assert self._at(hours=24) == "~1d"
+        assert self._at(days=2) == "~2d"
+
+    def test_tz_independent(self):
+        # A tz-aware target in a non-UTC zone still yields the same delta label.
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        dt = (NOW + timedelta(hours=2)).astimezone(ZoneInfo("Asia/Tokyo"))
+        assert format_until(dt, now=NOW) == "~2h"
 
 
 class TestFormatLocalShort:

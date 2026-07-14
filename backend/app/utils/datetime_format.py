@@ -71,6 +71,27 @@ def format_local(
     return f"{pad(dt.day)}.{pad(dt.month)}.{dt.year} {dt.strftime('%H:%M')}"
 
 
+def format_until(dt: datetime | None, now: datetime | None = None) -> str | None:
+    """Compact, timezone-independent "time from now" used for next-fetch hints, e.g.
+    ``~35m``, ``~2h``, ``~1d``. Relative so a table cell stays narrow even when the
+    target is a day out (an absolute date would widen the column; the exact time can
+    go in a tooltip). Returns ``None`` when ``dt`` is ``None``; ``due`` when already
+    past. Only the delta matters, so no tz conversion is needed."""
+    if dt is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    secs = (dt - now).total_seconds()
+    if secs <= 0:
+        return "due"
+    mins = round(secs / 60)
+    if mins < 60:
+        return f"~{mins}m"
+    hours = secs / 3600
+    if hours < 24:
+        return f"~{round(hours)}h"
+    return f"~{round(hours / 24)}d"
+
+
 @cache
 def _available_set() -> frozenset[str]:
     return frozenset(zoneinfo.available_timezones())

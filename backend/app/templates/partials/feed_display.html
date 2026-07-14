@@ -1,0 +1,2 @@
+{# Shared feed-display macros used by the admin and settings feeds tables. #}
+{% macro fmt_interval(m) %}{% if m < 60 %}{{ m }}m{% else %}{{ "%g"|format(m / 60) | replace(".", ",") }}h{% endif %}{% endmacro %}

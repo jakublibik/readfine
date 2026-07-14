@@ -24,7 +24,7 @@ from app.utils.crypto import encrypt
 from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
-from app.utils.datetime_format import is_valid_timezone
+from app.utils.datetime_format import format_until, is_valid_timezone
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
@@ -200,22 +200,24 @@ async def _get_feeds_context(user, db):
         article_counts = {row.feed_id: row.cnt for row in counts_result}
     else:
         article_counts = {}
-    # Annotate errored feeds with their predicted next fetch (transient, in-memory).
+    # Annotate each feed (transient, in-memory) with its effective Auto interval and
+    # predicted next fetch (relative hint) for the feeds table.
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
     min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
     max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
+    now = datetime.now(timezone.utc)
     for uf in user_feeds:
-        uf.feed.next_fetch_at = (
-            compute_next_fetch_at(
-                uf.feed,
-                default_interval_min=default_interval,
-                min_interval_min=min_interval,
-                max_interval_min=max_interval,
-            )
-            if uf.feed.status == "error"
-            else None
+        f = uf.feed
+        f.auto_interval_min = auto_interval_min(
+            f.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
         )
+        f.next_fetch_at = compute_next_fetch_at(
+            f, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval, now=now,
+        )
+        f.next_fetch_rel = format_until(f.next_fetch_at, now)
     return user_feeds, folders, article_counts
 
 
