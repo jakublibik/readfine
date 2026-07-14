@@ -9,7 +9,9 @@ from unittest.mock import patch
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    _pin_connection,
     fetch_url_conditional,
+    fetch_url_with_ssrf_check,
     parse_retry_after,
     redact_url,
     spacing_from_headers,
@@ -307,6 +309,69 @@ class TestResolveResponseIntegration:
                 result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert "ok" in result.text
+
+
+class TestPinConnection:
+    """_pin_connection: rewrite to the validated IP while preserving Host / SNI."""
+
+    def test_https_rewrites_to_ip_with_host_and_sni(self):
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            connect_url, headers, extensions = _pin_connection("https://example.com/feed.xml")
+        assert connect_url == "https://93.184.216.34/feed.xml"
+        assert headers["Host"] == "example.com"
+        assert extensions["sni_hostname"] == "example.com"
+
+    def test_http_sets_no_sni(self):
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            connect_url, headers, extensions = _pin_connection("http://example.com/feed.xml")
+        assert connect_url == "http://93.184.216.34/feed.xml"
+        assert "sni_hostname" not in extensions
+
+    def test_port_and_query_preserved(self):
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            connect_url, headers, _ = _pin_connection("https://example.com:8443/f?a=1")
+        assert connect_url == "https://93.184.216.34:8443/f?a=1"
+        assert headers["Host"] == "example.com:8443"
+
+    def test_userinfo_preserved(self):
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+            connect_url, headers, _ = _pin_connection("https://user:pass@example.com/f")
+        assert connect_url == "https://user:pass@93.184.216.34/f"
+        assert headers["Host"] == "example.com"  # Host carries no credentials
+
+    def test_ipv6_is_bracketed(self):
+        with patch("socket.getaddrinfo", return_value=[(10, 1, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 0, 0, 0))]):
+            connect_url, _, _ = _pin_connection("https://example.com/f")
+        assert connect_url == "https://[2606:2800:220:1:248:1893:25c8:1946]/f"
+
+    def test_rejects_when_any_resolved_address_is_private(self):
+        # A public + private mix (rebinding-style) is rejected outright, not
+        # silently pinned to the public one.
+        with patch("socket.getaddrinfo", return_value=[
+            (2, 1, 6, "", ("93.184.216.34", 0)),
+            (2, 1, 6, "", ("169.254.169.254", 0)),
+        ]):
+            with pytest.raises(ValueError, match="disallowed address"):
+                _pin_connection("https://example.com/f")
+
+
+class TestDnsRebindingClosure:
+    """The fetch connects to the IP validated at check time, not a re-resolved one."""
+
+    def test_fetch_targets_pinned_ip_not_hostname(self):
+        seen = {}
+
+        def handler(request):
+            seen["host"] = request.url.host
+            seen["header"] = request.headers.get("host")
+            return httpx.Response(200, text="ok")
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        # httpx is asked to connect to the validated IP; the hostname rides in Host.
+        assert seen["host"] == "93.184.216.34"
+        assert seen["header"] == "example.com"
 
 
 class TestTransientHttpStatuses:

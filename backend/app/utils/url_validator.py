@@ -184,34 +184,23 @@ def redact_url(url: str) -> str:
     return cleaned
 
 
-def validate_feed_url(url: str) -> None:
+def _resolve_and_pin(hostname: str) -> str:
+    """Resolve *hostname* once, reject it if any resolved address is disallowed
+    (loopback/private/link-local/reserved/multicast), and return a single public
+    IP to pin the connection to. Raises ValueError on resolution failure or a
+    disallowed address.
+
+    Pinning the connect target to the IP we validated is what closes the
+    DNS-rebinding / TOCTOU window: without it the OS re-resolves at connect time
+    and an attacker-controlled authoritative DNS could hand back a private /
+    metadata address (169.254.169.254, …) different from the one we checked.
     """
-    Validate a feed URL for use in server-side HTTP requests.
-
-    Raises ValueError if:
-    - scheme is not http/https
-    - hostname resolves to a private/loopback/link-local address
-
-    Known limitation (DNS rebinding / TOCTOU): this resolves DNS to check the
-    IP, but httpx re-resolves at connect time, so a hostname whose DNS flips
-    between calls could pass validation yet connect to a private/metadata IP.
-    Low severity (needs attacker-controlled authoritative DNS + race). Deferred
-    hardening (review M4): pin the validated IP and connect to it directly.
-    """
-    parsed = urlparse(url)
-
-    if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise ValueError(f"Invalid URL scheme '{parsed.scheme}': only http and https are allowed")
-
-    hostname = parsed.hostname
-    if not hostname:
-        raise ValueError("URL has no hostname")
-
     try:
         infos = socket.getaddrinfo(hostname, None)
     except socket.gaierror as exc:
         raise ValueError(f"Cannot resolve hostname '{hostname}': {exc}") from exc
 
+    pinned: str | None = None
     for _family, _type, _proto, _canonname, sockaddr in infos:
         ip_str = sockaddr[0]
         try:
@@ -223,6 +212,75 @@ def validate_feed_url(url: str) -> None:
                 f"URL resolves to a disallowed address ({ip}): "
                 "localhost, private, and link-local addresses are not permitted"
             )
+        if pinned is None:
+            pinned = ip_str
+    if pinned is None:
+        raise ValueError(f"Cannot resolve hostname '{hostname}': no usable address")
+    return pinned
+
+
+def validate_feed_url(url: str) -> None:
+    """
+    Validate a feed URL for use in server-side HTTP requests.
+
+    Raises ValueError if:
+    - scheme is not http/https
+    - hostname resolves to a private/loopback/link-local address
+
+    This is the pre-flight check used by callers that validate a URL without
+    fetching. The fetch path (:func:`_resolve_response`) additionally pins the
+    connection to the validated IP, so DNS cannot rebind to a private/metadata
+    address between this check and the connect (review M4).
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"Invalid URL scheme '{parsed.scheme}': only http and https are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname")
+
+    _resolve_and_pin(hostname)
+
+
+def _pin_connection(url: str) -> tuple[str, dict[str, str], dict]:
+    """Validate *url* and rewrite it to connect to a pinned, validated IP.
+
+    Returns ``(connect_url, header_overlay, extensions)``:
+      * ``connect_url`` has its host replaced by the validated IP (userinfo and
+        port preserved), so the socket connects to exactly the address we checked
+        rather than a re-resolved one.
+      * ``header_overlay`` carries the original ``Host`` so name-based virtual
+        hosting still works.
+      * ``extensions`` sets ``sni_hostname`` for HTTPS so TLS SNI and certificate
+        verification run against the real hostname, not the IP.
+    """
+    parsed = urlparse(url)
+
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"Invalid URL scheme '{parsed.scheme}': only http and https are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname")
+
+    ip = _resolve_and_pin(hostname)
+
+    ip_netloc = f"[{ip}]" if ":" in ip else ip
+    if parsed.port:
+        ip_netloc = f"{ip_netloc}:{parsed.port}"
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    connect_url = parsed._replace(netloc=userinfo + ip_netloc).geturl()
+
+    host_header = f"{hostname}:{parsed.port}" if parsed.port else hostname
+    extensions = {"sni_hostname": hostname} if parsed.scheme == "https" else {}
+    return connect_url, {"Host": host_header}, extensions
 
 
 async def async_validate_feed_url(url: str) -> None:
@@ -248,7 +306,11 @@ def _resolve_response(
     current_url = url
     with httpx.Client(timeout=timeout, follow_redirects=False, auth=auth, headers=headers) as client:
         for _ in range(max_redirects + 1):
-            response = client.get(current_url)
+            # Validate + pin every hop to its resolved IP; connecting to the IP
+            # (with the original Host header and HTTPS SNI) removes the re-resolve
+            # that would otherwise reopen the DNS-rebinding window.
+            connect_url, host_overlay, extensions = _pin_connection(current_url)
+            response = client.get(connect_url, headers=host_overlay, extensions=extensions)
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.
             if not response.has_redirect_location:
@@ -258,7 +320,7 @@ def _resolve_response(
             redirect_url = response.headers.get("location", "")
             if redirect_url and not redirect_url.startswith(("http://", "https://")):
                 redirect_url = urljoin(current_url, redirect_url)
-            validate_feed_url(redirect_url)
+            # The next iteration's _pin_connection validates redirect_url before use.
             current_url = redirect_url
     raise httpx.TooManyRedirects(
         f"Too many redirects (max {max_redirects})", request=response.request
