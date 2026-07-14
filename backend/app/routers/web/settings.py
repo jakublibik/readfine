@@ -41,6 +41,7 @@ from app.models.label import Label
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
@@ -203,12 +204,14 @@ async def _get_feeds_context(user, db):
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
     min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
     for uf in user_feeds:
         uf.feed.next_fetch_at = (
             compute_next_fetch_at(
                 uf.feed,
                 default_interval_min=default_interval,
                 min_interval_min=min_interval,
+                max_interval_min=max_interval,
             )
             if uf.feed.status == "error"
             else None
@@ -772,17 +775,26 @@ async def settings_feed_edit(
         and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
     )
     is_sole_subscriber = uf.feed.subscriber_count == 1
+    default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
+    min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
         "next_fetch_at": compute_next_fetch_at(
             uf.feed,
-            default_interval_min=(app_s.default_fetch_interval_min if app_s else None) or 60,
-            min_interval_min=(app_s.min_fetch_interval_min if app_s else None) or 15,
+            default_interval_min=default_interval,
+            min_interval_min=min_interval,
+            max_interval_min=max_interval,
         ),
         "is_sole_subscriber": is_sole_subscriber,
         "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
-        "default_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
+        "default_interval_min": default_interval,
+        # Effective interval Auto would use for this feed — hint next to the "Auto" option.
+        "auto_interval_min": auto_interval_min(
+            uf.feed.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
+        ),
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,
     })

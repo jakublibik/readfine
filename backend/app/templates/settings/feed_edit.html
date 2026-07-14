@@ -56,20 +56,20 @@
     {% if can_edit_interval %}
     <select name="fetch_interval_min"
             class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <option value="">Default ({{ default_interval_min }} min)</option>
+      <option value="">Auto (~{{ auto_interval_min }} min)</option>
       {% for m in [15,30,60,90,120,180,360,720,1440] %}
         <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
           {{ m }} min
         </option>
       {% endfor %}
     </select>
-    <p class="text-xs text-gray-400 mt-1">How often to check for new articles.</p>
+    <p class="text-xs text-gray-400 mt-1">Auto adapts to how often this feed publishes; pick a value to override.</p>
     {% else %}
     <p class="text-sm text-gray-600">
       {% if uf.feed.fetch_interval_min %}
         Every {{ uf.feed.fetch_interval_min }} min
       {% else %}
-        Every {{ default_interval_min }} min <span class="text-gray-400">(server default)</span>
+        Every ~{{ auto_interval_min }} min <span class="text-gray-400">(auto)</span>
       {% endif %}
     </p>
     <p class="text-xs text-gray-400 mt-1">This is a shared feed - the fetch interval is managed by the server administrator.</p>

@@ -11,6 +11,11 @@ from sqlalchemy import and_, case, func, literal_column, or_, select
 import app.database as db
 from app.fetcher import host_throttle
 from app.fetcher.host_throttle import host_key
+from app.fetcher.interval import (
+    WINDOW_DAYS,
+    auto_interval_min,
+    derive_interval_min,
+)
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
@@ -46,6 +51,54 @@ _COOLDOWN_BUFFER = timedelta(seconds=5)
 _DUE_GRACE = timedelta(minutes=2)
 
 _T = TypeVar("_T")
+
+
+def effective_interval_min(
+    feed: Feed,
+    *,
+    default_interval_min: int,
+    min_interval_min: int,
+    max_interval_min: int,
+) -> int:
+    """The feed's effective poll interval in minutes. Mirror of ``effective_interval_sql``.
+
+    A manual override (``fetch_interval_min``) is authoritative: floored at the global
+    minimum but NOT capped, since the user picked it explicitly. Otherwise (Auto) defer
+    to :func:`app.fetcher.interval.auto_interval_min`, which caps a genuinely derived
+    value but leaves the default fallback uncapped.
+    """
+    if feed.fetch_interval_min is not None:
+        return max(feed.fetch_interval_min, min_interval_min)
+    return auto_interval_min(
+        feed.derived_interval_min,
+        default_interval_min=default_interval_min,
+        min_interval_min=min_interval_min,
+        max_interval_min=max_interval_min,
+    )
+
+
+def effective_interval_sql(
+    default_interval_min: int, min_interval_min: int, max_interval_min: int
+):
+    """SQLAlchemy expression mirroring :func:`effective_interval_min` for the due query.
+
+    A DB test guards that this and the Python scalar agree across the manual/auto matrix.
+    Like the scalar, only a genuinely derived value is capped; the default fallback
+    (no derived value yet) is floored at the minimum but left uncapped.
+    """
+    manual = Feed.fetch_interval_min
+    derived = Feed.derived_interval_min
+    auto = case(
+        (
+            derived.isnot(None),
+            func.least(func.greatest(derived, min_interval_min), max_interval_min),
+        ),
+        else_=func.greatest(default_interval_min, min_interval_min),
+    )
+    return case(
+        (manual.isnot(None), func.greatest(manual, min_interval_min)),
+        else_=auto,
+    )
 
 
 def _cooldown_wait(
@@ -124,6 +177,7 @@ def compute_next_fetch_at(
     *,
     default_interval_min: int,
     min_interval_min: int,
+    max_interval_min: int,
     now: datetime | None = None,
 ) -> datetime | None:
     """Predict when the scheduler will next attempt to fetch *feed*.
@@ -137,8 +191,11 @@ def compute_next_fetch_at(
     if feed.subscriber_count <= 0 or feed.status not in ("active", "error"):
         return None
 
-    effective_interval_min = max(
-        feed.fetch_interval_min or default_interval_min, min_interval_min
+    interval_min = effective_interval_min(
+        feed,
+        default_interval_min=default_interval_min,
+        min_interval_min=min_interval_min,
+        max_interval_min=max_interval_min,
     )
 
     if feed.last_fetched_at is None:
@@ -151,7 +208,7 @@ def compute_next_fetch_at(
         )
         due = feed.last_fetched_at + timedelta(minutes=backoff_min)
     else:  # active
-        due = feed.last_fetched_at + timedelta(minutes=effective_interval_min)
+        due = feed.last_fetched_at + timedelta(minutes=interval_min)
 
     # A server-requested Retry-After (HTTP 429) defers the feed further.
     if feed.retry_after_until is not None and feed.retry_after_until > due:
@@ -199,7 +256,7 @@ def _feed_due_for_selection(
 
 
 async def _select_due_feeds(
-    session, now: datetime, *, default_interval: int, min_interval: int
+    session, now: datetime, *, default_interval: int, min_interval: int, max_interval: int
 ) -> list[Feed]:
     """Select the feeds due for a fetch at *now* (the scheduler's selection query).
 
@@ -209,12 +266,11 @@ async def _select_due_feeds(
     """
     error_backoff_min = max(15, default_interval * 2)
     one_minute = literal_column("interval '1 minute'")
-    # per-feed interval clamped to the global minimum
-    effective_interval_min = func.greatest(
-        func.coalesce(Feed.fetch_interval_min, default_interval),
-        min_interval,
+    # manual override (uncapped) or adaptive derived interval, clamped — see
+    # effective_interval_sql(); a DB test guards it against the Python mirror.
+    effective_interval = (
+        effective_interval_sql(default_interval, min_interval, max_interval) * one_minute
     )
-    effective_interval = effective_interval_min * one_minute
     # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
     error_backoff = case(
         (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
@@ -262,19 +318,22 @@ async def _fetch_due_feeds() -> None:
             select(
                 AppSettings.default_fetch_interval_min,
                 AppSettings.min_fetch_interval_min,
+                AppSettings.max_fetch_interval_min,
                 AppSettings.default_purge_after_days,
             ).where(AppSettings.id == 1)
         )
         row = result.one_or_none()
         default_interval = (row[0] if row else None) or 60
         min_interval = (row[1] if row else None) or 15
-        global_purge_days = (row[2] if row else None)
+        max_interval = (row[2] if row else None) or 360
+        global_purge_days = (row[3] if row else None)
         now = datetime.now(timezone.utc)
 
         # active: fetch when due; error: tiered backoff; paused/disabled: skip.
         # A due feed is picked at any 15-min tick — see _select_due_feeds().
         feeds = await _select_due_feeds(
-            session, now, default_interval=default_interval, min_interval=min_interval
+            session, now, default_interval=default_interval,
+            min_interval=min_interval, max_interval=max_interval,
         )
 
         # Per-feed published_cutoff: MAX(COALESCE(user_feed.purge_after_days, global))
@@ -417,6 +476,62 @@ async def _process_ai_filters() -> None:
     from app.services.filter_service import process_ai_filters_batch
     async with db.async_session_factory() as session:
         await process_ai_filters_batch(session)
+
+
+async def recompute_derived_intervals(session) -> int:
+    """Recompute ``Feed.derived_interval_min`` for every feed from its recent publish
+    cadence, writing only the feeds whose value changed. Returns the number updated.
+
+    One grouped count over the trailing window drives the whole set; cadence moves
+    slowly, so this runs daily (plus once at startup) rather than per fetch.
+
+    The count filters ``trimmed_at IS NULL`` so it can ride the partial index
+    ``ix_articles_sort_ts``. This can slightly undercount a very high-volume feed whose
+    recent items were already trimmed by count-based purge, but such feeds bottom out at
+    ``AUTO_FLOOR`` regardless, so the effect is immaterial — a deliberate trade-off.
+    Only ``active``/``error`` feeds are recomputed; paused/disabled ones are not polled,
+    so a stale derived value on them costs nothing (the next run refreshes on resume).
+    """
+    from app.models.article import Article
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=WINDOW_DAYS)
+    rows = await session.execute(
+        select(Article.feed_id, func.count().label("n"))
+        .where(
+            func.coalesce(Article.published_at, Article.fetched_at) > window_start,
+            Article.trimmed_at.is_(None),
+        )
+        .group_by(Article.feed_id)
+    )
+    counts = {feed_id: n for feed_id, n in rows.all()}
+
+    feeds = (
+        await session.execute(
+            select(Feed).where(Feed.status.in_(("active", "error")))
+        )
+    ).scalars().all()
+    updated = 0
+    for feed in feeds:
+        new_val = derive_interval_min(
+            created_at=feed.created_at, count=counts.get(feed.id, 0), now=now
+        )
+        if new_val != feed.derived_interval_min:
+            feed.derived_interval_min = new_val
+            updated += 1
+    if updated:
+        await session.commit()
+    return updated
+
+
+async def _recompute_derived_intervals() -> None:
+    """Job: refresh the adaptive per-feed fetch intervals."""
+    if db.async_session_factory is None:
+        return
+    async with db.async_session_factory() as session:
+        n = await recompute_derived_intervals(session)
+        if n:
+            logger.info("Recomputed adaptive fetch interval for %d feeds", n)
 
 
 async def _purge_old_articles() -> None:
@@ -585,6 +700,16 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _recompute_derived_intervals,
+        trigger="cron",
+        hour=2,
+        minute=30,
+        id="recompute_derived_intervals",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _purge_old_articles,

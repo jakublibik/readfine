@@ -56,6 +56,12 @@ async def lifespan(app: FastAPI):
     async with db.async_session_factory() as session:
         await load_into_memory(session)
 
+    # Backfill/refresh adaptive fetch intervals now (writes only changed feeds), then
+    # the daily job keeps them current.
+    from app.fetcher.scheduler import recompute_derived_intervals
+    async with db.async_session_factory() as session:
+        await recompute_derived_intervals(session)
+
     from app.fetcher.scheduler import create_scheduler
     sched = create_scheduler()
     sched.start()

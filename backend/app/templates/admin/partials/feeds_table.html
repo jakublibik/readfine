@@ -1,3 +1,4 @@
+{% macro fmt_interval(m) %}{% if m < 60 %}{{ m }}m{% else %}{{ "%g"|format(m / 60) | replace(".", ",") }}h{% endif %}{% endmacro %}
 {% macro feed_row(item, default_interval_min, gq) %}
 {% set f = item.feed %}
 <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
@@ -30,7 +31,7 @@
   <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
   <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
   <td class="px-2 py-2 text-right text-gray-500">
-    {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-400" title="Default (no per-feed override)">{{ default_interval_min }}m</span>{% endif %}
+    {% if f.fetch_interval_min %}{{ fmt_interval(f.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(f.auto_interval_min) }}</span>{% endif %}
   </td>
   <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
     {% if f.last_fetched_at %}

@@ -77,6 +77,20 @@
           {% endfor %}
         </select>
       </div>
+      <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Maximum fetch interval (auto)</label>
+          <p class="text-xs text-gray-400">Cap for the adaptive interval on quiet feeds</p>
+        </div>
+        <select name="max_fetch_interval_min"
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+          {% for m in [60,120,180,360,720,1440] %}
+            <option value="{{ m }}" {% if s.max_fetch_interval_min == m %}selected{% endif %}>
+              {{ m }} min
+            </option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
   </section>
 
