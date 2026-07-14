@@ -67,16 +67,15 @@ class TestListFeeds:
 
 
 class TestListUserFeedsIncludeUnread:
-    """list_user_feeds(include_unread=True) must override the cached unread_count
-    with a value computed fresh from the DB, falling back to 0 for feeds with no
-    matching unread rows. Guards against the cached-column drift the API used to
-    expose (web computes fresh, API trusted the stale column)."""
+    """list_user_feeds(include_unread=True) computes each feed's unread_count fresh
+    from the DB, falling back to 0 for feeds with no matching unread rows. There is
+    no stored unread column; every API response counts on read."""
 
     @pytest.mark.asyncio
-    async def test_overrides_cached_unread_count(self):
+    async def test_sets_fresh_unread_count(self):
         from app.services.feed import list_user_feeds
 
-        # Cached column is deliberately wrong (stale) to prove it's replaced.
+        # Pre-set value is deliberately wrong to prove it's overwritten.
         uf1 = _make_user_feed(id=1, feed_id=10, unread_count=999)
         uf2 = _make_user_feed(id=2, feed_id=20, unread_count=999)
 
@@ -108,9 +107,8 @@ class TestListUserFeedsIncludeUnread:
 
         feeds = await list_user_feeds(user, db)
 
-        # No second query, cached value left untouched.
+        # No second query when the count isn't requested.
         assert db.execute.await_count == 1
-        assert feeds[0].unread_count == 999
 
 
 class TestSubscribeFeed:

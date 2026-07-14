@@ -61,31 +61,31 @@ class TestDedupCrossFeedGlobal:
         await dedup_cross_feed_global(SINCE, db)
         db.commit.assert_not_called()
 
-    async def test_duplicate_triggers_insert_update_commit(self):
-        # 1 unique feed_id → SELECT + INSERT + UPDATE(unread_count) = 3 executes
-        rows = [SimpleNamespace(user_id=1, article_id=5, feed_id=10)]
+    async def test_duplicate_triggers_insert_and_commit(self):
+        # SELECT + INSERT = 2 executes (unread counts are computed on read now)
+        rows = [SimpleNamespace(user_id=1, article_id=5)]
         db = _db_returning(rows)
         await dedup_cross_feed_global(SINCE, db)
-        assert db.execute.call_count == 3
+        assert db.execute.call_count == 2
         db.commit.assert_called_once()
 
     async def test_returns_count_of_marked_rows(self):
         rows = [
-            SimpleNamespace(user_id=1, article_id=5, feed_id=10),
-            SimpleNamespace(user_id=2, article_id=5, feed_id=10),
+            SimpleNamespace(user_id=1, article_id=5),
+            SimpleNamespace(user_id=2, article_id=5),
         ]
         db = _db_returning(rows)
         assert await dedup_cross_feed_global(SINCE, db) == 2
 
-    async def test_two_feeds_execute_two_unread_updates(self):
+    async def test_multiple_feeds_still_single_insert(self):
         rows = [
-            SimpleNamespace(user_id=1, article_id=5, feed_id=10),
-            SimpleNamespace(user_id=1, article_id=7, feed_id=20),
+            SimpleNamespace(user_id=1, article_id=5),
+            SimpleNamespace(user_id=1, article_id=7),
         ]
         db = _db_returning(rows)
         await dedup_cross_feed_global(SINCE, db)
-        # SELECT + INSERT + UPDATE(feed 10) + UPDATE(feed 20) = 4
-        assert db.execute.call_count == 4
+        # SELECT + INSERT = 2 regardless of how many feeds are involved
+        assert db.execute.call_count == 2
 
     async def test_sql_uses_less_than_not_neq(self):
         """Regression: dup_exists subquery must use < so only the higher-ID duplicate
@@ -132,16 +132,16 @@ class TestDedupCrossFeed:
         # Only the SELECT was executed
         assert db.execute.call_count == 1
 
-    async def test_duplicate_rows_trigger_insert_and_update(self):
+    async def test_duplicate_rows_trigger_insert(self):
         rows = [SimpleNamespace(user_id=1, article_id=5)]
         db = _db_returning(rows)
         await _dedup_cross_feed(10, [self._article(5)], db)
-        # SELECT + INSERT + UPDATE(unread_count) = 3
-        assert db.execute.call_count == 3
+        # SELECT + INSERT = 2 (unread counts are computed on read now)
+        assert db.execute.call_count == 2
 
     async def test_multiple_new_articles_mixed_duplicates(self):
         # Only article 5 is a duplicate; article 6 is not
         rows = [SimpleNamespace(user_id=1, article_id=5)]
         db = _db_returning(rows)
         await _dedup_cross_feed(10, [self._article(5), self._article(6)], db)
-        assert db.execute.call_count == 3
+        assert db.execute.call_count == 2

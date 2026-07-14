@@ -79,7 +79,6 @@ class UserFeed(Base):
     readable_auto_disabled_reason: Mapped[str | None] = mapped_column(String(20))
     ai_scoring_enabled: Mapped[bool | None] = mapped_column(Boolean)
     ai_summary_enabled: Mapped[bool | None] = mapped_column(Boolean)
-    unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     purge_after_days: Mapped[int | None] = mapped_column(SmallInteger)
     purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger)
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)

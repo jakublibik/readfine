@@ -47,51 +47,6 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _SNIPPET_LEN = 200
 
 
-async def _recalc_unread_for_feeds(user_id: int, feed_ids, db: AsyncSession) -> None:
-    """Recalculate unread_count for the given feeds in one statement.
-
-    `feed_ids` may be a list of ints or a single-column subquery (SELECT feed_id …).
-    Uses a correlated subquery so the update is a single SQL statement regardless
-    of how many feeds are affected.
-    """
-    if isinstance(feed_ids, (list, tuple, set)) and not feed_ids:
-        return
-    unread_subq = (
-        select(func.count())
-        .select_from(Article)
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user_id),
-        )
-        .where(
-            Article.feed_id == UserFeed.feed_id,
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
-        )
-        .correlate(UserFeed)
-        .scalar_subquery()
-    )
-    await db.execute(
-        update(UserFeed)
-        .where(UserFeed.user_id == user_id, UserFeed.feed_id.in_(feed_ids))
-        .values(unread_count=unread_subq)
-    )
-
-
-async def _recalculate_unread_counts(
-    user_id: int, article_ids: list[int], db: AsyncSession
-) -> None:
-    """Recalculate unread_count for feeds touched by the given article IDs.
-
-    For small, already-materialized batches (e.g. scroll-based mark-read).
-    """
-    if not article_ids:
-        return
-    affected_feed_ids = select(Article.feed_id.distinct()).where(Article.id.in_(article_ids))
-    await _recalc_unread_for_feeds(user_id, affected_feed_ids, db)
-
-
 def _make_snippet(summary: str | None, content: str | None) -> str | None:
     """Return a plain-text snippet: summary if usable, otherwise content prefix."""
     for source in (summary, content):
@@ -468,8 +423,6 @@ async def mark_scope_read(
             )
             .values(is_read=True, read_at=now)
         )
-        affected_feeds = select(Article.feed_id.distinct()).where(Article.id.in_(scope_articles))
-        await _recalc_unread_for_feeds(user.id, affected_feeds, db)
         await db.commit()
         return
 
@@ -515,7 +468,6 @@ async def mark_scope_read(
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
-    await _recalc_unread_for_feeds(user.id, scoped_select(Article.feed_id).distinct(), db)
     await db.commit()
 
 
@@ -566,7 +518,6 @@ async def mark_articles_read_batch(user: User, article_ids: list[int], db: Async
         where=(UserArticleState.__table__.c.is_read.is_not(True)),
     )
     await db.execute(stmt)
-    await _recalculate_unread_counts(user.id, article_ids, db)
     await db.commit()
 
 
@@ -637,12 +588,6 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
-        delta = -1 if new_value else 1
-        await db.execute(
-            update(UserFeed)
-            .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
-            .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
-        )
 
     if field == "is_starred":
         _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
@@ -718,16 +663,8 @@ async def update_article_state(
         db.add(state)
 
     if payload.is_read is not None:
-        was_read = bool(state.is_read)
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
-        if was_read != payload.is_read:
-            delta = -1 if payload.is_read else 1
-            await db.execute(
-                update(UserFeed)
-                .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user.id)
-                .values(unread_count=func.greatest(UserFeed.unread_count + delta, 0))
-            )
 
     if payload.is_starred is not None:
         was_starred = bool(state.is_starred)

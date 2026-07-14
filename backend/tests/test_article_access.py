@@ -44,11 +44,8 @@ class TestMarkArticlesReadBatch:
     async def test_upserts_only_accessible_ids(self):
         db = _make_db()
         user = SimpleNamespace(id=5)
-        with (
-            patch("app.services.article.filter_accessible_article_ids",
-                  new=AsyncMock(return_value=[1, 3])),
-            patch("app.services.article._recalculate_unread_counts", new=AsyncMock()),
-        ):
+        with patch("app.services.article.filter_accessible_article_ids",
+                   new=AsyncMock(return_value=[1, 3])):
             await mark_articles_read_batch(user, [1, 2, 3], db)
         db.execute.assert_awaited_once()
         db.commit.assert_awaited_once()

@@ -14,7 +14,7 @@ from sqlalchemy import case, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.feed import Feed, UserFeed
+from app.models.feed import Feed
 from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
 from app.fetcher import host_throttle
@@ -362,11 +362,6 @@ async def _save_scrape_articles(
         for a in new_articles:
             db.add(a)
         await db.flush()
-        await db.execute(
-            update(UserFeed)
-            .where(UserFeed.feed_id == feed.id)
-            .values(unread_count=UserFeed.unread_count + len(new_articles))
-        )
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
 

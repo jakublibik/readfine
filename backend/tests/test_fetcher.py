@@ -1385,7 +1385,7 @@ def _save_session(existing_hashes=(), existing_urls=()) -> AsyncMock:
 
     Routes the two SELECTs by inspecting the statement: the guid_hash existence
     query, then (only when there are URL dedup keys) the url existence query. Any
-    other statement (the unread_count UPDATE) gets a throwaway result.
+    other statement gets a throwaway result.
     """
     eh, eu = list(existing_hashes), list(existing_urls)
 
