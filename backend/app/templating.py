@@ -2,7 +2,7 @@ import json
 from markupsafe import Markup
 from fastapi.templating import Jinja2Templates
 
-from app.utils.markdown import md_render
+from app.utils.markdown import md_render, md_render_inline
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
 from app.utils.static import static_url
 from app.utils.datetime_format import (
@@ -15,6 +15,7 @@ from app.utils.datetime_format import (
 templates = Jinja2Templates(directory="app/templates")
 
 templates.env.filters["markdown"] = lambda text: Markup(md_render(text or ""))
+templates.env.filters["markdown_inline"] = lambda text: Markup(md_render_inline(text or ""))
 
 
 def _localtime(dt, fmt: str = "short") -> str:

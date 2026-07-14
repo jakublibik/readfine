@@ -48,6 +48,12 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      - name: Regenerate FEATURES.md from source
+        run: uv run python ../scripts/gen_features.py
+
+      - name: Fail if committed FEATURES.md is stale
+        run: git diff --exit-code ../FEATURES.md
+
   frontend:
     runs-on: ubuntu-latest
     steps:

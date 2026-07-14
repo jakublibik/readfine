@@ -44,6 +44,8 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - **Accounts:** per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
 - **Import/export:** OPML (incl. Tiny Tiny RSS compatibility)
 
+See [FEATURES.md](FEATURES.md) for the full list, grouped by area (also at `/features` in the app).
+
 <p>
   <img src="backend/app/static/images/landing/mobile_summary.png" width="30%" alt="AI summary" />
   <img src="backend/app/static/images/landing/mobile_filters.png" width="30%" alt="Filters" />

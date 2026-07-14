@@ -8,6 +8,22 @@
 .ai-loading-indicator { display: none; }
 .ai-loading-indicator.htmx-request { display: flex; }
 
+/* Links inside Markdown-rendered feature descriptions (/features) */
+.feature-desc a { color: #2563eb; }
+.feature-desc a:hover { text-decoration: underline; }
+.dark .feature-desc a { color: #60a5fa; }
+
+/* Inline code in feature descriptions */
+.feature-desc code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  background: #f3f4f6;
+  color: #374151;
+}
+.dark .feature-desc code { background: #1f2937; color: #d1d5db; }
+
 /* Article feed/readable content: media never overflows the reading panel */
 .article-body img { max-width: 100%; height: auto; }
 
