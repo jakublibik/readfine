@@ -1,7 +1,7 @@
 {% macro feed_row(item, default_interval_min, gq) %}
 {% set f = item.feed %}
 <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
-  <td class="px-3 py-2 w-full max-w-0">
+  <td class="px-3 py-2 w-full min-w-[14rem] max-w-0">
     <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
     <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
@@ -107,7 +107,7 @@
 <table class="w-full text-sm">
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
-      <th class="w-full text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
+      <th class="w-full min-w-[14rem] text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Type</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Status</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Subs</th>
