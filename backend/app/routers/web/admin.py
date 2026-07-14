@@ -344,6 +344,25 @@ def _norm_group(group: str | None) -> str:
     return "host" if group == "host" else "az"
 
 
+def _humanize_until(dt: datetime | None, now: datetime) -> str | None:
+    """Compact "time from now" for the admin feeds table's next-fetch hint, e.g.
+    ``~35m``, ``~2h``, ``~1d``. Relative so it stays narrow even when the fetch is a
+    day out (an absolute date would widen the column); the exact time goes in a
+    tooltip. ``None`` when nothing is scheduled; ``due`` when already past."""
+    if dt is None:
+        return None
+    secs = (dt - now).total_seconds()
+    if secs <= 0:
+        return "due"
+    mins = round(secs / 60)
+    if mins < 60:
+        return f"~{mins}m"
+    hours = secs / 3600
+    if hours < 24:
+        return f"~{round(hours)}h"
+    return f"~{round(hours / 24)}d"
+
+
 async def _feeds_context(db, group: str = "az") -> dict:
     """Feeds list annotated for the admin table: predicted next fetch for errored
     feeds (mirrors settings) and the effective default interval for feeds without a
@@ -354,16 +373,16 @@ async def _feeds_context(db, group: str = "az") -> dict:
     default_interval = (s.default_fetch_interval_min or 60)
     min_interval = (s.min_fetch_interval_min or 15)
     max_interval = (s.max_fetch_interval_min or 360)
+    now = datetime.now(timezone.utc)
     for item in feeds:
         f = item["feed"]
-        f.next_fetch_at = (
-            compute_next_fetch_at(
-                f, default_interval_min=default_interval,
-                min_interval_min=min_interval, max_interval_min=max_interval,
-            )
-            if f.status == "error"
-            else None
+        # Predicted next fetch for every scheduled feed (None for paused/disabled/no-subs),
+        # shown under "Last fetch" as a relative hint.
+        f.next_fetch_at = compute_next_fetch_at(
+            f, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval, now=now,
         )
+        f.next_fetch_rel = _humanize_until(f.next_fetch_at, now)
         # Effective Auto interval the scheduler would use (capped derived value, or the
         # uncapped default fallback), so the table matches behaviour, not the raw stored value.
         f.auto_interval_min = auto_interval_min(

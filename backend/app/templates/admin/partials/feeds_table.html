@@ -8,12 +8,6 @@
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
     {% if f.status == 'error' and f.last_error %}
     <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
-    {% if f.next_fetch_at %}
-    <div class="text-xs text-gray-400 mt-0.5">Next fetch
-      <time datetime="{{ f.next_fetch_at.isoformat() }}"
-            title="{{ f.next_fetch_at | localtime('long') }}">~ {{ f.next_fetch_at | localtime('short') }}</time>
-    </div>
-    {% endif %}
     {% endif %}
   </td>
   <td class="px-2 py-2">
@@ -40,6 +34,11 @@
       <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
       {% endif %}
     {% else %}<span class="text-gray-300">—</span>{% endif %}
+    {% if f.next_fetch_rel %}
+    <div class="text-xs text-gray-400 mt-0.5" title="Next fetch {{ f.next_fetch_at | localtime('long') }}">
+      next {{ f.next_fetch_rel }}
+    </div>
+    {% endif %}
   </td>
   <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
     {% if f.last_published_at %}
@@ -114,7 +113,7 @@
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Subs</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Articles</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Interval</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last fetch</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last / next fetch</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last published</th>
       <th class="px-2 py-2"></th>
     </tr>
