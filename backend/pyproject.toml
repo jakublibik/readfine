@@ -23,8 +23,9 @@ dependencies = [
     # Config
     "pydantic-settings>=2.3.0",
     "pydantic[email]>=2.7.0",
-    # RSS fetching
-    "httpx>=0.27.0",
+    # RSS fetching (http2 extra: some CDNs, e.g. Reddit/Fastly, 403 or hard-throttle
+    # HTTP/1.1 clients as bots but serve HTTP/2 normally)
+    "httpx[http2]>=0.27.0",
     "feedparser>=6.0.11",
     # Readable extraction
     "trafilatura>=1.12.0",

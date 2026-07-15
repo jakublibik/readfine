@@ -304,7 +304,13 @@ def _resolve_response(
     requests).
     """
     current_url = url
-    with httpx.Client(timeout=timeout, follow_redirects=False, auth=auth, headers=headers) as client:
+    # http2=True: negotiate HTTP/2 when the server offers it (falls back to HTTP/1.1
+    # otherwise). Some CDNs treat a plain HTTP/1.1 request as a bot signal and answer
+    # with a header-less 403 / near-zero rate budget (observed on Reddit via Fastly),
+    # while serving HTTP/2 clients normally.
+    with httpx.Client(
+        timeout=timeout, follow_redirects=False, auth=auth, headers=headers, http2=True
+    ) as client:
         for _ in range(max_redirects + 1):
             # Validate + pin every hop to its resolved IP; connecting to the IP
             # (with the original Host header and HTTPS SNI) removes the re-resolve
