@@ -226,6 +226,13 @@ async def fetch_scrape_feed(
         feed.last_error = None
         feed.fetch_error_count = 0
         feed.retry_after_until = None
+        # Mirror rss.py: track the newest article date this listing carried. Only
+        # advance when at least one link is dated, so a fetch of purely undated
+        # links doesn't wipe a previously-known publication date. Stays None for
+        # feeds whose listings never expose dates (genuinely unknown, not fetch time).
+        latest_pub = max((pub for _, _, pub, _ in links if pub), default=None)
+        if latest_pub:
+            feed.last_published_at = latest_pub
         await db.commit()
         # Scrape success carries no RateLimit-* headers (fetch returns HTML only), so
         # this just clears any pending 429 streak for the host.
