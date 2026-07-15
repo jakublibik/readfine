@@ -564,13 +564,22 @@ async def admin_force_fetch(
                 "type": "warning",
             }})
             return resp
+        # Read the admin id before fetching: a failing fetch rolls back inside
+        # fetch_feed, which expires every ORM object in this session (user, feed).
+        # Touching user.id afterwards would then trigger a sync lazy-load on the
+        # async engine and raise MissingGreenlet.
+        admin_id = user.id
         if feed.feed_type == "scrape":
             from app.fetcher.scrape import fetch_scrape_feed
             await fetch_scrape_feed(feed, db)
         else:
             from app.fetcher.rss import fetch_feed
             await fetch_feed(feed, db)
-        await log_audit(db, user.id, "feed_force_fetch", target_type="feed", target_id=feed_id)
+        # fetch_feed writes the feed's status/last_error via a Core UPDATE and may
+        # have rolled back (expiring the ORM object), so reload the row to read its
+        # true post-fetch state safely in async context.
+        await db.refresh(feed)
+        await log_audit(db, admin_id, "feed_force_fetch", target_type="feed", target_id=feed_id)
         # A live 429 during the fetch just armed a cooldown but stored the raw
         # httpx error — surface the timed message (only on failure).
         now2 = datetime.now(timezone.utc)
