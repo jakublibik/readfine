@@ -3,6 +3,7 @@
 {% block title %}Add web scraping feed – Readfine{% endblock %}
 
 {% block settings_content %}
+{% from "partials/feed_display.html" import fmt_interval %}
 <h1 class="text-xl font-semibold text-gray-900 mb-1">Add web scraping feed</h1>
 <p class="text-sm text-gray-500 mb-3 font-mono break-all">
   <a href="{{ url }}" target="_blank" rel="noopener noreferrer" class="hover:text-blue-600 underline">{{ url }}</a>
@@ -115,7 +116,7 @@
             class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       <option value="">Auto (adapts to publish rate)</option>
       {% for m in [15,30,60,90,120,180,360,720,1440] %}
-        <option value="{{ m }}" {% if fetch_interval_min == m %}selected{% endif %}>{{ m }} min</option>
+        <option value="{{ m }}" {% if fetch_interval_min == m %}selected{% endif %}>{{ fmt_interval(m) }}</option>
       {% endfor %}
     </select>
     <p class="text-xs text-gray-400 mt-1">Auto adapts to how often this feed publishes; pick a value to override.</p>

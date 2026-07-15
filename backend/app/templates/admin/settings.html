@@ -3,6 +3,7 @@
 {% set active = "settings" %}
 
 {% block admin_content %}
+{% from "partials/feed_display.html" import fmt_interval %}
 <h1 class="text-xl font-semibold text-gray-900 mb-6">Global settings</h1>
 
 {% if s.registration_enabled and not s.smtp_host %}
@@ -53,12 +54,15 @@
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Feed fetching</h2>
     <div class="space-y-4 max-w-lg">
       <div class="flex items-center justify-between">
-        <label class="text-sm font-medium text-gray-700">Default fetch interval</label>
+        <div>
+          <label class="text-sm font-medium text-gray-700">Default fetch interval</label>
+          <p class="text-xs text-gray-400">Startup baseline for Auto feeds: used until a feed has ~7 days of history to learn its publish rate from</p>
+        </div>
         <select name="default_fetch_interval_min"
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
           {% for m in [15,30,60,90,120,180,360,720,1440] %}
             <option value="{{ m }}" {% if s.default_fetch_interval_min == m %}selected{% endif %}>
-              {{ m }} min
+              {{ fmt_interval(m) }}
             </option>
           {% endfor %}
         </select>
@@ -66,13 +70,13 @@
       <div class="flex items-center justify-between">
         <div>
           <label class="text-sm font-medium text-gray-700">Minimum fetch interval</label>
-          <p class="text-xs text-gray-400">No feed is fetched more often than this</p>
+          <p class="text-xs text-gray-400">No feed is fetched more often than this; also floors manual per-feed intervals. Auto mode has its own floor of 30 min, so its effective minimum is the higher of the two, set this above 30 and Auto follows.</p>
         </div>
         <select name="min_fetch_interval_min"
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
           {% for m in [15,30,60,90,120,180,360,720,1440] %}
             <option value="{{ m }}" {% if s.min_fetch_interval_min == m %}selected{% endif %}>
-              {{ m }} min
+              {{ fmt_interval(m) }}
             </option>
           {% endfor %}
         </select>
@@ -86,7 +90,7 @@
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
           {% for m in [60,120,180,360,720,1440] %}
             <option value="{{ m }}" {% if s.max_fetch_interval_min == m %}selected{% endif %}>
-              {{ m }} min
+              {{ fmt_interval(m) }}
             </option>
           {% endfor %}
         </select>

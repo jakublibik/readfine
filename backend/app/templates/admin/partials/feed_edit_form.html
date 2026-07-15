@@ -1,3 +1,4 @@
+{% from "partials/feed_display.html" import fmt_interval %}
 {% set gq = '?group=' + group_mode %}
 <form hx-post="/admin/feeds/{{ feed.id }}/edit{{ gq }}"
       hx-target="#feeds-table"
@@ -32,9 +33,9 @@
       <label class="block text-sm font-medium text-gray-700 mb-1">Fetch interval</label>
       <select name="fetch_interval_min"
               class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <option value="">Auto (~{{ auto_interval_min }} min)</option>
+        <option value="">Auto (~{{ fmt_interval(auto_interval_min) }})</option>
         {% for m in [15,30,60,90,120,180,360,720,1440] %}
-        <option value="{{ m }}" {% if feed.fetch_interval_min == m %}selected{% endif %}>{{ m }} min</option>
+        <option value="{{ m }}" {% if feed.fetch_interval_min == m %}selected{% endif %}>{{ fmt_interval(m) }}</option>
         {% endfor %}
       </select>
     </div>

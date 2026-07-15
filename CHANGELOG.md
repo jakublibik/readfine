@@ -20,6 +20,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Fetch interval dropdowns (Admin → Settings and the feed edit screens) now show longer intervals in hours, for example `6h` or `24h`, instead of raw minutes like `360 min`. This matches how the feeds tables already render intervals. The admin settings also spell out how the default, minimum and maximum intervals interact with Auto mode (the minimum floors Auto too, and Auto never polls faster than 30 minutes).
 - Readable extraction backfills an article's publication date from the article page when the feed listing carried no date, so undated articles sort and expire correctly instead of all landing at fetch time. It reads the page's structured `datePublished` (via htmldate) rather than the oldest date on the page, guards against implausible future dates, and never overrides a date the feed already provided. The reader's date updates once extraction finishes.
 - Deleting a feed subscription or folder now cleans up references to it left dangling in filter scopes and catch-up/briefing scopes. As a safeguard against silently widening, a filter or briefing whose scope would empty out is deactivated or disabled instead, and the affected filter and briefing names are surfaced in the feeds settings banner.
 

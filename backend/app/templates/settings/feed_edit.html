@@ -3,6 +3,7 @@
 {% block title %}Edit feed – Readfine{% endblock %}
 
 {% block settings_content %}
+{% from "partials/feed_display.html" import fmt_interval %}
 <div class="mb-6">
   <h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
   <p class="text-sm text-gray-700 mb-2">{{ uf.feed.title }}</p>
@@ -56,10 +57,10 @@
     {% if can_edit_interval %}
     <select name="fetch_interval_min"
             class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
-      <option value="">Auto (~{{ auto_interval_min }} min)</option>
+      <option value="">Auto (~{{ fmt_interval(auto_interval_min) }})</option>
       {% for m in [15,30,60,90,120,180,360,720,1440] %}
         <option value="{{ m }}" {% if uf.feed.fetch_interval_min == m %}selected{% endif %}>
-          {{ m }} min
+          {{ fmt_interval(m) }}
         </option>
       {% endfor %}
     </select>
@@ -67,9 +68,9 @@
     {% else %}
     <p class="text-sm text-gray-600">
       {% if uf.feed.fetch_interval_min %}
-        Every {{ uf.feed.fetch_interval_min }} min
+        Every {{ fmt_interval(uf.feed.fetch_interval_min) }}
       {% else %}
-        Every ~{{ auto_interval_min }} min <span class="text-gray-400">(auto)</span>
+        Every ~{{ fmt_interval(auto_interval_min) }} <span class="text-gray-400">(auto)</span>
       {% endif %}
     </p>
     <p class="text-xs text-gray-400 mt-1">This is a shared feed - the fetch interval is managed by the server administrator.</p>

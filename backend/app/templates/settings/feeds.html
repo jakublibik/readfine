@@ -4,6 +4,7 @@
 {% block settings_main_width %}max-w-4xl{% endblock %}
 
 {% block settings_content %}
+{% from "partials/feed_display.html" import fmt_interval %}
 <h1 class="text-xl font-semibold text-gray-900 mb-6">
   Feeds
   <span id="feeds-count" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
@@ -61,7 +62,7 @@
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
           <option value="">Auto (adapts to publish rate)</option>
           {% for m in [15,30,60,90,120,180,360,720,1440] %}
-            <option value="{{ m }}">{{ m }} min</option>
+            <option value="{{ m }}">{{ fmt_interval(m) }}</option>
           {% endfor %}
         </select>
         <span class="basis-full sm:basis-0 sm:flex-1 text-xs text-gray-400">Auto adapts to how often the feed publishes. Applies only to feeds you originate.</span>
