@@ -25,6 +25,7 @@ _A clean reader that adapts to your screen._
 - **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
 - **Dark mode:** Light, dark, or follow your system preference.
 - **Reading typography:** Choose the font family and text size for the reading view.
+- **Number & date format:** Pick how numbers and dates are written (decimal separator and date order) independently of the interface language, so English can pair with `1 234,56` and `25.06.2026`.
 - **List density:** Compact, comfortable, or summary, set separately for desktop and mobile.
 - **Mark read on scroll:** Optionally mark articles read as they scroll past.
 - **Article states:** Mark articles read, star favourites, and archive what you want out of the way.

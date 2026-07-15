@@ -62,6 +62,11 @@ categories:
         desc: Light, dark, or follow your system preference.
       - title: Reading typography
         desc: Choose the font family and text size for the reading view.
+      - title: Number & date format
+        desc: >-
+          Pick how numbers and dates are written (decimal separator and date
+          order) independently of the interface language, so English can pair
+          with `1 234,56` and `25.06.2026`.
       - title: List density
         desc: >-
           Compact, comfortable, or summary, set separately for desktop and

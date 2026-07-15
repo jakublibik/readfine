@@ -6,7 +6,7 @@
 {% elif detected_feeds is defined %}
   {% if detected_feeds %}
   <div class="text-sm">
-    <p class="text-amber-700 font-medium mb-1.5">No RSS feed found at this URL.<br>Found {{ detected_feeds | length }} feed{{ 's' if detected_feeds | length > 1 }} on the page:</p>
+    <p class="text-amber-700 font-medium mb-1.5">No RSS feed found at this URL.<br>Found {{ (detected_feeds | length)|num }} feed{{ 's' if detected_feeds | length > 1 }} on the page:</p>
     <ul class="space-y-1.5">
       {% for feed in detected_feeds %}
       <li class="flex {{ 'items-start' if feed.title else 'items-center' }} gap-2">
@@ -48,7 +48,7 @@
 <div class="text-sm text-green-700 space-y-0.5">
   <p>
     <span class="font-medium">✓ Feed OK</span> - {{ feed_title }}
-    <span class="text-gray-500">({{ entry_count }} article{% if entry_count != 1 %}s{% endif %})</span>
+    <span class="text-gray-500">({{ entry_count|num }} article{% if entry_count != 1 %}s{% endif %})</span>
   </p>
   {% if auth_status == "not_required" %}
   <p class="text-amber-600 text-xs">⚠ Feed is publicly accessible - authentication is not required.</p>

@@ -20,12 +20,12 @@
         <td class="pr-2 py-2 font-medium text-gray-900">
           <span class="block truncate max-w-[28rem]" title="{{ fs.feed_title }}">{{ fs.feed_title }}</span>
         </td>
-        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.total_articles }}</td>
-        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.read_pct }}%</td>
-        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.labeled_pct }}%</td>
-        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.starred_pct }}%</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.total_articles|num }}</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.read_pct|num(1) }}%</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.labeled_pct|num(1) }}%</td>
+        <td class="px-2 py-2 text-right text-gray-600 whitespace-nowrap">{{ fs.starred_pct|num(1) }}%</td>
         <td class="px-2 py-2 text-right text-gray-500 text-xs whitespace-nowrap">
-          {% if fs.avg_dwell %}{{ (fs.avg_dwell / 60)|round(1) }}m{% else %}—{% endif %}
+          {% if fs.avg_dwell %}{{ (fs.avg_dwell / 60)|num(1) }}m{% else %}—{% endif %}
         </td>
         {% if ai_enabled %}
         <td class="px-2 py-2 text-right text-gray-600 text-xs whitespace-nowrap">
@@ -34,11 +34,11 @@
         {% endif %}
         <td class="px-2 py-2 text-right whitespace-nowrap">
           {% if fs.signal >= 0.4 %}
-            <span class="text-green-600 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+            <span class="text-green-600 font-medium">● {{ fs.signal|num(2) }}</span>
           {% elif fs.signal >= 0.1 %}
-            <span class="text-yellow-500 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+            <span class="text-yellow-500 font-medium">● {{ fs.signal|num(2) }}</span>
           {% else %}
-            <span class="text-red-500 font-medium">● {{ "%.2f"|format(fs.signal) }}</span>
+            <span class="text-red-500 font-medium">● {{ fs.signal|num(2) }}</span>
           {% endif %}
         </td>
       </tr>

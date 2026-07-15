@@ -55,6 +55,7 @@ class UserSettings(Base):
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)
     timezone: Mapped[str] = mapped_column(String(50), default="UTC")
     language: Mapped[str] = mapped_column(String(10), default="en")
+    format_profile: Mapped[str] = mapped_column(String(10), nullable=False, default="iso")
     keyboard_shortcuts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     label_display: Mapped[str] = mapped_column(String(20), default="indicator")
     bucket_small_max: Mapped[int] = mapped_column(SmallInteger, default=640)

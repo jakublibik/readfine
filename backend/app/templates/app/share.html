@@ -48,7 +48,7 @@
             {% endif %}
             {% if article.published_at %}
               {% if feed_title or article.author %}<span>·</span>{% endif %}
-              <span><time datetime="{{ article.published_at.isoformat() }}">{{ article.published_at | localtime('date') }}</time></span>
+              <span><time datetime="{{ article.published_at.isoformat() }}">{{ article.published_at | localtime('numdate') }}</time></span>
             {% endif %}
             {% if article.estimated_read_min %}
               {% if feed_title or article.author or article.published_at %}<span>·</span>{% endif %}

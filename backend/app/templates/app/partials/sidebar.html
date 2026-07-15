@@ -1,5 +1,5 @@
-{% macro badge_unread(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count }}</span>{% endmacro %}
-{% macro badge_total(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count }}</span>{% endmacro %}
+{% macro badge_unread(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count|num }}</span>{% endmacro %}
+{% macro badge_total(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count|num }}</span>{% endmacro %}
 
 {# Both the collapsed rail and the full sidebar are always rendered; CSS (base.html)
    shows exactly one based on pinned / mobile-overlay state, so collapse/expand is a

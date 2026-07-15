@@ -11,17 +11,17 @@
 
 <div class="grid grid-cols-2 gap-4 mb-8 sm:grid-cols-4">
   <a href="/admin/users" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
-    <div class="text-2xl font-bold text-gray-900">{{ stats.user_count }}</div>
-    <div class="text-sm text-gray-500 mt-1">Users <span class="text-gray-400">({{ stats.active_user_count }} active)</span></div>
+    <div class="text-2xl font-bold text-gray-900">{{ stats.user_count|num }}</div>
+    <div class="text-sm text-gray-500 mt-1">Users <span class="text-gray-400">({{ stats.active_user_count|num }} active)</span></div>
   </a>
   <a href="/admin/feeds" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
-    <div class="text-2xl font-bold text-gray-900">{{ stats.feed_count }}</div>
+    <div class="text-2xl font-bold text-gray-900">{{ stats.feed_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Feeds
-      {% if stats.error_feed_count %}<span class="text-red-500">({{ stats.error_feed_count }} errors)</span>{% endif %}
+      {% if stats.error_feed_count %}<span class="text-red-500">({{ stats.error_feed_count|num }} errors)</span>{% endif %}
     </div>
   </a>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
-    <div class="text-2xl font-bold text-gray-900">{{ stats.article_count }}</div>
+    <div class="text-2xl font-bold text-gray-900">{{ stats.article_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Articles</div>
   </div>
 </div>
@@ -29,10 +29,10 @@
 {% if stats.readable_pending or stats.readable_failed %}
 <div class="flex items-center gap-4 mb-6">
   {% if stats.readable_pending %}
-  <span class="text-sm text-gray-500">Readable extraction: <strong class="text-gray-700">{{ stats.readable_pending }}</strong> pending</span>
+  <span class="text-sm text-gray-500">Readable extraction: <strong class="text-gray-700">{{ stats.readable_pending|num }}</strong> pending</span>
   {% endif %}
   {% if stats.readable_failed %}
-  <span class="text-sm text-red-500">{{ stats.readable_failed }} failed</span>
+  <span class="text-sm text-red-500">{{ stats.readable_failed|num }} failed</span>
   {% endif %}
 </div>
 {% endif %}

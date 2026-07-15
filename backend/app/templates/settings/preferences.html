@@ -31,6 +31,17 @@
         {% endfor %}
       </select>
     </div>
+    <div class="flex items-center justify-between mt-4">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Number &amp; date format</label>
+        <p class="text-xs text-gray-500 mt-0.5">Decimal separator and date order used across the app</p>
+      </div>
+      <select name="format_profile" class="border border-gray-300 rounded px-2 py-1.5 text-sm max-w-[16rem]">
+        {% for key, label in format_choices() %}
+        <option value="{{ key }}" {% if key == s.format_profile %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
   </section>
 
   <section>

@@ -22,8 +22,8 @@
       <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
     {% endif %}
   </td>
-  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
-  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count|num }}</td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count|num }}</td>
   <td class="px-2 py-2 text-right text-gray-500">
     {% if f.fetch_interval_min %}{{ fmt_interval(f.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(f.auto_interval_min) }}</span>{% endif %}
   </td>
@@ -31,7 +31,7 @@
     {% if f.last_fetched_at %}
       <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at | localtime('short') }}</time>
       {% if f.last_fetch_duration_ms is not none %}
-      <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
+      <span class="text-gray-300 text-xs"> · {{ (f.last_fetch_duration_ms / 1000)|num(1) }}s</span>
       {% endif %}
     {% else %}<span class="text-gray-300">—</span>{% endif %}
     {% if f.next_fetch_rel %}
@@ -123,7 +123,7 @@
       {% for g in feed_groups %}
       <tr class="bg-gray-50">
         <td colspan="9" class="px-3 py-1.5 text-xs font-medium {% if g.has_error %}text-red-700{% else %}text-gray-500{% endif %}">
-          {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count }}</span>
+          {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count|num }}</span>
         </td>
       </tr>
       {% for item in g.feeds %}{{ feed_row(item, default_interval_min, gq) }}{% endfor %}

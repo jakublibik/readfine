@@ -22,7 +22,7 @@
         <tr>
           <td class="py-2 pr-2 font-medium text-gray-900 break-all">{{ s.host }}</td>
           <td class="px-2 py-2 text-right text-gray-700 tabular-nums whitespace-nowrap">
-            {% if s.seconds >= 60 %}{{ (s.seconds / 60) | round(1) }}m{% else %}{{ s.seconds | round | int }}s{% endif %}
+            {% if s.seconds >= 60 %}{{ (s.seconds / 60)|num(1) }}m{% else %}{{ s.seconds | round | int }}s{% endif %}
           </td>
           <td class="px-2 py-2">
             <span class="px-1.5 py-0.5 text-xs rounded font-mono

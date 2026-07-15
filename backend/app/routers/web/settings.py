@@ -25,6 +25,7 @@ from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import format_until, is_valid_timezone
+from app.utils.formats import is_valid_format
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
@@ -1597,6 +1598,10 @@ async def settings_preferences_save(
     if is_valid_timezone(tz_value) and tz_value != s.timezone:
         s.timezone = tz_value
         await _reschedule_briefings(user.id, tz_value, db)
+
+    fmt_value = (form.get("format_profile") or "").strip()
+    if is_valid_format(fmt_value):
+        s.format_profile = fmt_value
 
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {

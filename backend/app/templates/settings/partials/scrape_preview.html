@@ -5,7 +5,7 @@
 {% elif links %}
 <div class="border border-gray-200 rounded bg-gray-50 px-4 py-3">
   <p class="text-xs text-gray-500 mb-2">
-    Found {{ total }} link{{ 's' if total != 1 else '' }} - showing first {{ links | length }}:
+    Found {{ total|num }} link{{ 's' if total != 1 else '' }} - showing first {{ (links | length)|num }}:
   </p>
   <ul class="space-y-1.5">
     {% for url, title in links %}

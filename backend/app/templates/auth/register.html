@@ -15,6 +15,7 @@
         <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
             <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
             <input type="hidden" name="timezone" id="tz-field">
+            <input type="hidden" name="format_profile" id="fmt-field">
             {% if invite_token %}
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
@@ -54,6 +55,26 @@
             document.getElementById('tz-field').value =
                 Intl.DateTimeFormat().resolvedOptions().timeZone || '';
         } catch (e) { /* leave empty → server defaults to UTC */ }
+
+        // Detect a number/date format profile from the browser and map it to one
+        // of our five keys. Server validates + falls back to 'iso'.
+        try {
+            var dec = '.', grp = '';
+            new Intl.NumberFormat().formatToParts(12345.6).forEach(function (p) {
+                if (p.type === 'decimal') dec = p.value;
+                if (p.type === 'group') grp = p.value;
+            });
+            var order = new Intl.DateTimeFormat().formatToParts(new Date(2026, 5, 25))
+                .filter(function (p) { return p.type === 'day' || p.type === 'month' || p.type === 'year'; })
+                .map(function (p) { return p.type.charAt(0); }).join('');
+            // comma decimal -> 'de' only when grouped with a dot; every other
+            // grouping (space, NBSP U+00A0, narrow NBSP U+202F, none) maps to 'eu'.
+            var key;
+            if (order.charAt(0) === 'y') key = 'iso';
+            else if (dec === ',') key = (grp === '.') ? 'de' : 'eu';
+            else key = (order.charAt(0) === 'm') ? 'us' : 'uk';
+            document.getElementById('fmt-field').value = key;
+        } catch (e) { /* leave empty → server defaults to 'iso' */ }
 
         document.querySelector('form').addEventListener('submit', function() {
             var btn = document.getElementById('submit-btn');

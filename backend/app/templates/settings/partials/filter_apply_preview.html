@@ -20,7 +20,7 @@
     </p>
     {% if scoring_count > 0 %}
       <p class="{% if scoring_count > 1000 %}text-red-700 font-medium{% else %}text-gray-600{% endif %}">
-        Up to ~<strong>{{ scoring_count }}</strong> will be queued for AI scoring.
+        Up to ~<strong>{{ scoring_count|num }}</strong> will be queued for AI scoring.
         {% if scoring_count > 1000 %}That's a lot of AI calls - consider narrowing the filter scope.{% endif %}
       </p>
       <div class="flex items-center gap-3 flex-wrap">

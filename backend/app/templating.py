@@ -1,5 +1,6 @@
 import json
 from markupsafe import Markup
+from jinja2 import Undefined
 from fastapi.templating import Jinja2Templates
 
 from app.utils.markdown import md_render, md_render_inline
@@ -11,6 +12,7 @@ from app.utils.datetime_format import (
     timezone_groups,
     is_common_timezone,
 )
+from app.utils.formats import format_number, format_number_g, format_choices
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -30,6 +32,15 @@ def _utctime(dt, fmt: str = "short") -> str:
 
 templates.env.filters["localtime"] = _localtime
 templates.env.filters["utctime"] = _utctime
+# A missing template value arrives as jinja Undefined, whose __float__ raises
+# UndefinedError (not caught by format_number); coerce it to None so a stray
+# {{ missing|num }} renders empty like a bare {{ missing }} instead of 500ing.
+templates.env.filters["num"] = lambda value, decimals=None: format_number(
+    None if isinstance(value, Undefined) else value, decimals
+)
+templates.env.filters["numg"] = lambda value: format_number_g(
+    None if isinstance(value, Undefined) else value
+)
 
 
 def _catchup_config_json(cfg) -> str:
@@ -99,3 +110,4 @@ templates.env.globals["viewer_is_admin"] = lambda: current_viewer_is_admin.get()
 templates.env.globals["ai_error_fresh"] = lambda: current_viewer_ai_error.get()
 templates.env.globals["timezone_groups"] = timezone_groups
 templates.env.globals["is_common_timezone"] = is_common_timezone
+templates.env.globals["format_choices"] = format_choices

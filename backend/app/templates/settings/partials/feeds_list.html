@@ -97,7 +97,7 @@
                 <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ uf.feed.status }}</span>
               {% endif %}
             </td>
-            <td class="px-1.5 py-2 text-right text-gray-600">{{ article_counts.get(uf.feed_id, 0) }}</td>
+            <td class="px-1.5 py-2 text-right text-gray-600">{{ article_counts.get(uf.feed_id, 0)|num }}</td>
             <td class="px-1.5 py-2 text-right text-gray-500">
               {% if uf.feed.fetch_interval_min %}{{ fmt_interval(uf.feed.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(uf.feed.auto_interval_min) }}</span>{% endif %}
             </td>
@@ -183,5 +183,5 @@
   {% include "settings/partials/folder_select.html" %}
 {% endif %}
 {% if request.headers.get('hx-request') %}
-<span id="feeds-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
+<span id="feeds-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ (user_feeds | length)|num }})</span>
 {% endif %}

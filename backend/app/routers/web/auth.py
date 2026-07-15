@@ -17,6 +17,7 @@ from app.auth.security import dummy_verify_password, hash_password, password_wit
 from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
+from app.utils.formats import is_valid_format
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.services.app_settings_cache import get_registration_enabled
@@ -178,6 +179,7 @@ async def register(
     display_name: str = Form(""),
     invite_token: str = Form(""),
     tz: str = Form("", alias="timezone"),
+    fmt: str = Form("", alias="format_profile"),
     db: AsyncSession = Depends(get_db),
 ):
     app_settings = await _get_app_settings(db)
@@ -244,7 +246,8 @@ async def register(
     await db.flush()
 
     user_tz = tz.strip() if is_valid_timezone(tz.strip()) else "UTC"
-    db.add(UserSettings(user_id=user.id, timezone=user_tz))
+    user_fmt = fmt.strip() if is_valid_format(fmt.strip()) else "iso"
+    db.add(UserSettings(user_id=user.id, timezone=user_tz, format_profile=user_fmt))
 
     if inv:
         inv.used_at = datetime.now(timezone.utc)

@@ -190,7 +190,7 @@
       <label for="ai_content_limit" class="text-sm font-medium text-gray-700">Article content limit</label>
       <div class="flex items-center gap-2 mt-1">
         <input type="text" inputmode="numeric" name="ai_content_limit" id="ai_content_limit"
-               value="{{ '{:,}'.format(s.ai_content_limit).replace(',', ' ') }}"
+               value="{{ s.ai_content_limit }}"
                class="w-28 border border-gray-300 rounded px-2 py-1.5 text-sm">
         <span class="text-xs text-gray-500">characters</span>
       </div>

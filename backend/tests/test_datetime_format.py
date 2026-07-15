@@ -56,23 +56,29 @@ class TestFormatLocalShort:
         assert format_local(dt, "Europe/Prague", "short", now=NOW) == "16:30"
 
     def test_this_year_other_day(self):
-        dt = datetime(2026, 3, 5, 9, 15, tzinfo=timezone.utc)
-        # Prague UTC+1 in March → 10:15
-        assert format_local(dt, "Europe/Prague", "short", now=NOW) == "05.03. 10:15"
+        # Day 25 (> 12) so a month/day order bug can't slip through.
+        dt = datetime(2026, 3, 25, 9, 15, tzinfo=timezone.utc)
+        # Prague UTC+1 in March → 10:15; eu profile drops the year within this year
+        assert format_local(dt, "Europe/Prague", "short", now=NOW, profile="eu") == "25.03 10:15"
 
     def test_older_year_includes_year(self):
-        dt = datetime(2020, 1, 5, 9, 0, tzinfo=timezone.utc)
-        assert format_local(dt, "America/New_York", "short", now=NOW) == "05.01.2020 04:00"
+        dt = datetime(2020, 1, 25, 9, 0, tzinfo=timezone.utc)
+        assert format_local(dt, "America/New_York", "short", now=NOW, profile="eu") == "25.01.2020 04:00"
 
 
 class TestFormatLocalOtherFormats:
-    def test_date_format(self):
-        dt = datetime(2026, 6, 2, 14, 30, tzinfo=timezone.utc)
-        assert format_local(dt, "Europe/Prague", "date", now=NOW) == "Jun 2, 2026"
+    def test_numdate_and_date_alias(self):
+        # Day 25 (> 12) makes the field order unambiguous across profiles.
+        dt = datetime(2026, 6, 25, 14, 30, tzinfo=timezone.utc)
+        # `date` is a legacy alias for `numdate`; both render numerically per profile
+        assert format_local(dt, "Europe/Prague", "numdate", profile="eu") == "25.06.2026"
+        assert format_local(dt, "Europe/Prague", "date", profile="eu") == "25.06.2026"
+        assert format_local(dt, "Europe/Prague", "numdate", profile="us") == "06/25/2026"
+        assert format_local(dt, "Europe/Prague", "numdate", profile="iso") == "2026-06-25"
 
     def test_long_format(self):
-        dt = datetime(2026, 6, 2, 14, 30, tzinfo=timezone.utc)
-        assert format_local(dt, "Europe/Prague", "long", now=NOW) == "2. 6. 2026 16:30"
+        dt = datetime(2026, 6, 25, 14, 30, tzinfo=timezone.utc)
+        assert format_local(dt, "Europe/Prague", "long", now=NOW, profile="eu") == "25.06.2026 16:30"
 
 
 class TestFormatLocalEdgeCases:

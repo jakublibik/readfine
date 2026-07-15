@@ -7,7 +7,7 @@
 {% from "partials/feed_display.html" import fmt_interval %}
 <h1 class="text-xl font-semibold text-gray-900 mb-6">
   Feeds
-  <span id="feeds-count" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
+  <span id="feeds-count" class="text-sm font-normal text-gray-400">({{ (user_feeds | length)|num }})</span>
 </h1>
 
 {% if added %}
@@ -129,11 +129,11 @@
 {# ── Data retention ─────────────────────────────────────────────────────────── #}
 <p class="mt-4 text-xs text-gray-400">
   {% if purge_days and purge_count %}
-    Articles are kept for up to <span class="text-gray-500">{{ purge_days }} days</span> and a maximum of <span class="text-gray-500">{{ purge_count }} per feed</span>.
+    Articles are kept for up to <span class="text-gray-500">{{ purge_days }} days</span> and a maximum of <span class="text-gray-500">{{ purge_count|num }} per feed</span>.
   {% elif purge_days %}
     Articles are kept for up to <span class="text-gray-500">{{ purge_days }} days</span>.
   {% elif purge_count %}
-    A maximum of <span class="text-gray-500">{{ purge_count }} articles per feed</span> are kept.
+    A maximum of <span class="text-gray-500">{{ purge_count|num }} articles per feed</span> are kept.
   {% else %}
     No automatic article deletion is configured.
   {% endif %}

@@ -15,12 +15,10 @@ from functools import cache
 import zoneinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.utils.formats import current_viewer_format, format_date_parts, resolve_profile
+
 # Per-request viewer timezone (IANA name). Defaults to UTC when unauthenticated.
 current_viewer_tz: ContextVar[str] = ContextVar("current_viewer_tz", default="UTC")
-
-# Fixed month abbreviations — avoids dependence on the process locale (%b).
-_MONTHS = ("", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 def resolve_tz(tz_str: str | None) -> ZoneInfo:
@@ -35,14 +33,16 @@ def format_local(
     tz_str: str = "UTC",
     fmt: str = "short",
     now: datetime | None = None,
+    profile: str | None = None,
 ) -> str:
-    """Format ``dt`` in ``tz_str``.
+    """Format ``dt`` in ``tz_str``, with numeric date order/separator from the
+    viewer's format profile (or ``profile`` when passed explicitly, e.g. from a
+    background render). Time stays 24h ``HH:MM`` across all profiles.
 
-    Formats:
-      - ``short``: today → ``HH:MM``; this year → ``DD.MM. HH:MM``; older → ``DD.MM.YYYY HH:MM``
-      - ``date``:  ``Mon D, YYYY`` (e.g. ``Jun 2, 2026``)
+    Formats (examples shown for the ``eu`` profile):
+      - ``short``: today → ``HH:MM``; this year → ``DD.MM HH:MM``; older → ``DD.MM.YYYY HH:MM``
       - ``numdate``: ``DD.MM.YYYY`` (zero-padded, no time)
-      - ``long``:  ``D. M. YYYY HH:MM``
+      - ``long``:  ``DD.MM.YYYY HH:MM``
     """
     if dt is None:
         return ""
@@ -53,22 +53,20 @@ def format_local(
     tz = resolve_tz(tz_str)
     dt = dt.astimezone(tz)
     now = (now or datetime.now(timezone.utc)).astimezone(tz)
+    p = resolve_profile(profile if profile is not None else current_viewer_format.get())
 
-    if fmt == "date":
-        return f"{_MONTHS[dt.month]} {dt.day}, {dt.year}"
-    if fmt == "numdate":
-        pad = lambda n: str(n).zfill(2)
-        return f"{pad(dt.day)}.{pad(dt.month)}.{dt.year}"
+    # ``date`` is a legacy alias kept so any stray caller still renders numerically.
+    if fmt in ("numdate", "date"):
+        return format_date_parts(dt, p)
     if fmt == "long":
-        return f"{dt.day}. {dt.month}. {dt.year} {dt.strftime('%H:%M')}"
+        return f"{format_date_parts(dt, p)} {dt.strftime('%H:%M')}"
 
-    # short
-    pad = lambda n: str(n).zfill(2)
+    # short (relative)
     if dt.date() == now.date():
         return dt.strftime("%H:%M")
     if dt.year == now.year:
-        return f"{pad(dt.day)}.{pad(dt.month)}. {dt.strftime('%H:%M')}"
-    return f"{pad(dt.day)}.{pad(dt.month)}.{dt.year} {dt.strftime('%H:%M')}"
+        return f"{format_date_parts(dt, p, with_year=False)} {dt.strftime('%H:%M')}"
+    return f"{format_date_parts(dt, p)} {dt.strftime('%H:%M')}"
 
 
 def format_until(dt: datetime | None, now: datetime | None = None) -> str | None:
