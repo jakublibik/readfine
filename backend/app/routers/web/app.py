@@ -2082,12 +2082,15 @@ async def catchup_page(
     except ZoneInfoNotFoundError:
         _tz = ZoneInfo("UTC")
 
+    from app.utils.formats import current_viewer_format, format_date_parts, resolve_profile
+    _fmt_profile = resolve_profile(current_viewer_format.get())
+
     def _period_desc(period: str) -> str:
         start = _period_to_start_dt(period, tz_str).astimezone(_tz)
         today_date = datetime.now(_tz).date()
         days = (today_date - start.date()).days + 1
         day_label = f"{days} day{'s' if days != 1 else ''}"
-        return f"from {start.strftime('%d.%m')} 00:00 · {day_label}"
+        return f"from {format_date_parts(start, _fmt_profile, with_year=False)} 00:00 · {day_label}"
 
     period_descs = {p: _period_desc(p) for p in ("today", "yesterday", "7days")}
 
@@ -2184,8 +2187,9 @@ async def htmx_catchup_cost(
 
     slot_label = "fast" if model_slot == "fast" else "quality"
     est_note = " · model not in price list, approximated" if cost_estimated else ""
+    from app.utils.formats import format_number
     return HTMLResponse(
-        f'<span class="text-gray-500 text-sm">Estimated cost: ~${cost:.4f} '
+        f'<span class="text-gray-500 text-sm">Estimated cost: ~${format_number(cost, 4)} '
         f'<span class="text-gray-400">({effective_count} articles × {slot_label} model{est_note})</span></span>'
     )
 

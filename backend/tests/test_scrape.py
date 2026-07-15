@@ -405,7 +405,6 @@ class TestFetchScrapeFeedSuccess:
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # guid_hash
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # url_normalized
             extract_readable_result,  # extract_readable query
-            AsyncMock(),              # update UserFeed unread_count
         ])
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
@@ -449,7 +448,6 @@ class TestFetchScrapeFeedSuccess:
             extract_readable_result,  # extract_readable query (before _save_scrape_articles)
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # guid_hash
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # url_normalized
-            AsyncMock(),  # unread_count update
         ])
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):

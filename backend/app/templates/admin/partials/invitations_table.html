@@ -31,7 +31,7 @@
       <td class="px-4 py-2 text-gray-600">{{ inv.email or "—" }}</td>
       <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
         {% if inv.expires_at %}
-          <time datetime="{{ inv.expires_at.isoformat() }}">{{ inv.expires_at | localtime('date') }}</time>
+          <time datetime="{{ inv.expires_at.isoformat() }}">{{ inv.expires_at | localtime('numdate') }}</time>
         {% else %}—{% endif %}
       </td>
       <td class="px-4 py-2">

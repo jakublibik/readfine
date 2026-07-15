@@ -11,21 +11,31 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Added
 
+- Preferences → "Number & date format": a per-user choice of how numbers and dates are written, independent of the interface language. Five profiles cover the common conventions (US, UK/International, Europe, DE/AT, ISO), each differing in the decimal separator, thousands separator and date order, so you can keep the app in English yet see `1 234,56` and `25.06.2026`. New accounts are detected from the browser at sign-up; existing accounts start on the Europe profile and can switch anytime. The setting drives numbers across the stats and AI cost views and the numeric date formats throughout the app, including the date shown in briefing emails (in your timezone). Times stay 24-hour for now.
+- A categorized feature list at `/features`, linked from the landing page and the help guide, plus a matching `FEATURES.md` at the repo root. Both are generated from one source (`backend/app/content/features.yml`): the app renders it at runtime, and `scripts/gen_features.py` projects it into `FEATURES.md`, so the list is never maintained in two places. CI regenerates the Markdown and fails if the committed copy is stale.
+- Adaptive fetch intervals: a feed left on "Auto" is now polled at a cadence derived from how often it actually publishes, rather than the flat default. Readfine counts each feed's items over the last 7 days and targets an interval a bit shorter than its real publish gap, so busy feeds refresh more often and quiet ones less. New feeds and feeds without enough history keep using the global default, and an explicit per-feed interval still wins. Admin → Settings gains a "Maximum fetch interval" cap for how rarely a quiet feed may be polled; the feed edit screen shows the interval Auto would pick. Cadence is recomputed daily and at startup. The feeds tables (Settings → Feeds and the admin panel) show each feed's effective interval and its predicted next fetch (relative, e.g. "next ~1h") under the last-fetch column, with intervals of an hour or more rendered in hours.
 - Preferences → "Advance after mark all as read" (off by default): after you mark a feed, folder or label read from the sidebar, Readfine selects and opens the next one that still has unread articles, expanding a collapsed folder if needed. Feeds advance across folder boundaries; empty scopes are skipped, and the special views (All articles, Starred, Archived) are left alone.
 - Admin → Feeds: an "Edit" action on the table's ··· menu for shared feed fields (title, status, fetch interval, and the scrape article-links selector with a live preview). Per-subscriber preferences and feed credentials are intentionally left out, since an admin usually is not the subscriber.
 - Admin dashboard: a "Briefing errors" section listing catch-up configs whose scheduled briefing is currently failing (user, config, error, retries, next send). Configs with no scheduled retry, for example when SMTP is unconfigured, sort first and are flagged as needing manual attention; the entry clears once a send succeeds.
-- Admin → Users: per-user columns for genuine reads (dwell, link opens or stars, not just marked-read), filter count, and AI operations over the last 7 days and all time across summaries, scoring, context, chat and catch-up.
+- Admin → Users: per-user columns showing whether an account is currently active, not just its lifetime totals. "Read 7d" counts articles genuinely read in the last 7 days (marked read with at least 30 seconds of dwell, the same signal the reading stats use), "AI 7d" counts AI operations in the last 7 days across summaries, scoring, context, chat and catch-up, and a filter count.
 
 ### Changed
 
+- Fetch interval dropdowns (Admin → Settings and the feed edit screens) now show longer intervals in hours, for example `6h` or `24h`, instead of raw minutes like `360 min`. This matches how the feeds tables already render intervals. The admin settings also spell out how the default, minimum and maximum intervals interact with Auto mode (the minimum floors Auto too, and Auto never polls faster than 30 minutes).
 - Readable extraction backfills an article's publication date from the article page when the feed listing carried no date, so undated articles sort and expire correctly instead of all landing at fetch time. It reads the page's structured `datePublished` (via htmldate) rather than the oldest date on the page, guards against implausible future dates, and never overrides a date the feed already provided. The reader's date updates once extraction finishes.
 - Deleting a feed subscription or folder now cleans up references to it left dangling in filter scopes and catch-up/briefing scopes. As a safeguard against silently widening, a filter or briefing whose scope would empty out is deactivated or disabled instead, and the affected filter and briefing names are surfaced in the feeds settings banner.
 
 ### Fixed
 
+- The sidebar now highlights the active category right after opening or reloading the app, not only after a click. On load the highlight was applied to the collapsed rail copy of each nav item (which is hidden) instead of the visible full-sidebar copy, so nothing appeared selected until you clicked a category.
+- Feeds behind some CDNs (most visibly Reddit, via Fastly) that kept failing with `403 Blocked` or persistent `429` now fetch normally. The fetcher spoke plain HTTP/1.1, which these CDNs treat as a bot signal and answer with a header-less 403 or a near-zero rate budget, while serving HTTP/2 clients as usual. Server-side fetches (feeds, scraping, readable extraction) now negotiate HTTP/2 when the server offers it and fall back to HTTP/1.1 otherwise. The User-Agent was never the cause.
+- Scrape-type feeds now record a "last published" date in the feeds tables (Settings → Feeds and the admin panel), like RSS feeds already did. The scrape fetcher tracked every other feed field but never set this one, so the column stayed empty even when the scraped listing carried article dates. It now advances to the newest dated link on each fetch and stays empty only when the listing exposes no dates at all.
+- The single-feed API endpoints (`GET`/`POST`/`PATCH /api/v1/feeds/{id}`) now report `unread_count` computed fresh from the database, like the feed list already did. They previously serialized a cached column that no longer had a live writer on every path, so it could read as stale or zero. The cached column has been dropped (migration 0079); every response counts unread on read.
+- Server-side feed and scrape fetches now pin each connection to the IP address they validated, closing a DNS-rebinding gap: previously the SSRF check resolved the hostname once and the HTTP client resolved it again at connect time, so a hostname whose DNS flipped between the two could pass validation yet connect to a private or cloud-metadata address. Every request and redirect hop now connects to the checked IP, carrying the original `Host` header and, for HTTPS, the original hostname for TLS SNI and certificate verification.
 - Readable extraction is no longer enabled for Tumblr feeds, which already deliver the full post in the feed. Extracting the page instead pulled in the likes/reblogs "notes" list as the body and duplicated the post text; Tumblr (and other feeds that advertise themselves as full-content via their `<generator>`) are now treated as full-content at subscribe time, so their feed content is shown as-is. Should extraction still run on a Tumblr page, the notes list and tracking pixels are stripped before extraction as a safeguard.
 - Marking a feed or folder read from the sidebar now refreshes the whole sidebar, so counts that share those articles (labels, other feeds) update right away instead of going stale until the next reload.
 - Readable extraction removes duplicate images: some news sites emit the same photo as several renditions (lead, inline, responsive) and each was extracted, so the body showed the same picture two or three times. Matching on the image filename now collapses them to a single copy.
+- Admin → Feeds: on narrow screens the "Feed" column no longer collapses to a couple of unreadable characters. As the table grew it stopped fitting the panel, and the flexible feed column shrank to nothing while the rest scrolled; it now keeps a readable minimum width and the table scrolls horizontally instead.
 - Admin → Feeds: a host group that contains a failing feed no longer paints its entire header red, which overstated severity and blended into the group separator; only the host name turns red now.
 - Scheduled fetching no longer crashes while arming per-host pacing: after a fetch committed, the scheduler re-read the feed's URL off an expired ORM object, which raised a `MissingGreenlet` error, failed the fetch, and skipped arming the adaptive per-host spacing. The spacing was therefore never enforced between same-host feeds, so hosts with several feeds (Reddit, YouTube) were fetched in bursts and more likely to answer 403. The URL is now captured before the fetch, so pacing is armed as intended.
 - A feed marked errored in the sidebar now clears its red indicator immediately when a manual refresh succeeds, instead of staying red until the next full page reload. The refresh only swapped the unread count, which sits apart from the error marker; it now updates the marker out-of-band from the feed's fresh status.
@@ -130,18 +140,18 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
   longer return 429 mid-subscribe.
 - When several feeds share a host (e.g. multiple Reddit subreddits), a scheduled
   fetch no longer requests them all at once. Requests to a given host are now
-  serialized within a fetch round — different hosts still run in parallel — which
+  serialized within a fetch round (different hosts still run in parallel), which
   flattens the burst that made some of those feeds return HTTP 429.
-- Readable extraction that returns no usable content — e.g. a Reddit article page
-  that serves a bot-verification wall (HTTP 200) instead of the article — is no
+- Readable extraction that returns no usable content, e.g. a Reddit article page
+  that serves a bot-verification wall (HTTP 200) instead of the article, is no
   longer saved as a blank "successful" extraction that rendered an empty body. Such
   articles now show their original feed content, and a feed whose pages keep
   extracting nothing auto-disables full-content extraction after repeated empties
   (the same way persistent HTTP 403 blocks already did) instead of re-fetching every
   page forever.
 - The auto-disabled notice for full-content extraction now states why it was turned
-  off — the feed already delivers full articles, or the site blocked extraction /
-  returned no readable content — instead of always claiming the site blocked it.
+  off (the feed already delivers full articles, or the site blocked extraction /
+  returned no readable content) instead of always claiming the site blocked it.
 - The article view no longer flickers an endless "Extracting full content…" spinner
   for an article whose extraction failed and is waiting to retry; it shows the feed
   content quietly, and the spinner appears only while a first attempt is in flight.
@@ -154,7 +164,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - One-command local demo: `docker compose -f docker-compose.demo.yml up` brings the
   app up on `http://localhost:8000` with a seeded admin and no setup wizard, for
-  trying it out before a full install. Demo only — plain HTTP, `DEBUG=true`, and
+  trying it out before a full install. Demo only: plain HTTP, `DEBUG=true`, and
   hard-coded throwaway secrets; not for production. See README → Quick demo.
 
 ### Fixed
@@ -223,12 +233,12 @@ First public release. Self-hosted RSS reader with:
 - OPML import/export, including web-scraping feeds (round-trips via custom outline
   attributes) and Tiny Tiny RSS compatibility
 - `/healthz` endpoint (lightweight DB ping, GET + HEAD) for uptime/monitoring probes
-- `backup.sh` — off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
+- `backup.sh`: off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
   deduplicated, retention), with a Cloudflare R2 example config. See README → Backups.
 
 Notes for self-hosters:
 
-- **Registration is closed by default** on a fresh install — only the admin account
+- **Registration is closed by default** on a fresh install. Only the admin account
   exists; enable sign-ups in the admin panel to open the instance.
 - Shell scripts are pinned to LF line endings (`.gitattributes`) so `setup.sh` runs
   correctly when the repo is cloned/unzipped on Windows.

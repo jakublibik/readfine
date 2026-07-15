@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.fetcher import host_throttle
+from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.user import User
 from app.services.host_rate_limit_service import flush as flush_host_rate_limits
@@ -37,6 +38,7 @@ from app.services.admin_service import (
     update_feed_admin,
 )
 from app.utils.crypto import encrypt
+from app.utils.datetime_format import format_until
 from app.utils.parsing import clamp, safe_int
 from app.utils.smtp import send_email
 
@@ -175,6 +177,11 @@ async def admin_settings_save(
         "registration_enabled": form.get("registration_enabled") == "true",
         "default_fetch_interval_min": _quantize15(safe_int(form.get("default_fetch_interval_min")), 60),
         "min_fetch_interval_min": _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
+        # Cap for the adaptive interval; never below the minimum (else the read-time clamp inverts).
+        "max_fetch_interval_min": max(
+            _quantize15(safe_int(form.get("max_fetch_interval_min")), 360),
+            _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
+        ),
         "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
         "default_purge_after_days": _purge_days,
         "smtp_host": form.get("smtp_host", "").strip() or None,
@@ -347,14 +354,22 @@ async def _feeds_context(db, group: str = "az") -> dict:
     s = await get_app_settings(db)
     default_interval = (s.default_fetch_interval_min or 60)
     min_interval = (s.min_fetch_interval_min or 15)
+    max_interval = (s.max_fetch_interval_min or 360)
+    now = datetime.now(timezone.utc)
     for item in feeds:
         f = item["feed"]
-        f.next_fetch_at = (
-            compute_next_fetch_at(
-                f, default_interval_min=default_interval, min_interval_min=min_interval
-            )
-            if f.status == "error"
-            else None
+        # Predicted next fetch for every scheduled feed (None for paused/disabled/no-subs),
+        # shown under "Last fetch" as a relative hint.
+        f.next_fetch_at = compute_next_fetch_at(
+            f, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval, now=now,
+        )
+        f.next_fetch_rel = format_until(f.next_fetch_at, now)
+        # Effective Auto interval the scheduler would use (capped derived value, or the
+        # uncapped default fallback), so the table matches behaviour, not the raw stored value.
+        f.auto_interval_min = auto_interval_min(
+            f.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
         )
     group = _norm_group(group)
     return {
@@ -482,10 +497,18 @@ async def admin_feed_edit_form(
     if not feed:
         return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
     s = await get_app_settings(db)
+    default_interval = (s.default_fetch_interval_min or 60)
+    min_interval = (s.min_fetch_interval_min or 15)
+    max_interval = (s.max_fetch_interval_min or 360)
     return templates.TemplateResponse(request, "admin/partials/feed_edit_form.html", {
         "feed": feed,
         "group_mode": _norm_group(group),
-        "default_interval_min": (s.default_fetch_interval_min or 60),
+        "default_interval_min": default_interval,
+        # Effective Auto interval shown as the "Auto (~N min)" hint.
+        "auto_interval_min": auto_interval_min(
+            feed.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
+        ),
     })
 
 

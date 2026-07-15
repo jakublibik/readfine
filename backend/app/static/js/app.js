@@ -448,13 +448,20 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
   // (e.g. the mark-as-read sidebarRefresh after opening an article).
   var oldScroll = evt.detail.target.querySelector('#sidebar-scroll');
   window._sidebarScroll = oldScroll ? oldScroll.scrollTop : 0;
-  var navGet = _activeNavGet || '/htmx/articles';
+  // On the initial `load` swap _activeNavGet may not be set yet (it's assigned by
+  // _autoLoadArticleList, which races this fetch) — fall back to the saved nav so
+  // the active category is highlighted from the first render.
+  var navGet = _activeNavGet;
+  if (!navGet) { try { navGet = localStorage.getItem('lastNavItem'); } catch (e) {} }
+  navGet = navGet || '/htmx/articles';
   var temp = document.createElement('div');
   temp.innerHTML = evt.detail.serverResponse;
-  var match = temp.querySelector('.nav-item[hx-get="' + navGet + '"]');
-  if (match) {
+  // Each nav target is rendered twice (collapsed rail + full sidebar); highlight
+  // every match so whichever one is visible shows the active state.
+  var matches = temp.querySelectorAll('.nav-item[hx-get="' + navGet + '"]');
+  if (matches.length) {
     temp.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
-    match.classList.add('active');
+    matches.forEach(function (m) { m.classList.add('active'); });
   }
   evt.detail.serverResponse = temp.innerHTML;
 });

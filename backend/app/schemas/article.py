@@ -27,7 +27,9 @@ class ArticleListItem(BaseModel):
     summary: str | None
     snippet: str | None  # pre-computed: summary or stripped content prefix
     published_at: datetime | None
-    formatted_date: str  # pre-formatted: HH:MM for today, "DD.MM. HH:MM" otherwise
+    # Display-only string, formatted per the viewer's number/date format profile
+    # (order/separators vary). Parse `published_at` (ISO) for machine use.
+    formatted_date: str
     estimated_read_min: int | None
     image_url: str | None
     # state (None = no UserArticleState row yet = unread, not starred)

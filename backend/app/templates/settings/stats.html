@@ -11,7 +11,7 @@
   <a href="/app?view=labeled" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-xs text-gray-500 mb-1">Labeled unread</div>
     <div class="text-2xl font-bold text-gray-900">
-      {% if reading.labeled_backlog > 0 %}{{ reading.labeled_backlog }}{% else %}—{% endif %}
+      {% if reading.labeled_backlog > 0 %}{{ reading.labeled_backlog|num }}{% else %}—{% endif %}
     </div>
     {% if reading.labeled_backlog > 0 %}
     <div class="text-xs text-gray-400 mt-0.5">unread articles</div>
@@ -20,7 +20,7 @@
   <a href="/app?view=starred" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-xs text-gray-500 mb-1">Starred to read</div>
     <div class="text-2xl font-bold text-gray-900">
-      {% if reading.starred_backlog > 0 %}{{ reading.starred_backlog }}{% else %}—{% endif %}
+      {% if reading.starred_backlog > 0 %}{{ reading.starred_backlog|num }}{% else %}—{% endif %}
     </div>
     {% if reading.starred_backlog > 0 %}
     <div class="text-xs text-gray-400 mt-0.5">starred articles</div>
@@ -29,14 +29,14 @@
   <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-xs text-gray-500 mb-1">Reading streak</div>
     <div class="text-2xl font-bold text-gray-900">
-      {% if reading.streak > 0 %}{{ reading.streak }}{% else %}—{% endif %}
+      {% if reading.streak > 0 %}{{ reading.streak|num }}{% else %}—{% endif %}
     </div>
     {% if reading.streak > 0 %}<div class="text-xs text-gray-400 mt-0.5">days</div>{% endif %}
   </div>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-xs text-gray-500 mb-1">Label coverage</div>
     <div class="text-2xl font-bold text-gray-900">
-      {% if labels.label_coverage_pct > 0 %}{{ labels.label_coverage_pct }}%{% else %}—{% endif %}
+      {% if labels.label_coverage_pct > 0 %}{{ labels.label_coverage_pct|num(1) }}%{% else %}—{% endif %}
     </div>
     {% if labels.label_coverage_pct > 0 %}<div class="text-xs text-gray-400 mt-0.5">articles labeled</div>{% endif %}
   </div>
@@ -58,7 +58,7 @@
       ]|sort(attribute="count", reverse=true) %}
       {# Fetched = 100% reference #}
       <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ reading.total_articles }}</div>
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ reading.total_articles|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
           <div class="bg-blue-500 h-2 rounded-full" style="width:100%"></div>
         </div>
@@ -66,13 +66,13 @@
       </div>
       {% for step in steps %}
       <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count }}</div>
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
           <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [step.count / reading.total_articles * 100, 100]|min|round }}%"></div>
         </div>
         <div class="w-28 text-xs text-gray-500">
           {{ step.label }}
-          <span class="text-gray-400">({{ (step.count / reading.total_articles * 100)|round(1) }}%)</span>
+          <span class="text-gray-400">({{ (step.count / reading.total_articles * 100)|num(1) }}%)</span>
         </div>
       </div>
       {% endfor %}
@@ -106,9 +106,9 @@
       <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg time to read</h3>
       {% if reading.avg_time_to_read_hours is not none %}
         {% if reading.avg_time_to_read_hours < 24 %}
-        <p class="text-lg font-semibold text-gray-800">{{ reading.avg_time_to_read_hours }}h after publish</p>
+        <p class="text-lg font-semibold text-gray-800">{{ reading.avg_time_to_read_hours|num(1) }}h after publish</p>
         {% else %}
-        <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_time_to_read_hours / 24)|round(1) }}d after publish</p>
+        <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_time_to_read_hours / 24)|num(1) }}d after publish</p>
         {% endif %}
       {% else %}
       <p class="text-sm text-gray-400">—</p>
@@ -121,11 +121,11 @@
     <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Avg dwell</h3>
     {% if reading.avg_dwell_seconds is not none %}
     <div class="flex flex-wrap items-baseline gap-x-6 gap-y-1">
-      <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_dwell_seconds / 60)|round(1) }} min overall</p>
+      <p class="text-lg font-semibold text-gray-800">{{ (reading.avg_dwell_seconds / 60)|num(1) }} min overall</p>
       {% if reading.top_feeds_by_dwell %}
       <span class="text-xs text-gray-300">·</span>
       {% for f in reading.top_feeds_by_dwell %}
-      <span class="text-xs text-gray-600">{{ f.title }} <span class="text-gray-400">{{ (f.avg_dwell_seconds / 60)|round(1) }}m</span></span>
+      <span class="text-xs text-gray-600">{{ f.title }} <span class="text-gray-400">{{ (f.avg_dwell_seconds / 60)|num(1) }}m</span></span>
       {% if not loop.last %}<span class="text-xs text-gray-300">·</span>{% endif %}
       {% endfor %}
       {% endif %}
@@ -183,7 +183,7 @@
 
   {# Overlooked gems #}
   <div class="mb-5">
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(score ≥ 0.7, never opened)</span></h3>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(score ≥ 70, never opened)</span></h3>
     {% if ai.gems %}
     <div class="overflow-x-auto">
     <table class="w-full text-sm min-w-[24rem]">
@@ -222,7 +222,7 @@
 
   {# AI got it wrong #}
   <div>
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(score &lt; 0.3, you starred it)</span></h3>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(score &lt; 30, you starred it)</span></h3>
     {% if ai.wrong %}
     <div class="overflow-x-auto">
     <table class="w-full text-sm min-w-[24rem]">
@@ -269,9 +269,9 @@
             {{ l.name }}
           </span>
         </td>
-        <td class="py-2 text-right text-gray-600">{{ l.article_count }}</td>
-        <td class="py-2 text-right text-gray-600">{{ l.star_rate }}%</td>
-        <td class="py-2 text-right text-gray-600">{{ l.read_rate }}%</td>
+        <td class="py-2 text-right text-gray-600">{{ l.article_count|num }}</td>
+        <td class="py-2 text-right text-gray-600">{{ l.star_rate|num(1) }}%</td>
+        <td class="py-2 text-right text-gray-600">{{ l.read_rate|num(1) }}%</td>
       </tr>
       {% endfor %}
     </tbody>

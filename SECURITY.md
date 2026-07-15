@@ -12,8 +12,8 @@ reporting.
 
 Report privately through either channel:
 
-- **Preferred:** GitHub's [Private Vulnerability Reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-  — use the **Report a vulnerability** button under the repository's **Security** tab.
+- **Preferred:** GitHub's [Private Vulnerability Reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability):
+  use the **Report a vulnerability** button under the repository's **Security** tab.
 - **Email:** security@readfine.app
 
 Please include:
@@ -33,7 +33,7 @@ reasonable window to release a fix before any public disclosure.
 
 Readfine is self-hosted: each operator runs their own instance and is
 responsible for its deployment (TLS, reverse proxy, secrets, OS patching). Most
-relevant are issues in the application code — for example authentication and
+relevant are issues in the application code, for example authentication and
 session handling, multi-user data isolation, SSRF in the feed fetcher/scraper,
 XSS in rendered feed or AI content, and the handling of stored secrets (API
 keys, feed passwords).

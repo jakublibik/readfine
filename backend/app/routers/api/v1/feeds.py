@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
-from app.services.feed import list_user_feeds, subscribe, unsubscribe
+from app.services.feed import attach_unread_counts, list_user_feeds, subscribe, unsubscribe
 from app.utils.crypto import encrypt
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
@@ -46,7 +46,9 @@ async def subscribe_feed(
     result = await db.execute(
         select(UserFeed).options(selectinload(UserFeed.feed)).where(UserFeed.id == user_feed.id)
     )
-    return result.scalar_one()
+    reloaded = result.scalar_one()
+    await attach_unread_counts(user.id, [reloaded], db)
+    return reloaded
 
 
 @router.get("/{user_feed_id}", response_model=UserFeedResponse)
@@ -66,6 +68,7 @@ async def get_feed(
     user_feed = result.scalar_one_or_none()
     if not user_feed:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Feed not found")
+    await attach_unread_counts(user.id, [user_feed], db)
     return user_feed
 
 
@@ -137,6 +140,7 @@ async def update_feed(
 
     await db.commit()
     await db.refresh(user_feed)
+    await attach_unread_counts(user.id, [user_feed], db)
     return user_feed
 
 

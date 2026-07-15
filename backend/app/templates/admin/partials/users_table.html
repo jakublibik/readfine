@@ -6,9 +6,9 @@
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Status</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Feeds</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Articles</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Articles actually read: dwell ≥ 30s, link opened, or ever starred">Read</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Articles genuinely read in the last 7 days (marked read with dwell ≥ 30s)">Read 7d</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Filters</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="AI operations: last 7 days / all time (summaries, scoring, context, chat, catch-up)">AI 7d/all</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="AI operations in the last 7 days (summaries, scoring, context, chat, catch-up)">AI 7d</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Last active</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500" title="Days since last active">Idle</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Joined</th>
@@ -39,16 +39,12 @@
           <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">inactive</span>
         {% endif %}
       </td>
-      <td class="px-2 py-2 text-right text-gray-600">{{ item.feed_count }}</td>
-      <td class="px-2 py-2 text-right text-gray-600">{{ item.article_count }}</td>
-      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count }}</td>
-      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}">{{ item.filter_count }}</td>
-      <td class="px-2 py-2 text-right whitespace-nowrap">
-        {% if item.ai_ops_total == 0 %}
-          <span class="text-gray-300">—</span>
-        {% else %}
-          <span class="{{ 'text-gray-700' if item.ai_ops_recent else 'text-gray-400' }}">{{ item.ai_ops_recent }}</span><span class="text-xs text-gray-400"> / {{ item.ai_ops_total }}</span>
-        {% endif %}
+      <td class="px-2 py-2 text-right text-gray-600">{{ item.feed_count|num }}</td>
+      <td class="px-2 py-2 text-right text-gray-600">{{ item.article_count|num }}</td>
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count|num }}</td>
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}">{{ item.filter_count|num }}</td>
+      <td class="px-2 py-2 text-right whitespace-nowrap {{ 'text-gray-700' if item.ai_ops_recent else 'text-gray-300' }}">
+        {% if item.ai_ops_recent %}{{ item.ai_ops_recent|num }}{% else %}—{% endif %}
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
         {% if u.last_active_at %}
@@ -61,11 +57,11 @@
         {% elif item.inactive_days == 0 %}
           <span class="text-green-600 text-xs">&lt;24h</span>
         {% elif item.inactive_days <= 7 %}
-          <span class="text-gray-500 text-xs">{{ item.inactive_days }}d</span>
+          <span class="text-gray-500 text-xs">{{ item.inactive_days|num }}d</span>
         {% elif item.inactive_days <= 30 %}
-          <span class="text-yellow-600 text-xs">{{ item.inactive_days }}d</span>
+          <span class="text-yellow-600 text-xs">{{ item.inactive_days|num }}d</span>
         {% else %}
-          <span class="text-red-500 text-xs">{{ item.inactive_days }}d</span>
+          <span class="text-red-500 text-xs">{{ item.inactive_days|num }}d</span>
         {% endif %}
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
@@ -102,5 +98,5 @@
   </tbody>
 </table>
 {% if request.headers.get('hx-request') %}
-<span id="users-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ users | length }})</span>
+<span id="users-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ (users | length)|num }})</span>
 {% endif %}

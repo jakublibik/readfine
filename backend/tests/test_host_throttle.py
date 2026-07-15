@@ -243,6 +243,24 @@ class TestLearnedSpacing:
         assert host_throttle._spacing["reddit.com"].consecutive_429 == 0
         assert host_throttle.effective_spacing("reddit.com") == tightened
 
+    def test_unchanged_success_does_not_restamp_or_dirty(self):
+        host_throttle.record_success("reddit.com", NOW, 6.0)
+        host_throttle.drain_dirty()  # clear the dirty flag from the first learn
+        later = NOW + timedelta(minutes=5)
+        # Same advertised spacing on a later fetch: no change, so no restamp/dirty.
+        assert host_throttle.record_success("reddit.com", later, 6.0) is None
+        assert host_throttle._spacing["reddit.com"].learned_at == NOW
+        assert host_throttle.drain_dirty() == set()
+
+    def test_changed_success_restamps_and_dirties(self):
+        host_throttle.record_success("reddit.com", NOW, 6.0)
+        host_throttle.drain_dirty()
+        later = NOW + timedelta(minutes=5)
+        # A higher advertised spacing ratchets up → restamp and mark dirty.
+        assert host_throttle.record_success("reddit.com", later, 10.0) is not None
+        assert host_throttle._spacing["reddit.com"].learned_at == later
+        assert host_throttle.drain_dirty() == {"reddit.com"}
+
     def test_streak_must_be_consecutive(self):
         host_throttle.record_rate_limited("reddit.com", NOW, 60.0)  # streak 1
         host_throttle.record_success("reddit.com", NOW)             # resets streak

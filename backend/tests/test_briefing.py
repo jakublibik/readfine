@@ -50,6 +50,7 @@ def make_user(**kwargs):
         role="user",
         settings=SimpleNamespace(
             timezone="UTC",
+            format_profile="eu",
             ai_scoring_enabled_default=False,
         ),
     )
@@ -399,6 +400,50 @@ class TestSendBriefing:
                                                         test_mode=True)
 
         assert sent_subject[0].startswith("[TEST]")
+
+    @pytest.mark.asyncio
+    async def test_subject_date_uses_recipient_format_profile(self, mock_db):
+        """The date in the subject must follow the recipient's format profile
+        (checks the profile is actually threaded into the background render)."""
+        from contextlib import ExitStack
+        from app.services.briefing_service import send_briefing
+
+        mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
+                                       published_at=None, fetched_at=datetime.now(timezone.utc),
+                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       readable_content=None, content="text")
+
+        async def _subject_for(profile):
+            config = make_config()
+            user = make_user()
+            user.settings.format_profile = profile
+            user.settings.timezone = "UTC"
+            captured = []
+            with ExitStack() as es:
+                es.enter_context(patch("app.services.briefing_service.fetch_catchup_articles",
+                                       new_callable=AsyncMock, return_value=[mock_article]))
+                es.enter_context(patch("app.services.ai_service.get_ai_client",
+                                       new_callable=AsyncMock,
+                                       return_value=(MagicMock(), "anthropic", "claude-3")))
+                es.enter_context(patch("app.services.briefing_service.apply_catchup_limit",
+                                       return_value=[mock_article]))
+                es.enter_context(patch("app.services.briefing_service.build_articles_meta",
+                                       return_value=[]))
+                es.enter_context(patch("app.services.ai_service.catch_me_up",
+                                       new_callable=AsyncMock, return_value=("text", 100, 50)))
+                es.enter_context(patch("app.services.briefing_service.send_html_email",
+                                       side_effect=lambda s, to, subject, html, plain, bcc=None: captured.append(subject)))
+                es.enter_context(patch("app.services.briefing_service._build_email_html",
+                                       return_value="<html>...</html>"))
+                await send_briefing(config, user, mock_db, make_app_settings())
+            return captured[0]
+
+        # Date segment = part after the last "·". Separator alone distinguishes
+        # the profiles regardless of today's actual date.
+        us_date = (await _subject_for("us")).rsplit("·", 1)[1]
+        eu_date = (await _subject_for("eu")).rsplit("·", 1)[1]
+        assert "/" in us_date                          # US → e.g. 06/25/2026
+        assert "/" not in eu_date and "." in eu_date   # eu → e.g. 25.06.2026
 
     @pytest.mark.asyncio
     async def test_extra_recipients_sent_as_bcc(self, mock_db):

@@ -4,14 +4,14 @@ import hashlib
 import logging
 import re
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import case, func, literal, select, update
+from sqlalchemy import case, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -370,14 +370,6 @@ async def _save_articles(
         # this benign race as "0 new articles" rather than a fetch failure.
         await db.flush()
 
-        # Increment unread_count for every subscriber of this feed.
-        # Filters may decrement it afterwards for articles they mark as read.
-        await db.execute(
-            update(UserFeed)
-            .where(UserFeed.feed_id == feed.id)
-            .values(unread_count=UserFeed.unread_count + len(new_articles))
-        )
-
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
 
@@ -417,7 +409,7 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
     )
 
     rows = (await db.execute(
-        select(UserFeed.user_id, Article.id.label("article_id"), Article.feed_id)
+        select(UserFeed.user_id, Article.id.label("article_id"))
         .select_from(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(
@@ -436,32 +428,6 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
         .on_conflict_do_nothing()
     )
 
-    by_feed: dict[int, list[int]] = defaultdict(list)
-    for r in rows:
-        by_feed[r.feed_id].append(r.user_id)
-
-    for feed_id, user_ids in by_feed.items():
-        unread_subq = (
-            select(func.count())
-            .select_from(Article)
-            .outerjoin(
-                UserArticleState,
-                (UserArticleState.article_id == Article.id)
-                & (UserArticleState.user_id == UserFeed.user_id),
-            )
-            .where(
-                Article.feed_id == feed_id,
-                (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
-            )
-            .correlate(UserFeed)
-            .scalar_subquery()
-        )
-        await db.execute(
-            update(UserFeed)
-            .where(UserFeed.user_id.in_(user_ids), UserFeed.feed_id == feed_id)
-            .values(unread_count=unread_subq)
-        )
-
     await db.commit()
     return len(rows)
 
@@ -470,7 +436,7 @@ async def _dedup_cross_feed(
     feed_id: int, new_articles: list[Article], db: AsyncSession
 ) -> None:
     """For users subscribed to this feed who already have the same URL from another feed,
-    mark the new duplicate article as read and adjust unread_count."""
+    mark the new duplicate article as read."""
     articles_with_url = [a for a in new_articles if a.url_normalized]
     if not articles_with_url:
         return
@@ -509,28 +475,6 @@ async def _dedup_cross_feed(
         pg_insert(UserArticleState)
         .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
         .on_conflict_do_nothing()
-    )
-
-    affected_user_ids = list({r.user_id for r in rows})
-    unread_subq = (
-        select(func.count())
-        .select_from(Article)
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == UserFeed.user_id),
-        )
-        .where(
-            Article.feed_id == feed_id,
-            (UserArticleState.is_read == False) | UserArticleState.is_read.is_(None),
-        )
-        .correlate(UserFeed)
-        .scalar_subquery()
-    )
-    await db.execute(
-        update(UserFeed)
-        .where(UserFeed.user_id.in_(affected_user_ids), UserFeed.feed_id == feed_id)
-        .values(unread_count=unread_subq)
     )
 
 

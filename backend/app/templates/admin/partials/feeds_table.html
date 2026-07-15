@@ -1,18 +1,13 @@
+{% from "partials/feed_display.html" import fmt_interval %}
 {% macro feed_row(item, default_interval_min, gq) %}
 {% set f = item.feed %}
 <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
-  <td class="px-3 py-2 w-full max-w-0">
-    <div class="font-medium text-gray-900 truncate">{{ f.title }}</div>
+  <td class="px-3 py-2 w-full min-w-[16rem] max-w-0">
+    <div class="font-medium text-gray-900 truncate" title="{{ f.title }}">{{ f.title }}</div>
     <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
     {% if f.status == 'error' and f.last_error %}
     <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
-    {% if f.next_fetch_at %}
-    <div class="text-xs text-gray-400 mt-0.5">Next fetch
-      <time datetime="{{ f.next_fetch_at.isoformat() }}"
-            title="{{ f.next_fetch_at | localtime('long') }}">~ {{ f.next_fetch_at | localtime('short') }}</time>
-    </div>
-    {% endif %}
     {% endif %}
   </td>
   <td class="px-2 py-2">
@@ -27,18 +22,23 @@
       <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
     {% endif %}
   </td>
-  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count }}</td>
-  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count }}</td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count|num }}</td>
+  <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count|num }}</td>
   <td class="px-2 py-2 text-right text-gray-500">
-    {% if f.fetch_interval_min %}{{ f.fetch_interval_min }}m{% else %}<span class="text-gray-400" title="Default (no per-feed override)">{{ default_interval_min }}m</span>{% endif %}
+    {% if f.fetch_interval_min %}{{ fmt_interval(f.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(f.auto_interval_min) }}</span>{% endif %}
   </td>
   <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
     {% if f.last_fetched_at %}
       <time datetime="{{ f.last_fetched_at.isoformat() }}">{{ f.last_fetched_at | localtime('short') }}</time>
       {% if f.last_fetch_duration_ms is not none %}
-      <span class="text-gray-300 text-xs"> · {{ "%.1f"|format(f.last_fetch_duration_ms / 1000) }}s</span>
+      <span class="text-gray-300 text-xs"> · {{ (f.last_fetch_duration_ms / 1000)|num(1) }}s</span>
       {% endif %}
     {% else %}<span class="text-gray-300">—</span>{% endif %}
+    {% if f.next_fetch_rel %}
+    <div class="text-xs text-gray-400 mt-0.5" title="Next fetch {{ f.next_fetch_at | localtime('long') }}">
+      next {{ f.next_fetch_rel }}
+    </div>
+    {% endif %}
   </td>
   <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
     {% if f.last_published_at %}
@@ -107,13 +107,13 @@
 <table class="w-full text-sm">
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
-      <th class="w-full text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
+      <th class="w-full min-w-[16rem] text-left px-3 py-2 text-xs font-medium text-gray-500">Feed</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Type</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Status</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Subs</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Articles</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Interval</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last fetch</th>
+      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last / next fetch</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last published</th>
       <th class="px-2 py-2"></th>
     </tr>
@@ -123,7 +123,7 @@
       {% for g in feed_groups %}
       <tr class="bg-gray-50">
         <td colspan="9" class="px-3 py-1.5 text-xs font-medium {% if g.has_error %}text-red-700{% else %}text-gray-500{% endif %}">
-          {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count }}</span>
+          {{ g.label }}<span class="text-gray-400 font-normal"> · {{ g.count|num }}</span>
         </td>
       </tr>
       {% for item in g.feeds %}{{ feed_row(item, default_interval_min, gq) }}{% endfor %}

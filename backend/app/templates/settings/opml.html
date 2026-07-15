@@ -24,26 +24,26 @@
     <tbody class="divide-y divide-gray-100">
       <tr>
         <td class="py-1">Feeds</td>
-        <td class="text-right">{{ import_result.feeds_added }}</td>
-        <td class="text-right text-gray-400">{{ import_result.feeds_skipped }}</td>
-        <td class="text-right {% if import_result.feeds_failed %}text-red-600{% else %}text-gray-400{% endif %}">{{ import_result.feeds_failed }}</td>
+        <td class="text-right">{{ import_result.feeds_added|num }}</td>
+        <td class="text-right text-gray-400">{{ import_result.feeds_skipped|num }}</td>
+        <td class="text-right {% if import_result.feeds_failed %}text-red-600{% else %}text-gray-400{% endif %}">{{ import_result.feeds_failed|num }}</td>
       </tr>
       <tr>
         <td class="py-1">Labels</td>
-        <td class="text-right">{{ import_result.labels_added }}</td>
-        <td class="text-right text-gray-400">{{ import_result.labels_skipped }}</td>
+        <td class="text-right">{{ import_result.labels_added|num }}</td>
+        <td class="text-right text-gray-400">{{ import_result.labels_skipped|num }}</td>
         <td class="text-right text-gray-400">—</td>
       </tr>
       <tr>
         <td class="py-1">Preferences</td>
-        <td class="text-right">{{ import_result.prefs_updated }}</td>
+        <td class="text-right">{{ import_result.prefs_updated|num }}</td>
         <td class="text-right text-gray-400">—</td>
         <td class="text-right text-gray-400">—</td>
       </tr>
       <tr>
         <td class="py-1">Filters</td>
-        <td class="text-right">{{ import_result.filters_added }}</td>
-        <td class="text-right text-gray-400">{{ import_result.filters_skipped }}</td>
+        <td class="text-right">{{ import_result.filters_added|num }}</td>
+        <td class="text-right text-gray-400">{{ import_result.filters_skipped|num }}</td>
         <td class="text-right text-gray-400">—</td>
       </tr>
     </tbody>

@@ -136,6 +136,16 @@ def record_success(host: str, now: datetime, spacing_seconds: float | None = Non
         return existing
     prev = existing.seconds if existing else 0.0
     seconds = min(max(prev, spacing_seconds), MAX_SPACING)
+    if (
+        existing is not None
+        and existing.seconds == seconds
+        and existing.source == "200"
+        and existing.consecutive_429 == 0
+    ):
+        # Nothing actually changed (same learned gap, same source, no streak to
+        # reset): don't restamp learned_at or dirty the host. "Learned" tracks the
+        # last real change, and this avoids a DB upsert on every routine fetch.
+        return None
     entry = LearnedSpacing(host, seconds, "200", now, 0)
     _spacing[host] = entry
     _dirty.add(host)

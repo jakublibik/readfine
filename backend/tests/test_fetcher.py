@@ -24,6 +24,7 @@ from app.fetcher.rss import (
 from app.fetcher.scheduler import (
     compute_next_fetch_at,
     create_scheduler,
+    effective_interval_min,
     _cooldown_wait,
     _COOLDOWN_BUFFER,
     _feed_due_for_selection,
@@ -347,6 +348,7 @@ def _sched_feed(**kwargs) -> SimpleNamespace:
         status="active",
         subscriber_count=1,
         fetch_interval_min=None,
+        derived_interval_min=None,
         last_fetched_at=None,
         retry_after_until=None,
         fetch_error_count=0,
@@ -358,7 +360,7 @@ def _sched_feed(**kwargs) -> SimpleNamespace:
 class TestComputeNextFetchAt:
     """Predicted next fetch must mirror the _fetch_due_feeds query."""
 
-    DEFAULTS = dict(default_interval_min=60, min_interval_min=15)
+    DEFAULTS = dict(default_interval_min=60, min_interval_min=15, max_interval_min=360)
 
     def test_active_uses_interval_snapped_to_tick(self):
         # 60-min feed last fetched at 13:00 → due 14:00, which is itself a tick.
@@ -452,6 +454,50 @@ class TestComputeNextFetchAt:
         now = datetime(2026, 1, 15, 13, 5, tzinfo=timezone.utc)
         nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
         assert nxt == datetime(2026, 1, 15, 13, 15, tzinfo=timezone.utc)
+
+    def test_auto_uses_derived_interval(self):
+        # No manual override, derived 45 → active feed due 45 min after last fetch.
+        feed = _sched_feed(
+            derived_interval_min=45,
+            last_fetched_at=datetime(2026, 1, 15, 13, 0, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 13, 30, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        # due 13:45 → target 13:43 (grace) → snaps up to 13:45.
+        assert nxt == datetime(2026, 1, 15, 13, 45, tzinfo=timezone.utc)
+
+
+class TestEffectiveIntervalMin:
+    """The Python scalar; the SQL mirror is drift-tested in test_scheduler_selection."""
+
+    ARGS = dict(default_interval_min=60, min_interval_min=15, max_interval_min=360)
+
+    def test_manual_override_is_authoritative_and_uncapped(self):
+        # Manual 1440 must survive the 360 cap — it's an explicit user choice.
+        feed = _sched_feed(fetch_interval_min=1440, derived_interval_min=45)
+        assert effective_interval_min(feed, **self.ARGS) == 1440
+
+    def test_manual_floored_at_min(self):
+        feed = _sched_feed(fetch_interval_min=5)
+        assert effective_interval_min(feed, **self.ARGS) == 15
+
+    def test_auto_uses_derived(self):
+        feed = _sched_feed(fetch_interval_min=None, derived_interval_min=90)
+        assert effective_interval_min(feed, **self.ARGS) == 90
+
+    def test_auto_derived_capped(self):
+        feed = _sched_feed(fetch_interval_min=None, derived_interval_min=5040)
+        assert effective_interval_min(feed, **self.ARGS) == 360
+
+    def test_auto_no_derived_falls_back_to_default(self):
+        feed = _sched_feed(fetch_interval_min=None, derived_interval_min=None)
+        assert effective_interval_min(feed, **self.ARGS) == 60
+
+    def test_auto_no_derived_default_above_cap_not_capped(self):
+        # L1: default fallback is floored but NOT capped, so a high admin default wins.
+        feed = _sched_feed(fetch_interval_min=None, derived_interval_min=None)
+        args = dict(default_interval_min=720, min_interval_min=15, max_interval_min=360)
+        assert effective_interval_min(feed, **args) == 720
 
 
 # ── _clamp_published_at ───────────────────────────────────────────────────────
@@ -1385,7 +1431,7 @@ def _save_session(existing_hashes=(), existing_urls=()) -> AsyncMock:
 
     Routes the two SELECTs by inspecting the statement: the guid_hash existence
     query, then (only when there are URL dedup keys) the url existence query. Any
-    other statement (the unread_count UPDATE) gets a throwaway result.
+    other statement gets a throwaway result.
     """
     eh, eu = list(existing_hashes), list(existing_urls)
 

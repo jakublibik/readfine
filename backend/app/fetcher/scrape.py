@@ -14,7 +14,7 @@ from sqlalchemy import case, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
-from app.models.feed import Feed, UserFeed
+from app.models.feed import Feed
 from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
 from app.fetcher import host_throttle
@@ -226,6 +226,13 @@ async def fetch_scrape_feed(
         feed.last_error = None
         feed.fetch_error_count = 0
         feed.retry_after_until = None
+        # Mirror rss.py: track the newest article date this listing carried. Only
+        # advance when at least one link is dated, so a fetch of purely undated
+        # links doesn't wipe a previously-known publication date. Stays None for
+        # feeds whose listings never expose dates (genuinely unknown, not fetch time).
+        latest_pub = max((pub for _, _, pub, _ in links if pub), default=None)
+        if latest_pub:
+            feed.last_published_at = latest_pub
         await db.commit()
         # Scrape success carries no RateLimit-* headers (fetch returns HTML only), so
         # this just clears any pending 429 streak for the host.
@@ -362,11 +369,6 @@ async def _save_scrape_articles(
         for a in new_articles:
             db.add(a)
         await db.flush()
-        await db.execute(
-            update(UserFeed)
-            .where(UserFeed.feed_id == feed.id)
-            .values(unread_count=UserFeed.unread_count + len(new_articles))
-        )
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
 

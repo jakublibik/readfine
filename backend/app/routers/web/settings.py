@@ -24,7 +24,8 @@ from app.utils.crypto import encrypt
 from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
-from app.utils.datetime_format import is_valid_timezone
+from app.utils.datetime_format import format_until, is_valid_timezone
+from app.utils.formats import is_valid_format
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
@@ -41,6 +42,7 @@ from app.models.label import Label
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.schemas.label import LabelCreate, LabelUpdate
@@ -199,20 +201,24 @@ async def _get_feeds_context(user, db):
         article_counts = {row.feed_id: row.cnt for row in counts_result}
     else:
         article_counts = {}
-    # Annotate errored feeds with their predicted next fetch (transient, in-memory).
+    # Annotate each feed (transient, in-memory) with its effective Auto interval and
+    # predicted next fetch (relative hint) for the feeds table.
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
     min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
+    now = datetime.now(timezone.utc)
     for uf in user_feeds:
-        uf.feed.next_fetch_at = (
-            compute_next_fetch_at(
-                uf.feed,
-                default_interval_min=default_interval,
-                min_interval_min=min_interval,
-            )
-            if uf.feed.status == "error"
-            else None
+        f = uf.feed
+        f.auto_interval_min = auto_interval_min(
+            f.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
         )
+        f.next_fetch_at = compute_next_fetch_at(
+            f, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval, now=now,
+        )
+        f.next_fetch_rel = format_until(f.next_fetch_at, now)
     return user_feeds, folders, article_counts
 
 
@@ -772,17 +778,26 @@ async def settings_feed_edit(
         and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
     )
     is_sole_subscriber = uf.feed.subscriber_count == 1
+    default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
+    min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
+    max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
         "next_fetch_at": compute_next_fetch_at(
             uf.feed,
-            default_interval_min=(app_s.default_fetch_interval_min if app_s else None) or 60,
-            min_interval_min=(app_s.min_fetch_interval_min if app_s else None) or 15,
+            default_interval_min=default_interval,
+            min_interval_min=min_interval,
+            max_interval_min=max_interval,
         ),
         "is_sole_subscriber": is_sole_subscriber,
         "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
-        "default_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
+        "default_interval_min": default_interval,
+        # Effective interval Auto would use for this feed — hint next to the "Auto" option.
+        "auto_interval_min": auto_interval_min(
+            uf.feed.derived_interval_min, default_interval_min=default_interval,
+            min_interval_min=min_interval, max_interval_min=max_interval,
+        ),
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,
     })
@@ -1583,6 +1598,10 @@ async def settings_preferences_save(
     if is_valid_timezone(tz_value) and tz_value != s.timezone:
         s.timezone = tz_value
         await _reschedule_briefings(user.id, tz_value, db)
+
+    fmt_value = (form.get("format_profile") or "").strip()
+    if is_valid_format(fmt_value):
+        s.format_profile = fmt_value
 
     await db.commit()
     return templates.TemplateResponse(request, "settings/preferences.html", {

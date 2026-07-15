@@ -6,6 +6,7 @@ import pytest
 
 from app.utils.datetime_format import (
     format_local,
+    format_until,
     is_valid_timezone,
     available_timezone_list,
     timezone_groups,
@@ -15,6 +16,39 @@ from app.utils.datetime_format import (
 NOW = datetime(2026, 6, 2, 12, 0, tzinfo=timezone.utc)
 
 
+class TestFormatUntil:
+    def _at(self, **delta):
+        from datetime import timedelta
+        return format_until(NOW + timedelta(**delta), now=NOW)
+
+    def test_none_returns_none(self):
+        assert format_until(None, now=NOW) is None
+
+    def test_past_is_due(self):
+        assert self._at(minutes=-5) == "due"
+        assert self._at(seconds=0) == "due"
+
+    def test_minutes(self):
+        assert self._at(minutes=8) == "~8m"
+        assert self._at(minutes=59) == "~59m"
+
+    def test_hours(self):
+        assert self._at(minutes=60) == "~1h"
+        assert self._at(minutes=90) == "~2h"   # rounds to nearest hour
+        assert self._at(hours=23) == "~23h"
+
+    def test_days(self):
+        assert self._at(hours=24) == "~1d"
+        assert self._at(days=2) == "~2d"
+
+    def test_tz_independent(self):
+        # A tz-aware target in a non-UTC zone still yields the same delta label.
+        from datetime import timedelta
+        from zoneinfo import ZoneInfo
+        dt = (NOW + timedelta(hours=2)).astimezone(ZoneInfo("Asia/Tokyo"))
+        assert format_until(dt, now=NOW) == "~2h"
+
+
 class TestFormatLocalShort:
     def test_today_shows_time_only(self):
         dt = datetime(2026, 6, 2, 14, 30, tzinfo=timezone.utc)
@@ -22,23 +56,29 @@ class TestFormatLocalShort:
         assert format_local(dt, "Europe/Prague", "short", now=NOW) == "16:30"
 
     def test_this_year_other_day(self):
-        dt = datetime(2026, 3, 5, 9, 15, tzinfo=timezone.utc)
-        # Prague UTC+1 in March → 10:15
-        assert format_local(dt, "Europe/Prague", "short", now=NOW) == "05.03. 10:15"
+        # Day 25 (> 12) so a month/day order bug can't slip through.
+        dt = datetime(2026, 3, 25, 9, 15, tzinfo=timezone.utc)
+        # Prague UTC+1 in March → 10:15; eu profile drops the year within this year
+        assert format_local(dt, "Europe/Prague", "short", now=NOW, profile="eu") == "25.03 10:15"
 
     def test_older_year_includes_year(self):
-        dt = datetime(2020, 1, 5, 9, 0, tzinfo=timezone.utc)
-        assert format_local(dt, "America/New_York", "short", now=NOW) == "05.01.2020 04:00"
+        dt = datetime(2020, 1, 25, 9, 0, tzinfo=timezone.utc)
+        assert format_local(dt, "America/New_York", "short", now=NOW, profile="eu") == "25.01.2020 04:00"
 
 
 class TestFormatLocalOtherFormats:
-    def test_date_format(self):
-        dt = datetime(2026, 6, 2, 14, 30, tzinfo=timezone.utc)
-        assert format_local(dt, "Europe/Prague", "date", now=NOW) == "Jun 2, 2026"
+    def test_numdate_and_date_alias(self):
+        # Day 25 (> 12) makes the field order unambiguous across profiles.
+        dt = datetime(2026, 6, 25, 14, 30, tzinfo=timezone.utc)
+        # `date` is a legacy alias for `numdate`; both render numerically per profile
+        assert format_local(dt, "Europe/Prague", "numdate", profile="eu") == "25.06.2026"
+        assert format_local(dt, "Europe/Prague", "date", profile="eu") == "25.06.2026"
+        assert format_local(dt, "Europe/Prague", "numdate", profile="us") == "06/25/2026"
+        assert format_local(dt, "Europe/Prague", "numdate", profile="iso") == "2026-06-25"
 
     def test_long_format(self):
-        dt = datetime(2026, 6, 2, 14, 30, tzinfo=timezone.utc)
-        assert format_local(dt, "Europe/Prague", "long", now=NOW) == "2. 6. 2026 16:30"
+        dt = datetime(2026, 6, 25, 14, 30, tzinfo=timezone.utc)
+        assert format_local(dt, "Europe/Prague", "long", now=NOW, profile="eu") == "25.06.2026 16:30"
 
 
 class TestFormatLocalEdgeCases:

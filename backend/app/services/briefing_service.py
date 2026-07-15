@@ -18,6 +18,7 @@ from app.services.catchup_service import (
     populate_snippet_sources,
 )
 from app.templating import templates
+from app.utils.datetime_format import format_local
 from app.utils.markdown import md_render
 from app.utils.smtp import send_html_email
 
@@ -132,9 +133,8 @@ def _build_email_html(
     return _inliner.inline(raw)
 
 
-def _compose_subject(config_name: str, period: str, now_utc: datetime) -> str:
+def _compose_subject(config_name: str, period: str, date_label: str) -> str:
     period_label = _PERIOD_LABELS.get(period, period)
-    date_label = f"{now_utc:%d.%m.%Y}"
     return f"{config_name} — {period_label} · {date_label}"
 
 
@@ -160,6 +160,7 @@ async def send_briefing(
         return
 
     tz_str = (user.settings.timezone if user.settings else None) or "UTC"
+    profile = (user.settings.format_profile if user.settings else None) or "iso"
 
     try:
         articles = await fetch_catchup_articles(
@@ -226,12 +227,14 @@ async def send_briefing(
         custom_prompt=config.custom_prompt or None,
     )
 
-    subject = _compose_subject(config.name, config.period, now_utc)
+    # Date shown in the subject and email footer, in the recipient's timezone and
+    # format profile (background render: pass profile explicitly, no request context).
+    date_label = format_local(now_utc, tz_str, "numdate", profile=profile)
+    subject = _compose_subject(config.name, config.period, date_label)
     if test_mode:
         subject = f"[TEST] {subject}"
 
     period_label = _PERIOD_LABELS.get(config.period, config.period)
-    date_label = f"{now_utc:%d.%m.%Y}"
     html_body = _build_email_html(text, subject, config.name, period_label, date_label, len(sampled))
 
     extra_recipients: list[str] = []

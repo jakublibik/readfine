@@ -1,3 +1,4 @@
+{% from "partials/feed_display.html" import fmt_interval %}
 <div id="feeds-list">
   {% if scope_cleanup and scope_cleanup.has_changes %}
     <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 space-y-1">
@@ -27,7 +28,8 @@
           <th class="text-left px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Type</th>
           <th class="text-left px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Status</th>
           <th class="text-right px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Articles</th>
-          <th class="text-left px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap w-8">Last fetch</th>
+          <th class="text-right px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Interval</th>
+          <th class="text-left px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap w-8">Last / next fetch</th>
           <th class="text-left px-1.5 py-2 text-xs font-medium text-gray-500 whitespace-nowrap w-8">Last pub.</th>
           <th class="pl-2 pr-0 py-2"></th>
         </tr>
@@ -38,7 +40,7 @@
           {% if folder_name != ns.current_folder %}
             {% set ns.current_folder = folder_name %}
             <tr class="bg-gray-50">
-              <td colspan="7" class="pr-2 pt-4 pb-1">
+              <td colspan="8" class="pr-2 pt-4 pb-1">
                 <div class="flex items-center" id="folder-header-{{ uf.folder.id if uf.folder else 'none' }}">
                   <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     {{ folder_name or "No folder" }}
@@ -74,19 +76,13 @@
                 {% else %}
                   <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
                 {% endif %}
-                <span class="font-medium text-gray-900 truncate min-w-0">{{ uf.custom_title or uf.feed.title }}</span>
+                <span class="font-medium text-gray-900 line-clamp-2 break-words min-w-0" title="{{ uf.custom_title or uf.feed.title }}">{{ uf.custom_title or uf.feed.title }}</span>
                 {% if uf.readable_auto_disabled %}
                   <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled - this feed already delivers full articles.{% else %}Full content extraction was automatically disabled - the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
                 <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
-                {% if uf.feed.next_fetch_at %}
-                  <div class="text-xs text-gray-400 mt-0.5 pl-6">Next fetch
-                    <time datetime="{{ uf.feed.next_fetch_at.isoformat() }}"
-                          title="{{ uf.feed.next_fetch_at | localtime('long') }}">~ {{ uf.feed.next_fetch_at | localtime('short') }}</time>
-                  </div>
-                {% endif %}
               {% endif %}
             </td>
             <td class="px-1.5 py-2">
@@ -101,12 +97,20 @@
                 <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ uf.feed.status }}</span>
               {% endif %}
             </td>
-            <td class="px-1.5 py-2 text-right text-gray-600">{{ article_counts.get(uf.feed_id, 0) }}</td>
+            <td class="px-1.5 py-2 text-right text-gray-600">{{ article_counts.get(uf.feed_id, 0)|num }}</td>
+            <td class="px-1.5 py-2 text-right text-gray-500">
+              {% if uf.feed.fetch_interval_min %}{{ fmt_interval(uf.feed.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(uf.feed.auto_interval_min) }}</span>{% endif %}
+            </td>
             <td class="px-1.5 py-2 text-gray-400 whitespace-nowrap">
               {% if uf.feed.last_fetched_at %}
                 <time datetime="{{ uf.feed.last_fetched_at.isoformat() }}"
                       title="{{ uf.feed.last_fetched_at | localtime('long') }}">{{ uf.feed.last_fetched_at | localtime('short') }}</time>
               {% else %}<span class="text-gray-300">—</span>{% endif %}
+              {% if uf.feed.next_fetch_rel %}
+              <div class="text-xs text-gray-400 mt-0.5" title="Next fetch {{ uf.feed.next_fetch_at | localtime('long') }}">
+                next {{ uf.feed.next_fetch_rel }}
+              </div>
+              {% endif %}
             </td>
             <td class="px-1.5 py-2 text-gray-400 whitespace-nowrap">
               {% if uf.feed.last_published_at %}
@@ -179,5 +183,5 @@
   {% include "settings/partials/folder_select.html" %}
 {% endif %}
 {% if request.headers.get('hx-request') %}
-<span id="feeds-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ user_feeds | length }})</span>
+<span id="feeds-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ (user_feeds | length)|num }})</span>
 {% endif %}

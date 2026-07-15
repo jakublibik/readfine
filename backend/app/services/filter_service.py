@@ -8,7 +8,7 @@ from functools import lru_cache
 
 import regex as _regex
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -494,11 +494,6 @@ async def _execute_actions(
                 if action.action_type == "mark_read" and not state.is_read:
                     state.is_read = True
                     state.read_at = datetime.now(timezone.utc)
-                    await db.execute(
-                        update(UserFeed)
-                        .where(UserFeed.user_id == user_id, UserFeed.feed_id == article.feed_id)
-                        .values(unread_count=func.greatest(UserFeed.unread_count - 1, 0))
-                    )
                     changed = True
                 elif action.action_type == "star" and not state.is_starred:
                     # Filter star sets is_starred ONLY — deliberately not the
@@ -512,8 +507,8 @@ async def _execute_actions(
                 elif action.action_type == "archive" and not state.is_archived:
                     # Archive removes the article from the inbox/feed views and
                     # exempts it from retention purge (see purge_service). Unlike
-                    # mark_read it does not touch is_read / unread_count — an
-                    # archived article can still be unread.
+                    # mark_read it does not touch is_read — an archived article
+                    # can still be unread.
                     state.is_archived = True
                     changed = True
 

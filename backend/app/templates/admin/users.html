@@ -5,7 +5,7 @@
 {% block admin_content %}
 <h1 class="text-xl font-semibold text-gray-900 mb-6">
   Users
-  <span id="users-count" class="text-sm font-normal text-gray-400">({{ users | length }})</span>
+  <span id="users-count" class="text-sm font-normal text-gray-400">({{ (users | length)|num }})</span>
 </h1>
 
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">

@@ -9,14 +9,14 @@
 A self-hosted web RSS reader (inspired by Tiny Tiny RSS) with web scraping, filters,
 readable extraction, and optional AI summaries, scoring, and briefings.
 
-**Try the hosted instance:** [readfine.app](https://readfine.app) — or self-host with the steps below.
+**Try the hosted instance:** [readfine.app](https://readfine.app), or self-host with the steps below.
 
 > [!NOTE]
 > **Built with AI.** Readfine is primarily AI-written (with Claude Code), with
-> limited line-by-line human review. It's a real, working app that I use daily —
+> limited line-by-line human review. It's a real, working app that I use daily,
 > but if you self-host it, treat it accordingly: review the code, and audit the
 > security-sensitive parts (auth, key storage, SSRF protection) before trusting
-> it with anything sensitive. No warranty — see [License](#license).
+> it with anything sensitive. No warranty; see [License](#license).
 
 ![Readfine reading view](backend/app/static/images/landing/desktop_reading.png)
 
@@ -36,13 +36,15 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 
 ## Features
 
-- **Feeds** — RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
-- **Reading** — readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind)
-- **Adaptive layout** — pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) — more than mobile-friendly, not a squeezed-down desktop
-- **Filters** — conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
-- **AI (bring-your-own-key)** — summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
-- **Accounts** — per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
-- **Import/export** — OPML (incl. Tiny Tiny RSS compatibility)
+- **Feeds:** RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
+- **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind)
+- **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
+- **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
+- **AI (bring-your-own-key):** summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
+- **Accounts:** per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
+- **Import/export:** OPML (incl. Tiny Tiny RSS compatibility)
+
+See [FEATURES.md](FEATURES.md) for the full list, grouped by area (also at `/features` in the app).
 
 <p>
   <img src="backend/app/static/images/landing/mobile_summary.png" width="30%" alt="AI summary" />
@@ -64,11 +66,11 @@ Then open **http://localhost:8000** and log in:
 - **password:** `demodemo`
 
 > [!WARNING]
-> **Demo only — not for production.** This compose file runs plain HTTP with no
+> **Demo only, not for production.** This compose file runs plain HTTP with no
 > reverse proxy, `DEBUG=true`, and **hard-coded throwaway secrets and admin
 > credentials**. It exists purely to try the app in one command. For a real
-> deployment use `setup.sh` below (unique secrets, TLS, your own admin account) —
-> never expose the demo compose or reuse its keys.
+> deployment use `setup.sh` below (unique secrets, TLS, your own admin account).
+> Never expose the demo compose or reuse its keys.
 
 Tear it down (and wipe the demo database) with:
 
@@ -86,7 +88,7 @@ Prefer not to install anything? The hosted instance at
 - A Unix shell to run `setup.sh` (Linux or macOS)
 
 > **On Windows?** The app itself is OS-agnostic (it runs in Docker), but `setup.sh` is a
-> bash script. Run it inside **WSL2** — which Docker Desktop already uses on Windows anyway.
+> bash script. Run it inside **WSL2**, which Docker Desktop already uses on Windows anyway.
 > Install [WSL2](https://learn.microsoft.com/windows/wsl/install) + Docker Desktop, then
 > clone/unzip Readfine inside your WSL home and run `bash setup.sh` there. (`ssl.sh` for
 > Let's Encrypt is Debian/Ubuntu-only; on other setups provide your own certificate.)
@@ -95,7 +97,7 @@ Prefer not to install anything? The hosted instance at
 
 ### 1. Get the code
 
-**Option A — download the latest release** (no git needed):
+**Option A: download the latest release** (no git needed):
 download the source `.zip` from the [latest release](https://github.com/jakublibik/readfine/releases/latest),
 unzip it, and rename the folder to `readfine`. Using a **stable folder name** matters: Docker
 Compose names your data volume after the folder, so keeping it consistent across updates is
@@ -107,7 +109,7 @@ mv readfine-* readfine
 cd readfine
 ```
 
-**Option B — clone with git** (easier to update later):
+**Option B: clone with git** (easier to update later):
 
 ```bash
 git clone https://github.com/jakublibik/readfine.git
@@ -118,14 +120,14 @@ cd readfine
 
 You need a certificate before running setup. Two options:
 
-**Option A — via your DNS/CDN provider** (e.g. Cloudflare Origin Certificate):
+**Option A: via your DNS/CDN provider** (e.g. Cloudflare Origin Certificate):
 ```bash
 mkdir -p certs
 nano certs/cert.pem   # paste the certificate
 nano certs/cert.key   # paste the private key
 ```
 
-**Option B — Let's Encrypt** (certbot must be able to bind port 80):
+**Option B: Let's Encrypt** (certbot must be able to bind port 80):
 ```bash
 sudo bash ssl.sh your-domain.com admin@your-domain.com
 mkdir -p certs
@@ -152,7 +154,7 @@ It will then generate the configuration, build and start all containers, and run
 
 Open your browser at the URL shown at the end of setup and log in with the admin credentials you provided.
 
-> **Registration is closed by default.** A fresh install starts with sign-ups disabled —
+> **Registration is closed by default.** A fresh install starts with sign-ups disabled;
 > only your admin account exists. To let other people register, enable it in the admin
 > panel (configure SMTP first if you want email verification). Leaving it closed keeps the
 > instance private / invite-only.
@@ -168,7 +170,7 @@ Open your browser at the URL shown at the end of setup and log in with the admin
 
 The login lockout keys on the visitor's IP. The bundled `docker-compose.yml` always runs
 **nginx in front of the app**, so a Docker deployment always has at least one proxy. Tell
-the app how many proxies sit in front so it can find the real visitor IP — otherwise an
+the app how many proxies sit in front so it can find the real visitor IP. Otherwise an
 attacker could spoof headers and dodge the lockout.
 
 **Pick one line and set it in `.env`:**
@@ -184,7 +186,7 @@ That's all most deployments need. The two settings are explained below.
 ### If you use Cloudflare: lock the origin down
 
 `TRUST_CLOUDFLARE=true` trusts Cloudflare's `CF-Connecting-IP` header. That's only safe if
-your server **cannot** be reached except through Cloudflare — otherwise someone could hit
+your server **cannot** be reached except through Cloudflare. Otherwise someone could hit
 it directly with a forged header. Restrict inbound 80/443 to Cloudflare's IP ranges, e.g.
 with UFW:
 
@@ -199,7 +201,7 @@ sudo ufw deny 443/tcp
 ### How `TRUSTED_PROXY_COUNT` works
 
 `TRUSTED_PROXY_COUNT=N` reads the visitor IP from the `X-Forwarded-For` header counting `N`
-entries from the **right** — those are the hops your own proxies added. Anything further
+entries from the **right**. Those are the hops your own proxies added. Anything further
 left is supplied by the client and ignored, so it can't be spoofed. With the bundled nginx
 that's `1`; add `1` more for each extra proxy you put in front.
 
@@ -226,7 +228,7 @@ docker compose up -d --build
 
 **If you downloaded the release zip:** download the new release and unzip it. Copy your
 existing `.env`, `certs/`, and `nginx.conf` into it, then rename it to the **same folder name
-as before** (`readfine`) — replacing the old folder. Keeping the folder name identical is what
+as before** (`readfine`), replacing the old folder. Keeping the folder name identical is what
 makes Docker reuse the same data volume. From that folder:
 
 ```bash
@@ -236,14 +238,14 @@ docker compose up -d --build
 Your data lives in a Docker volume, not in the project folder, so it survives updates **as
 long as the project folder keeps the same name** (see above).
 Migrations run automatically on startup. Updates never re-run `setup.sh`; the `ENCRYPTION_KEY`
-in `.env` must stay stable for the life of the install — changing it makes all stored API keys
+in `.env` must stay stable for the life of the install. Changing it makes all stored API keys
 and feed passwords permanently unreadable.
 
 > **Run a single worker.** Rate limiting and the login brute-force lockout are
 > kept in process memory, so they only work correctly with **one** Uvicorn worker
 > (the shipped `docker-compose.yml` does this). Adding workers silently splits the
 > counters per worker and weakens those protections. Horizontal scaling would need
-> a shared (DB/Redis) backend for the lockout — not yet implemented.
+> a shared (DB/Redis) backend for the lockout, not yet implemented.
 
 ## Backups
 
@@ -278,7 +280,7 @@ crontab -e
 ```
 
 > **Store the secrets safely.** Keep the `RESTIC_PASSWORD` somewhere separate from
-> the backups (a password manager) — without it the backups cannot be restored.
+> the backups (a password manager). Without it the backups cannot be restored.
 > Also back up your `.env` `ENCRYPTION_KEY` and `SECRET_KEY`: a restored database
 > is useless without the original `ENCRYPTION_KEY` (stored API keys and feed
 > passwords become permanently unreadable).
@@ -288,7 +290,7 @@ crontab -e
 ```bash
 # Load the repo location and credentials into your shell first (any manual
 # restic command needs them; backup.sh sources this file itself). Don't use
-# sudo — it drops the environment.
+# sudo. It drops the environment.
 set -a; . backup.env; set +a
 
 restic snapshots                                   # list available backups
@@ -296,7 +298,7 @@ restic dump latest /readfine.sql > restore.sql     # extract the newest dump
 docker compose exec -T db psql -U readfine -d readfine < restore.sql
 ```
 
-Test a restore into a throwaway database at least once — an untested backup is not
+Test a restore into a throwaway database at least once. An untested backup is not
 a backup.
 
 ## Useful commands
@@ -330,7 +332,7 @@ npm install
 
 ### CSS build
 
-Tailwind CSS is compiled from templates into a static file — `backend/app/static/css/tailwind.css`. This file is committed to the repository.
+Tailwind CSS is compiled from templates into a static file, `backend/app/static/css/tailwind.css`. This file is committed to the repository.
 
 **Rebuild after changing Tailwind classes in any template:**
 
@@ -378,7 +380,7 @@ uv run pytest
 ```
 
 Most tests use mocks and need no database. The integration tests (retention,
-catch-up) require the `db` container to be running — start it with
+catch-up) require the `db` container to be running; start it with
 `docker compose up -d db` first. Without a reachable database they are skipped
 locally (and fail in CI, where Postgres is always provisioned).
 
@@ -390,7 +392,7 @@ code baked into the image at build time, so updates require a rebuild
 
 If you prefer to develop with the app inside Docker and live-reload edits
 without rebuilding, add a `docker-compose.override.yml` (gitignored, auto-loaded
-locally) with a bind mount — do **not** commit it, so production keeps building
+locally) with a bind mount. Do **not** commit it, so production keeps building
 immutable images:
 
 ```yaml
@@ -432,8 +434,8 @@ chmod +x .git/hooks/pre-commit
 ## License
 
 Copyright © Jakub Libík. Licensed under the **GNU Affero General Public License v3.0 or
-later** (AGPL-3.0-or-later) — see [LICENSE](LICENSE).
+later** (AGPL-3.0-or-later). See [LICENSE](LICENSE).
 
 The AGPL's network clause (§13) means that if you run a modified version of Readfine as a
-network service, you must offer its users the corresponding source — for example by linking
+network service, you must offer its users the corresponding source, for example by linking
 back to your fork from within the running app.

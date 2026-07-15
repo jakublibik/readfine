@@ -13,6 +13,9 @@ class AppSettings(Base):
     registration_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     default_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=60)
     min_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=15)
+    # Upper bound for the auto (adaptive) fetch interval. Caps how rarely a quiet feed
+    # is polled; does not apply to explicit manual per-feed overrides.
+    max_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=360)
     max_feeds_per_user: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=200)
     default_purge_after_days: Mapped[int | None] = mapped_column(SmallInteger, default=60)
     default_purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger, default=None)

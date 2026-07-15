@@ -51,7 +51,11 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
         headers = {"User-Agent": READFINE_UA}
         current_url = url
-        with httpx.Client(timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers) as client:
+        # http2=True: some CDNs 403 / hard-throttle HTTP/1.1 as a bot signal but serve
+        # HTTP/2 normally (see url_validator._resolve_response).
+        with httpx.Client(
+            timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers, http2=True
+        ) as client:
             for _ in range(_MAX_REDIRECTS + 1):
                 resp = client.get(current_url)
                 if not resp.is_redirect:
