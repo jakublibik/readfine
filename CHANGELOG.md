@@ -17,7 +17,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Preferences → "Advance after mark all as read" (off by default): after you mark a feed, folder or label read from the sidebar, Readfine selects and opens the next one that still has unread articles, expanding a collapsed folder if needed. Feeds advance across folder boundaries; empty scopes are skipped, and the special views (All articles, Starred, Archived) are left alone.
 - Admin → Feeds: an "Edit" action on the table's ··· menu for shared feed fields (title, status, fetch interval, and the scrape article-links selector with a live preview). Per-subscriber preferences and feed credentials are intentionally left out, since an admin usually is not the subscriber.
 - Admin dashboard: a "Briefing errors" section listing catch-up configs whose scheduled briefing is currently failing (user, config, error, retries, next send). Configs with no scheduled retry, for example when SMTP is unconfigured, sort first and are flagged as needing manual attention; the entry clears once a send succeeds.
-- Admin → Users: per-user columns for genuine reads (dwell, link opens or stars, not just marked-read), filter count, and AI operations over the last 7 days and all time across summaries, scoring, context, chat and catch-up.
+- Admin → Users: per-user columns showing whether an account is currently active, not just its lifetime totals. "Read 7d" counts articles genuinely read in the last 7 days (marked read with at least 30 seconds of dwell, the same signal the reading stats use), "AI 7d" counts AI operations in the last 7 days across summaries, scoring, context, chat and catch-up, and a filter count.
 
 ### Changed
 

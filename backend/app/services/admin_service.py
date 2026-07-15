@@ -3,7 +3,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, or_, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -68,34 +68,31 @@ async def list_users(db: AsyncSession) -> list[dict]:
     filter_counts = await _counts(
         select(Filter.user_id, func.count(Filter.id)).group_by(Filter.user_id)
     )
-    # Genuine reading engagement (not is_read): dwell >= 30s, opened the link, or ever starred.
+    # Genuine reading in the last 7 days. Uses read_at (set on mark-read) gated by
+    # dwell >= 30s — the same "reading happened" signal stats_service uses for streaks
+    # and heatmaps. link_opened has no timestamp, so it can't be time-bounded here.
     read_counts = await _counts(
         select(UserArticleState.user_id, func.count())
         .where(
-            or_(
-                UserArticleState.dwell_seconds >= 30,
-                UserArticleState.link_opened.is_(True),
-                UserArticleState.ever_starred.is_(True),
-            )
+            UserArticleState.read_at >= cutoff,
+            UserArticleState.dwell_seconds >= 30,
         )
         .group_by(UserArticleState.user_id)
     )
 
-    # AI usage aggregated across all sources, as (last-7d, all-time) per user.
+    # AI usage in the last 7 days, aggregated across all sources per user.
+    # We only care whether a user actively uses AI, not lifetime totals.
     ai_recent: dict[int, int] = {}
-    ai_total: dict[int, int] = {}
 
     async def _ai_counts(model, ts_col, *conds) -> None:
         stmt = select(
             model.user_id,
             func.count().filter(ts_col >= cutoff),
-            func.count(),
         ).group_by(model.user_id)
         for cond in conds:
             stmt = stmt.where(cond)
-        for uid, recent, total in (await db.execute(stmt)).all():
+        for uid, recent in (await db.execute(stmt)).all():
             ai_recent[uid] = ai_recent.get(uid, 0) + recent
-            ai_total[uid] = ai_total.get(uid, 0) + total
 
     await _ai_counts(ArticleAiJob, ArticleAiJob.created_at, ArticleAiJob.status == "success")
     await _ai_counts(AiUsageLog, AiUsageLog.created_at)
@@ -123,7 +120,6 @@ async def list_users(db: AsyncSession) -> list[dict]:
             "filter_count": filter_counts.get(user.id, 0),
             "read_count": read_counts.get(user.id, 0),
             "ai_ops_recent": ai_recent.get(user.id, 0),
-            "ai_ops_total": ai_total.get(user.id, 0),
             "inactive_days": inactive_days,
         })
     return result
