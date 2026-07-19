@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-19
+
 ### Added
 
 - Preferences → "Number & date format": a per-user choice of how numbers and dates are written, independent of the interface language. Five profiles cover the common conventions (US, UK/International, Europe, DE/AT, ISO), each differing in the decimal separator, thousands separator and date order, so you can keep the app in English yet see `1 234,56` and `25.06.2026`. New accounts are detected from the browser at sign-up; existing accounts start on the Europe profile and can switch anytime. The setting drives numbers across the stats and AI cost views and the numeric date formats throughout the app, including the date shown in briefing emails (in your timezone). Times stay 24-hour for now.
