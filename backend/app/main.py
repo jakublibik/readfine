@@ -18,8 +18,12 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import select, text
 
 from app.config import settings
+from app.logging_config import configure_logging
 from app.rate_limit import limiter
 import app.database as db
+
+# Before anything else logs: uvicorn leaves the root logger unconfigured.
+configure_logging()
 
 
 @asynccontextmanager

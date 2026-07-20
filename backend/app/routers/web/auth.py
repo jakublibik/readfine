@@ -200,10 +200,12 @@ async def register(
     # makes it usable as a relay for bombing third-party inboxes.
     trap = check_form(honeypot, form_ts)
     if trap:
-        logger.info("Registration blocked by bot trap (%s) from %s", trap, get_client_ip(request))
         if trap == "stale":
-            # Could be a genuinely stale tab; let the person try again.
+            # Could be a genuinely stale tab, so this one is not news.
+            logger.info("Registration form expired, from %s", get_client_ip(request))
             return _err("This form expired. Please try again.")
+        # A caught bot is rare and worth seeing at the default log level.
+        logger.warning("Registration blocked by bot trap (%s) from %s", trap, get_client_ip(request))
         # Fake the success path so the script cannot tell it was caught.
         return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1",
                                 status_code=302)

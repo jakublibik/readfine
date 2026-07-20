@@ -339,6 +339,21 @@ docker compose down
 docker compose down -v
 ```
 
+**How much gets logged** is set by `LOG_LEVEL` in `.env` (`DEBUG`, `INFO`, `WARNING`,
+`ERROR`). The default `WARNING` keeps the log to things that need attention; `INFO` adds
+the running commentary from the scheduler and fetcher.
+
+When a site starts answering `403` or `429`, `LOG_OUTBOUND_REQUESTS=true` writes one line
+per outbound request (feed fetches, scraping, readable extraction) with the host, status,
+HTTP version, elapsed time and any rate-limit headers, so you can read the real request
+rate per host. It ignores `LOG_LEVEL`, so switching it on is enough. Restart the app after
+changing either, and turn the outbound log back off when you're done. It is verbose.
+
+```bash
+# every outbound request to one host, with timestamps
+docker compose logs --since 24h --no-log-prefix -t app | grep 'outbound host=www.example.com'
+```
+
 ## Development
 
 ### Requirements
