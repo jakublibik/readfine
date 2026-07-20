@@ -65,7 +65,8 @@
         {% endif %}
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">
-        <time datetime="{{ u.created_at.isoformat() }}">{{ u.created_at | localtime('numdate') }}</time>
+        <time datetime="{{ u.created_at.isoformat() }}"
+              title="{{ u.created_at | localtime('long') }}">{{ u.created_at | localtime('numdate') }}</time>
       </td>
       <td class="px-2 py-2 text-right">
         {% if u.id != current_user.id %}
