@@ -27,6 +27,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
+- [If you open registration](#if-you-open-registration)
 - [Updating](#updating)
 - [Backups](#backups)
 - [Useful commands](#useful-commands)
@@ -217,6 +218,27 @@ that's `1`; add `1` more for each extra proxy you put in front.
 
 ---
 
+## If you open registration
+
+Registration is off by default. If you turn it on in the admin panel, your instance will
+send a verification email to whatever address a visitor types in. Bots look for exactly
+that: they post scraped addresses through open signup forms to flood someone else's inbox,
+and your domain is the one that ends up sending the spam.
+
+Readfine ships with two traps on the registration form, both on by default with nothing to
+configure: a hidden honeypot field, and a signed timestamp that rejects a form submitted
+faster than a person could fill it. Together they stop the usual bulk form-stuffing.
+
+For a public instance, add a second layer in front of the app. Rate-limit or challenge
+`/register` at your reverse proxy or CDN. On Cloudflare, a WAF custom rule matching
+`http.request.uri.path eq "/register"` with the **Managed Challenge** action does the job
+and stays invisible to real visitors.
+
+If you don't need public signup, leave registration closed and add people with invitation
+links from the admin panel. That removes the problem entirely.
+
+---
+
 ## Updating
 
 **If you cloned with git:**
@@ -315,6 +337,21 @@ docker compose down
 
 # Stop and delete all data (irreversible)
 docker compose down -v
+```
+
+**How much gets logged** is set by `LOG_LEVEL` in `.env` (`DEBUG`, `INFO`, `WARNING`,
+`ERROR`). The default `WARNING` keeps the log to things that need attention; `INFO` adds
+the running commentary from the scheduler and fetcher.
+
+When a site starts answering `403` or `429`, `LOG_OUTBOUND_REQUESTS=true` writes one line
+per outbound request (feed fetches, scraping, readable extraction) with the host, status,
+HTTP version, elapsed time and any rate-limit headers, so you can read the real request
+rate per host. It ignores `LOG_LEVEL`, so switching it on is enough. Restart the app after
+changing either, and turn the outbound log back off when you're done. It is verbose.
+
+```bash
+# every outbound request to one host, with timestamps
+docker compose logs --since 24h --no-log-prefix -t app | grep 'outbound host=www.example.com'
 ```
 
 ## Development

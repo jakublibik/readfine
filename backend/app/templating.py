@@ -13,6 +13,7 @@ from app.utils.datetime_format import (
     is_common_timezone,
 )
 from app.utils.formats import format_number, format_number_g, format_choices
+from app.utils.form_guard import HONEYPOT_FIELD, issue_form_ts
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -111,3 +112,7 @@ templates.env.globals["ai_error_fresh"] = lambda: current_viewer_ai_error.get()
 templates.env.globals["timezone_groups"] = timezone_groups
 templates.env.globals["is_common_timezone"] = is_common_timezone
 templates.env.globals["format_choices"] = format_choices
+# Bot traps for public forms. Called from the template so every render (including
+# a re-render after a validation error) gets a fresh stamp.
+templates.env.globals["form_ts"] = issue_form_ts
+templates.env.globals["honeypot_field"] = HONEYPOT_FIELD

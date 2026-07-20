@@ -1,6 +1,7 @@
 """Readable extraction pipeline: trafilatura → readability-lxml fallback."""
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlsplit
@@ -40,7 +41,7 @@ _EMPTY_CONTENT_MSG = "No content could be extracted from the page"
 
 def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[int]]:
     """Download article HTML. Returns (html, error_message, http_status_code)."""
-    from app.utils.url_validator import validate_feed_url
+    from app.utils.url_validator import log_outbound, validate_feed_url
     try:
         validate_feed_url(url)
     except ValueError as exc:
@@ -57,7 +58,16 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
             timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers, http2=True
         ) as client:
             for _ in range(_MAX_REDIRECTS + 1):
-                resp = client.get(current_url)
+                started = time.monotonic()
+                try:
+                    resp = client.get(current_url)
+                except Exception as exc:
+                    log_outbound(current_url, None, started, error=type(exc).__name__)
+                    raise
+                # Extraction has its own client (no host throttling), so it must be
+                # visible in the outbound log too — otherwise its share of a host's
+                # rate-limit budget is invisible.
+                log_outbound(current_url, resp, started)
                 if not resp.is_redirect:
                     break
                 redirect_url = resp.headers.get("location", "")

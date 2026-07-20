@@ -16,6 +16,14 @@
             <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
             <input type="hidden" name="timezone" id="tz-field">
             <input type="hidden" name="format_profile" id="fmt-field">
+            <input type="hidden" name="form_ts" value="{{ form_ts() }}">
+            {# Bot trap: off-screen and hidden from assistive tech, so only a
+               script filling every field will put anything in it. #}
+            <div class="absolute left-[-9999px] h-px w-px overflow-hidden" aria-hidden="true">
+                <label for="{{ honeypot_field }}">Leave this field empty</label>
+                <input id="{{ honeypot_field }}" name="{{ honeypot_field }}" type="text"
+                    tabindex="-1" autocomplete="off">
+            </div>
             {% if invite_token %}
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
