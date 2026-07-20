@@ -1,4 +1,5 @@
 """Unit tests for SSRF-protection URL validator."""
+import logging
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -398,3 +399,50 @@ class TestRetryableHttpStatuses:
     def test_permanent_4xx_still_excluded(self):
         for status in (400, 401, 404, 410):
             assert status not in RETRYABLE_HTTP_STATUSES
+
+
+class TestOutboundLogging:
+    """The outbound request log is a diagnostic switch: silent unless asked for,
+    and never able to break a fetch."""
+
+    def _log(self, caplog, *, enabled, response=None, error=None):
+        from app.utils.url_validator import log_outbound
+
+        with patch("app.config.settings.log_outbound_requests", enabled):
+            with caplog.at_level(logging.INFO, logger="app.utils.url_validator"):
+                log_outbound("https://example.com/feed", response, 0.0, error=error)
+        return caplog.text
+
+    def test_silent_when_disabled(self, caplog):
+        resp = httpx.Response(200, request=httpx.Request("GET", "https://example.com/feed"))
+        assert "outbound" not in self._log(caplog, enabled=False, response=resp)
+
+    def test_logs_status_and_rate_limit_headers(self, caplog):
+        resp = httpx.Response(
+            403,
+            headers={"x-ratelimit-remaining": "0.0", "x-ratelimit-reset": "20"},
+            request=httpx.Request("GET", "https://example.com/feed"),
+        )
+        text = self._log(caplog, enabled=True, response=resp)
+        assert "host=example.com" in text
+        assert "status=403" in text
+        assert "rl_remaining=0.0" in text
+        assert "rl_reset=20" in text
+
+    def test_logs_transport_failures(self, caplog):
+        text = self._log(caplog, enabled=True, response=None, error="ConnectTimeout")
+        assert "status=ERR(ConnectTimeout)" in text
+
+    def test_credentials_are_redacted(self, caplog):
+        from app.utils.url_validator import log_outbound
+
+        resp = httpx.Response(200, request=httpx.Request("GET", "https://example.com/feed"))
+        with patch("app.config.settings.log_outbound_requests", True):
+            with caplog.at_level(logging.INFO, logger="app.utils.url_validator"):
+                log_outbound("https://user:secret@example.com/feed?token=abc", resp, 0.0)
+        assert "secret" not in caplog.text
+        assert "token=abc" not in caplog.text
+
+    def test_never_raises(self, caplog):
+        # A malformed response object must not propagate out of the logger.
+        assert self._log(caplog, enabled=True, response=object()) is not None

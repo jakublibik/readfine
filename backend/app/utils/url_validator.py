@@ -1,13 +1,17 @@
 """URL validation with SSRF protection."""
 import asyncio
 import ipaddress
+import logging
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import NamedTuple
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 10
@@ -184,6 +188,55 @@ def redact_url(url: str) -> str:
     return cleaned
 
 
+# Rate-limit headers worth recording, in the order they are logged. Each entry is
+# (label, candidate header names) — hosts disagree on the prefix (Reddit sends the
+# x- variants, RFC 9239 drops it), so both spellings are tried.
+_OUTBOUND_LOG_HEADERS = (
+    ("retry_after", ("retry-after",)),
+    ("rl_used", ("x-ratelimit-used", "ratelimit-used")),
+    ("rl_remaining", ("x-ratelimit-remaining", "ratelimit-remaining")),
+    ("rl_reset", ("x-ratelimit-reset", "ratelimit-reset")),
+    ("rl_limit", ("x-ratelimit-limit", "ratelimit-limit")),
+)
+
+
+def log_outbound(
+    url: str, response: httpx.Response | None, started: float, error: str | None = None
+) -> None:
+    """Record one outbound HTTP request when ``LOG_OUTBOUND_REQUESTS`` is enabled.
+
+    Per-feed error records cannot answer "how often do we actually hit this host":
+    a host is shared by several feeds and by readable extraction, and successful
+    requests leave no trace at all. This logs every attempt with its timestamp,
+    status and rate-limit headers, so the real request rate and spacing per host
+    can be reconstructed from the log.
+
+    *started* is a ``time.monotonic()`` reading taken just before the request.
+    *url* is the logical URL (the hostname one), not the pinned-IP connect URL.
+    """
+    from app.config import settings
+
+    if not settings.log_outbound_requests:
+        return
+    try:
+        parts = [f"host={urlparse(url).hostname or '?'}"]
+        if response is not None:
+            parts.append(f"status={response.status_code}")
+            parts.append(f"http={response.http_version}")
+        else:
+            parts.append(f"status=ERR({error or 'unknown'})")
+        parts.append(f"ms={int((time.monotonic() - started) * 1000)}")
+        if response is not None:
+            for label, names in _OUTBOUND_LOG_HEADERS:
+                value = _first_header(response.headers, names)
+                if value is not None:
+                    parts.append(f"{label}={value}")
+        parts.append(f"url={redact_url(url)}")
+        logger.info("outbound %s", " ".join(parts))
+    except Exception:  # diagnostics must never break a fetch
+        logger.debug("outbound request logging failed", exc_info=True)
+
+
 def _resolve_and_pin(hostname: str) -> str:
     """Resolve *hostname* once, reject it if any resolved address is disallowed
     (loopback/private/link-local/reserved/multicast), and return a single public
@@ -316,7 +369,13 @@ def _resolve_response(
             # (with the original Host header and HTTPS SNI) removes the re-resolve
             # that would otherwise reopen the DNS-rebinding window.
             connect_url, host_overlay, extensions = _pin_connection(current_url)
-            response = client.get(connect_url, headers=host_overlay, extensions=extensions)
+            started = time.monotonic()
+            try:
+                response = client.get(connect_url, headers=host_overlay, extensions=extensions)
+            except Exception as exc:
+                log_outbound(current_url, None, started, error=type(exc).__name__)
+                raise
+            log_outbound(current_url, response, started)
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.
             if not response.has_redirect_location:

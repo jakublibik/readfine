@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     debug: bool = False
     app_name: str = "Readfine"
 
+    # Diagnostics: log one INFO line per outbound HTTP request (feed fetch, scrape,
+    # readable extraction) with host, status, elapsed time and any rate-limit headers.
+    # Off by default — it is verbose and only useful when investigating a specific
+    # host's throttling. Enable via LOG_OUTBOUND_REQUESTS=true and restart the app.
+    log_outbound_requests: bool = False
+
     # Initial admin (used only on first run)
     first_admin_email: EmailStr | None = None
     first_admin_password: str | None = None

@@ -9,6 +9,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- `LOG_OUTBOUND_REQUESTS` (off by default): a diagnostic switch that logs one line per outbound HTTP request, covering feed fetches, scraping and readable extraction. Each line records the host, status, HTTP version, elapsed time and any rate-limit headers the server sent (`Retry-After`, `X-RateLimit-*`). Per-feed error records only show failures, and only per feed, so they cannot answer how often a host is really being hit when several feeds and the extraction pipeline share it. Turn this on when a site starts returning 403 or 429, read the real request rate and spacing from the log, then turn it off again.
+
 ## [0.13.0] - 2026-07-19
 
 ### Added
