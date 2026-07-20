@@ -27,6 +27,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
+- [If you open registration](#if-you-open-registration)
 - [Updating](#updating)
 - [Backups](#backups)
 - [Useful commands](#useful-commands)
@@ -214,6 +215,27 @@ that's `1`; add `1` more for each extra proxy you put in front.
 > set_real_ip_from <CF range>;   # repeat for every Cloudflare range
 > real_ip_header CF-Connecting-IP;
 > ```
+
+---
+
+## If you open registration
+
+Registration is off by default. If you turn it on in the admin panel, your instance will
+send a verification email to whatever address a visitor types in. Bots look for exactly
+that: they post scraped addresses through open signup forms to flood someone else's inbox,
+and your domain is the one that ends up sending the spam.
+
+Readfine ships with two traps on the registration form, both on by default with nothing to
+configure: a hidden honeypot field, and a signed timestamp that rejects a form submitted
+faster than a person could fill it. Together they stop the usual bulk form-stuffing.
+
+For a public instance, add a second layer in front of the app. Rate-limit or challenge
+`/register` at your reverse proxy or CDN. On Cloudflare, a WAF custom rule matching
+`http.request.uri.path eq "/register"` with the **Managed Challenge** action does the job
+and stays invisible to real visitors.
+
+If you don't need public signup, leave registration closed and add people with invitation
+links from the admin panel. That removes the problem entirely.
 
 ---
 

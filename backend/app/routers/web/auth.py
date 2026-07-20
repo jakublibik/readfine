@@ -21,6 +21,7 @@ from app.utils.formats import is_valid_format
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.services.app_settings_cache import get_registration_enabled
+from app.utils.form_guard import HONEYPOT_FIELD, check_form
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
@@ -180,6 +181,8 @@ async def register(
     invite_token: str = Form(""),
     tz: str = Form("", alias="timezone"),
     fmt: str = Form("", alias="format_profile"),
+    form_ts: str = Form(""),
+    honeypot: str = Form("", alias=HONEYPOT_FIELD),
     db: AsyncSession = Depends(get_db),
 ):
     app_settings = await _get_app_settings(db)
@@ -191,6 +194,19 @@ async def register(
         ctx = {"error": msg, "invite_token": invite_token,
                "prefill_email": email, "prefill_display_name": display_name, **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
+
+    # Bot traps, before any DB work or outbound mail. Registration is the one
+    # public endpoint that emails an arbitrary attacker-supplied address, which
+    # makes it usable as a relay for bombing third-party inboxes.
+    trap = check_form(honeypot, form_ts)
+    if trap:
+        logger.info("Registration blocked by bot trap (%s) from %s", trap, get_client_ip(request))
+        if trap == "stale":
+            # Could be a genuinely stale tab; let the person try again.
+            return _err("This form expired. Please try again.")
+        # Fake the success path so the script cannot tell it was caught.
+        return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1",
+                                status_code=302)
 
     if not is_valid_email(email):
         return _err("Please enter a valid email address.")

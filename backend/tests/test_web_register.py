@@ -1,10 +1,13 @@
 """Tests for web registration flow and email verification."""
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.utils.form_guard import HONEYPOT_FIELD, issue_form_ts
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -61,6 +64,18 @@ def web_client(mock_db):
 
     app.dependency_overrides[get_db] = override_get_db
     with TestClient(app, raise_server_exceptions=True, follow_redirects=False) as c:
+        # /register carries bot traps (see form_guard). Every test that isn't
+        # about the traps themselves posts as a human would, with a stamp that
+        # is already old enough to clear the minimum fill time.
+        original_post = c.post
+
+        def post(url, **kwargs):
+            data = kwargs.get("data")
+            if url == "/register" and isinstance(data, dict) and "form_ts" not in data:
+                kwargs["data"] = {**data, "form_ts": issue_form_ts(time.time() - 60)}
+            return original_post(url, **kwargs)
+
+        c.post = post
         yield c
     app.dependency_overrides.clear()
 
@@ -364,3 +379,110 @@ class TestWebLoginEmailVerified:
         r = web_client.get("/login?verified=1")
         assert r.status_code == 200
         assert "verified" in r.text.lower()
+
+
+# ── Registration — bot traps ──────────────────────────────────────────────────
+
+class TestRegisterBotTraps:
+    """Registration emails an arbitrary address, so it is the one endpoint an
+    attacker can use as a mail relay. These guard that door."""
+
+    def test_filled_honeypot_creates_no_account(self, web_client, mock_db):
+        r = web_client.post("/register", data={
+            **VALID_FORM,
+            "form_ts": issue_form_ts(time.time() - 60),
+            HONEYPOT_FIELD: "http://spam.example",
+        })
+        assert r.status_code == 302
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    def test_filled_honeypot_looks_like_success(self, web_client, mock_db):
+        # The bot must not be able to tell it was caught.
+        r = web_client.post("/register", data={
+            **VALID_FORM,
+            "form_ts": issue_form_ts(time.time() - 60),
+            HONEYPOT_FIELD: "spam",
+        })
+        assert r.headers["location"].startswith("/register/check-email")
+
+    def test_instant_submit_creates_no_account(self, web_client, mock_db):
+        r = web_client.post("/register", data={**VALID_FORM, "form_ts": issue_form_ts()})
+        assert r.status_code == 302
+        assert r.headers["location"].startswith("/register/check-email")
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    def test_missing_stamp_creates_no_account(self, web_client, mock_db):
+        r = web_client.post("/register", data={**VALID_FORM, "form_ts": ""})
+        assert r.status_code == 422
+        assert "expired" in r.text.lower()
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    def test_forged_stamp_creates_no_account(self, web_client, mock_db):
+        forged = f"{int(time.time()) - 60}.bogussignature"
+        r = web_client.post("/register", data={**VALID_FORM, "form_ts": forged})
+        assert r.status_code == 422
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    def test_expired_stamp_creates_no_account(self, web_client, mock_db):
+        from app.utils.form_guard import MAX_FORM_AGE_SECONDS
+        old = issue_form_ts(time.time() - MAX_FORM_AGE_SECONDS - 60)
+        r = web_client.post("/register", data={**VALID_FORM, "form_ts": old})
+        assert r.status_code == 422
+        mock_db.add.assert_not_called()
+        mock_db.commit.assert_not_called()
+
+    def test_empty_honeypot_and_aged_stamp_passes(self, web_client, mock_db):
+        # No SMTP → straight to /app, proving the traps let a human through.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            r = web_client.post("/register", data={
+                **VALID_FORM,
+                "form_ts": issue_form_ts(time.time() - 60),
+                HONEYPOT_FIELD: "",
+            })
+        assert r.status_code == 302
+        assert r.headers["location"] == "/app"
+
+    def test_register_page_renders_the_traps(self, web_client, mock_db):
+        from app.services.app_settings_cache import invalidate_registration_cache
+        # The open/closed flag is cached process-wide; another test may have
+        # filled it with False, which would render the "closed" page instead.
+        invalidate_registration_cache()
+        mock_db.execute = AsyncMock(return_value=_scalar(_make_app_settings()))
+        r = web_client.get("/register")
+        assert r.status_code == 200
+        assert 'name="form_ts"' in r.text
+        assert f'name="{HONEYPOT_FIELD}"' in r.text
+
+
+class TestFormGuardUnit:
+    def test_stamp_round_trips(self):
+        from app.utils.form_guard import form_age_seconds
+        age = form_age_seconds(issue_form_ts(time.time() - 30))
+        assert age is not None
+        assert 29 <= age <= 32
+
+    def test_tampered_stamp_has_no_age(self):
+        from app.utils.form_guard import form_age_seconds
+        stamp = issue_form_ts(time.time() - 30)
+        assert form_age_seconds(stamp[:-1] + ("x" if stamp[-1] != "x" else "y")) is None
+
+    def test_unsigned_stamp_rejected(self):
+        from app.utils.form_guard import form_age_seconds
+        assert form_age_seconds(str(int(time.time()) - 30)) is None
+
+    def test_check_form_reasons(self):
+        from app.utils.form_guard import check_form
+        good = issue_form_ts(time.time() - 60)
+        assert check_form("", good) is None
+        assert check_form("spam", good) == "honeypot"
+        assert check_form("", issue_form_ts()) == "too_fast"
+        assert check_form("", "") == "stale"
+
+    def test_honeypot_beats_a_valid_stamp(self):
+        from app.utils.form_guard import check_form
+        assert check_form("  spam  ", issue_form_ts(time.time() - 60)) == "honeypot"
