@@ -466,10 +466,24 @@ class TestFormGuardUnit:
         assert age is not None
         assert 29 <= age <= 32
 
-    def test_tampered_stamp_has_no_age(self):
+    def test_tampered_timestamp_has_no_age(self):
+        # Rewrite the timestamp and keep the original signature — the forgery a bot
+        # would actually attempt, backdating the stamp to clear the too_fast check.
         from app.utils.form_guard import form_age_seconds
-        stamp = issue_form_ts(time.time() - 30)
-        assert form_age_seconds(stamp[:-1] + ("x" if stamp[-1] != "x" else "y")) is None
+        payload, _, signature = issue_form_ts(time.time() - 30).partition(".")
+        forged = str(int(payload) - 600) + "." + signature
+        assert form_age_seconds(forged) is None
+
+    def test_tampered_signature_has_no_age(self):
+        # Mutate the *first* signature character, not the last. The signature is 20
+        # HMAC-SHA1 bytes in 27 base64url characters, so its final character carries
+        # two unused bits and four different characters decode to identical bytes:
+        # flipping only that one left the stamp valid in ~7 % of runs, and the test
+        # went red for no reason.
+        from app.utils.form_guard import form_age_seconds
+        payload, _, signature = issue_form_ts(time.time() - 30).partition(".")
+        flipped = ("b" if signature[0] != "b" else "c") + signature[1:]
+        assert form_age_seconds(payload + "." + flipped) is None
 
     def test_unsigned_stamp_rejected(self):
         from app.utils.form_guard import form_age_seconds
