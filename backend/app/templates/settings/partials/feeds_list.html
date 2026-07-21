@@ -83,6 +83,11 @@
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
                 <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+              {% elif uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
+                {# Explains the badge without a hover (there is none on touch) and shows
+                   the run-up to being switched off, which the badge alone cannot. Gray,
+                   not red: the feed is fine and this resolves on its own. #}
+                <div class="text-xs text-gray-500 truncate mt-0.5 pl-6">Site refused the last {{ uf.feed.block_count }} fetches (switched off after {{ block_disable_threshold }})</div>
               {% endif %}
             </td>
             <td class="px-1.5 py-2">
@@ -94,7 +99,7 @@
                    rather than red — fetching resumes on its own once the block lifts.
                    One word like the other badges, or the narrow column wraps it. #}
                 <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700"
-                      title="The site is refusing automated requests. Retrying on the normal schedule.">throttled</span>
+                      title="The site is refusing automated requests. Nothing is wrong with the feed; fetching backs off and resumes on its own.">throttled</span>
               {% elif uf.feed.status == 'active' %}
                 <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
               {% elif uf.feed.status == 'error' %}
