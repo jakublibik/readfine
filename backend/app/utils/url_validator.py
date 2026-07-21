@@ -20,13 +20,39 @@ _MAX_REDIRECTS = 10
 # Retry-After / RateLimit-* headers and arm the per-host cooldown from them.
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
 
-# 4xx statuses that should NOT disable a feed on the first hit; instead the feed
-# backs off through the error tier and is disabled only after
-# FETCH_ERROR_DISABLE_THRESHOLD consecutive failures. Superset of the rate-limit
-# statuses plus 403: Reddit/YouTube return 403 as a transient anti-bot /
+# 4xx statuses that should NOT disable a feed on the first hit. Superset of the
+# rate-limit statuses plus 403: Reddit/YouTube return 403 as a transient anti-bot /
 # rate-adjacent block (datacenter IP, generic UA) far more often than as a
-# permanent denial, so retrying beats disabling on a single 403.
+# permanent denial, so retrying beats disabling on a single 403. 403 and 429 are
+# additionally routed to the block tier (see is_bot_block); 408 stays a plain error.
 RETRYABLE_HTTP_STATUSES = TRANSIENT_HTTP_STATUSES | {403}
+
+# Statuses a host uses to refuse automated clients, as opposed to reporting a
+# problem with the feed itself.
+_BLOCK_HTTP_STATUSES = frozenset({403, 429})
+
+
+def is_bot_block(status_code: int | None, headers) -> bool:
+    """True when a failure looks like the host refusing automation, not a broken feed.
+
+    Deliberately crude: 403/429 without a ``WWW-Authenticate`` header. A real
+    "you need credentials" response carries that header; anti-bot edges never do.
+    No body sniffing and no CDN-header matching — both rot within a release or two.
+
+    Measured on Reddit and Techdirt, these blocks are unrelated to how fast we
+    fetch (identical rates at 75s and 2700s spacing) and arrive in waves lasting
+    minutes to hours, so they say nothing about the feed's health. Callers count
+    them separately from real fetch errors.
+
+    The known misclassification is a permanently forbidden feed (subscription
+    expired, subreddit deleted): it reads as a block and is disabled later than it
+    would be otherwise. That trade is deliberate — keeping a working feed alive
+    matters more than promptly retiring a dead one.
+    """
+    if status_code not in _BLOCK_HTTP_STATUSES:
+        return False
+    return not headers.get("www-authenticate")
+
 
 # Bounds for an honored Retry-After delay: never retry sooner than this, never
 # wait longer than this regardless of what the server asks for.
@@ -137,21 +163,34 @@ def spacing_from_headers(headers, now: datetime) -> float | None:
     Unlike :func:`rate_limited_until` (which fires only when the budget is exhausted),
     this reads the *live* allowance on any response — ``spacing = reset / remaining``,
     i.e. the seconds to spread the remaining calls evenly over the remaining window.
-    A host reporting ``remaining=10, reset=60`` yields 6s; ``remaining=1, reset=60``
-    yields 60s. Returns ``None`` when the headers are absent or unusable.
+    A host reporting ``remaining=10, reset=60`` yields 6s; ``remaining=2, reset=60``
+    yields 30s. Returns ``None`` when the headers are absent or unusable.
 
     ``*-reset`` is delta-seconds unless it looks like a unix epoch (same convention as
-    :func:`rate_limited_until`). ``remaining`` is floored to 1 so an exhausted budget
-    maps to the full reset window rather than dividing by zero.
+    :func:`rate_limited_until`).
+
+    **An exhausted budget (``remaining <= 0``) yields no spacing at all.** With nothing
+    left in the window, ``reset`` is the *phase* remaining in the current window, not a
+    period — it depends on what time we happened to ask, not on any rate. Reddit makes
+    this obvious: it answers every request with ``used=1, remaining=0`` and a ``reset``
+    that is exactly the seconds to the next wall-clock minute, so consecutive requests
+    84s apart report 59, then 35, then 11. Dividing that by a floored ``remaining`` of 1
+    used to hand the caller a uniform sample from (0, window); the monotonic ratchet in
+    host_throttle then kept the maximum and converged on the window length, which looks
+    like a measurement but is an artifact of when we sampled.
+
+    The honest reading of that case is a deadline, not a rate, and belongs to
+    :func:`rate_limited_until`, which turns it into a "not before ``now + reset``"
+    cooldown.
     """
     reset = _as_float(_first_header(headers, _RESET_HEADERS))
     remaining = _as_float(_first_header(headers, _REMAINING_HEADERS))
-    if reset is None or remaining is None:
+    if reset is None or remaining is None or remaining <= 0:
         return None
     seconds = (reset - now.timestamp()) if reset >= _EPOCH_THRESHOLD else reset
     if seconds <= 0:
         return None
-    spacing = seconds / max(remaining, 1.0)
+    spacing = seconds / remaining
     return spacing if spacing > 0 else None
 
 

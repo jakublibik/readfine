@@ -24,6 +24,10 @@ class Feed(Base):
     favicon_data: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Consecutive fetches refused by the host itself (anti-bot 403 / bare 429), kept
+    # apart from fetch_error_count: these say nothing about the feed's health, so they
+    # must not push it through the error tier. See app.fetcher.failure.
+    block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).

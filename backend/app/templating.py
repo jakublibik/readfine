@@ -14,6 +14,7 @@ from app.utils.datetime_format import (
 )
 from app.utils.formats import format_number, format_number_g, format_choices
 from app.utils.form_guard import HONEYPOT_FIELD, issue_form_ts
+from app.fetcher.failure import BLOCK_BADGE_THRESHOLD
 
 templates = Jinja2Templates(directory="app/templates")
 
@@ -116,3 +117,6 @@ templates.env.globals["format_choices"] = format_choices
 # a re-render after a validation error) gets a fresh stamp.
 templates.env.globals["form_ts"] = issue_form_ts
 templates.env.globals["honeypot_field"] = HONEYPOT_FIELD
+# How many consecutive host refusals before a feed's badge says so. Exposed rather
+# than hard-coded in the feed tables so the threshold lives in one place.
+templates.env.globals["block_badge_threshold"] = BLOCK_BADGE_THRESHOLD

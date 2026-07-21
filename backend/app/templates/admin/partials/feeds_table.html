@@ -14,7 +14,13 @@
     <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
   </td>
   <td class="px-2 py-2">
-    {% if f.status == 'active' %}
+    {% if f.status == 'active' and f.block_count >= block_badge_threshold %}
+      {# Host is refusing automated requests — amber, not red: the feed is fine and
+         resumes on its own. One word like the other badges, or the column wraps.
+         See app/fetcher/failure.py for the two tiers. #}
+      <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700"
+            title="The site is refusing automated requests. Retrying on the normal schedule.">throttled</span>
+    {% elif f.status == 'active' %}
       <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
     {% elif f.status == 'error' %}
       <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">error</span>

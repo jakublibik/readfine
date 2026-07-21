@@ -116,6 +116,7 @@ async def update_feed(
         if feed.status == "disabled":
             feed.status = "active"
         feed.fetch_error_count = 0
+        feed.block_count = 0
         if not feed.is_private:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

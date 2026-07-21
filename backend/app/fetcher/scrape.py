@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import case, literal, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
@@ -19,18 +19,18 @@ from app.models.fetch_log import FetchLog
 from app.utils.http_client import READFINE_UA
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
-    RETRYABLE_HTTP_STATUSES,
-    TRANSIENT_HTTP_STATUSES,
     async_validate_feed_url,
     fetch_url_with_ssrf_check,
-    parse_retry_after,
-    rate_limited_until,
     redact_url,
+)
+# FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
+from app.fetcher.failure import (  # noqa: F401
+    FETCH_ERROR_DISABLE_THRESHOLD,
+    arm_host_cooldown,
+    failure_values,
 )
 
 logger = logging.getLogger(__name__)
-
-FETCH_ERROR_DISABLE_THRESHOLD = 5
 
 _HEADERS = {
     "User-Agent": READFINE_UA,
@@ -201,6 +201,9 @@ async def fetch_scrape_feed(
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
+    # Read before any DB work: the error path rolls back first, which expires the
+    # instance, and re-reading an attribute there would fire a lazy load.
+    block_count = feed.block_count or 0
     selector = (feed.type_config or {}).get("article_links_selector", "")
     fetched_at = datetime.now(timezone.utc)
 
@@ -225,6 +228,7 @@ async def fetch_scrape_feed(
         feed.status = "active"
         feed.last_error = None
         feed.fetch_error_count = 0
+        feed.block_count = 0
         feed.retry_after_until = None
         # Mirror rss.py: track the newest article date this listing carried. Only
         # advance when at least one link is dated, so a fetch of purely undated
@@ -243,52 +247,18 @@ async def fetch_scrape_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error scraping feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
+        now = datetime.now(timezone.utc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        # 403/408/429 back off via the normal error tier instead of disabling on the
-        # first hit (403 is usually a transient anti-bot / rate-adjacent block on
-        # Reddit/YouTube, not a permanent denial). Other 4xx stay permanent.
-        is_permanent_4xx = (
-            http_status is not None
-            and 400 <= http_status < 500
-            and http_status not in RETRYABLE_HTTP_STATUSES
-        )
         db.add(FetchLog(
             feed_id=feed_id,
-            failed_at=datetime.now(timezone.utc),
+            failed_at=now,
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        new_status = literal("disabled") if is_permanent_4xx else case(
-            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
-            else_=literal("error"),
-        )
-        now = datetime.now(timezone.utc)
-        retry_after_until = None
-        if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
-            retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
-            host = host_throttle.host_key(feed_url)
-            signal = rate_limited_until(exc.response.headers, now)
-            host_throttle.note_rate_limited(host, signal)
-            if http_status == 429:
-                retry_after_s = (signal - now).total_seconds() if signal else None
-                host_throttle.record_rate_limited(host, now, retry_after_s)
-        elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
-            # Real signal → rate-limit cooldown (gates everyone); bare anti-bot 403 →
-            # fixed breather that only paces the scheduler, not manual refreshes.
-            # See rss.fetch_feed for the full rationale.
-            host = host_throttle.host_key(feed_url)
-            signal = rate_limited_until(exc.response.headers, now)
-            if signal is not None:
-                host_throttle.note_rate_limited(host, signal)
-            else:
-                host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
+        arm_host_cooldown(feed_url, exc, http_status, now)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
-                status=new_status,
-                fetch_error_count=Feed.fetch_error_count + 1,
-                last_error=str(exc)[:500],
-                last_fetched_at=now,
-                retry_after_until=retry_after_until,
+                **failure_values(exc, feed_block_count=block_count, now=now)
             )
         )
         await db.commit()

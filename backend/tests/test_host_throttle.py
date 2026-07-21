@@ -135,8 +135,10 @@ class TestBlockBreather:
         assert host_throttle.blocked_until("reddit.com", NOW, include_block=True) is None
 
 
-def _feed(feed_url="https://www.reddit.com/r/rss/.rss", retry_after_until=None):
-    return SimpleNamespace(feed_url=feed_url, retry_after_until=retry_after_until)
+def _feed(feed_url="https://www.reddit.com/r/rss/.rss", retry_after_until=None, block_count=0):
+    return SimpleNamespace(
+        feed_url=feed_url, retry_after_until=retry_after_until, block_count=block_count
+    )
 
 
 class TestCooldownUntil:
@@ -161,6 +163,21 @@ class TestCooldownUntil:
         # the manual-facing gate) — only real rate-limit cooldowns do.
         host_throttle.note_block(host_throttle.host_key("https://reddit.com/x"), NOW + timedelta(seconds=60))
         assert cooldown_until(_feed(), NOW) is None
+
+    def test_block_backoff_does_not_gate_a_manual_refresh(self):
+        # The block backoff defers the *scheduler* via retry_after_until. It is our own
+        # guess about a host refusing automation, and the refusal is often transient, so
+        # someone clicking Refresh must still be allowed to find out.
+        feed = _feed(retry_after_until=NOW + timedelta(minutes=15), block_count=2)
+        assert cooldown_until(feed, NOW) is None
+
+    def test_block_backoff_still_honors_a_real_host_deadline(self):
+        # A deadline the host actually stated is armed on the host throttle too, so it
+        # keeps gating manual fetches even while the feed is in the block tier.
+        until = NOW + timedelta(seconds=90)
+        host_throttle.note_rate_limited(host_throttle.host_key("https://reddit.com/r/x/.rss"), until)
+        feed = _feed(retry_after_until=NOW + timedelta(minutes=15), block_count=2)
+        assert cooldown_until(feed, NOW) == until
 
     def test_host_throttle_from_sibling_feed(self):
         # A sibling feed's 429 armed the host cooldown; this feed has no retry_after_until.
@@ -260,6 +277,43 @@ class TestLearnedSpacing:
         assert host_throttle.record_success("reddit.com", later, 10.0) is not None
         assert host_throttle._spacing["reddit.com"].learned_at == later
         assert host_throttle.drain_dirty() == {"reddit.com"}
+
+    def test_debounce_streak_alone_is_not_persisted(self):
+        # A lone 429 with nothing learned yet leaves seconds=0. That is process-local
+        # debounce state, not a limit, and a 0s row reads like a learned limit in the
+        # admin view — so it must not be written back to the DB.
+        host_throttle.record_rate_limited("techdirt.com", NOW)
+        assert host_throttle._spacing["techdirt.com"].consecutive_429 == 1
+        assert host_throttle.drain_dirty() == set()
+
+    def test_debounce_streak_is_not_listed_in_the_admin_view(self):
+        # The admin modal renders all_spacing(), which reads the in-memory store, not
+        # the DB — so keeping the row out of the flush is not enough on its own. A host
+        # mid-debounce has learned nothing and must not show up as a 0s limit.
+        host_throttle.record_rate_limited("techdirt.com", NOW)
+        assert host_throttle.get_spacing("techdirt.com") is not None  # streak still tracked
+        assert host_throttle.all_spacing() == []
+
+    def test_a_real_learned_value_is_listed(self):
+        host_throttle.record_success("reddit.com", NOW, 30.0)
+        assert [s.host for s in host_throttle.all_spacing()] == ["reddit.com"]
+
+    def test_success_drops_an_entry_that_learned_nothing(self):
+        # How techdirt.com ended up with a permanent spacing_seconds=0 row: a lone 429
+        # persisted the entry, then a success cleared the streak but kept the zero.
+        host_throttle.record_rate_limited("techdirt.com", NOW)
+        host_throttle.record_success("techdirt.com", NOW)
+        assert host_throttle.get_spacing("techdirt.com") is None
+        assert host_throttle.drain_dirty() == {"techdirt.com"}  # flush deletes the row
+
+    def test_success_after_a_real_tighten_keeps_the_row(self):
+        # The cleanup must not eat a value we actually learned.
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        host_throttle.record_rate_limited("reddit.com", NOW, 60.0)
+        host_throttle.record_success("reddit.com", NOW)
+        entry = host_throttle.get_spacing("reddit.com")
+        assert entry is not None and entry.seconds == pytest.approx(69.0)
+        assert entry.consecutive_429 == 0
 
     def test_streak_must_be_consecutive(self):
         host_throttle.record_rate_limited("reddit.com", NOW, 60.0)  # streak 1

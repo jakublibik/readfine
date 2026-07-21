@@ -130,6 +130,13 @@ def record_success(host: str, now: datetime, spacing_seconds: float | None = Non
         # No advertised spacing: only meaningful effect is resetting a 429 streak.
         if existing is None or existing.consecutive_429 == 0:
             return None
+        if existing.seconds == 0:
+            # The streak never got far enough to learn anything, so the entry held
+            # nothing but the streak itself. Drop it rather than persisting a 0s row
+            # that the admin view would present as a learned limit.
+            del _spacing[host]
+            _dirty.add(host)  # flush deletes the row
+            return None
         existing.consecutive_429 = 0
         existing.learned_at = now
         _dirty.add(host)
@@ -168,7 +175,10 @@ def record_rate_limited(host: str, now: datetime, retry_after_seconds: float | N
         seconds = min(base * SPACING_MARGIN, MAX_SPACING)
         entry = LearnedSpacing(host, seconds, "429", now, streak)
     _spacing[host] = entry
-    _dirty.add(host)
+    if entry.seconds > 0:
+        _dirty.add(host)
+    # else: nothing learned yet, only the debounce streak — process-local state that
+    # is not worth a DB row (and a 0s row reads like a learned limit in the admin view).
     return entry
 
 
@@ -222,8 +232,17 @@ def get_spacing(host: str) -> LearnedSpacing | None:
 
 
 def all_spacing() -> list[LearnedSpacing]:
-    """Snapshot of learned spacings (for the admin view), most-spaced first."""
-    return sorted(_spacing.values(), key=lambda s: s.seconds, reverse=True)
+    """Snapshot of learned spacings (for the admin view), most-spaced first.
+
+    Entries at ``seconds == 0`` are omitted: those carry nothing but a 429 debounce
+    streak that has not reached ``TIGHTEN_AFTER_429`` yet. They are internal
+    bookkeeping, and listing one as a 0s row reads like a learned limit of zero.
+    """
+    return sorted(
+        (s for s in _spacing.values() if s.seconds > 0),
+        key=lambda s: s.seconds,
+        reverse=True,
+    )
 
 
 def drain_dirty() -> set[str]:

@@ -11,7 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import feedparser
 import httpx
 import nh3
-from sqlalchemy import case, literal, select, update
+from sqlalchemy import literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,21 +23,21 @@ from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
 from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import (
-    RETRYABLE_HTTP_STATUSES,
-    TRANSIENT_HTTP_STATUSES,
     async_validate_feed_url,
     fetch_url_conditional,
     fetch_url_with_ssrf_check,
-    parse_retry_after,
-    rate_limited_until,
     redact_url,
     validate_feed_url,
 )
 from app.fetcher import host_throttle
+# FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
+from app.fetcher.failure import (  # noqa: F401
+    FETCH_ERROR_DISABLE_THRESHOLD,
+    arm_host_cooldown,
+    failure_values,
+)
 
 logger = logging.getLogger(__name__)
-
-FETCH_ERROR_DISABLE_THRESHOLD = 5  # consecutive failures before feed is disabled
 
 _HEADERS = {
     "User-Agent": READFINE_UA,
@@ -90,15 +90,22 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
 def cooldown_until(feed: Feed, now: datetime) -> datetime | None:
     """Latest active rate-limit cooldown for a *manual* fetch of this feed, or None.
 
-    Combines the per-feed ``retry_after_until`` (set on 429/408, persisted in the DB)
-    with the per-host in-memory throttle (armed when *any* feed on the same host was
-    rate-limited). Manual fetch paths consult this to avoid hammering into a known 429
-    window; the scheduler enforces the same via its own gates. Returns the later of the
-    two, or None when neither is active. Does not cover bare 403s — those carry no reset
-    time, so a manual fetch retries and may see 403 again.
+    Combines the per-feed ``retry_after_until`` (persisted in the DB) with the per-host
+    in-memory throttle (armed when *any* feed on the same host was rate-limited). Manual
+    fetch paths consult this to avoid hammering into a known 429 window; the scheduler
+    enforces the same via its own gates. Returns the later of the two, or None when
+    neither is active.
+
+    A feed deferred by the *block* backoff is excluded: that deadline is our own guess
+    about a host refusing automation, not something the host asked for, and the block is
+    often transient (measured: a third of requests refused, in waves). Someone clicking
+    Refresh is explicitly asking to find out, and may well get through. Any deadline the
+    host really did state — a ``Retry-After`` or a ``RateLimit-*`` reset — is armed on the
+    host throttle by ``arm_host_cooldown`` as well, so it still gates manual fetches here.
     """
     candidates = []
-    if feed.retry_after_until is not None and feed.retry_after_until > now:
+    blocked = (feed.block_count or 0) > 0
+    if not blocked and feed.retry_after_until is not None and feed.retry_after_until > now:
         candidates.append(feed.retry_after_until)
     host_until = host_throttle.blocked_until(host_throttle.host_key(feed.feed_url), now)
     if host_until is not None:
@@ -122,6 +129,9 @@ async def fetch_feed(
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
     feed_url = feed.feed_url
+    # Read before any DB work: the error path rolls back first, which expires the
+    # instance, and re-reading an attribute there would fire a lazy load.
+    block_count = feed.block_count or 0
 
     try:
         resp = None
@@ -145,6 +155,7 @@ async def fetch_feed(
                 feed.status = "active"
                 feed.last_error = None
                 feed.fetch_error_count = 0
+                feed.block_count = 0
                 feed.retry_after_until = None
                 await db.commit()
                 host = host_throttle.host_key(feed_url)
@@ -166,6 +177,7 @@ async def fetch_feed(
         feed.status = "active"
         feed.last_error = None
         feed.fetch_error_count = 0
+        feed.block_count = 0
         feed.retry_after_until = None
         # Update validators from this 200, but keep the last-known ones when the
         # response omits a header (some CDNs send ETag only intermittently) so we
@@ -200,63 +212,18 @@ async def fetch_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
+        now = datetime.now(timezone.utc)
         http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        # 403/408/429 back off via the normal error tier instead of disabling on the
-        # first hit (403 is usually a transient anti-bot / rate-adjacent block on
-        # Reddit/YouTube, not a permanent denial). Other 4xx stay permanent.
-        is_permanent_4xx = (
-            http_status is not None
-            and 400 <= http_status < 500
-            and http_status not in RETRYABLE_HTTP_STATUSES
-        )
         db.add(FetchLog(
             feed_id=feed_id,
-            failed_at=datetime.now(timezone.utc),
+            failed_at=now,
             http_status=http_status,
             error_message=str(exc)[:500],
         ))
-        if is_permanent_4xx:
-            new_status = literal("disabled")
-        else:
-            new_status = case(
-                (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
-                else_=literal("error"),
-            )
-        now = datetime.now(timezone.utc)
-        retry_after_until = None
-        if http_status in TRANSIENT_HTTP_STATUSES and isinstance(exc, httpx.HTTPStatusError):
-            retry_after_until = parse_retry_after(exc.response.headers.get("retry-after"), now)
-            # Also arm the host-wide cooldown from any rate-limit headers (Reddit's
-            # 429 carries x-ratelimit-reset but no Retry-After) so sibling feeds on
-            # the same host defer instead of hammering into another 429.
-            host = host_throttle.host_key(feed_url)
-            signal = rate_limited_until(exc.response.headers, now)
-            host_throttle.note_rate_limited(host, signal)
-            if http_status == 429:
-                # Ratchet the learned spacing tighter (429 only — 408 is a timeout,
-                # not a throttle). Retry-After is a lower bound, not a per-request gap.
-                retry_after_s = (signal - now).total_seconds() if signal else None
-                host_throttle.record_rate_limited(host, now, retry_after_s)
-        elif http_status == 403 and isinstance(exc, httpx.HTTPStatusError):
-            # A 403 with a real rate-limit signal is a genuine throttle → arm the
-            # rate-limit cooldown (gates the scheduler *and* manual refreshes). A bare
-            # anti-bot 403 (no usable timing) gets only the fixed breather, which paces
-            # the scheduler but never blocks a manual refresh — the user asked to retry
-            # and the block is often transient. retry_after_until stays null either way,
-            # so the per-feed error tier still drives the eventual disable.
-            host = host_throttle.host_key(feed_url)
-            signal = rate_limited_until(exc.response.headers, now)
-            if signal is not None:
-                host_throttle.note_rate_limited(host, signal)
-            else:
-                host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
+        arm_host_cooldown(feed_url, exc, http_status, now)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
-                status=new_status,
-                fetch_error_count=Feed.fetch_error_count + 1,
-                last_error=str(exc)[:500],
-                last_fetched_at=now,
-                retry_after_until=retry_after_until,
+                **failure_values(exc, feed_block_count=block_count, now=now)
             )
         )
         await db.commit()

@@ -13,7 +13,9 @@ from app.utils.url_validator import (
     _pin_connection,
     fetch_url_conditional,
     fetch_url_with_ssrf_check,
+    is_bot_block,
     parse_retry_after,
+    rate_limited_until,
     redact_url,
     spacing_from_headers,
     validate_feed_url,
@@ -33,9 +35,24 @@ class TestSpacingFromHeaders:
     def test_single_call_window_equals_reset(self):
         assert spacing_from_headers(self._h(ratelimit_remaining=1, ratelimit_reset=60), _NOW) == 60.0
 
-    def test_exhausted_budget_floors_remaining_to_one(self):
-        # remaining=0 → spread the full reset window rather than dividing by zero.
-        assert spacing_from_headers(self._h(ratelimit_remaining=0, ratelimit_reset=30), _NOW) == 30.0
+    def test_exhausted_budget_yields_no_spacing(self):
+        # remaining=0 → `reset` is the phase left in the current window, not a period.
+        # It depends on when we asked, not on any rate: Reddit answers every request
+        # with remaining=0 and a reset that counts down to the next wall-clock minute,
+        # so consecutive requests 84s apart report 59, then 35, then 11. Feeding that
+        # to the monotonic ratchet in host_throttle "learned" the window length from
+        # sampling noise. The deadline reading belongs to rate_limited_until instead.
+        assert spacing_from_headers(self._h(ratelimit_remaining=0, ratelimit_reset=30), _NOW) is None
+
+    def test_exhausted_budget_still_yields_a_cooldown(self):
+        # The same headers remain a valid "not before now + reset" deadline.
+        h = self._h(ratelimit_remaining=0, ratelimit_reset=30)
+        assert rate_limited_until(h, _NOW) == _NOW + timedelta(seconds=30)
+
+    def test_budget_with_room_still_yields_a_rate(self):
+        # The fix must not silence the case the function exists for: a live budget
+        # with requests left in it really is reset/remaining.
+        assert spacing_from_headers(self._h(ratelimit_remaining=4, ratelimit_reset=60), _NOW) == 15.0
 
     def test_legacy_x_spelling(self):
         h = self._h(**{"x-ratelimit-remaining": 4, "x-ratelimit-reset": 40})
@@ -68,6 +85,38 @@ def _mock_httpx_client(handler):
 
     with patch("app.utils.url_validator.httpx.Client", factory):
         yield
+
+
+class TestIsBotBlock:
+    """403/429 without WWW-Authenticate = the host refusing automation."""
+
+    def _h(self, **kw):
+        return httpx.Headers({k.replace("_", "-"): str(v) for k, v in kw.items()})
+
+    def test_bare_403_is_a_block(self):
+        assert is_bot_block(403, self._h()) is True
+
+    def test_bare_429_is_a_block(self):
+        assert is_bot_block(429, self._h()) is True
+
+    def test_403_with_www_authenticate_is_an_auth_failure(self):
+        h = self._h(**{"www-authenticate": 'Basic realm="feeds"'})
+        assert is_bot_block(403, h) is False
+
+    def test_403_with_ratelimit_headers_is_still_a_block(self):
+        # Reddit sends both shapes for the same condition; a throttle is not a feed fault.
+        h = self._h(**{"x-ratelimit-remaining": 0, "x-ratelimit-reset": 45})
+        assert is_bot_block(403, h) is True
+
+    def test_404_is_not_a_block(self):
+        assert is_bot_block(404, self._h()) is False
+
+    def test_500_is_not_a_block(self):
+        assert is_bot_block(500, self._h()) is False
+
+    def test_no_status_is_not_a_block(self):
+        # Timeouts and DNS failures reach the caller with no status at all.
+        assert is_bot_block(None, self._h()) is False
 
 
 class TestSchemeValidation:

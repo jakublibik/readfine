@@ -15,6 +15,7 @@ from app.fetcher.scrape import (
     extract_article_links,
     fetch_scrape_feed,
 )
+from app.fetcher.failure import BLOCK_BACKOFF_BASE
 from app.models.fetch_log import FetchLog
 from app.utils.scrape_ai import generate_selector_prompt
 
@@ -30,6 +31,7 @@ def _make_scrape_feed(**kwargs) -> SimpleNamespace:
         "fetch_auth_user": None,
         "fetch_auth_pass_encrypted": None,
         "fetch_error_count": 0,
+        "block_count": 0,
         "status": "active",
         "last_fetched_at": None,
         "last_fetch_duration_ms": None,
@@ -540,15 +542,17 @@ class TestFetchScrapeFeed429Transient:
         assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
     async def test_429_sets_retry_after_until_from_header(self):
+        # A 429 is a block: the feed always gets at least BLOCK_BACKOFF_BASE, and a
+        # longer Retry-After from the host wins over it.
         feed = _make_scrape_feed()
         session = _make_session()
-        exc = _scrape_http_error(429, headers={"Retry-After": "600"})
+        exc = _scrape_http_error(429, headers={"Retry-After": "3600"})
         before = datetime.now(timezone.utc)
         with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
             await fetch_scrape_feed(feed, session)
         rau = _scrape_update_values(session)["retry_after_until"].value
         assert rau is not None
-        assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
+        assert before + timedelta(seconds=3590) <= rau <= before + timedelta(seconds=3610)
 
     async def test_403_does_not_disable_on_first_hit(self):
         feed = _make_scrape_feed()
@@ -557,14 +561,18 @@ class TestFetchScrapeFeed429Transient:
             await fetch_scrape_feed(feed, session)
         assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
-    async def test_403_leaves_retry_after_null(self):
-        # 403 carries no rate-limit signal: no Retry-After honored.
+    async def test_403_backs_off_on_the_block_tier(self):
+        # A bare 403 arms the block backoff rather than the feed's error tier, so the
+        # scheduler stops retrying a refusing host on the normal interval.
         feed = _make_scrape_feed()
         session = _make_session()
-        exc = _scrape_http_error(403, headers={"Retry-After": "600"})
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(403)):
             await fetch_scrape_feed(feed, session)
-        assert _scrape_update_values(session)["retry_after_until"].value is None
+        vals = _scrape_update_values(session)
+        rau = vals["retry_after_until"].value
+        assert abs((rau - (before + BLOCK_BACKOFF_BASE)).total_seconds()) < 5
+        assert "fetch_error_count" not in vals
 
     async def test_permanent_4xx_still_disables(self):
         feed = _make_scrape_feed()

@@ -5,8 +5,13 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
+from app.fetcher.failure import (
+    BLOCK_BACKOFF_BASE,
+    BLOCK_DISABLE_THRESHOLD,
+)
 from app.fetcher.rss import (
     FETCH_ERROR_DISABLE_THRESHOLD,
     _clamp_published_at,
@@ -831,6 +836,7 @@ def _make_feed(**kwargs) -> SimpleNamespace:
         "fetch_auth_user": None,
         "fetch_auth_pass_encrypted": None,
         "fetch_error_count": 0,
+        "block_count": 0,
         "status": "active",
         "last_fetched_at": None,
         "last_fetch_duration_ms": None,
@@ -939,24 +945,30 @@ class TestFetchFeed429Transient:
         added = session.add.call_args[0][0]
         assert added.http_status == 429
 
-    async def test_429_sets_retry_after_until_from_header(self):
+    async def test_429_retry_after_wins_when_longer_than_block_backoff(self):
+        # A 429 is a block, so the feed always gets at least BLOCK_BACKOFF_BASE. A
+        # Retry-After longer than that is the host's own instruction and wins.
         feed = _make_feed()
         session = _make_session()
-        exc = _http_error(429, headers={"Retry-After": "600"})
+        exc = _http_error(429, headers={"Retry-After": "3600"})
         before = datetime.now(timezone.utc)
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
             await fetch_feed(feed, session)
         rau = _update_values(session)["retry_after_until"].value
         assert rau is not None
-        # 600 s is within [60 s, 24 h] bounds → honored as-is (allow a little slack)
-        assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
+        assert before + timedelta(seconds=3590) <= rau <= before + timedelta(seconds=3610)
 
-    async def test_429_without_header_leaves_retry_after_null(self):
+    async def test_429_without_header_still_backs_off(self):
+        # No Retry-After: the block backoff applies anyway, so we stop retrying a
+        # refusing host on the feed's normal interval.
         feed = _make_feed()
         session = _make_session()
+        before = datetime.now(timezone.utc)
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(429)):
             await fetch_feed(feed, session)
-        assert _update_values(session)["retry_after_until"].value is None
+        rau = _update_values(session)["retry_after_until"].value
+        assert rau is not None
+        assert abs((rau - (before + BLOCK_BACKOFF_BASE)).total_seconds()) < 5
 
     async def test_404_still_disables(self):
         feed = _make_feed()
@@ -1002,16 +1014,15 @@ class TestFetchFeed403Transient:
         assert feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
 
     async def test_403_arms_scheduler_only_breather_not_manual(self):
-        # A bare anti-bot 403 (Retry-After: 0, no RateLimit-*) leaves retry_after_until
-        # null and arms only the 403 breather: it paces the scheduler (include_block)
-        # but must NOT block a manual refresh (default blocked_until stays None).
+        # A bare anti-bot 403 (Retry-After: 0, no RateLimit-*) arms only the 403
+        # breather: it paces the scheduler (include_block) but must NOT block a manual
+        # refresh (default blocked_until stays None).
         feed = _make_feed()
         session = _make_session()
         before = datetime.now(timezone.utc)
         exc = _http_error(403, headers={"Retry-After": "0"})
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
             await fetch_feed(feed, session)
-        assert _update_values(session)["retry_after_until"].value is None
         # manual-facing lookup: not blocked
         assert host_throttle.blocked_until("example.com", before) is None
         # scheduler-facing lookup: 60s breather armed
@@ -1053,9 +1064,7 @@ class TestFetchFeedHostCooldown:
         before = datetime.now(timezone.utc)
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
             await fetch_feed(feed, session)
-        # Per-feed retry_after_until stays null (no Retry-After) — existing behavior.
-        assert _update_values(session)["retry_after_until"].value is None
-        # But the host cooldown is armed ~45s out.
+        # The host cooldown is armed ~45s out.
         until = host_throttle.blocked_until("example.com", before)
         assert until is not None
         assert before + timedelta(seconds=40) <= until <= before + timedelta(seconds=50)
@@ -1142,6 +1151,118 @@ class TestFetchFeedLearnedSpacing:
             await fetch_feed(feed, _make_session())
             await fetch_feed(feed, _make_session())
         assert "reddit.com" not in host_throttle._spacing
+
+    async def test_429_reset_header_does_not_tighten_spacing(self):
+        # Regression guard for the whole change. Reddit sends no Retry-After, only
+        # remaining=0 + reset=N, where N is the seconds left in the current wall-clock
+        # window — a deadline, not a rate. Ratcheting on it is how reddit.com acquired
+        # a learned 78s spacing that no measurement supported, and it would come back
+        # through this path even with spacing_from_headers fixed.
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        exc = _http_error(429, headers={"x-ratelimit-remaining": "0", "x-ratelimit-reset": "45"})
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, _make_session())
+            await fetch_feed(feed, _make_session())
+        # Nothing learned: two 429s tighten only from GLOBAL_MIN_SPACING.
+        assert host_throttle.effective_spacing("reddit.com") == pytest.approx(
+            host_throttle.GLOBAL_MIN_SPACING * host_throttle.SPACING_MARGIN
+        )
+        # The same headers are still honored as a cooldown — that reading is correct.
+        until = host_throttle.blocked_until("reddit.com", before)
+        assert until is not None
+        assert before + timedelta(seconds=40) <= until <= before + timedelta(seconds=50)
+
+    async def test_429_with_real_retry_after_still_tightens(self):
+        # The ratchet is not switched off, it is fed only instructions it can act on.
+        feed = _make_feed(feed_url="https://reddit.com/r/x/.rss")
+        exc = _http_error(429, headers={"Retry-After": "120"})
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=exc):
+            await fetch_feed(feed, _make_session())
+            await fetch_feed(feed, _make_session())
+        assert host_throttle.effective_spacing("reddit.com") == pytest.approx(
+            120 * host_throttle.SPACING_MARGIN
+        )
+
+
+class TestFetchFeedBlockTier:
+    """A host refusing automation moves block_count, never fetch_error_count."""
+
+    def setup_method(self):
+        host_throttle.clear()
+
+    def teardown_method(self):
+        host_throttle.clear()
+
+    async def test_403_bumps_block_count_only(self):
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        vals = _update_values(session)
+        assert "block_count" in vals
+        assert "fetch_error_count" not in vals
+
+    async def test_403_leaves_the_feed_active(self):
+        # The status expression is Feed.status, i.e. "whatever it already was" —
+        # never the literal 'error' the error tier would write.
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        assert not _status_is_disabled(_update_values(session)["status"])
+
+    async def test_block_on_a_feed_already_in_error_does_not_touch_the_error_tier(self):
+        # A feed carrying a real failure keeps it: the block neither clears the error
+        # nor advances it toward the disable threshold.
+        feed = _make_feed(status="error", fetch_error_count=3)
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        vals = _update_values(session)
+        assert "fetch_error_count" not in vals
+        assert "block_count" in vals
+
+    async def test_block_defers_the_feed(self):
+        feed = _make_feed()
+        session = _make_session()
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        rau = _update_values(session)["retry_after_until"].value
+        assert abs((rau - (before + BLOCK_BACKOFF_BASE)).total_seconds()) < 5
+
+    async def test_block_backoff_grows_with_the_existing_count(self):
+        feed = _make_feed(block_count=2)
+        session = _make_session()
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(403)):
+            await fetch_feed(feed, session)
+        rau = _update_values(session)["retry_after_until"].value
+        assert abs((rau - (before + BLOCK_BACKOFF_BASE * 4)).total_seconds()) < 5
+
+    async def test_timeout_still_uses_the_error_tier(self):
+        # Negative path: an exception with no response must not reach exc.response.
+        feed = _make_feed()
+        session = _make_session()
+        with patch("app.fetcher.rss.fetch_url_conditional", side_effect=httpx.ConnectTimeout("x")):
+            await fetch_feed(feed, session)
+        vals = _update_values(session)
+        assert "fetch_error_count" in vals
+        assert "block_count" not in vals
+        assert vals["retry_after_until"].value is None
+
+    async def test_success_clears_both_counters(self):
+        import feedparser
+        feed = _make_feed(status="error", fetch_error_count=4, block_count=7)
+        session = _make_session()
+        parsed = feedparser.FeedParserDict(
+            {"bozo": False, "entries": [], "feed": feedparser.FeedParserDict({})}
+        )
+        await fetch_feed(feed, session, prefetched=parsed)
+        assert feed.fetch_error_count == 0
+        assert feed.block_count == 0
+        assert feed.status == "active"
 
 
 class TestFetchFeedConditional:

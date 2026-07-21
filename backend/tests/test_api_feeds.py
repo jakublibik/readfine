@@ -16,6 +16,7 @@ def _make_feed(id=1, **kwargs):
         status="active",
         last_fetched_at=None,
         last_error=None,
+        block_count=0,
         subscriber_count=1,
         feed_type="rss",
     )

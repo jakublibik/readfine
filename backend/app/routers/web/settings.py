@@ -866,6 +866,7 @@ async def settings_feed_update(
     if uf.feed.status == "disabled":
         uf.feed.status = "active"
     uf.feed.fetch_error_count = 0
+    uf.feed.block_count = 0
 
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)
