@@ -107,7 +107,7 @@ async def _trim_engaged(
     _SNIPPET_CHARS normalized characters; keeps per-user ai_summary/ai_context;
     revokes share tokens; stamps trimmed_at. Idempotent via trimmed_at IS NULL.
     """
-    from app.services.ai_service import _normalize  # lazy: avoid heavy import at module load
+    from app.utils.text import strip_html
 
     feed_cond = Article.feed_id.is_(None) if orphan else (Article.feed_id == feed_id)
     rows = (await db.execute(
@@ -125,7 +125,7 @@ async def _trim_engaged(
     updates: list[dict] = []
     for aid, content, readable in rows:
         src = readable if readable else content
-        snippet = _normalize(src)[:_SNIPPET_CHARS] if src else None
+        snippet = strip_html(src)[:_SNIPPET_CHARS] if src else None
         if readable is not None:
             # keep the shared snippet in readable_content, drop raw content
             updates.append({"id": aid, "content": None, "readable_content": snippet, "trimmed_at": now})

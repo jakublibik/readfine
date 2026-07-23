@@ -10,7 +10,6 @@ from app.auth.security import decode_access_token, hash_token
 from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
-from app.models.settings import AppSettings
 from app.utils.datetime_format import current_viewer_tz
 from app.utils.formats import current_viewer_format
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
@@ -117,6 +116,6 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
 
 
 async def require_ai_enabled(db: AsyncSession = Depends(get_db)) -> None:
-    row = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
-    if row is None or not row.ai_enabled:
+    from app.services.ai_jobs import ai_enabled_globally
+    if not await ai_enabled_globally(db):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="AI features are disabled by the administrator")

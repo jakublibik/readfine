@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai import UserAiKey
 from app.models.user import UserSettings
 from app.utils.crypto import decrypt, encrypt
+from app.utils.text import strip_html
 
 logger = logging.getLogger(__name__)
 
@@ -533,21 +534,12 @@ async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
 
 # ── interest profile generation ─────────────────────────────────────────────
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _normalize(s: str) -> str:
-    """Strip HTML tags and collapse whitespace."""
-    return _WHITESPACE_RE.sub(" ", _HTML_TAG_RE.sub(" ", s)).strip()
-
-
 def _pref_snippet(ai_summary: str | None, readable: str | None,
                   content: str | None, limit: int = 300) -> str:
     """Up to `limit` chars of normalized text: ai_summary → readable_content → content."""
     for src in (ai_summary, readable, content):
         if src:
-            return _normalize(src)[:limit]
+            return strip_html(src)[:limit]
     return ""
 
 

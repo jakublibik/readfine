@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil, floor
@@ -15,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
+from app.utils.text import strip_html
 
 # ── Sampling constants ────────────────────────────────────────────────────────
 _CATCHUP_COVERAGE_RATIO = 0.6          # scoring enabled
@@ -65,32 +66,6 @@ def _period_to_start_dt(period: str, tz_str: str | None) -> datetime:
 
 # ── Scope helpers ─────────────────────────────────────────────────────────────
 
-def _parse_scope(scope_include: str | None) -> tuple[list[int], list[int]]:
-    """Return (feed_ids, folder_ids) from a JSON scope string.
-
-    folder_id=0 is the sentinel for "feeds with no folder".
-    Empty lists mean "all user feeds" (no scope restriction).
-    """
-    if not scope_include:
-        return [], []
-    try:
-        items: list[str] = json.loads(scope_include)
-    except (json.JSONDecodeError, TypeError):
-        return [], []
-
-    feed_ids: list[int] = []
-    folder_ids: list[int] = []
-    for item in items:
-        try:
-            if item.startswith("feed:"):
-                feed_ids.append(int(item[5:]))
-            elif item.startswith("folder:"):
-                folder_ids.append(int(item[7:]))
-        except (ValueError, IndexError):
-            pass
-    return feed_ids, folder_ids
-
-
 async def validate_scope(user_id: int, scope_include: str | None, db: AsyncSession) -> None:
     """Raise ValueError if scope_include contains items not belonging to the user."""
     from app.services.filter_service import _validate_scope_list  # noqa: PLC0415
@@ -106,23 +81,14 @@ async def validate_scope(user_id: int, scope_include: str | None, db: AsyncSessi
 
 # ── Snippet helper ────────────────────────────────────────────────────────────
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-
-def _normalize(text: str) -> str:
-    """Strip HTML tags and normalize whitespace."""
-    text = _HTML_TAG_RE.sub(" ", text)
-    return _WHITESPACE_RE.sub(" ", text).strip()
-
-
 def _snippet(article: CatchupArticle) -> str:
     """Return up to 150 chars of normalized text: ai_summary → readable_content → content."""
     if article.ai_summary:
-        return _normalize(article.ai_summary)[:200]
+        return strip_html(article.ai_summary)[:200]
     if article.readable_content:
-        return _normalize(article.readable_content)[:150]
+        return strip_html(article.readable_content)[:150]
     if article.content:
-        return _normalize(article.content)[:150]
+        return strip_html(article.content)[:150]
     return ""
 
 
@@ -140,7 +106,7 @@ async def fetch_catchup_articles(
 ) -> list[CatchupArticle]:
     """Fetch articles matching the given catchup parameters."""
     start_dt = _period_to_start_dt(period, tz_str)
-    feed_ids, folder_ids = _parse_scope(scope_include)
+    feed_ids, folder_ids = parse_scope_tokens(scope_include)
 
     # Lightweight projection: bodies (content / readable_content / ai_summary) are
     # NOT selected here — they're only needed to build snippets for the <=limit
@@ -194,9 +160,7 @@ async def fetch_catchup_articles(
     # Label filter (same JSON shape as search): "any" = has at least one label,
     # otherwise articles carrying at least one of the selected labels.
     if label_filter:
-        from app.services.article import _parse_label_filter  # noqa: PLC0415
-
-        any_label, lf_ids = _parse_label_filter(label_filter)
+        any_label, lf_ids = parse_label_tokens(label_filter)
         cond = (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id)
         if any_label:
             stmt = stmt.where(exists(select(ArticleLabel.article_id).where(cond)))

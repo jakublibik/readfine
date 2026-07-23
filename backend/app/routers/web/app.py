@@ -132,8 +132,8 @@ async def main_app(
     reading_font_size = settings.reading_font_size if settings else "md"
     reading_font_family = settings.reading_font_family if settings else "sans"
     label_display = settings.label_display if settings else "indicator"
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    from app.services.ai_jobs import ai_enabled_globally
+    ai_on = await ai_enabled_globally(db)
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
     chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
     catchup_avail = _catchup_available(bool(ai_on), settings)
@@ -267,8 +267,8 @@ async def htmx_sidebar(
     pinned = request.query_params.get("pinned", "true").lower() != "false"
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    from app.services.ai_jobs import ai_enabled_globally
+    ai_on = await ai_enabled_globally(db)
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
     chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
     catchup_avail = _catchup_available(bool(ai_on), settings)
@@ -960,8 +960,8 @@ async def htmx_article_detail(
     )
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    from app.services.ai_jobs import ai_enabled_globally
+    ai_on = await ai_enabled_globally(db)
     ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
     summary_pending = False
     if ai_avail and not article.ai_summary:
@@ -1577,9 +1577,8 @@ async def htmx_ai_summary_trigger(
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand: run summary synchronously and return result block."""
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
-    if not ai_on:
+    from app.services.ai_jobs import ai_enabled_globally
+    if not await ai_enabled_globally(db):
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
         )
@@ -1659,9 +1658,8 @@ async def htmx_ai_context_trigger(
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand: call AI directly and return context block (synchronous, may take several seconds)."""
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
-    if not ai_on:
+    from app.services.ai_jobs import ai_enabled_globally
+    if not await ai_enabled_globally(db):
         return HTMLResponse(
             f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
         )
@@ -1796,8 +1794,8 @@ async def htmx_general_ai_chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    from app.services.ai_jobs import ai_enabled_globally
+    ai_on = await ai_enabled_globally(db)
     if not ai_on:
         return HTMLResponse(
             f'<div id="general-chat-area" '
@@ -1922,8 +1920,8 @@ async def htmx_ai_chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.models.settings import AppSettings as _AS
-    ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    from app.services.ai_jobs import ai_enabled_globally
+    ai_on = await ai_enabled_globally(db)
     if not ai_on:
         return HTMLResponse(
             f'<div id="chat-area-{article_id}" '
@@ -2052,10 +2050,11 @@ async def catchup_page(
 ):
     from app.models.settings import AppSettings as _AS
     from app.models.user import UserCatchupConfig
+    from app.services.ai_jobs import ai_enabled_globally
     from app.services.ai_service import _DEFAULT_CATCHUP_PROMPT
     from app.services.feed import list_user_feeds
 
-    ai_on = bool(await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1)))
+    ai_on = bool(await ai_enabled_globally(db))
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
 
     if not _catchup_available(ai_on, settings):
@@ -2215,15 +2214,15 @@ async def htmx_catchup_generate(
 ):
     include_snippet_bool = include_snippet == 'true'
     article_limit = max(1, min(article_limit, 500))
-    from app.models.settings import AppSettings as _AS
     from app.models.user import CatchupLog
+    from app.services.ai_jobs import ai_enabled_globally
     from app.services.ai_service import catch_me_up, get_ai_client
     from app.services.catchup_service import (
         apply_catchup_limit, build_articles_meta, fetch_catchup_articles,
         populate_snippet_sources, validate_scope,
     )
 
-    ai_on = bool(await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1)))
+    ai_on = bool(await ai_enabled_globally(db))
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
 
     if not _catchup_available(ai_on, settings):

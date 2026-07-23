@@ -1,7 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
-import json
 import logging
-import re
 from datetime import date, datetime, timezone
 
 from sqlalchemy import func, literal, literal_column, or_, select, tuple_, update
@@ -13,7 +11,9 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
+from app.utils.text import strip_html
 
 logger = logging.getLogger(__name__)
 
@@ -56,32 +56,6 @@ def article_access_predicate():
     )
 
 
-def _parse_label_filter(label_filter: str | None) -> tuple[bool, list[int]]:
-    """Parse the label-filter JSON (same shape as the scope selector).
-
-    Returns (any_label, label_ids). "any" means "has at least one label" and
-    takes precedence over specific ids. Empty/invalid means no label filtering.
-    """
-    if not label_filter:
-        return False, []
-    try:
-        items = json.loads(label_filter)
-    except (json.JSONDecodeError, TypeError):
-        return False, []
-    if "any" in items:
-        return True, []
-    ids: list[int] = []
-    for item in items:
-        if isinstance(item, str) and item.startswith("label:"):
-            try:
-                ids.append(int(item[6:]))
-            except ValueError:
-                pass
-    return False, ids
-
-
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
 _SNIPPET_LEN = 200
 
 
@@ -90,8 +64,7 @@ def _make_snippet(summary: str | None, content: str | None) -> str | None:
     for source in (summary, content):
         if not source:
             continue
-        text = _HTML_TAG_RE.sub(" ", source)
-        text = _WHITESPACE_RE.sub(" ", text).strip()
+        text = strip_html(source)
         if len(text) > 20:
             return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] if len(text) > _SNIPPET_LEN else text
     return None
@@ -184,8 +157,7 @@ async def list_articles(
     # Empty lists mean "all feeds" — no restriction. Feed ownership is already
     # enforced by the UserFeed join above, so unknown ids simply match nothing.
     if scope_include:
-        from app.services.catchup_service import _parse_scope  # noqa: PLC0415
-        scope_feed_ids, scope_folder_ids = _parse_scope(scope_include)
+        scope_feed_ids, scope_folder_ids = parse_scope_tokens(scope_include)
         if scope_feed_ids or scope_folder_ids:
             clauses = []
             if scope_feed_ids:
@@ -217,7 +189,7 @@ async def list_articles(
     # Search label filter (multi-select): "any" = has at least one label,
     # otherwise articles carrying at least one of the selected labels.
     if label_filter:
-        any_label, lf_ids = _parse_label_filter(label_filter)
+        any_label, lf_ids = parse_label_tokens(label_filter)
         cond = (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id)
         if any_label:
             stmt = stmt.where(select(ArticleLabel.article_id).where(cond).exists())

@@ -17,6 +17,7 @@ from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
+from app.services.scope_tokens import token_matches_article
 
 logger = logging.getLogger(__name__)
 
@@ -403,21 +404,6 @@ def _parse_scope_list(value: str | None) -> list[str] | None:
         return None
 
 
-def _item_matches_article(item: str, article: Article, user_feed: UserFeed | None) -> bool:
-    """Return True if a single scope item (feed:ID or folder:ID) matches the article."""
-    try:
-        if item.startswith("feed:"):
-            return article.feed_id == int(item[5:])
-        if item.startswith("folder:"):
-            folder_val = int(item[7:])
-            if folder_val == 0:  # sentinel: feeds with no folder
-                return user_feed is not None and user_feed.folder_id is None
-            return user_feed is not None and user_feed.folder_id == folder_val
-    except (ValueError, IndexError):
-        pass
-    return False
-
-
 def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> bool:
     """Return True if the article is within the filter's scope (and not excluded)."""
     # Inclusion: None = parse error → fail-closed; [] = all feeds; list = specific items
@@ -425,12 +411,12 @@ def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> b
     if include_list is None:
         logger.warning("filter %s: corrupt scope_include — skipping (fail-closed)", getattr(f, "id", "?"))
         return False
-    if include_list and not any(_item_matches_article(item, article, user_feed) for item in include_list):
+    if include_list and not any(token_matches_article(item, article, user_feed) for item in include_list):
         return False
 
     # Exclusion: None = parse error → ignore (fail-safe: don't exclude anything)
     except_list = _parse_scope_list(f.scope_except) or []
-    if any(_item_matches_article(item, article, user_feed) for item in except_list):
+    if any(token_matches_article(item, article, user_feed) for item in except_list):
         return False
 
     return True
@@ -597,10 +583,9 @@ _AI_FILTER_BATCH_SIZE = 50
 async def process_ai_filters_batch(db: AsyncSession) -> int:
     """Apply AI filters to articles that have a fresh ai_score (ai_filters_applied=false)."""
     from app.models.article import UserArticleState
-    from app.models.settings import AppSettings
+    from app.services.ai_jobs import ai_enabled_globally
 
-    ai_enabled = await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1))
-    if not ai_enabled:
+    if not await ai_enabled_globally(db):
         return 0
 
     states_result = await db.execute(
@@ -793,8 +778,8 @@ async def _plan_retroactive_apply(
 ) -> "RetroApplyPlan | None":
     """Single scan that both preview and apply consume — guarantees the previewed
     scoring count matches what apply actually enqueues."""
-    from app.models.settings import AppSettings
     from app.models.user import UserSettings
+    from app.services.ai_jobs import ai_enabled_globally
     from app.services.ai_scoring_service import scoring_eligible
 
     result = await db.execute(
@@ -849,7 +834,7 @@ async def _plan_retroactive_apply(
 
     # Scoring prerequisites loaded once. Settings-level eligibility (uf=None) gates
     # the whole batch; a per-feed override can only turn scoring *off* per article.
-    ai_on = bool(await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1)))
+    ai_on = await ai_enabled_globally(db)
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     scoring_possible = has_label and ai_on and scoring_eligible(settings, None)
 

@@ -21,6 +21,31 @@ from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf
 
 logger = logging.getLogger(__name__)
 
+
+class FeedSubscriptionError(ValueError):
+    """Base for subscribe errors.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working; the typed subclasses let callers map the failure to the right HTTP
+    status (or import-loop action) without string-matching the message.
+    """
+
+
+class FeedLimitReached(FeedSubscriptionError):
+    """The user is already at their feed-subscription cap."""
+
+    def __init__(self, max_feeds: int):
+        self.max_feeds = max_feeds
+        super().__init__(f"Feed limit reached ({max_feeds})")
+
+
+class AlreadySubscribed(FeedSubscriptionError):
+    """The user already subscribes to this feed."""
+
+    def __init__(self, message: str = "Already subscribed to this feed"):
+        super().__init__(message)
+
+
 # Feed IDs for which an initial fetch task is already running.
 # Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
 _initial_fetch_in_progress: set[int] = set()
@@ -115,7 +140,7 @@ async def subscribe(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         if (count_result.scalar() or 0) >= max_feeds:
-            raise ValueError(f"Feed limit reached ({max_feeds})")
+            raise FeedLimitReached(max_feeds)
 
     feed: Feed | None = None
     parsed = None
@@ -136,7 +161,7 @@ async def subscribe(
                 )
             )
             if already.scalar_one_or_none():
-                raise ValueError("Already subscribed to this feed")
+                raise AlreadySubscribed()
         return found
 
     feed = await _existing_public_feed(url)
@@ -212,7 +237,7 @@ async def subscribe(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ValueError("Already subscribed to this feed")
+        raise AlreadySubscribed()
     await db.refresh(user_feed)
     user_feed.feed = feed
 
@@ -310,7 +335,7 @@ async def subscribe_scrape(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         if (count_result.scalar() or 0) >= max_feeds:
-            raise ValueError(f"Feed limit reached ({max_feeds})")
+            raise FeedLimitReached(max_feeds)
 
     selector = selector.strip()
     if not selector:
@@ -353,7 +378,7 @@ async def subscribe_scrape(
             select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
         )
         if already.scalar_one_or_none():
-            raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+            raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     else:
         feed = Feed(
             feed_url=url[:2048],
@@ -383,7 +408,7 @@ async def subscribe_scrape(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+        raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     await db.refresh(user_feed)
 
     # Mark in-progress synchronously before spawning (see subscribe() for why).

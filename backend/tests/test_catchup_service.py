@@ -8,13 +8,13 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.catchup_service import (
-    _parse_scope,
     _period_to_start_dt,
     _snippet,
     apply_catchup_limit,
     build_articles_meta,
     estimate_catchup_tokens,
 )
+from app.services.scope_tokens import parse_scope_tokens as _parse_scope
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

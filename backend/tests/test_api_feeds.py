@@ -128,7 +128,8 @@ class TestSubscribeFeed:
         assert response.status_code == 201
 
     def test_already_subscribed_returns_409(self, client, mock_db):
-        with patch("app.routers.api.v1.feeds.subscribe", side_effect=ValueError("already subscribed")):
+        from app.services.feed import AlreadySubscribed
+        with patch("app.routers.api.v1.feeds.subscribe", side_effect=AlreadySubscribed()):
             response = client.post(
                 "/api/v1/feeds",
                 json={"url": "https://example.com/feed.xml"},
