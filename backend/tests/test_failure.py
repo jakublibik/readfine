@@ -17,20 +17,23 @@ from app.fetcher.failure import (
     FETCH_ERROR_DISABLE_THRESHOLD,
     block_backoff,
     classify,
+    failure_message,
     failure_values,
 )
 
 NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
+FEED_URL = "https://example.com/feed.xml"
 
-def _http_error(status: int, headers: dict | None = None) -> httpx.HTTPStatusError:
-    request = httpx.Request("GET", "https://example.com/feed.xml")
+
+def _http_error(status: int, headers: dict | None = None, url: str = FEED_URL) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", url)
     response = httpx.Response(status, request=request, headers=headers or {})
     return httpx.HTTPStatusError(str(status), request=request, response=response)
 
 
 def _values(exc, block_count: int = 0) -> dict:
-    return failure_values(exc, feed_block_count=block_count, now=NOW)
+    return failure_values(exc, feed_url=FEED_URL, feed_block_count=block_count, now=NOW)
 
 
 class TestClassify:
@@ -53,6 +56,28 @@ class TestClassify:
         # exc.response for those would raise inside the except block.
         assert classify(httpx.ConnectTimeout("timed out")) == (None, False)
         assert classify(ValueError("Feed parse error")) == (None, False)
+
+
+class TestFailureMessage:
+    def test_http_error_uses_feed_url_and_reason(self):
+        # httpx would embed the pinned IP the request connected to; the message must
+        # show the feed's own hostname and the status reason instead.
+        exc = _http_error(403, url="https://93.184.216.34/feed.xml")
+        msg = failure_message(exc, FEED_URL)
+        assert msg == "HTTP 403 Forbidden: https://example.com/feed.xml"
+        assert "93.184.216.34" not in msg
+
+    def test_reason_phrase_is_included(self):
+        assert failure_message(_http_error(429), FEED_URL).startswith("HTTP 429 Too Many Requests")
+
+    def test_query_string_is_redacted(self):
+        exc = _http_error(403)
+        msg = failure_message(exc, "https://example.com/feed.xml?api_key=secret")
+        assert "secret" not in msg
+        assert "<redacted>" in msg
+
+    def test_non_http_exception_keeps_its_text(self):
+        assert failure_message(httpx.ConnectTimeout("timed out"), FEED_URL) == "timed out"
 
 
 class TestBlockBackoff:
@@ -95,7 +120,7 @@ class TestBlockTier:
         assert _values(exc)["retry_after_until"] == NOW + BLOCK_BACKOFF_BASE
 
     def test_records_the_error_message(self):
-        assert _values(_http_error(403))["last_error"] == "403"
+        assert _values(_http_error(403))["last_error"] == "HTTP 403 Forbidden: https://example.com/feed.xml"
 
 
 class TestErrorTier:

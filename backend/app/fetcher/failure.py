@@ -34,6 +34,7 @@ from app.utils.url_validator import (
     is_bot_block,
     parse_retry_after,
     rate_limited_until,
+    redact_url,
 )
 
 # Consecutive failures before a feed is disabled. Both are compared against the
@@ -116,7 +117,25 @@ def arm_host_cooldown(feed_url: str, exc: Exception, http_status: int | None, no
             host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
 
 
-def failure_values(exc: Exception, *, feed_block_count: int, now: datetime) -> dict:
+def failure_message(exc: Exception, feed_url: str) -> str:
+    """Human-readable ``last_error`` for a failed fetch.
+
+    For an HTTP status error, ``str(exc)`` embeds httpx's request URL, whose host
+    is the validated IP the connection was pinned to (see ``_pin_connection``) — an
+    ephemeral address that means nothing to the admin reading the row. Rebuild the
+    line from the status, its reason phrase and the feed's own (redacted) URL. Every
+    other failure (timeout, DNS, feedparser, SSRF) never carried an IP, so keep its
+    original text.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        reason = exc.response.reason_phrase
+        label = f"HTTP {status} {reason}".rstrip()
+        return f"{label}: {redact_url(feed_url)}"[:500]
+    return str(exc)[:500]
+
+
+def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now: datetime) -> dict:
     """Column values for the ``feeds`` UPDATE after a failed fetch.
 
     *feed_block_count* is the feed's current (pre-increment) block count, used only
@@ -124,7 +143,7 @@ def failure_values(exc: Exception, *, feed_block_count: int, now: datetime) -> d
     fetches cannot lose an increment.
     """
     http_status, is_block = classify(exc)
-    message = str(exc)[:500]
+    message = failure_message(exc, feed_url)
 
     if is_block:
         # A host-level refusal: leave status alone (never improve it, never worsen

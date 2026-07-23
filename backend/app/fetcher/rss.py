@@ -36,6 +36,7 @@ from app.fetcher.redirects import adopt_permanent_url
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
     arm_host_cooldown,
+    failure_message,
     failure_values,
 )
 
@@ -241,12 +242,12 @@ async def fetch_feed(
             feed_id=feed_id,
             failed_at=now,
             http_status=http_status,
-            error_message=str(exc)[:500],
+            error_message=failure_message(exc, feed_url),
         ))
         arm_host_cooldown(feed_url, exc, http_status, now)
         await db.execute(
             update(Feed).where(Feed.id == feed_id).values(
-                **failure_values(exc, feed_block_count=block_count, now=now)
+                **failure_values(exc, feed_url=feed_url, feed_block_count=block_count, now=now)
             )
         )
         await db.commit()
