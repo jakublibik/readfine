@@ -6,6 +6,7 @@ import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import feedparser
@@ -25,11 +26,12 @@ from app.utils.http_client import READFINE_UA
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_conditional,
-    fetch_url_with_ssrf_check,
+    fetch_url_page,
     redact_url,
     validate_feed_url,
 )
 from app.fetcher import host_throttle
+from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
@@ -44,7 +46,6 @@ _HEADERS = {
     "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
 }
 _TIMEOUT = 30  # seconds
-_MAX_REDIRECTS = 5
 
 _STRIP_PARAMS = frozenset({
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
@@ -67,14 +68,24 @@ def _normalize_url(url: str | None) -> str | None:
 
 
 
-async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
+class ParsedFeed(NamedTuple):
+    """A parsed feed plus the address it permanently moved to, if any.
+
+    ``permanent_url`` lets the subscribe path create the feed row on the address
+    the host actually serves, instead of one that redirects on every later poll.
+    """
+    parsed: feedparser.FeedParserDict
+    permanent_url: str | None
+
+
+async def fetch_and_parse_url(url: str) -> ParsedFeed:
     """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
-    content = await loop.run_in_executor(
-        None, fetch_url_with_ssrf_check, url, None, _TIMEOUT, _HEADERS
+    page = await loop.run_in_executor(
+        None, fetch_url_page, url, None, _TIMEOUT, _HEADERS
     )
-    parsed = await loop.run_in_executor(None, feedparser.parse, content)
+    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
     if parsed.bozo:
         import xml.sax._exceptions as _sax
@@ -84,7 +95,7 @@ async def fetch_and_parse_url(url: str) -> feedparser.FeedParserDict:
         if not parsed.entries and not parsed.feed:
             raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
-    return parsed
+    return ParsedFeed(parsed, page.permanent_url)
 
 
 def cooldown_until(feed: Feed, now: datetime) -> datetime | None:
@@ -130,8 +141,10 @@ async def fetch_feed(
     feed_id = feed.id
     feed_url = feed.feed_url
     # Read before any DB work: the error path rolls back first, which expires the
-    # instance, and re-reading an attribute there would fire a lazy load.
+    # instance, and re-reading an attribute there would fire a lazy load. The same
+    # goes for is_private, which the post-commit URL adoption needs.
     block_count = feed.block_count or 0
+    is_private = bool(feed.is_private)
 
     try:
         resp = None
@@ -162,6 +175,10 @@ async def fetch_feed(
                 if resp.rate_limited_until:
                     host_throttle.note_rate_limited(host, resp.rate_limited_until)
                 host_throttle.record_success(host, datetime.now(timezone.utc), resp.spacing_seconds)
+                if resp.permanent_url:
+                    await adopt_permanent_url(
+                        feed_id, feed_url, resp.permanent_url, db, is_private=is_private
+                    )
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
             parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
@@ -198,6 +215,12 @@ async def fetch_feed(
             if resp.rate_limited_until:
                 host_throttle.note_rate_limited(host, resp.rate_limited_until)
             host_throttle.record_success(host, datetime.now(timezone.utc), resp.spacing_seconds)
+            # Only now that the body parsed and its articles are committed: a dead
+            # feed 301'ing to the site homepage must not become the stored address.
+            if resp.permanent_url:
+                await adopt_permanent_url(
+                    feed_id, feed_url, resp.permanent_url, db, is_private=is_private
+                )
         logger.info("Fetched feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 

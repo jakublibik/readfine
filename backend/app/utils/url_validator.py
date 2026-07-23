@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 _ALLOWED_SCHEMES = {"http", "https"}
 _MAX_REDIRECTS = 10
 
+# Redirect statuses that state the resource has *moved for good*. Only these let a
+# caller rewrite the address it started from; 302/303/307 say "this time, go here".
+_PERMANENT_REDIRECT_STATUSES = frozenset({301, 308})
+
 # HTTP statuses that carry rate-limit / timeout semantics: we read their
 # Retry-After / RateLimit-* headers and arm the per-host cooldown from them.
 TRANSIENT_HTTP_STATUSES = frozenset({408, 429})
@@ -381,21 +385,67 @@ async def async_validate_feed_url(url: str) -> None:
     await loop.run_in_executor(None, validate_feed_url, url)
 
 
+def _permanent_redirect_target(original: str, candidate: str) -> str | None:
+    """The address *original* may safely be rewritten to, or ``None`` to keep it.
+
+    *candidate* is the URL reached after following only 301/308 hops (see
+    :func:`_resolve_response`). Everything below is a reason to keep the stored URL
+    even though the host said the resource moved:
+
+    * **Userinfo in the original.** ``https://user:pass@host/feed`` is a supported
+      feed form (see :func:`_pin_connection`), but a ``Location`` header never
+      carries userinfo, so adopting the target would silently drop the credentials
+      and turn every later fetch into a 401.
+    * **A changed query string, either direction.** Losing it breaks feeds that
+      carry a token (``?api_key=…``); gaining it bakes in a session/CDN parameter
+      that expires in a few days. Only an unchanged query is safe to adopt.
+    * **An https → http downgrade**, which no honest permanent move needs.
+    * **Over-long URLs**, which would not survive the 2048-char column.
+    """
+    if candidate == original:
+        return None
+    try:
+        before, after = urlparse(original), urlparse(candidate)
+    except Exception:
+        return None
+    if before.username:
+        return None
+    if before.query != after.query:
+        return None
+    if before.scheme == "https" and after.scheme != "https":
+        return None
+    if len(candidate) > 2048:
+        return None
+    return candidate
+
+
 def _resolve_response(
     url: str,
     auth=None,
     timeout: int = 30,
     headers: dict | None = None,
     max_redirects: int = _MAX_REDIRECTS,
-) -> httpx.Response:
+) -> tuple[httpx.Response, str | None]:
     """Fetch a URL following redirects, validating every hop against SSRF.
 
-    Returns the final response after ``raise_for_status()``. A 304 Not Modified is
-    returned without raising (httpx classifies 304 as a redirect status yet it has
-    no ``Location``, so it is treated as a terminal response here, for conditional
-    requests).
+    Returns ``(response, permanent_url)``: the final response after
+    ``raise_for_status()``, plus the address the caller may store in place of *url*
+    (``None`` when there is nothing safe to adopt — see
+    :func:`_permanent_redirect_target`). A 304 Not Modified is returned without
+    raising (httpx classifies 304 as a redirect status yet it has no ``Location``,
+    so it is treated as a terminal response here, for conditional requests).
+
+    ``permanent_url`` tracks the *longest leading run* of 301/308 hops rather than
+    requiring the whole chain to be permanent. A host answering ``301`` has stated
+    the resource moved for good; whatever a later temporary hop does cannot unsay
+    it. Insisting on an all-permanent chain would throw away the most common and
+    most valuable case, an http → https hop followed by something temporary.
     """
     current_url = url
+    # Last URL reached through 301/308 hops only; frozen at the first hop that is
+    # not permanent, so a temporary redirect never contributes a stored address.
+    last_permanent_url = url
+    chain_permanent = True
     # http2=True: negotiate HTTP/2 when the server offers it (falls back to HTTP/1.1
     # otherwise). Some CDNs treat a plain HTTP/1.1 request as a bot signal and answer
     # with a header-less 403 / near-zero rate budget (observed on Reddit via Fastly),
@@ -420,15 +470,46 @@ def _resolve_response(
             if not response.has_redirect_location:
                 if response.status_code != 304:
                     response.raise_for_status()
-                return response
+                return response, _permanent_redirect_target(url, last_permanent_url)
             redirect_url = response.headers.get("location", "")
             if redirect_url and not redirect_url.startswith(("http://", "https://")):
                 redirect_url = urljoin(current_url, redirect_url)
             # The next iteration's _pin_connection validates redirect_url before use.
             current_url = redirect_url
+            if chain_permanent and response.status_code in _PERMANENT_REDIRECT_STATUSES:
+                last_permanent_url = redirect_url
+            else:
+                chain_permanent = False
     raise httpx.TooManyRedirects(
         f"Too many redirects (max {max_redirects})", request=response.request
     )
+
+
+class PageResponse(NamedTuple):
+    """Body of a fetched page, plus the address it permanently moved to (if any).
+
+    ``permanent_url`` is set only when the caller may safely store it in place of
+    the URL it asked for; ``None`` means keep the original.
+    """
+    text: str
+    permanent_url: str | None
+
+
+def fetch_url_page(
+    url: str,
+    auth=None,
+    timeout: int = 30,
+    headers: dict | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> PageResponse:
+    """SSRF-safe fetch that also reports a permanent redirect target.
+
+    Use this over :func:`fetch_url_with_ssrf_check` wherever the fetched URL is
+    *stored* (feed rows), so a moved feed stops walking its redirect chain on
+    every poll.
+    """
+    response, permanent_url = _resolve_response(url, auth, timeout, headers, max_redirects)
+    return PageResponse(response.text, permanent_url)
 
 
 def fetch_url_with_ssrf_check(
@@ -439,7 +520,7 @@ def fetch_url_with_ssrf_check(
     max_redirects: int = _MAX_REDIRECTS,
 ) -> str:
     """Synchronous HTTP fetch with SSRF-safe redirect validation on every hop."""
-    return _resolve_response(url, auth, timeout, headers, max_redirects).text
+    return fetch_url_page(url, auth, timeout, headers, max_redirects).text
 
 
 class ConditionalResponse(NamedTuple):
@@ -460,6 +541,9 @@ class ConditionalResponse(NamedTuple):
     # Sustainable per-request spacing (seconds) advertised by live RateLimit-* headers
     # (reset / remaining), for learned per-host pacing. None when not advertised.
     spacing_seconds: float | None = None
+    # Address this URL permanently moved to, safe to store in its place. None when
+    # the response was not (only) permanently redirected. See _resolve_response.
+    permanent_url: str | None = None
 
 
 def fetch_url_conditional(
@@ -482,7 +566,9 @@ def fetch_url_conditional(
         request_headers["If-None-Match"] = etag
     if last_modified:
         request_headers["If-Modified-Since"] = last_modified
-    response = _resolve_response(url, auth, timeout, request_headers, max_redirects)
+    response, permanent_url = _resolve_response(
+        url, auth, timeout, request_headers, max_redirects
+    )
     new_etag = response.headers.get("etag")
     new_last_modified = response.headers.get("last-modified")
     now = datetime.now(timezone.utc)
@@ -493,4 +579,5 @@ def fetch_url_conditional(
         last_modified=new_last_modified[:255] if new_last_modified else None,
         rate_limited_until=rate_limited_until(response.headers, now),
         spacing_seconds=spacing_from_headers(response.headers, now),
+        permanent_url=permanent_url,
     )

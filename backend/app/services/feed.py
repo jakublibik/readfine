@@ -32,27 +32,44 @@ _initial_fetch_in_progress: set[int] = set()
 # the (normalized) feed URL. In-process cache — fine for the single-process deploy,
 # same as _initial_fetch_in_progress.
 _FEED_PREVIEW_TTL = 120.0  # seconds
-_feed_preview_cache: dict[str, tuple[float, feedparser.FeedParserDict]] = {}
+# url → (expiry, parsed, permanent_url). The third element is the address the URL
+# permanently redirects to, so subscribe() can create the feed row on the real
+# address without spending a second request to discover it.
+_feed_preview_cache: dict[str, tuple[float, feedparser.FeedParserDict, str | None]] = {}
 
 
-def cache_feed_preview(url: str, parsed: feedparser.FeedParserDict) -> None:
+def cache_feed_preview(
+    url: str, parsed: feedparser.FeedParserDict, permanent_url: str | None = None
+) -> None:
     """Store a successful public-feed parse for brief reuse by subscribe()."""
     now = time.monotonic()
-    for stale in [k for k, (exp, _) in _feed_preview_cache.items() if exp <= now]:
+    for stale in [k for k, (exp, _, _) in _feed_preview_cache.items() if exp <= now]:
         _feed_preview_cache.pop(stale, None)
-    _feed_preview_cache[url] = (now + _FEED_PREVIEW_TTL, parsed)
+    _feed_preview_cache[url] = (now + _FEED_PREVIEW_TTL, parsed, permanent_url)
+
+
+def _live_preview(url: str) -> tuple[feedparser.FeedParserDict, str | None] | None:
+    """Return the still-fresh cache entry for *url*, evicting an expired one."""
+    entry = _feed_preview_cache.get(url)
+    if entry is None:
+        return None
+    expiry, parsed, permanent_url = entry
+    if expiry <= time.monotonic():
+        _feed_preview_cache.pop(url, None)
+        return None
+    return parsed, permanent_url
 
 
 def get_cached_feed_preview(url: str) -> feedparser.FeedParserDict | None:
     """Return a still-fresh cached parse for *url*, else None (evicting if expired)."""
-    entry = _feed_preview_cache.get(url)
-    if entry is None:
-        return None
-    expiry, parsed = entry
-    if expiry <= time.monotonic():
-        _feed_preview_cache.pop(url, None)
-        return None
-    return parsed
+    entry = _live_preview(url)
+    return entry[0] if entry else None
+
+
+def get_cached_permanent_url(url: str) -> str | None:
+    """Return the permanent redirect target recorded with *url*'s cached parse."""
+    entry = _live_preview(url)
+    return entry[1] if entry else None
 
 
 async def subscribe(
@@ -103,31 +120,44 @@ async def subscribe(
     feed: Feed | None = None
     parsed = None
 
-    if not is_private:
-        # Look for existing public feed
+    async def _existing_public_feed(feed_url: str) -> Feed | None:
+        """The shared public feed row at *feed_url*, if any (raises if subscribed)."""
+        if is_private:
+            return None
         existing = await db.execute(
-            select(Feed).where(Feed.feed_url == url, Feed.is_private == False)
+            select(Feed).where(Feed.feed_url == feed_url, Feed.is_private == False)
         )
-        feed = existing.scalar_one_or_none()
-
-        if feed:
-            # Check if already subscribed
+        found = existing.scalar_one_or_none()
+        if found:
             already = await db.execute(
                 select(UserFeed).where(
                     UserFeed.user_id == user.id,
-                    UserFeed.feed_id == feed.id,
+                    UserFeed.feed_id == found.id,
                 )
             )
             if already.scalar_one_or_none():
                 raise ValueError("Already subscribed to this feed")
+        return found
+
+    feed = await _existing_public_feed(url)
 
     if feed is None:
         # Reuse a recent Test-step parse if available so the whole add flow is a
         # single network request (avoids tripping rate limits like Reddit's). Only
         # public feeds are cached; private/auth feeds always fetch fresh.
         parsed = None if is_private else get_cached_feed_preview(url)
+        permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed = await fetch_and_parse_url(url)
+            parsed, permanent_url = await fetch_and_parse_url(url)
+
+        # Create the row on the address the host actually serves. Storing the URL the
+        # user typed would make every later poll walk the same redirect chain, and on
+        # an OPML re-import it would create a second row for a feed we already have.
+        if permanent_url and permanent_url != url:
+            url = permanent_url
+            feed = await _existing_public_feed(url)
+
+    if feed is None:
         title = (
             custom_title
             or parsed.feed.get("title")

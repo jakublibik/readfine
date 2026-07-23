@@ -183,4 +183,39 @@
 {% else %}
 <p class="text-sm text-gray-400">No briefing errors.</p>
 {% endif %}
+
+{% if stats.redirect_conflicts %}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Feed redirect conflicts</h2>
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  These feeds permanently redirect to a URL another feed already occupies, so the
+  address cannot be updated and the feed re-walks its redirect on every fetch. Merge
+  the pair by hand: move the subscribers to the target feed and remove this one.
+</p>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Redirects to</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Held by</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Detected</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in stats.redirect_conflicts %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.feed_title }} <span class="text-xs text-gray-400">#{{ c.feed_id }}</span></td>
+        <td class="px-4 py-2 text-gray-500 truncate max-w-xs" title="{{ c.target_url }}">{{ c.target_url }}</td>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.holder_title }} <span class="text-xs text-gray-400">#{{ c.holder_id }}</span></td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          <time class="text-gray-400" datetime="{{ c.detected_at.isoformat() }}">{{ c.detected_at | utctime('short') }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

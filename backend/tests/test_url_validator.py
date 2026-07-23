@@ -12,6 +12,7 @@ from app.utils.url_validator import (
     TRANSIENT_HTTP_STATUSES,
     _pin_connection,
     fetch_url_conditional,
+    fetch_url_page,
     fetch_url_with_ssrf_check,
     is_bot_block,
     parse_retry_after,
@@ -272,7 +273,7 @@ class TestFetchUrlConditional:
 
     def test_validators_sent_as_conditional_headers(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(304)) as mock_resolve:
+                   return_value=(httpx.Response(304), None)) as mock_resolve:
             fetch_url_conditional(
                 "https://example.com/feed.xml",
                 etag='"abc"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
@@ -283,7 +284,7 @@ class TestFetchUrlConditional:
 
     def test_no_conditional_headers_without_validators(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(200)) as mock_resolve:
+                   return_value=(httpx.Response(200), None)) as mock_resolve:
             fetch_url_conditional("https://example.com/feed.xml", headers={"User-Agent": "x"})
         headers = mock_resolve.call_args[0][3]
         assert "If-None-Match" not in headers
@@ -292,7 +293,7 @@ class TestFetchUrlConditional:
 
     def test_304_passthrough(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(304)):
+                   return_value=(httpx.Response(304), None)):
             result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
         assert result.status_code == 304
         assert result.text == ""
@@ -302,7 +303,7 @@ class TestFetchUrlConditional:
             200, text="<rss/>",
             headers={"ETag": '"new"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
         )
-        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert result.text == "<rss/>"
@@ -311,7 +312,7 @@ class TestFetchUrlConditional:
 
     def test_long_validators_truncated_to_255(self):
         resp = httpx.Response(200, headers={"ETag": "x" * 400})
-        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert len(result.etag) == 255
 
@@ -359,6 +360,110 @@ class TestResolveResponseIntegration:
                 result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert "ok" in result.text
+
+
+class TestPermanentRedirectTarget:
+    """The address a stored feed URL may safely be rewritten to.
+
+    End-to-end through the real redirect loop: the interesting behaviour is which
+    hop the permanent prefix stops at, which a unit test of the guard alone misses.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _chain(self, start, *hops):
+        """Fetch *start* through *hops* ((status, location), …), return permanent_url.
+
+        Hops are served in order and the last request answers 200, so a chain may
+        revisit the same path (http → https on one URL) without looping.
+        """
+        remaining = list(hops)
+
+        def handler(request):
+            if not remaining:
+                return httpx.Response(200, text="<rss/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                return fetch_url_page(start).permanent_url
+
+    def test_all_permanent_chain_yields_final_url(self):
+        # The vice.com shape: http → 301 https → 301 trailing slash → 200.
+        assert self._chain(
+            "http://example.com/feed",
+            (301, "https://example.com/feed"),
+            (301, "https://example.com/feed/"),
+        ) == "https://example.com/feed/"
+
+    def test_permanent_prefix_survives_a_later_temporary_hop(self):
+        # The 301 said "/feed moved to /moved" for good; whatever the 302 does after
+        # that cannot unsay it, so the permanent prefix is still worth storing.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://example.com/moved"),
+            (302, "https://example.com/temporary"),
+        ) == "https://example.com/moved"
+
+    def test_temporary_first_hop_yields_nothing(self):
+        assert self._chain(
+            "https://example.com/feed",
+            (302, "https://example.com/elsewhere"),
+            (301, "https://example.com/final"),
+        ) is None
+
+    def test_no_redirect_yields_nothing(self):
+        assert self._chain("https://example.com/feed") is None
+
+    def test_userinfo_in_original_blocks_adoption(self):
+        # A Location header never carries credentials, so adopting the target would
+        # silently drop them and turn every later fetch into a 401.
+        assert self._chain(
+            "https://user:pass@example.com/feed",
+            (301, "https://example.com/moved"),
+        ) is None
+
+    def test_query_gained_blocks_adoption(self):
+        # A session/CDN parameter would be baked in and expire days later.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://example.com/feed?session=abc"),
+        ) is None
+
+    def test_query_lost_blocks_adoption(self):
+        # Feeds authenticated by a query token must not lose it.
+        assert self._chain(
+            "https://example.com/feed?api_key=secret",
+            (301, "https://example.com/feed"),
+        ) is None
+
+    def test_unchanged_query_is_adopted(self):
+        assert self._chain(
+            "https://example.com/feed?format=rss",
+            (301, "https://www.example.com/feed?format=rss"),
+        ) == "https://www.example.com/feed?format=rss"
+
+    def test_https_to_http_downgrade_blocks_adoption(self):
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "http://example.com/feed"),
+        ) is None
+
+    def test_conditional_fetch_reports_permanent_url_too(self):
+        served = []
+
+        def handler(request):
+            served.append(request)
+            if len(served) == 1:
+                return httpx.Response(301, headers={"Location": "https://example.com/moved"})
+            return httpx.Response(304)
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                result = fetch_url_conditional("https://example.com/feed", etag='"abc"')
+        assert result.status_code == 304
+        assert result.permanent_url == "https://example.com/moved"
 
 
 class TestPinConnection:

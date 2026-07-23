@@ -833,6 +833,7 @@ def _make_feed(**kwargs) -> SimpleNamespace:
     defaults = {
         "id": 1,
         "feed_url": "https://example.com/feed.xml",
+        "is_private": False,
         "fetch_auth_user": None,
         "fetch_auth_pass_encrypted": None,
         "fetch_error_count": 0,
@@ -1493,8 +1494,8 @@ class TestFeedPreviewCache:
         url = "https://cache.example/expired"
         feed_svc.cache_feed_preview(url, feedparser.FeedParserDict({"entries": []}))
         # force the stored expiry into the past
-        _, value = feed_svc._feed_preview_cache[url]
-        feed_svc._feed_preview_cache[url] = (0.0, value)
+        _, value, permanent = feed_svc._feed_preview_cache[url]
+        feed_svc._feed_preview_cache[url] = (0.0, value, permanent)
         assert feed_svc.get_cached_feed_preview(url) is None
         assert url not in feed_svc._feed_preview_cache
 

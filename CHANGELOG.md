@@ -25,6 +25,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- A feed that has permanently moved now gets its stored address updated, so each fetch is a single request again. Until now the redirect was followed but never remembered, and the feed walked the same chain on every poll, forever: one feed here cost three requests and 800 ms where one would do, and it counted against the request budget of sites that ration them. The new address is only taken when the site said the move is permanent, the fetch actually produced articles, and nothing would be lost along the way (a query string, credentials in the URL, or an HTTPS connection). Existing feeds fix themselves on their next fetch. Adding a feed resolves the address first as well, so a subscription, or an OPML import carrying a years-old URL, lands on the feed you already have instead of creating a second copy of it.
+- Admin dashboard: a "Feed redirect conflicts" section, shown only when there is something to report. It lists feeds that permanently redirect onto a URL another feed already holds, the one case where the address above cannot be updated, so the feed keeps re-walking its redirect. The fix is to merge the pair by hand; the section names both feeds so it can be found.
 - Admin → Users: hovering the "Joined" date now shows the exact date and time of sign-up. The column itself still shows the date alone, which is not enough to see that a burst of accounts arrived within the same minute.
 
 ## [0.13.0] - 2026-07-19

@@ -26,7 +26,7 @@ from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import format_until, is_valid_timezone
 from app.utils.formats import is_valid_format
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
+from app.utils.url_validator import async_validate_feed_url, fetch_url_page, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
 from app.fetcher.scrape import extract_article_links
@@ -278,15 +278,15 @@ async def settings_feeds_test(
     auth = (auth_user, auth_pass) if has_auth else None
     loop = asyncio.get_running_loop()
 
-    async def _fetch(with_auth) -> tuple[str | None, str | None]:
-        """Returns (content, error_string). Uses SSRF-safe redirect loop."""
+    async def _fetch(with_auth):
+        """Returns (page, error_string). Uses SSRF-safe redirect loop."""
         fetch_auth = auth if with_auth else None
         try:
-            content = await loop.run_in_executor(
+            page = await loop.run_in_executor(
                 None,
-                lambda: fetch_url_with_ssrf_check(url, auth=fetch_auth, timeout=15, headers=_headers),
+                lambda: fetch_url_page(url, auth=fetch_auth, timeout=15, headers=_headers),
             )
-            return content, None
+            return page, None
         except httpx.HTTPStatusError as e:
             sc = e.response.status_code
             if sc == 403:
@@ -296,16 +296,16 @@ async def settings_feeds_test(
             return None, f"Connection error: {e}"
 
     # Always fetch with the configured auth (or no auth if none provided)
-    content, error = await _fetch(with_auth=True)
+    page, error = await _fetch(with_auth=True)
 
     auth_status = None  # will be set when credentials were provided
-    if has_auth and content is None and error and "401" in error:
+    if has_auth and page is None and error and "401" in error:
         # Credentials provided but got 401 → wrong credentials
         auth_status = "wrong"
-    elif has_auth and content is not None:
+    elif has_auth and page is not None:
         # Succeeded with auth — check if auth was actually needed
-        no_auth_content, no_auth_error = await _fetch(with_auth=False)
-        if no_auth_content is not None:
+        no_auth_page, no_auth_error = await _fetch(with_auth=False)
+        if no_auth_page is not None:
             auth_status = "not_required"
         else:
             auth_status = "required_ok"
@@ -318,7 +318,7 @@ async def settings_feeds_test(
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": f"{error} — credentials rejected"})
 
-    parsed = await loop.run_in_executor(None, feedparser.parse, content)
+    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
     import xml.sax._exceptions as _sax
     is_xml_error = parsed.bozo and isinstance(parsed.bozo_exception, _sax.SAXParseException)
@@ -343,7 +343,7 @@ async def settings_feeds_test(
     # (single network request per add — important for rate-limited sites). Public
     # feeds only; auth'd fetches are user-specific and not shared.
     if not has_auth:
-        cache_feed_preview(url, parsed)
+        cache_feed_preview(url, parsed, page.permanent_url)
     return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
         "feed_title": feed_title,
         "entry_count": entry_count,

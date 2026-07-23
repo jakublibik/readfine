@@ -20,9 +20,10 @@ from app.utils.http_client import READFINE_UA
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
-    fetch_url_with_ssrf_check,
+    fetch_url_page,
     redact_url,
 )
+from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
@@ -202,8 +203,10 @@ async def fetch_scrape_feed(
     feed_id = feed.id
     feed_url = feed.feed_url
     # Read before any DB work: the error path rolls back first, which expires the
-    # instance, and re-reading an attribute there would fire a lazy load.
+    # instance, and re-reading an attribute there would fire a lazy load. The same
+    # goes for is_private, which the post-commit URL adoption needs.
     block_count = feed.block_count or 0
+    is_private = bool(feed.is_private)
     selector = (feed.type_config or {}).get("article_links_selector", "")
     fetched_at = datetime.now(timezone.utc)
 
@@ -213,10 +216,10 @@ async def fetch_scrape_feed(
         # at an internal/metadata address.
         await async_validate_feed_url(feed_url)
         loop = asyncio.get_running_loop()
-        html = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, feed_url, None, _TIMEOUT, _HEADERS
+        page = await loop.run_in_executor(
+            None, fetch_url_page, feed_url, None, _TIMEOUT, _HEADERS
         )
-        links = extract_article_links(html, selector, feed_url)
+        links = extract_article_links(page.text, selector, feed_url)
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
 
@@ -241,6 +244,13 @@ async def fetch_scrape_feed(
         # Scrape success carries no RateLimit-* headers (fetch returns HTML only), so
         # this just clears any pending 429 streak for the host.
         host_throttle.record_success(host_throttle.host_key(feed_url), datetime.now(timezone.utc))
+        # Only after the selector actually matched links, so a redirect to a page
+        # this feed cannot scrape never becomes its stored address.
+        if page.permanent_url:
+            await adopt_permanent_url(
+                feed_id, feed_url, page.permanent_url, db,
+                feed_type="scrape", selector=selector, is_private=is_private,
+            )
         logger.info("Scrape feed %d: %d new articles in %dms", feed_id, new_count, duration_ms)
         return new_count
 

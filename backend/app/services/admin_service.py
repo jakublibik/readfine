@@ -216,6 +216,44 @@ async def list_briefing_errors(db: AsyncSession) -> list[UserCatchupConfig]:
     return result.scalars().all()
 
 
+async def list_redirect_conflicts(db: AsyncSession) -> list[dict]:
+    """Feeds that permanently redirect onto a URL another feed already holds.
+
+    The stored address cannot be rewritten in that case (it would collide on the
+    public-feed unique index), so the feed keeps walking its redirect on every
+    fetch. New convergence no longer arises, since subscribe and OPML import resolve
+    the address before creating a row, so a non-empty list is an existing pair worth
+    merging by hand. Reads the in-process registry populated by ``adopt_permanent_url``
+    and joins in the feed titles; returns newest-detected first.
+    """
+    from app.fetcher.redirects import redirect_conflicts
+    from app.utils.url_validator import redact_url
+
+    conflicts = redirect_conflicts()
+    if not conflicts:
+        return []
+    ids = set(conflicts) | {c.holder_id for c in conflicts.values()}
+    titles = dict((await db.execute(
+        select(Feed.id, Feed.title).where(Feed.id.in_(ids))
+    )).all())
+    rows = [
+        {
+            "feed_id": feed_id,
+            "feed_title": titles.get(feed_id, "—"),
+            # Redacted: the query is unchanged from the feed's own URL (the adoption
+            # guard requires it), so it can carry a token like ?api_key=… that the
+            # dashboard should not print in full.
+            "target_url": redact_url(c.target_url),
+            "holder_id": c.holder_id,
+            "holder_title": titles.get(c.holder_id, "(deleted)"),
+            "detected_at": c.detected_at,
+        }
+        for feed_id, c in conflicts.items()
+    ]
+    rows.sort(key=lambda r: r["detected_at"], reverse=True)
+    return rows
+
+
 async def list_audit_logs(db: AsyncSession, limit: int = 100) -> list[AuditLog]:
     result = await db.execute(
         select(AuditLog)
@@ -441,6 +479,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .limit(5)
     )).scalars().all()
     briefing_errors = await list_briefing_errors(db)
+    redirect_conflicts_list = await list_redirect_conflicts(db)
     return {
         "user_count": user_count,
         "active_user_count": active_user_count,
@@ -453,4 +492,5 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
         "briefing_errors": briefing_errors,
+        "redirect_conflicts": redirect_conflicts_list,
     }
