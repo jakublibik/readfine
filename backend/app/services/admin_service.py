@@ -1,6 +1,5 @@
 """Admin service: user management, app settings, invitations, audit log."""
 import logging
-import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, delete, func, select
@@ -21,6 +20,7 @@ from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
 from app.models.user import User, UserCatchupConfig
+from app.auth.security import generate_token
 from app.services.scope_cleanup import strip_scope_references
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ async def create_invitation(
 ) -> Invitation:
     inv = Invitation(
         created_by=admin_id,
-        token=secrets.token_urlsafe(32),
+        token=generate_token(),
         email=email or None,
         expires_at=expires_at,
     )

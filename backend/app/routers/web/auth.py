@@ -1,7 +1,5 @@
 import asyncio
-import hashlib
 import logging
-import secrets
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -13,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, timedelta, timezone
 
-from app.auth.security import dummy_verify_password, hash_password, password_within_limit, verify_password
+from app.auth.security import dummy_verify_password, generate_token, hash_password, hash_token, password_within_limit, verify_password
 from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
@@ -249,7 +247,7 @@ async def register(
 
     token = None
     if needs_verification:
-        token = secrets.token_urlsafe(32)
+        token = generate_token()
 
     user = User(
         email=email,
@@ -257,7 +255,7 @@ async def register(
         display_name=display_name,
         role="user",
         email_verified=not needs_verification,
-        email_verification_token_hash=hashlib.sha256(token.encode()).hexdigest() if token else None,
+        email_verification_token_hash=hash_token(token) if token else None,
         email_verification_expires_at=datetime.now(timezone.utc) + timedelta(hours=24) if token else None,
     )
     db.add(user)
@@ -318,7 +316,7 @@ async def verify_email(request: Request, token: str = "", db: AsyncSession = Dep
     if not token:
         return templates.TemplateResponse(request, "auth/check_email.html",
                                           {"verify_error": True, "email": ""})
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.email_verification_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.email_verification_expires_at:
@@ -349,8 +347,8 @@ async def resend_verification(
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         if user and not user.email_verified:
-            token = secrets.token_urlsafe(32)
-            user.email_verification_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            token = generate_token()
+            user.email_verification_token_hash = hash_token(token)
             user.email_verification_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
             await db.commit()
             verify_url = str(request.base_url) + f"verify-email?token={token}"
@@ -378,7 +376,7 @@ async def verify_email_change(request: Request, token: str = "", db: AsyncSessio
 
     if not token:
         return _result(False, "This confirmation link is invalid.")
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.pending_email_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.pending_email or not user.pending_email_expires_at:
@@ -432,8 +430,8 @@ async def reset_password_request(
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user and user.is_active:
-        token = secrets.token_urlsafe(32)
-        user.password_reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        token = generate_token()
+        user.password_reset_token_hash = hash_token(token)
         user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         await db.commit()
 
@@ -500,7 +498,7 @@ async def reset_password_confirm(
 
 
 async def _get_user_by_reset_token(db: AsyncSession, token: str) -> User | None:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.password_reset_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.password_reset_expires_at:

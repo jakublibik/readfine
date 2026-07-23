@@ -17,7 +17,7 @@ from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.url_validator import async_validate_feed_url
 
 logger = logging.getLogger(__name__)
 
@@ -345,13 +345,9 @@ async def subscribe_scrape(
 
     # Validate selector against the live page before saving
     if validate_selector:
-        from app.fetcher.scrape import extract_article_links
-        loop = asyncio.get_running_loop()
+        from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
-            html = await loop.run_in_executor(
-                None, fetch_url_with_ssrf_check, url, None, 30,
-                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-            )
+            html = await fetch_page_html(url)
         except Exception as exc:
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)

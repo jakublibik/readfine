@@ -1568,6 +1568,41 @@ def _ai_spinner(target_id: str, poll_url: str) -> str:
     )
 
 
+async def _require_quality_ai_for_article(
+    user: User, article_id: int, db: AsyncSession, *, target_id: str, too_short_label: str
+):
+    """Shared guard for on-demand AI (summary / context): AI enabled globally, a
+    quality model configured, the article accessible, and its content long enough.
+
+    Returns an error ``HTMLResponse`` (rendered into ``target_id``) on any failed
+    check, or ``(article, settings, content_text)`` on success.
+    """
+    from app.services.ai_jobs import ai_enabled_globally, normalize_content
+    from app.services.ai_summary_service import _MIN_CONTENT_CHARS
+
+    def _note(text: str) -> HTMLResponse:
+        return HTMLResponse(f'<div id="{target_id}" class="text-xs text-gray-400 py-1">{text}</div>')
+
+    if not await ai_enabled_globally(db):
+        return _note("AI is disabled.")
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
+        return _note("Quality AI model not configured.")
+
+    article = await _get_article_access(user, article_id, db)
+    if not article:
+        return HTMLResponse("", status_code=404)
+
+    content_text = normalize_content(
+        article.title, article.readable_content or article.content, settings.ai_content_limit
+    )
+    if len(content_text) < _MIN_CONTENT_CHARS:
+        return _note(f"Article is too short for {too_short_label} (minimum {_MIN_CONTENT_CHARS} characters).")
+
+    return article, settings, content_text
+
+
 @router.post("/htmx/articles/{article_id}/ai-summary", response_class=HTMLResponse)
 @limiter.limit(app_settings_config.rate_limit_ai_summary)
 async def htmx_ai_summary_trigger(
@@ -1577,32 +1612,14 @@ async def htmx_ai_summary_trigger(
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand: run summary synchronously and return result block."""
-    from app.services.ai_jobs import ai_enabled_globally
-    if not await ai_enabled_globally(db):
-        return HTMLResponse(
-            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
-        )
+    guard = await _require_quality_ai_for_article(
+        user, article_id, db, target_id=f"ai-summary-{article_id}", too_short_label="a summary"
+    )
+    if isinstance(guard, HTMLResponse):
+        return guard
+    article, settings, content_text = guard
 
-    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
-        return HTMLResponse(
-            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
-        )
-
-    article = await _get_article_access(user, article_id, db)
-    if not article:
-        return HTMLResponse("", status_code=404)
-
-    from app.services.ai_jobs import normalize_content
-    from app.services.ai_summary_service import _MIN_CONTENT_CHARS, run_summary_on_demand
-    content_text = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
-    if len(content_text) < _MIN_CONTENT_CHARS:
-        return HTMLResponse(
-            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">'
-            f'Article is too short for a summary (minimum {_MIN_CONTENT_CHARS} characters).'
-            f'</div>'
-        )
-
+    from app.services.ai_summary_service import run_summary_on_demand
     import html as _html
     summary, error = await run_summary_on_demand(article, user.id, db)
     if summary is None:
@@ -1658,31 +1675,12 @@ async def htmx_ai_context_trigger(
     db: AsyncSession = Depends(get_db),
 ):
     """On-demand: call AI directly and return context block (synchronous, may take several seconds)."""
-    from app.services.ai_jobs import ai_enabled_globally
-    if not await ai_enabled_globally(db):
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">AI is disabled.</div>'
-        )
-
-    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
-        )
-
-    article = await _get_article_access(user, article_id, db)
-    if not article:
-        return HTMLResponse("", status_code=404)
-
-    from app.services.ai_jobs import normalize_content
-    from app.services.ai_summary_service import _MIN_CONTENT_CHARS
-    content_text = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
-    if len(content_text) < _MIN_CONTENT_CHARS:
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">'
-            f'Article is too short for context generation (minimum {_MIN_CONTENT_CHARS} characters).'
-            f'</div>'
-        )
+    guard = await _require_quality_ai_for_article(
+        user, article_id, db, target_id=f"ai-context-{article_id}", too_short_label="context generation"
+    )
+    if isinstance(guard, HTMLResponse):
+        return guard
+    article, settings, content_text = guard
 
     form = await request.form()
     focus = (form.get("focus") or "").strip() or None

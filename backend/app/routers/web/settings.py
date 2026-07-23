@@ -2,7 +2,6 @@
 import html as html_module
 import logging
 import re
-import secrets
 from datetime import datetime, timedelta, timezone
 
 import asyncio
@@ -17,7 +16,7 @@ import feedparser
 from bs4 import BeautifulSoup
 from sqlalchemy import func, select, update
 
-from app.auth.security import hash_password, password_within_limit, verify_password, hash_token
+from app.auth.security import generate_token, hash_password, password_within_limit, verify_password, hash_token
 from app.config import settings as app_settings_config
 from app.rate_limit import limiter
 from app.utils.crypto import encrypt
@@ -26,10 +25,11 @@ from app.utils.smtp import send_email
 from app.utils.parsing import safe_int
 from app.utils.datetime_format import format_until, is_valid_timezone
 from app.utils.formats import is_valid_format
-from app.utils.url_validator import async_validate_feed_url, fetch_url_page, fetch_url_with_ssrf_check, format_retry_in, rate_limited_until, redact_url
+from app.utils.http_client import READFINE_UA
+from app.utils.url_validator import async_validate_feed_url, fetch_url_page, format_retry_in, rate_limited_until, redact_url
 from app.utils.feed_detect import detect_feeds
 from app.utils.scrape_ai import extract_article_sample, build_selector_prompt, generate_selector_prompt
-from app.fetcher.scrape import extract_article_links
+from app.fetcher.scrape import extract_article_links, fetch_page_html
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +95,25 @@ from app.services.ai_service import (
 from app.templating import templates
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+def _ensure_scheme(url: str) -> str:
+    """Prefix https:// when a user-entered URL omits the scheme."""
+    return f"https://{url}" if url and "://" not in url else url
+
+
+def _snap_interval(raw: int) -> int:
+    """Clamp a fetch interval to [15, 1440] minutes, snapped to the nearest 15."""
+    return max(15, min(1440, round(raw / 15) * 15))
+
+
+def _ai_selector_available(app_s, user_s) -> bool:
+    """True when AI CSS-selector generation is usable: AI enabled globally and the
+    user has a quality model configured."""
+    return bool(
+        app_s and app_s.ai_enabled
+        and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
+    )
 
 
 @router.get("")
@@ -256,8 +275,7 @@ async def settings_feeds_test(
 ):
     """Test a feed URL without saving. Returns title + entry count or error."""
     url = url.strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
     if not url:
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": "Please enter a URL."})
@@ -271,7 +289,7 @@ async def settings_feeds_test(
                                           {"error": str(e)})
 
     _headers = {
-        "User-Agent": "Readfine/1.0",
+        "User-Agent": READFINE_UA,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
     has_auth = bool(auth_user and auth_pass)
@@ -359,8 +377,7 @@ async def settings_feeds_subscribe(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
     folder_id = safe_int(folder_id_raw)
@@ -372,7 +389,7 @@ async def settings_feeds_subscribe(
     import_mode = "latest" if form.get("import_mode") == "latest" else "recent"
     import_limit = max(1, min(safe_int(form.get("import_limit")) or 500, 100000))
     interval_raw = safe_int(form.get("fetch_interval_min"))
-    fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15)) if interval_raw else None
+    fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
 
     user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
@@ -487,10 +504,7 @@ async def settings_scrape_setup(
 
     html_sample = ""
     try:
-        html = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, url, None, 30,
-            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-        )
+        html = await fetch_page_html(url)
         soup = BeautifulSoup(html, "lxml")
         title_tag = soup.find("title")
         page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
@@ -501,10 +515,7 @@ async def settings_scrape_setup(
 
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    ai_selector_available = bool(
-        app_s and app_s.ai_enabled
-        and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
-    )
+    ai_selector_available = _ai_selector_available(app_s, user_s)
 
     return templates.TemplateResponse(request, "settings/scrape_setup.html", {
         "url": url,
@@ -526,8 +537,7 @@ async def settings_scrape_preview(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
     selector = (form.get("selector") or form.get("article_links_selector") or "").strip()
 
     if not url or not selector:
@@ -537,10 +547,7 @@ async def settings_scrape_preview(
 
     loop = asyncio.get_running_loop()
     try:
-        html = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, url, None, 30,
-            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-        )
+        html = await fetch_page_html(url)
         links = extract_article_links(html, selector, url)
     except Exception as e:
         return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
@@ -567,8 +574,7 @@ async def settings_scrape_ai_selector(
 
     form = await request.form()
     url = (form.get("url") or "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
     html_sample = (form.get("html_sample") or "").strip()
     history_raw = (form.get("conversation_history") or "[]").strip()
 
@@ -586,10 +592,7 @@ async def settings_scrape_ai_selector(
 
     if not html_sample:
         try:
-            html = await loop.run_in_executor(
-                None, fetch_url_with_ssrf_check, url, None, 30,
-                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-            )
+            html = await fetch_page_html(url)
             html_sample = extract_article_sample(html)
         except Exception as e:
             prompt_text = ""
@@ -669,18 +672,14 @@ async def settings_scrape_show_prompt(
 ):
     form = await request.form()
     url = (form.get("url") or "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")
 
     loop = asyncio.get_running_loop()
     try:
-        html = await loop.run_in_executor(
-            None, fetch_url_with_ssrf_check, url, None, 30,
-            {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-        )
+        html = await fetch_page_html(url)
         prompt = generate_selector_prompt(url, html)
     except Exception as e:
         return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {e}</div>")
@@ -698,13 +697,12 @@ async def settings_scrape_subscribe(
 ):
     form = await request.form()
     url = form.get("url", "").strip()
-    if url and "://" not in url:
-        url = "https://" + url
+    url = _ensure_scheme(url)
     selector = form.get("selector", "").strip()
     title = form.get("title", "").strip() or url
     folder_id = safe_int(form.get("folder_id"))
     interval_raw = safe_int(form.get("fetch_interval_min"))
-    fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15)) if interval_raw else None
+    fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
 
     _, folders, _ = await _get_feeds_context(user, db)
     try:
@@ -716,10 +714,7 @@ async def settings_scrape_subscribe(
         loop = asyncio.get_running_loop()
         html_sample = ""
         try:
-            html = await loop.run_in_executor(
-                None, fetch_url_with_ssrf_check, url, None, 30,
-                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-            )
+            html = await fetch_page_html(url)
             soup = BeautifulSoup(html, "lxml")
             title_tag = soup.find("title")
             page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
@@ -730,10 +725,7 @@ async def settings_scrape_subscribe(
             prompt = ""
         app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
         user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-        ai_selector_available = bool(
-            app_s and app_s.ai_enabled
-            and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
-        )
+        ai_selector_available = _ai_selector_available(app_s, user_s)
         return templates.TemplateResponse(request, "settings/scrape_setup.html", {
             "url": url,
             "page_title": page_title,
@@ -771,10 +763,7 @@ async def settings_feed_edit(
     folders = folders_result.scalars().all()
     user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
-    ai_selector_available = bool(
-        app_s and app_s.ai_enabled
-        and user_s and user_s.ai_quality_provider and user_s.ai_quality_model
-    )
+    ai_selector_available = _ai_selector_available(app_s, user_s)
     is_sole_subscriber = uf.feed.subscriber_count == 1
     default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
     min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
@@ -843,7 +832,7 @@ async def settings_feed_update(
     if user.role == "admin" or uf.feed.is_private or uf.feed.subscriber_count == 1:
         interval_raw = safe_int(form.get("fetch_interval_min"))
         if interval_raw is not None:
-            uf.feed.fetch_interval_min = max(15, min(1440, round(interval_raw / 15) * 15))
+            uf.feed.fetch_interval_min = _snap_interval(interval_raw)
         else:
             uf.feed.fetch_interval_min = None
 
@@ -1257,7 +1246,7 @@ async def settings_tokens_create(
             "error": "Token name cannot be empty.",
         }, status_code=422)
 
-    raw_token = secrets.token_urlsafe(32)
+    raw_token = generate_token()
     token_prefix = raw_token[:8]
     token_hash = hash_token(raw_token)
 
@@ -1379,7 +1368,7 @@ async def settings_profile_email(
         })
 
     # Pending-email flow: verify the new address before switching.
-    token = secrets.token_urlsafe(32)
+    token = generate_token()
     user.pending_email = email
     user.pending_email_token_hash = hash_token(token)
     user.pending_email_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)

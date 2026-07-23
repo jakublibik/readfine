@@ -631,7 +631,7 @@ class TestSubscribeScrape:
             coro.close()
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)), \
              patch("app.services.feed.asyncio.create_task", side_effect=_close_coro):
             uf = await subscribe_scrape(
                 user=user, url="https://example.com/news",
@@ -650,7 +650,7 @@ class TestSubscribeScrape:
         db = self._make_db(existing_feed=existing, existing_subscription=None, feed_count=1)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)):
             await subscribe_scrape(
                 user=user, url="https://example.com/news",
                 selector="article a", title="Example News",
@@ -670,7 +670,7 @@ class TestSubscribeScrape:
         db = self._make_db(existing_feed=existing, existing_subscription=existing_sub, feed_count=1)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)):
             with pytest.raises(ValueError, match="Already subscribed"):
                 await subscribe_scrape(
                     user=user, url="https://example.com/news",
@@ -732,7 +732,7 @@ class TestSubscribeScrape:
         empty_html = "<html><body><nav><a href='/about'>About</a></nav></body></html>"
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=empty_html):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=empty_html)):
             with pytest.raises(ValueError, match="matched no article links"):
                 await subscribe_scrape(
                     user=user, url="https://example.com",
@@ -748,7 +748,7 @@ class TestSubscribeScrape:
         db = self._make_db(feed_count=0)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", side_effect=Exception("timeout")):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(side_effect=Exception("timeout"))):
             with pytest.raises(ValueError, match="Could not fetch the page"):
                 await subscribe_scrape(
                     user=user, url="https://example.com",

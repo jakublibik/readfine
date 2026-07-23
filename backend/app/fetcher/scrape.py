@@ -21,6 +21,7 @@ from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_page,
+    fetch_url_with_ssrf_check,
     redact_url,
 )
 from app.fetcher.redirects import adopt_permanent_url
@@ -58,6 +59,18 @@ def _normalize_url(url: str | None) -> str | None:
         return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
     except Exception:
         return None
+
+
+async def fetch_page_html(url: str, timeout: int = 30) -> str:
+    """SSRF-safe fetch of a page's raw HTML for scrape setup / preview / validation.
+
+    Runs off the event loop and uses the scrape fetcher's own headers (READFINE_UA),
+    so a page tested during selector setup fetches identically when actually scraped.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None, fetch_url_with_ssrf_check, url, None, timeout, _HEADERS
+    )
 
 
 def _extract_title(elem, a_tag, fallback_url: str) -> str:

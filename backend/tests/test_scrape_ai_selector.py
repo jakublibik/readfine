@@ -177,8 +177,8 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_fetch_url_when_no_html_sample(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.fetch_url_with_ssrf_check",
-                  return_value=_SAMPLE_HTML),
+            patch("app.routers.web.settings.fetch_page_html",
+                  new=AsyncMock(return_value=_SAMPLE_HTML)),
             patch("app.routers.web.settings.extract_article_sample",
                   return_value=_SAMPLE_HTML),
             patch("app.routers.web.settings.get_ai_client",
@@ -191,8 +191,8 @@ class TestScrapeAiSelectorEndpoint:
         assert "a.post" in resp.text
 
     def test_fetch_failure_returns_error(self, ai_client, mock_db):
-        with patch("app.routers.web.settings.fetch_url_with_ssrf_check",
-                   side_effect=Exception("connection refused")):
+        with patch("app.routers.web.settings.fetch_page_html",
+                   new=AsyncMock(side_effect=Exception("connection refused"))):
             resp = ai_client.post(self.URL, data={"url": "https://example.com"})
         assert resp.status_code == 200
         assert "Could not fetch page" in resp.text

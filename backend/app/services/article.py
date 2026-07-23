@@ -534,16 +534,11 @@ def _apply_star_side_effects(state, article, *, starred: bool, extract_readable:
             state.ever_starred = False
 
 
-async def toggle_article_state(
-    user: User,
-    article_id: int,
-    field: str,
-    db: AsyncSession,
-) -> ArticleResponse | None:
-    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
-    assert field in {"is_read", "is_starred", "is_archived"}
-    current_value = {field: True}  # payload with inverted value – determined after load
-    # Load current state first via the same single-query path as update_article_state
+async def _load_article_for_write(user: User, article_id: int, db: AsyncSession):
+    """Load an article the user may act on, plus their state (created if missing) and
+    the display fields. Returns ``(article, state, feed_title, custom_title,
+    extract_readable)`` or ``None`` when inaccessible. Shared by the toggle and
+    update paths so both use one query and one access check."""
     stmt = add_article_access_joins(
         select(
             Article,
@@ -560,25 +555,15 @@ async def toggle_article_state(
     row = (await db.execute(stmt)).first()
     if not row:
         return None
-
     article, state, feed_title, custom_title, extract_readable = row
-
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
+    return article, state, feed_title, custom_title, extract_readable
 
-    new_value = not getattr(state, field, False)
-    setattr(state, field, new_value)
 
-    if field == "is_read":
-        state.read_at = datetime.now(timezone.utc) if new_value else None
-
-    if field == "is_starred":
-        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
-
-    await db.commit()
-    await db.refresh(state)
-
+def _state_response(article, state, feed_title, custom_title, labels) -> ArticleResponse:
+    """Build the ArticleResponse returned by the state-write endpoints."""
     return ArticleResponse(
         id=article.id,
         feed_id=article.feed_id,
@@ -599,8 +584,36 @@ async def toggle_article_state(
         is_starred=state.is_starred,
         is_archived=state.is_archived,
         read_at=state.read_at,
-        labels=await _fetch_labels(article_id, user.id, db),
+        labels=labels,
     )
+
+
+async def toggle_article_state(
+    user: User,
+    article_id: int,
+    field: str,
+    db: AsyncSession,
+) -> ArticleResponse | None:
+    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
+    assert field in {"is_read", "is_starred", "is_archived"}
+    loaded = await _load_article_for_write(user, article_id, db)
+    if loaded is None:
+        return None
+    article, state, feed_title, custom_title, extract_readable = loaded
+
+    new_value = not getattr(state, field, False)
+    setattr(state, field, new_value)
+
+    if field == "is_read":
+        state.read_at = datetime.now(timezone.utc) if new_value else None
+
+    if field == "is_starred":
+        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
+
+    await db.commit()
+    await db.refresh(state)
+    labels = await _fetch_labels(article_id, user.id, db)
+    return _state_response(article, state, feed_title, custom_title, labels)
 
 
 async def update_article_state(
@@ -609,33 +622,12 @@ async def update_article_state(
     payload: ArticleStateUpdate,
     db: AsyncSession,
 ) -> ArticleResponse | None:
-    """Toggle is_read / is_starred / is_archived. Creates UserArticleState if needed.
-
-    Single round-trip: loads Article + Feed title + UserFeed + state in one query,
-    applies changes, commits, and builds the response from already-loaded data.
-    """
-    stmt = add_article_access_joins(
-        select(
-            Article,
-            UserArticleState,
-            Feed.title.label("feed_title"),
-            UserFeed.custom_title.label("custom_title"),
-            UserFeed.extract_readable,
-        ).outerjoin(Feed, Feed.id == Article.feed_id),
-        user.id,
-    ).where(
-        Article.id == article_id,
-        article_access_predicate(),
-    )
-    row = (await db.execute(stmt)).first()
-    if not row:
+    """Set is_read / is_starred / is_archived from a payload. Creates UserArticleState
+    if needed. One round-trip: load, apply, commit, respond from loaded data."""
+    loaded = await _load_article_for_write(user, article_id, db)
+    if loaded is None:
         return None
-
-    article, state, feed_title, custom_title, extract_readable = row
-
-    if state is None:
-        state = UserArticleState(user_id=user.id, article_id=article_id)
-        db.add(state)
+    article, state, feed_title, custom_title, extract_readable = loaded
 
     if payload.is_read is not None:
         state.is_read = payload.is_read
@@ -654,26 +646,5 @@ async def update_article_state(
 
     await db.commit()
     await db.refresh(state)
-
-    return ArticleResponse(
-        id=article.id,
-        feed_id=article.feed_id,
-        feed_title=custom_title or feed_title,
-        url=article.url,
-        title=article.title,
-        author=article.author,
-        content=article.content,
-        content_source=article.content_source,
-        readable_content=article.readable_content,
-        readable_status=article.readable_status,
-        readable_error=article.readable_error,
-        published_at=article.published_at,
-        estimated_read_min=article.estimated_read_min,
-        word_count=article.word_count,
-        image_url=article.image_url,
-        is_read=state.is_read,
-        is_starred=state.is_starred,
-        is_archived=state.is_archived,
-        read_at=state.read_at,
-        labels=await _fetch_labels(article_id, user.id, db),
-    )
+    labels = await _fetch_labels(article_id, user.id, db)
+    return _state_response(article, state, feed_title, custom_title, labels)
