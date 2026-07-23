@@ -1594,8 +1594,9 @@ async def htmx_ai_summary_trigger(
     if not article:
         return HTMLResponse("", status_code=404)
 
-    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS, run_summary_on_demand
-    content_text = _normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
+    from app.services.ai_jobs import normalize_content
+    from app.services.ai_summary_service import _MIN_CONTENT_CHARS, run_summary_on_demand
+    content_text = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
     if len(content_text) < _MIN_CONTENT_CHARS:
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">'
@@ -1675,8 +1676,9 @@ async def htmx_ai_context_trigger(
     if not article:
         return HTMLResponse("", status_code=404)
 
-    from app.services.ai_summary_service import _normalize_content, _MIN_CONTENT_CHARS
-    content_text = _normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
+    from app.services.ai_jobs import normalize_content
+    from app.services.ai_summary_service import _MIN_CONTENT_CHARS
+    content_text = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
     if len(content_text) < _MIN_CONTENT_CHARS:
         return HTMLResponse(
             f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">'
@@ -1838,8 +1840,8 @@ async def htmx_general_ai_chat(
         art_id = int(article_id)
         article = await _get_article_access(user, art_id, db)
         if article:
-            from app.services.ai_summary_service import _normalize_content
-            article_ctx = _normalize_content(
+            from app.services.ai_jobs import normalize_content
+            article_ctx = normalize_content(
                 article.title,
                 article.readable_content or article.content,
                 settings.ai_content_limit,
@@ -1965,8 +1967,8 @@ async def htmx_ai_chat(
 
     article_ctx = None
     if use_article:
-        from app.services.ai_summary_service import _normalize_content
-        article_ctx = _normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
+        from app.services.ai_jobs import normalize_content
+        article_ctx = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
 
     from app.services.ai_service import get_ai_client, chat_with_article
     client, provider, model = await get_ai_client(user.id, tier, db)

@@ -563,7 +563,6 @@ async def settings_scrape_ai_selector(
     _ai: None = Depends(require_ai_enabled),
 ):
     import json as _json
-    from datetime import datetime, timezone
     from app.models.article import AiUsageLog
 
     form = await request.form()
@@ -651,7 +650,6 @@ async def settings_scrape_ai_selector(
     updated_history_json = _json.dumps(updated_history)
     prompt_text = build_selector_prompt(url, html_sample, history)
 
-    from fastapi.responses import HTMLResponse as _HR
     response = templates.TemplateResponse(request, "settings/partials/scrape_ai_result.html", {
         "selector": selector,
         "updated_history_json": updated_history_json,

@@ -1,41 +1,19 @@
 """AI scoring pipeline: enqueue and process article scoring jobs."""
-import html as html_module
 import logging
-import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, ArticleAiJob, UserArticleState
-from app.models.settings import AppSettings
 from app.models.user import UserSettings
+from app.services.ai_jobs import ai_enabled_globally, apply_job_failure, normalize_content
 
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 30
-_MAX_RETRIES = 3
-_BACKOFF_MINUTES = [5, 30, 120]
 _CONTENT_MAX_CHARS = 2000
-
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _normalize_content(title: str, content: str | None) -> str:
-    """Strip HTML, collapse whitespace, prepend title, truncate to _CONTENT_MAX_CHARS."""
-    import nh3
-    raw = content or ""
-    plain = nh3.clean(raw, tags=set())
-    plain = html_module.unescape(plain)
-    plain = _WHITESPACE_RE.sub(" ", plain).strip()
-    combined = f"{title}\n\n{plain}" if plain else title
-    return combined[:_CONTENT_MAX_CHARS]
-
-
-async def _ai_enabled_globally(db: AsyncSession) -> bool:
-    row = await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1))
-    return bool(row)
 
 
 def scoring_eligible(s: "UserSettings | None", uf: "UserFeed | None") -> bool:
@@ -91,7 +69,7 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
     - no AI client configured for fast slot
     - job already exists for this article/user/operation
     """
-    if not await _ai_enabled_globally(db):
+    if not await ai_enabled_globally(db):
         return False
 
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
@@ -145,9 +123,8 @@ async def _execute_scoring_job(
         job.processed_at = now
         return
 
-    content_text = _normalize_content(
-        article.title,
-        article.readable_content or article.content,
+    content_text = normalize_content(
+        article.title, article.readable_content or article.content, _CONTENT_MAX_CHARS
     )
 
     from app.services.ai_service import get_ai_client, score_article
@@ -183,27 +160,7 @@ async def _execute_scoring_job(
             s.last_ai_error_at = None
 
     except Exception as exc:
-        msg = str(exc)[:300]
-        http_status = _extract_http_status(exc)
-        retries = job.retry_count + 1
-        job.retry_count = retries
-
-        if http_status is not None and 400 <= http_status < 500 and http_status != 429:
-            job.status = "failed"
-            job.processed_at = now
-        elif retries >= _MAX_RETRIES:
-            job.status = "failed"
-            job.processed_at = now
-        else:
-            delay = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
-            job.next_retry_at = now + timedelta(minutes=delay)
-
-        job.error_message = msg
-        logger.warning("AI scoring failed job=%d article=%d user=%d: %s", job.id, job.article_id, job.user_id, msg)
-
-        if s:
-            s.last_ai_error = f"Scoring error: {msg}"
-            s.last_ai_error_at = now
+        apply_job_failure(job, exc, now, operation="scoring", settings=s)
 
 
 async def process_pending_scoring(db: AsyncSession) -> int:
@@ -211,7 +168,7 @@ async def process_pending_scoring(db: AsyncSession) -> int:
     Process a batch of pending scoring jobs, then run AI filters + summary inline.
     Returns number of jobs processed.
     """
-    if not await _ai_enabled_globally(db):
+    if not await ai_enabled_globally(db):
         return 0
 
     now = datetime.now(timezone.utc)
@@ -286,14 +243,3 @@ async def process_pending_scoring(db: AsyncSession) -> int:
     await db.commit()
     logger.info("ai_scoring: processed %d jobs", processed)
     return processed
-
-
-def _extract_http_status(exc: Exception) -> int | None:
-    """Best-effort extraction of HTTP status code from provider exceptions."""
-    for attr in ("status_code", "http_status", "code"):
-        val = getattr(exc, attr, None)
-        if isinstance(val, int):
-            return val
-    msg = str(exc)
-    m = re.search(r"\b([45]\d{2})\b", msg)
-    return int(m.group(1)) if m else None

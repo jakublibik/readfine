@@ -2,11 +2,12 @@
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article, UserArticleState
+from app.models.article import Article
 from app.models.feed import UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
+from app.services.article import add_article_access_joins, article_access_predicate
 
 
 class LabelAlreadyExistsError(Exception):
@@ -79,17 +80,9 @@ async def assign_label(
         return False
 
     article_access = await db.execute(
-        select(Article.id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
+        add_article_access_joins(select(Article.id), user.id).where(
             Article.id == article_id,
-            UserFeed.id.is_not(None)
-            | UserArticleState.is_starred.is_(True)
-            | UserArticleState.is_archived.is_(True),
+            article_access_predicate(),
         )
     )
     if not article_access.scalar_one_or_none():

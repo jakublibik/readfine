@@ -39,6 +39,44 @@ async def _get_user_by_id(user_id: int, db: AsyncSession) -> User | None:
     return user
 
 
+async def _auth_by_bearer(
+    credentials: HTTPAuthorizationCredentials | None, db: AsyncSession
+) -> User | None:
+    """Resolve a user from a Bearer credential: JWT first, then a hashed API token.
+
+    Returns None when there is no credential or it doesn't resolve to an active
+    user. Shared by both the web (session-or-bearer) and API (bearer-only) deps so
+    the token-verification path exists in exactly one place.
+    """
+    if not credentials:
+        return None
+    token = credentials.credentials
+
+    # Try JWT first
+    payload = decode_access_token(token)
+    if payload:
+        user = await _get_user_by_id(int(payload["sub"]), db)
+        if user and payload.get("tv", 0) == user.session_token_version:
+            return user
+
+    # Then API token (hashed lookup)
+    token_hash = hash_token(token)
+    result = await db.execute(
+        select(ApiToken).where(
+            ApiToken.token_hash == token_hash,
+            ApiToken.revoked_at == None,
+        )
+    )
+    api_token = result.scalar_one_or_none()
+    if api_token:
+        user = await _get_user_by_id(api_token.user_id, db)
+        if user:
+            api_token.last_used_at = datetime.now(timezone.utc)
+            await db.commit()
+            return user
+    return None
+
+
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
@@ -53,31 +91,9 @@ async def get_current_user(
             return user
 
     # 2. Try Bearer token (API)
-    if credentials:
-        token = credentials.credentials
-
-        # Try JWT first
-        payload = decode_access_token(token)
-        if payload:
-            user = await _get_user_by_id(int(payload["sub"]), db)
-            if user and payload.get("tv", 0) == user.session_token_version:
-                return user
-
-        # Try API token (hashed lookup)
-        token_hash = hash_token(token)
-        result = await db.execute(
-            select(ApiToken).where(
-                ApiToken.token_hash == token_hash,
-                ApiToken.revoked_at == None,
-            )
-        )
-        api_token = result.scalar_one_or_none()
-        if api_token:
-            user = await _get_user_by_id(api_token.user_id, db)
-            if user:
-                api_token.last_used_at = datetime.now(timezone.utc)
-                await db.commit()
-                return user
+    user = await _auth_by_bearer(credentials, db)
+    if user is not None:
+        return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
@@ -87,29 +103,9 @@ async def get_api_user(
     db: AsyncSession = Depends(get_db),
 ) -> User:
     """Bearer-only auth for API endpoints. Session cookies are not accepted."""
-    if credentials:
-        token = credentials.credentials
-
-        payload = decode_access_token(token)
-        if payload:
-            user = await _get_user_by_id(int(payload["sub"]), db)
-            if user and payload.get("tv", 0) == user.session_token_version:
-                return user
-
-        token_hash = hash_token(token)
-        result = await db.execute(
-            select(ApiToken).where(
-                ApiToken.token_hash == token_hash,
-                ApiToken.revoked_at == None,
-            )
-        )
-        api_token = result.scalar_one_or_none()
-        if api_token:
-            user = await _get_user_by_id(api_token.user_id, db)
-            if user:
-                api_token.last_used_at = datetime.now(timezone.utc)
-                await db.commit()
-                return user
+    user = await _auth_by_bearer(credentials, db)
+    if user is not None:
+        return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

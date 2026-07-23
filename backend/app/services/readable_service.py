@@ -16,14 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
+from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.http_client import READFINE_UA
 
 logger = logging.getLogger(__name__)
 
-# Extraction settings
+# Extraction settings. MAX_RETRIES / BACKOFF_MINUTES are shared with the AI job
+# services (app.services.ai_jobs) so the retry cadence stays consistent; readable's
+# own failure handling (below) applies them to Article rows, not ArticleAiJob.
 _TIMEOUT = 15  # seconds per HTTP request
-_MAX_RETRIES = 3
-_BACKOFF_MINUTES = [5, 30, 120]  # retry delays after 1st, 2nd, 3rd failure
 _BATCH_SIZE = 20  # articles processed per scheduler run
 _MAX_REDIRECTS = 5  # maximum followed redirects per request
 
@@ -335,12 +336,12 @@ def apply_readable_result(
     else:
         retries = (article.readable_retries or 0) + 1
         article.readable_retries = retries
-        if retries >= _MAX_RETRIES:
+        if retries >= MAX_RETRIES:
             article.readable_status = "failed"
             article.readable_failed_at = datetime.now(timezone.utc)
             article.readable_next_retry_at = None
         else:
-            delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            delay_min = BACKOFF_MINUTES[min(retries - 1, len(BACKOFF_MINUTES) - 1)]
             article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
     return is_403
 

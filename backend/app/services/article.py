@@ -18,6 +18,44 @@ from app.utils.datetime_format import current_viewer_tz, format_local
 logger = logging.getLogger(__name__)
 
 
+# ── article access (tenant isolation — single source of truth) ────────────────
+
+def add_article_access_joins(stmt, user_id: int):
+    """Outer-join UserFeed and UserArticleState for the access predicate.
+
+    Both joins are user-scoped in their ON clause, so ``article_access_predicate``
+    can decide visibility purely from whether a row matched. Pair the two: every
+    article read/write path uses this + ``article_access_predicate`` so the access
+    rule lives in exactly one place.
+    """
+    return (
+        stmt
+        .outerjoin(
+            UserFeed,
+            (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id),
+        )
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
+        )
+    )
+
+
+def article_access_predicate():
+    """WHERE clause for "this user may act on this article".
+
+    True when the user is subscribed to the article's feed, OR has starred/archived
+    it (access survives unsubscribe / feed deletion). Requires the query to have
+    added ``add_article_access_joins(user_id)`` first — the user scoping lives in
+    those joins' ON clauses, so this predicate only checks whether a row matched.
+    """
+    return (
+        UserFeed.id.is_not(None)
+        | UserArticleState.is_starred.is_(True)
+        | UserArticleState.is_archived.is_(True)
+    )
+
+
 def _parse_label_filter(label_filter: str | None) -> tuple[bool, list[int]]:
     """Parse the label-filter JSON (same shape as the scope selector).
 
@@ -311,26 +349,17 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     Access is granted if the user subscribes to the feed, OR has a starred/archived
     state for the article (remains accessible after unsubscribing).
     """
-    stmt = (
+    stmt = add_article_access_joins(
         select(
             Article,
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            UserFeed.id.is_not(None)
-            | UserArticleState.is_starred.is_(True)
-            | UserArticleState.is_archived.is_(True),
-        )
+        ).outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(
+        Article.id == article_id,
+        article_access_predicate(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
@@ -484,17 +513,9 @@ async def filter_accessible_article_ids(
     if not article_ids:
         return []
     rows = await db.execute(
-        select(Article.id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
-        )
-        .where(
+        add_article_access_joins(select(Article.id), user_id).where(
             Article.id.in_(article_ids),
-            UserFeed.id.is_not(None)
-            | UserArticleState.is_starred.is_(True)
-            | UserArticleState.is_archived.is_(True),
+            article_access_predicate(),
         )
     )
     return [r[0] for r in rows.all()]
@@ -551,27 +572,18 @@ async def toggle_article_state(
     assert field in {"is_read", "is_starred", "is_archived"}
     current_value = {field: True}  # payload with inverted value – determined after load
     # Load current state first via the same single-query path as update_article_state
-    stmt = (
+    stmt = add_article_access_joins(
         select(
             Article,
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
             UserFeed.extract_readable,
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
+        ).outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(
+        Article.id == article_id,
+        article_access_predicate(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
@@ -630,27 +642,18 @@ async def update_article_state(
     Single round-trip: loads Article + Feed title + UserFeed + state in one query,
     applies changes, commits, and builds the response from already-loaded data.
     """
-    stmt = (
+    stmt = add_article_access_joins(
         select(
             Article,
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
             UserFeed.extract_readable,
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
+        ).outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(
+        Article.id == article_id,
+        article_access_predicate(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
