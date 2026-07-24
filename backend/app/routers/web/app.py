@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -25,6 +26,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
+from app.services.ai_jobs import ai_enabled_globally, normalize_content
 from app.services.article import filter_accessible_article_ids, get_article, list_articles, mark_articles_read_batch, mark_scope_read, toggle_article_state, update_article_state
 from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
@@ -114,6 +116,19 @@ async def _summary_after_star_bg(article_id: int, user_id: int) -> None:
         logger.info("star summary: article=%d user=%d processed", article_id, user_id)
 
 
+async def _ai_availability(settings: UserSettings | None, db: AsyncSession) -> SimpleNamespace:
+    """AI feature gates for the current user: the admin kill-switch AND a configured
+    quality model (``quality``), plus the chat and catch-me-up sub-gates."""
+    ai_on = bool(await ai_enabled_globally(db))
+    quality = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
+    return SimpleNamespace(
+        ai_on=ai_on,
+        quality=quality,
+        chat=bool(quality and getattr(settings, "ai_chat_enabled", False)),
+        catchup=_catchup_available(ai_on, settings),
+    )
+
+
 @router.get("/app", response_class=HTMLResponse)
 async def main_app(
     request: Request,
@@ -132,11 +147,9 @@ async def main_app(
     reading_font_size = settings.reading_font_size if settings else "md"
     reading_font_family = settings.reading_font_family if settings else "sans"
     label_display = settings.label_display if settings else "indicator"
-    from app.services.ai_jobs import ai_enabled_globally
-    ai_on = await ai_enabled_globally(db)
-    ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
-    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
-    catchup_avail = _catchup_available(bool(ai_on), settings)
+    ai = await _ai_availability(settings, db)
+    chat_available = ai.chat
+    catchup_avail = ai.catchup
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -267,11 +280,9 @@ async def htmx_sidebar(
     pinned = request.query_params.get("pinned", "true").lower() != "false"
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    from app.services.ai_jobs import ai_enabled_globally
-    ai_on = await ai_enabled_globally(db)
-    ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
-    chat_available = bool(ai_avail and getattr(settings, 'ai_chat_enabled', False))
-    catchup_avail = _catchup_available(bool(ai_on), settings)
+    ai = await _ai_availability(settings, db)
+    chat_available = ai.chat
+    catchup_avail = ai.catchup
 
     return templates.TemplateResponse(request, "app/partials/sidebar.html", {
         "user": user,
@@ -296,15 +307,6 @@ async def htmx_sidebar(
         "catchup_available": catchup_avail,
         "mark_read_auto_advance": bool(settings and settings.mark_read_auto_advance),
     })
-
-
-@router.post("/htmx/sidebar/pin", response_class=HTMLResponse)
-async def htmx_sidebar_pin(
-    request: Request,
-    user: User = Depends(get_current_user),
-):
-    # Pin state is now managed client-side via localStorage; endpoint kept for compatibility.
-    return HTMLResponse("", status_code=204)
 
 
 @router.post("/htmx/articles/set-read-batch")
@@ -547,9 +549,7 @@ async def htmx_search_modal(
 
 
 def _badge_html(unread: int, total: int) -> str:
-    if unread > 0:
-        return f'<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{unread}</span>'
-    return f'<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{total}</span>'
+    return _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
 
 
 async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: bool, db: AsyncSession) -> str:
@@ -589,6 +589,61 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
     )) or 0
     oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
     return oob
+
+
+def _is_mobile(request: Request) -> bool:
+    """Coarse mobile detection from the User-Agent, used only to pick the mobile
+    vs web list density (a wrong guess just flips density, never breaks anything)."""
+    ua = request.headers.get("user-agent", "").lower()
+    return any(x in ua for x in ("mobile", "android", "iphone", "ipad"))
+
+
+def _build_filter_params(
+    *,
+    feed_id: int | None,
+    folder_id: int | None,
+    scope_include: str | None,
+    label_id: int | None,
+    unread_only: bool,
+    starred_only: bool,
+    archived_only: bool,
+    labeled_only: bool,
+    q: str | None,
+    is_search: bool,
+    sort_order: str,
+    read_status: str | None,
+    label_filter: str | None,
+) -> dict:
+    """Active-filter dict carried into infinite-scroll pagination. Shared by the
+    first-page and load-more endpoints; the caller passes the unread flag it uses
+    (effective_unread_only on the first page, the raw unread_only on load-more)."""
+    params: dict = {}
+    if feed_id is not None:
+        params["feed_id"] = feed_id
+    if folder_id is not None:
+        params["folder_id"] = folder_id
+    if scope_include:
+        params["scope_include"] = scope_include
+    if label_id is not None:
+        params["label_id"] = label_id
+    if unread_only:
+        params["unread_only"] = "true"
+    if starred_only:
+        params["starred_only"] = "true"
+    if archived_only:
+        params["archived_only"] = "true"
+    if labeled_only:
+        params["labeled_only"] = "true"
+    if q and q.strip():
+        params["q"] = q.strip()
+    if is_search:
+        # Carry the search/filter knobs into pagination, even with an empty query.
+        params["sort"] = sort_order
+        if read_status:
+            params["read_status"] = read_status
+        if label_filter:
+            params["label_filter"] = label_filter
+    return params
 
 
 def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: int) -> str:
@@ -645,8 +700,7 @@ async def htmx_article_list(
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     label_display = settings.label_display if settings else "indicator"
-    ua = request.headers.get("user-agent", "")
-    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
+    is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
@@ -729,32 +783,13 @@ async def htmx_article_list(
         )).scalar() or 0
         title_bar_count_type = "starred"
 
-    filter_params: dict = {}
-    if feed_id is not None:
-        filter_params["feed_id"] = feed_id
-    if folder_id is not None:
-        filter_params["folder_id"] = folder_id
-    if scope_include:
-        filter_params["scope_include"] = scope_include
-    if label_id is not None:
-        filter_params["label_id"] = label_id
-    if effective_unread_only:
-        filter_params["unread_only"] = "true"
-    if starred_only:
-        filter_params["starred_only"] = "true"
-    if archived_only:
-        filter_params["archived_only"] = "true"
-    if labeled_only:
-        filter_params["labeled_only"] = "true"
-    if q and q.strip():
-        filter_params["q"] = q.strip()
-    if is_search:
-        # Carry the search/filter knobs into pagination, even with an empty query.
-        filter_params["sort"] = sort_order
-        if read_status:
-            filter_params["read_status"] = read_status
-        if label_filter:
-            filter_params["label_filter"] = label_filter
+    filter_params = _build_filter_params(
+        feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+        label_id=label_id, unread_only=effective_unread_only,
+        starred_only=starred_only, archived_only=archived_only, labeled_only=labeled_only,
+        q=q, is_search=is_search, sort_order=sort_order,
+        read_status=read_status, label_filter=label_filter,
+    )
 
     extra_headers: dict[str, str] = {}
     if feed_id is not None:
@@ -838,8 +873,7 @@ async def htmx_article_list_more(
     if is_search:
         sort_order = sort or "relevance"
     articles_per_page = settings.articles_per_page if settings else 50
-    ua = request.headers.get("user-agent", "")
-    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
+    is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
     label_display = settings.label_display if settings else "indicator"
 
@@ -865,31 +899,13 @@ async def htmx_article_list_more(
     )
 
     has_more = len(articles) >= articles_per_page
-    filter_params: dict = {}
-    if feed_id is not None:
-        filter_params["feed_id"] = feed_id
-    if folder_id is not None:
-        filter_params["folder_id"] = folder_id
-    if scope_include:
-        filter_params["scope_include"] = scope_include
-    if label_id is not None:
-        filter_params["label_id"] = label_id
-    if unread_only:
-        filter_params["unread_only"] = "true"
-    if starred_only:
-        filter_params["starred_only"] = "true"
-    if archived_only:
-        filter_params["archived_only"] = "true"
-    if labeled_only:
-        filter_params["labeled_only"] = "true"
-    if q and q.strip():
-        filter_params["q"] = q.strip()
-    if is_search:
-        filter_params["sort"] = sort_order
-        if read_status:
-            filter_params["read_status"] = read_status
-        if label_filter:
-            filter_params["label_filter"] = label_filter
+    filter_params = _build_filter_params(
+        feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+        label_id=label_id, unread_only=unread_only,
+        starred_only=starred_only, archived_only=archived_only, labeled_only=labeled_only,
+        q=q, is_search=is_search, sort_order=sort_order,
+        read_status=read_status, label_filter=label_filter,
+    )
 
     extra_ctx = {}
     if settings and getattr(settings, 'ai_chat_enabled', False):
@@ -960,9 +976,8 @@ async def htmx_article_detail(
     )
     settings = settings_result.scalar_one_or_none()
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
-    from app.services.ai_jobs import ai_enabled_globally
-    ai_on = await ai_enabled_globally(db)
-    ai_avail = bool(ai_on and settings and settings.ai_quality_provider and settings.ai_quality_model)
+    ai = await _ai_availability(settings, db)
+    ai_avail = ai.quality
     summary_pending = False
     if ai_avail and not article.ai_summary:
         summary_pending = bool(await db.scalar(
@@ -973,7 +988,7 @@ async def htmx_article_detail(
                 ArticleAiJob.status == "pending",
             )
         ))
-    chat_available = bool(ai_avail and settings and getattr(settings, 'ai_chat_enabled', False))
+    chat_available = ai.chat
     chat_messages: list[dict] = []
     if chat_available:
         existing_chat = await db.scalar(
@@ -1008,17 +1023,6 @@ async def htmx_readable_poll(
     return _content_with_readtime_oob(request, article)
 
 
-async def _get_row_context(user, request: Request, db) -> dict:
-    """Return density and label_display for article row rendering."""
-    s = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
-    ua = request.headers.get("user-agent", "")
-    is_mobile = any(x in ua.lower() for x in ("mobile", "android", "iphone", "ipad"))
-    density = ((s.list_density_mobile if is_mobile else s.list_density_web) if s else "comfortable")
-    label_display = s.label_display if s else "indicator"
-    show_ai_score = s.ai_score_show_in_list if s else False
-    return {"density": density, "label_display": label_display, "show_ai_score": show_ai_score}
-
-
 def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     """Return article_content.html + OOB span to update the reading-time metadata."""
     content_html = templates.env.get_template("app/partials/article_content.html").render(
@@ -1037,46 +1041,40 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     return HTMLResponse(content_html + oob + date_oob)
 
 
-def _read_response(request: Request, article, density: str, label_display: str, **_) -> HTMLResponse:
-    """Return read button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
-    import json
-    btn_html = templates.env.get_template("app/partials/read_button.html").render(
-        article=article, request=request
-    )
+def _state_button_response(request: Request, article, *, template: str, event: str, payload: dict) -> HTMLResponse:
+    """Render a state button/icon partial + fire an HX-Trigger event (no OOB row
+    swap, to avoid flicker). Shared by the read / star / archive toggles."""
+    btn_html = templates.env.get_template(template).render(article=article, request=request)
     response = HTMLResponse(btn_html)
-    response.headers["HX-Trigger"] = json.dumps({
-        "sidebarRefresh": True,
-        "articleReadChanged": {"id": article.id, "isRead": article.is_read},
-    })
+    response.headers["HX-Trigger"] = json.dumps({"sidebarRefresh": True, event: payload})
     return response
+
+
+def _read_response(request: Request, article) -> HTMLResponse:
+    return _state_button_response(
+        request, article,
+        template="app/partials/read_button.html",
+        event="articleReadChanged",
+        payload={"id": article.id, "isRead": article.is_read},
+    )
 
 
 def _star_response(request: Request, article) -> HTMLResponse:
-    """Return star icon HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
-    import json
-    btn_html = templates.env.get_template("app/partials/star_icon.html").render(
-        article=article, request=request
+    return _state_button_response(
+        request, article,
+        template="app/partials/star_icon.html",
+        event="articleStarChanged",
+        payload={"id": article.id, "isStarred": article.is_starred},
     )
-    response = HTMLResponse(btn_html)
-    response.headers["HX-Trigger"] = json.dumps({
-        "sidebarRefresh": True,
-        "articleStarChanged": {"id": article.id, "isStarred": article.is_starred},
-    })
-    return response
 
 
 def _archive_response(request: Request, article) -> HTMLResponse:
-    """Return archive button HTML + JS class toggle via HX-Trigger (no OOB row swap to avoid flicker)."""
-    import json
-    btn_html = templates.env.get_template("app/partials/archive_button.html").render(
-        article=article, request=request
+    return _state_button_response(
+        request, article,
+        template="app/partials/archive_button.html",
+        event="articleArchiveChanged",
+        payload={"id": article.id, "isArchived": article.is_archived},
     )
-    response = HTMLResponse(btn_html)
-    response.headers["HX-Trigger"] = json.dumps({
-        "sidebarRefresh": True,
-        "articleArchiveChanged": {"id": article.id, "isArchived": article.is_archived},
-    })
-    return response
 
 
 @router.post("/htmx/articles/{article_id}/read", response_class=HTMLResponse)
@@ -1089,8 +1087,7 @@ async def htmx_toggle_read(
     article = await toggle_article_state(user, article_id, "is_read", db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    ctx = await _get_row_context(user, request, db)
-    return _read_response(request, article, **ctx)
+    return _read_response(request, article)
 
 
 @router.post("/htmx/articles/{article_id}/set-read", response_class=HTMLResponse)
@@ -1104,8 +1101,7 @@ async def htmx_set_read(
     article = await update_article_state(user, article_id, ArticleStateUpdate(is_read=state), db)
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
-    ctx = await _get_row_context(user, request, db)
-    return _read_response(request, article, **ctx)
+    return _read_response(request, article)
 
 
 @router.post("/htmx/articles/{article_id}/dwell")
@@ -1338,7 +1334,6 @@ async def htmx_extract_readable(
     db: AsyncSession = Depends(get_db),
 ):
     """Extract readable content on demand for a single article."""
-    import asyncio
     from app.services.readable_service import extract_readable
     from app.utils.crypto import decrypt
 
@@ -1392,13 +1387,6 @@ async def htmx_extract_readable(
     if article_resp is None:
         return HTMLResponse("")
     return _content_with_readtime_oob(request, article_resp)
-
-
-def _ai_available(settings: UserSettings | None) -> bool:
-    if settings is None:
-        return False
-    # TODO: respect settings.ai_enabled as per-user killswitch once multi-user demand is confirmed
-    return bool(settings.ai_quality_provider and settings.ai_quality_model)
 
 
 async def _get_article_access(user: User, article_id: int, db: AsyncSession):
@@ -1577,7 +1565,6 @@ async def _require_quality_ai_for_article(
     Returns an error ``HTMLResponse`` (rendered into ``target_id``) on any failed
     check, or ``(article, settings, content_text)`` on success.
     """
-    from app.services.ai_jobs import ai_enabled_globally, normalize_content
     from app.services.ai_summary_service import _MIN_CONTENT_CHARS
 
     def _note(text: str) -> HTMLResponse:
@@ -1620,10 +1607,9 @@ async def htmx_ai_summary_trigger(
     article, settings, content_text = guard
 
     from app.services.ai_summary_service import run_summary_on_demand
-    import html as _html
     summary, error = await run_summary_on_demand(article, user.id, db)
     if summary is None:
-        msg = _html.escape(error) if error else "Summary unavailable."
+        msg = html_module.escape(error) if error else "Summary unavailable."
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
@@ -1749,6 +1735,19 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
+def _ai_chat_error_message(exc: Exception) -> str:
+    """Map an AI-provider exception to a user-facing chat error line."""
+    exc_str = str(exc)
+    status = getattr(exc, "status_code", None)
+    if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
+        return "AI provider is overloaded — please try again in a moment."
+    if status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
+        return "Rate limit reached — please wait a moment and try again."
+    if status and status >= 500:
+        return "AI provider returned a server error — please try again."
+    return "Chat failed — please try again."
+
+
 def _render_general_chat_area(messages: list[dict], error: str = "") -> str:
     history_json = html_module.escape(json.dumps(messages, ensure_ascii=False))
     extra_inputs = (
@@ -1792,7 +1791,6 @@ async def htmx_general_ai_chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.ai_jobs import ai_enabled_globally
     ai_on = await ai_enabled_globally(db)
     if not ai_on:
         return HTMLResponse(
@@ -1836,7 +1834,6 @@ async def htmx_general_ai_chat(
         art_id = int(article_id)
         article = await _get_article_access(user, art_id, db)
         if article:
-            from app.services.ai_jobs import normalize_content
             article_ctx = normalize_content(
                 article.title,
                 article.readable_content or article.content,
@@ -1856,18 +1853,8 @@ async def htmx_general_ai_chat(
     try:
         response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
     except Exception as exc:
-        exc_str = str(exc)
-        status = getattr(exc, "status_code", None)
-        if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
-            err_msg = "AI provider is overloaded — please try again in a moment."
-        elif status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
-            err_msg = "Rate limit reached — please wait a moment and try again."
-        elif status and status >= 500:
-            err_msg = "AI provider returned a server error — please try again."
-        else:
-            err_msg = "Chat failed — please try again."
         return HTMLResponse(
-            _render_general_chat_area(current_messages[:-1], error=err_msg)
+            _render_general_chat_area(current_messages[:-1], error=_ai_chat_error_message(exc))
         )
 
     current_messages.append({"role": "assistant", "content": response_text})
@@ -1918,7 +1905,6 @@ async def htmx_ai_chat(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.services.ai_jobs import ai_enabled_globally
     ai_on = await ai_enabled_globally(db)
     if not ai_on:
         return HTMLResponse(
@@ -1963,7 +1949,6 @@ async def htmx_ai_chat(
 
     article_ctx = None
     if use_article:
-        from app.services.ai_jobs import normalize_content
         article_ctx = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
 
     from app.services.ai_service import get_ai_client, chat_with_article
@@ -1979,19 +1964,9 @@ async def htmx_ai_chat(
     try:
         response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
     except Exception as exc:
-        exc_str = str(exc)
-        status = getattr(exc, "status_code", None)
-        if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
-            err_msg = "AI provider is overloaded — please try again in a moment."
-        elif status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
-            err_msg = "Rate limit reached — please wait a moment and try again."
-        elif status and status >= 500:
-            err_msg = "AI provider returned a server error — please try again."
-        else:
-            err_msg = "Chat failed — please try again."
         return HTMLResponse(_render_chat_area(
             article_id, current_messages[:-1], use_article,
-            error=err_msg, article_title=title,
+            error=_ai_chat_error_message(exc), article_title=title,
         ))
 
     current_messages.append({"role": "assistant", "content": response_text})
@@ -2048,7 +2023,6 @@ async def catchup_page(
 ):
     from app.models.settings import AppSettings as _AS
     from app.models.user import UserCatchupConfig
-    from app.services.ai_jobs import ai_enabled_globally
     from app.services.ai_service import _DEFAULT_CATCHUP_PROMPT
     from app.services.feed import list_user_feeds
 
@@ -2213,7 +2187,6 @@ async def htmx_catchup_generate(
     include_snippet_bool = include_snippet == 'true'
     article_limit = max(1, min(article_limit, 500))
     from app.models.user import CatchupLog
-    from app.services.ai_jobs import ai_enabled_globally
     from app.services.ai_service import catch_me_up, get_ai_client
     from app.services.catchup_service import (
         apply_catchup_limit, build_articles_meta, fetch_catchup_articles,
@@ -2622,7 +2595,6 @@ async def htmx_briefing_modal_save(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    import json as _json
     from app.models.user import UserCatchupConfig
     from app.services.briefing_service import compute_next_send_at
 
@@ -2666,10 +2638,9 @@ async def htmx_briefing_modal_save(
         raw_emails = [e.strip() for e in briefing_recipients.split(",") if e.strip()]
         if len(raw_emails) > 5:
             return _validation_error("Maximum 5 additional recipients.")
-        import re as _re
-        _email_re = _re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+        from app.utils.email_validate import is_valid_email
         for addr in raw_emails:
-            if not _email_re.match(addr):
+            if not is_valid_email(addr):
                 return _validation_error(f"Invalid email address: {html_module.escape(addr)}")
         extra_emails = raw_emails
 
@@ -2682,7 +2653,7 @@ async def htmx_briefing_modal_save(
     config.briefing_interval = briefing_interval
     config.briefing_day = briefing_day
     config.briefing_time = briefing_time
-    config.briefing_recipients = _json.dumps(extra_emails) if extra_emails else None
+    config.briefing_recipients = json.dumps(extra_emails) if extra_emails else None
 
     if briefing_enabled:
         config.briefing_next_send_at = compute_next_send_at(

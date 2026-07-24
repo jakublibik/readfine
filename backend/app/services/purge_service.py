@@ -11,7 +11,6 @@ T1 measures article age (fetched_at); T2 measures uas.created_at (mirrors the pr
 lookback window). Invariant: admin T1 max (120) < T2 (180).
 """
 import logging
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select, update
@@ -23,37 +22,6 @@ from app.models.settings import AppSettings
 logger = logging.getLogger(__name__)
 
 _SNIPPET_CHARS = 300  # profile snippet length kept on trim
-
-
-# ── pure helpers (testable without DB) ───────────────────────────────────────
-
-def ids_exceeding_age(
-    articles: list[tuple[int, datetime]],
-    cutoff: datetime,
-) -> set[int]:
-    """Return IDs of articles whose fetched_at is before cutoff."""
-    return {aid for aid, fetched_at in articles if fetched_at < cutoff}
-
-
-def ids_exceeding_count(
-    articles: list[tuple[int, int | None, datetime | None, datetime]],
-    keep_count: int,
-) -> set[int]:
-    """
-    Return IDs of articles that exceed keep_count per feed.
-    articles: list of (id, feed_id, published_at, fetched_at)
-    Ordering: newest first (published_at if set, else fetched_at).
-    """
-    by_feed: dict[int | None, list[tuple[int, datetime]]] = defaultdict(list)
-    for aid, feed_id, published_at, fetched_at in articles:
-        by_feed[feed_id].append((aid, published_at or fetched_at))
-
-    excess: set[int] = set()
-    for items in by_feed.values():
-        items.sort(key=lambda x: x[1], reverse=True)
-        for aid, _ in items[keep_count:]:
-            excess.add(aid)
-    return excess
 
 
 # ── retention predicates (correlated EXISTS on the current Article) ───────────

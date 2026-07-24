@@ -268,7 +268,6 @@ async def list_articles(
     # Batch-fetch labels for all articles
     labels_by_article: dict[int, list[dict]] = {}
     if rows:
-        from app.models.label import Label
         article_ids = [row[0].id for row in rows]
         labels_rows = (await db.execute(
             select(ArticleLabel.article_id, Label.id, Label.name, Label.color)
@@ -305,7 +304,6 @@ async def list_articles(
 
 
 async def _fetch_labels(article_id: int, user_id: int, db: AsyncSession) -> list[dict]:
-    from app.models.label import Label
     rows = (await db.execute(
         select(ArticleLabel.label_id, Label.name, Label.color)
         .join(Label, Label.id == ArticleLabel.label_id)
@@ -393,8 +391,6 @@ async def mark_scope_read(
     Starred/archived scopes only UPDATE (state row is guaranteed to exist).
     All other scopes upsert to handle articles with and without existing state rows.
     """
-    from app.models.label import ArticleLabel
-
     now = datetime.now(timezone.utc)
 
     if starred_only or archived_only:

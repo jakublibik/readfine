@@ -60,12 +60,13 @@ async def _setup(session) -> tuple[User, Feed]:
 
 
 async def _article(session, feed, *, age_days, content="<p>raw</p>", readable=None,
-                   status="success", trimmed_at=None) -> Article:
+                   status="success", trimmed_at=None, published_days=None) -> Article:
     u = uuid.uuid4().hex
     a = Article(
         feed_id=feed.id, guid=u, guid_hash=u, title="T",
         content=content, readable_content=readable, readable_status=status,
         fetched_at=NOW - timedelta(days=age_days), trimmed_at=trimmed_at,
+        published_at=None if published_days is None else NOW - timedelta(days=published_days),
     )
     session.add(a)
     await session.flush()
@@ -322,6 +323,38 @@ class TestPurgeOrchestration:
         # Return is total deletions; ≥3 from our fixtures (T2 may also drop other
         # pre-existing stubs in a shared dev DB, so don't assert an exact total).
         assert total >= 3
+
+
+class TestCountOrdering:
+    async def test_count_pass_orders_by_published_at(self, pg):
+        """The count pass ranks by coalesce(published_at, fetched_at), so the
+        deleted 'excess' is the oldest by publication date even when fetched_at
+        disagrees. Guards the ORDER BY that the (now removed) ids_exceeding_count
+        helper used to cover in isolation."""
+        from app.services.purge_service import purge_old_articles
+
+        await _set_globals_null(pg)
+        user, feed = await _setup(pg)
+        uf = (await pg.execute(
+            select(UserFeed).where(UserFeed.feed_id == feed.id, UserFeed.user_id == user.id)
+        )).scalar_one()
+        uf.purge_keep_count = 2
+        await pg.flush()
+
+        # fetched_at order (newest→oldest): a, b, c
+        # published_at order (newest→oldest): c, b, a  ← reversed
+        # With keep_count=2 the count pass must delete `a` (oldest *published*),
+        # not `c` (oldest *fetched*).
+        a = await _article(pg, feed, age_days=1, published_days=9)   # excess by published_at
+        b = await _article(pg, feed, age_days=2, published_days=6)
+        c = await _article(pg, feed, age_days=3, published_days=3)   # kept despite oldest fetch
+
+        pg.commit = pg.flush
+        await purge_old_articles(pg)
+
+        assert not await _exists(pg, a.id)
+        assert await _exists(pg, b.id)
+        assert await _exists(pg, c.id)
 
 
 # ── visibility: trimmed stubs are hidden from listings ───────────────────────
