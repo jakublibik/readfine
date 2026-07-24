@@ -9,6 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
+from app.config import settings
 from app.fetcher import host_throttle
 from app.fetcher.host_throttle import host_key
 from app.fetcher.interval import (
@@ -49,6 +50,11 @@ _COOLDOWN_BUFFER = timedelta(seconds=5)
 # instead of slipping a whole 15-min slot. Keep the selection query, its pure mirror
 # (_feed_due_for_selection), and the UI prediction (compute_next_fetch_at) in sync.
 _DUE_GRACE = timedelta(minutes=2)
+
+# Phase offset (0–14 min) for the four 15-min fetch ticks. 0 keeps the historical
+# :00/:15/:30/:45; a non-zero value (e.g. staging) shifts them so co-hosted instances
+# don't fetch at the same wall-clock moment. Config already folds it into 0–14.
+_SLOT_OFFSET_MIN = settings.fetch_schedule_offset_min % 15
 
 _T = TypeVar("_T")
 
@@ -163,10 +169,15 @@ async def _run_throttled(
     return await asyncio.gather(*[_run(item) for item in items], return_exceptions=True)
 
 
-def _ceil_to_slot(dt: datetime) -> datetime:
-    """Round *dt* up to the next scheduler tick (:00/:15/:30/:45)."""
+def _ceil_to_slot(dt: datetime, offset: int = _SLOT_OFFSET_MIN) -> datetime:
+    """Round *dt* up to the next scheduler tick.
+
+    Ticks fall every 15 min at minutes congruent to *offset* (mod 15); *offset* 0
+    gives the historical :00/:15/:30/:45. Mirrors the cron trigger built in
+    :func:`create_scheduler` so the UI next-fetch prediction lands on the real tick.
+    """
     floored = dt.replace(second=0, microsecond=0)
-    rem = floored.minute % 15
+    rem = (floored.minute - offset) % 15
     if rem == 0 and floored == dt:
         return floored
     return floored - timedelta(minutes=rem) + timedelta(minutes=15)
@@ -656,10 +667,11 @@ async def _send_due_briefings() -> None:
 
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
+    fetch_minutes = ",".join(str(_SLOT_OFFSET_MIN + 15 * k) for k in range(4))
     scheduler.add_job(
         _fetch_due_feeds,
         trigger="cron",
-        minute="0,15,30,45",
+        minute=fetch_minutes,
         id="fetch_due_feeds",
         replace_existing=True,
         max_instances=1,
