@@ -136,7 +136,7 @@ class TestScrapeAiSelectorEndpoint:
         assert "URL is required" in resp.text
 
     def test_quality_model_not_configured(self, ai_client, mock_db):
-        with patch("app.routers.web.settings.get_ai_client",
+        with patch("app.routers.web.settings.scrape.get_ai_client",
                    new=AsyncMock(return_value=(None, None, None))):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
         assert resp.status_code == 200
@@ -144,9 +144,9 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_valid_selector_returned(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   new=AsyncMock(return_value=("a.article-link", 10, 5))),
         ):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
@@ -155,9 +155,9 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_ai_generates_prose_returns_invalid_error(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   new=AsyncMock(return_value=("Sorry I cannot find a selector", 10, 5))),
         ):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
@@ -166,9 +166,9 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_ai_error_returns_error_partial(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   side_effect=Exception("provider overloaded")),
         ):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
@@ -177,13 +177,13 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_fetch_url_when_no_html_sample(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.fetch_page_html",
+            patch("app.routers.web.settings.scrape.fetch_page_html",
                   new=AsyncMock(return_value=_SAMPLE_HTML)),
-            patch("app.routers.web.settings.extract_article_sample",
+            patch("app.routers.web.settings.scrape.extract_article_sample",
                   return_value=_SAMPLE_HTML),
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   new=AsyncMock(return_value=("a.post", 10, 5))),
         ):
             resp = ai_client.post(self.URL, data={"url": "https://example.com"})
@@ -191,7 +191,7 @@ class TestScrapeAiSelectorEndpoint:
         assert "a.post" in resp.text
 
     def test_fetch_failure_returns_error(self, ai_client, mock_db):
-        with patch("app.routers.web.settings.fetch_page_html",
+        with patch("app.routers.web.settings.scrape.fetch_page_html",
                    new=AsyncMock(side_effect=Exception("connection refused"))):
             resp = ai_client.post(self.URL, data={"url": "https://example.com"})
         assert resp.status_code == 200
@@ -199,9 +199,9 @@ class TestScrapeAiSelectorEndpoint:
 
     def test_selector_logged_to_ai_usage_log(self, ai_client, mock_db):
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   new=AsyncMock(return_value=("a.item", 12, 6))),
         ):
             ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
@@ -214,9 +214,9 @@ class TestScrapeAiSelectorEndpoint:
     def test_invalid_selector_too_long(self, ai_client, mock_db):
         long_selector = "a" * 301
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   new=AsyncMock(return_value=(long_selector, 10, 5))),
         ):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
@@ -233,9 +233,9 @@ class TestScrapeAiSelectorEndpoint:
             return ("a.article", 10, 5)
 
         with (
-            patch("app.routers.web.settings.get_ai_client",
+            patch("app.routers.web.settings.scrape.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
-            patch("app.routers.web.settings.generate_css_selector_from_sample",
+            patch("app.routers.web.settings.scrape.generate_css_selector_from_sample",
                   side_effect=fake_generate),
         ):
             ai_client.post(self.URL, data={
