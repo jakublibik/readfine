@@ -499,6 +499,19 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
+    # Feeds whose readable extraction was auto-disabled for 403s: awaiting a probe, or
+    # brought back by one. Read from the feed rows rather than kept in memory, since a
+    # revival is rare and the job runs at night — an in-process registry would be wiped
+    # by the next restart or deploy and the panel would sit empty.
+    readable_revival_pending = (await db.execute(
+        select(func.count(Feed.id)).where(Feed.readable_revival_next_at.isnot(None))
+    )).scalar() or 0
+    readable_revived_recent = (await db.execute(
+        select(Feed)
+        .where(Feed.readable_revived_at >= since)
+        .order_by(Feed.readable_revived_at.desc())
+        .limit(5)
+    )).scalars().all()
     briefing_errors = await list_briefing_errors(db)
     auto_profile_errors = await list_auto_profile_errors(db)
     redirect_conflicts_list = await list_redirect_conflicts(db)
@@ -513,6 +526,8 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_failed": readable_failed,
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
+        "readable_revival_pending": readable_revival_pending,
+        "readable_revived_recent": readable_revived_recent,
         "briefing_errors": briefing_errors,
         "auto_profile_errors": auto_profile_errors,
         "redirect_conflicts": redirect_conflicts_list,

@@ -28,6 +28,18 @@ class Feed(Base):
     # apart from fetch_error_count: these say nothing about the feed's health, so they
     # must not push it through the error tier. See app.fetcher.failure.
     block_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Readable-extraction revival: when a feed is auto-disabled for repeated 403s the
+    # block is often temporary (the HTTP/2 switch fixed a whole class of them), so it
+    # gets a couple of scheduled probes before being left alone. See
+    # app.services.readable_service.retry_blocked_feeds.
+    readable_revival_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Cumulative over the feed's lifetime and never reset automatically — a feed that is
+    # re-disabled after a successful probe proves the probe lied, and resetting here
+    # would loop disable → revive → disable forever. Cleared only by a manual re-enable.
+    readable_revival_attempts: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=0, server_default="0"
+    )
+    readable_revived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).

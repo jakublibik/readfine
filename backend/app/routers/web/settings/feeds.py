@@ -395,6 +395,12 @@ async def settings_feed_update(
         uf.feed.status = "active"
     uf.feed.fetch_error_count = 0
     uf.feed.block_count = 0
+    # Saving the form clears readable_auto_disabled above, which takes the feed out of
+    # the revival job's reach, so drop its bookkeeping too: a scheduled probe would
+    # otherwise linger on a feed the user has just decided about, and the spent-attempt
+    # count would keep the feed barred from future probes forever.
+    uf.feed.readable_revival_next_at = None
+    uf.feed.readable_revival_attempts = 0
 
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)

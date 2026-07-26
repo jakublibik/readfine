@@ -462,6 +462,15 @@ async def _process_readable() -> None:
         await process_pending_readable(session)
 
 
+async def _retry_blocked_readable() -> None:
+    """Job: probe feeds whose readable extraction was auto-disabled for 403s."""
+    if db.async_session_factory is None:
+        return
+    from app.services.readable_service import retry_blocked_feeds
+    async with db.async_session_factory() as session:
+        await retry_blocked_feeds(session)
+
+
 async def _process_ai_scoring() -> None:
     """Job: process pending AI scoring jobs."""
     if db.async_session_factory is None:
@@ -811,6 +820,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=20,
         id="generate_due_preferences",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _retry_blocked_readable,
+        trigger="cron",
+        hour=4,
+        minute=40,
+        id="retry_blocked_readable",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,
