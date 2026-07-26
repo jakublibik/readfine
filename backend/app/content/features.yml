@@ -110,6 +110,10 @@ categories:
         desc: >-
           Describe what you care about, or have the AI draft it from what you
           read; it drives scoring and digests.
+      - title: Profile on a schedule
+        desc: >-
+          Have the profile regenerate itself every 2 or 4 weeks as your
+          reading shifts, with the replaced version one click away.
       - title: Catch me up
         desc: >-
           An on-demand digest of what happened in your feeds over a period and

@@ -137,32 +137,124 @@
   </div>
   {% endfor %}
 
-  <div class="space-y-4 mt-4">
+</section>
+
+{# ── Scoring ───────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Scoring</h2>
+  <div class="flex items-center gap-2">
+    <input type="checkbox" name="ai_scoring_enabled_default" id="ai_scoring_enabled_default"
+           {% if s.ai_scoring_enabled_default %}checked{% endif %}
+           class="w-4 h-4 text-blue-600 rounded border-gray-300">
+    <label for="ai_scoring_enabled_default" class="text-sm font-medium text-gray-700">
+      Enable article scoring
+    </label>
+  </div>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance using the fast model. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+
+  {# Indent and rule only from sm up: on a phone they would cost the profile
+     textarea over a tenth of its width, and the block sits right under its
+     checkbox and dims with it, so the grouping still reads. #}
+  <div id="scoring-dependent"
+       class="mt-4 space-y-4 sm:ml-6 sm:pl-4 sm:border-l-2 sm:border-gray-100 {% if not s.ai_scoring_enabled_default %}opacity-50{% endif %}">
+    <div class="flex items-center gap-2">
+      <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
+             {% if s.ai_score_show_in_list %}checked{% endif %}
+             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+             class="w-4 h-4 text-blue-600 rounded border-gray-300">
+      <label for="ai_score_show_in_list" class="text-sm text-gray-700">
+        Show score in article list
+      </label>
+    </div>
+
     <div>
-      <div class="flex items-center gap-2">
-        <input type="checkbox" name="ai_scoring_enabled_default" id="ai_scoring_enabled_default"
-               {% if s.ai_scoring_enabled_default %}checked{% endif %}
-               class="w-4 h-4 text-blue-600 rounded border-gray-300"
-               id="chk-scoring-enabled">
-        <label for="ai_scoring_enabled_default" class="text-sm font-medium text-gray-700">
-          Enable article scoring
-        </label>
-      </div>
-      <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+      <label for="ai_preference_text" class="text-sm font-medium text-gray-700">Interest profile</label>
+      <p class="text-xs text-gray-500 mb-2">What scoring rates each article against. The more specific, the better.</p>
       {% if s.ai_scoring_enabled_default and not s.ai_preference_text %}
-      <p class="text-xs text-amber-600 mt-1 ml-6">Scoring is enabled but no interest profile is set - articles will not be scored until you fill in the profile below.</p>
+      <p class="text-xs text-amber-600 mb-2">Scoring is enabled but no interest profile is set - articles will not be scored until you fill this in.</p>
       {% endif %}
-    </div>
-    <div class="ml-6">
-      <div class="flex items-center gap-2">
-        <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
-               {% if s.ai_score_show_in_list %}checked{% endif %}
-               class="w-4 h-4 text-blue-600 rounded border-gray-300">
-        <label for="ai_score_show_in_list" class="text-sm text-gray-700">
-          Show score in article list
-        </label>
+
+      <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
+                placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Moderate relevance: hardware, science reporting&#10;Avoid: celebrity news, sports"
+                {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+                class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
+      <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
+
+      <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles - <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
+      <div id="pref-cold-start-warning">
+        {% if pref_strong_count < 20 %}
+        <p class="text-xs text-amber-600 mt-1 mb-1">
+          Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far - profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
+        </p>
+        {% endif %}
       </div>
+      <p class="text-xs text-gray-500 mt-1">
+        {% if s.ai_preference_updated_at %}
+          Last updated {{ s.ai_preference_updated_at | localtime('numdate') }}{% if s.ai_preference_source %} ({{ s.ai_preference_source }}){% endif %}.
+        {% else %}
+          Never generated.
+        {% endif %}
+        {% if pref_auto_status == 'up_to_date' or pref_auto_status == 'cooldown' %}
+          Next automatic generation {{ pref_auto_detail.next_at | localtime('numdate') }}.
+        {% elif pref_auto_status == 'not_enough_new' %}
+          Next automatic generation after {{ pref_auto_detail.missing }} more article{{ 's' if pref_auto_detail.missing != 1 else '' }} you read or star.
+        {% elif pref_auto_status == 'cold_start' %}
+          Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
+        {% elif pref_auto_status == 'no_quality_model' %}
+          Automatic generation needs a quality model configured.
+        {% elif pref_auto_status == 'due' %}
+          The next generation runs tonight.
+        {% endif %}
+      </p>
+
+      {% if s.ai_preference_last_error %}
+      <p class="text-xs text-red-600 mt-1">
+        Last automatic generation failed{% if s.ai_preference_last_error_at %} ({{ s.ai_preference_last_error_at | localtime('numdate') }}){% endif %}: {{ s.ai_preference_last_error }}
+      </p>
+      {% endif %}
+
+      <div class="flex flex-wrap items-center gap-3 mt-2">
+        <button type="button" id="btn-generate-preference"
+                hx-post="/settings/ai/generate-preference"
+                hx-target="#preference-message"
+                hx-swap="innerHTML"
+                data-loading-target="preference-message" data-loading-text="Generating…"
+                {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
+          ✨ Generate from reading history
+        </button>
+        <label class="text-sm text-gray-600 flex items-center gap-2">
+          Auto-generate
+          <select name="ai_preference_auto_days"
+                  {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+                  class="border border-gray-300 rounded px-2 py-1.5 text-sm disabled:opacity-50">
+            <option value="0" {% if not s.ai_preference_auto_days %}selected{% endif %}>Off</option>
+            <option value="14" {% if s.ai_preference_auto_days == 14 %}selected{% endif %}>Every 2 weeks</option>
+            <option value="28" {% if s.ai_preference_auto_days == 28 %}selected{% endif %}>Every 4 weeks</option>
+          </select>
+        </label>
+        {% if s.ai_preference_prev_text %}
+        <button type="button" id="btn-revert-preference"
+                hx-post="/settings/ai/revert-preference"
+                hx-target="#preference-message"
+                hx-swap="innerHTML"
+                data-loading-target="preference-message" data-loading-text="Reverting…"
+                {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
+                class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
+          Revert to previous
+        </button>
+        {% endif %}
+        <span id="preference-message" class="text-sm"></span>
+      </div>
+      <p class="text-xs text-gray-400 mt-1">Automatic generation overwrites the profile with a freshly generated one and keeps the replaced version for one-click revert.</p>
     </div>
+  </div>
+</section>
+
+{# ── Summaries & context ───────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Summaries &amp; context</h2>
+  <div class="space-y-4">
     <div>
       <div class="flex items-center gap-2">
         <input type="checkbox" name="ai_summary_enabled_default" id="ai_summary_enabled_default"
@@ -174,27 +266,6 @@
       </div>
       <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the quality model. Per-feed override available in feed settings.</p>
       <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
-    </div>
-    <div>
-      <div class="flex items-center gap-2">
-        <input type="checkbox" name="ai_chat_enabled" id="ai_chat_enabled"
-               {% if s.ai_chat_enabled %}checked{% endif %}
-               class="w-4 h-4 text-purple-600 rounded border-gray-300">
-        <label for="ai_chat_enabled" class="text-sm font-medium text-gray-700">
-          Enable chat
-        </label>
-      </div>
-      <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat - accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
-    </div>
-    <div>
-      <label for="ai_content_limit" class="text-sm font-medium text-gray-700">Article content limit</label>
-      <div class="flex items-center gap-2 mt-1">
-        <input type="text" inputmode="numeric" name="ai_content_limit" id="ai_content_limit"
-               value="{{ s.ai_content_limit }}"
-               class="w-28 border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <span class="text-xs text-gray-500">characters</span>
-      </div>
-      <p class="text-xs text-gray-500 mt-1">Maximum characters of normalized article text (HTML stripped, whitespace collapsed) sent to AI for summaries, context, and chat. Higher values improve quality for long articles at the cost of more tokens. Default: 20 000.</p>
     </div>
     <div>
       <label for="ai_summary_prompt" class="text-xs font-medium text-gray-600 block mb-1">Summary prompt <span class="font-normal text-gray-400">(leave blank for default)</span> · <button type="button" data-insert-default="#ai_summary_prompt" class="font-normal text-blue-600 hover:underline bg-transparent border-0 p-0 cursor-pointer">insert default</button></label>
@@ -217,37 +288,31 @@
   </div>
 </section>
 
-{# ── Preference Text ───────────────────────────────────────────────────────── #}
-<section id="preference-section" class="mb-8 {% if not s.ai_scoring_enabled_default %}opacity-50{% endif %}">
-  <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Interest profile</h2>
-  <p class="text-xs text-gray-500 mb-3">Used by scoring to rate article relevance. The more specific, the better.</p>
-
-  <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
-            placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Low relevance: sports, lifestyle&#10;No relevance: celebrity news, entertainment gossip"
-            {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
-  <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
-
-  <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles - <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
-  <div id="pref-cold-start-warning">
-    {% if pref_strong_count < 20 %}
-    <p class="text-xs text-amber-600 mt-1 mb-1">
-      Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far - profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
-    </p>
-    {% endif %}
+{# ── Chat ──────────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Chat</h2>
+  <div class="flex items-center gap-2">
+    <input type="checkbox" name="ai_chat_enabled" id="ai_chat_enabled"
+           {% if s.ai_chat_enabled %}checked{% endif %}
+           class="w-4 h-4 text-purple-600 rounded border-gray-300">
+    <label for="ai_chat_enabled" class="text-sm font-medium text-gray-700">
+      Enable chat
+    </label>
   </div>
-  <div class="flex items-center gap-3">
-    <button type="button" id="btn-generate-preference"
-            hx-post="/settings/ai/generate-preference"
-            hx-target="#preference-message"
-            hx-swap="innerHTML"
-            data-loading-target="preference-message" data-loading-text="Generating…"
-            {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
-            class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
-      ✨ Generate from reading history
-    </button>
-    <span id="preference-message" class="text-sm"></span>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat - accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
+</section>
+
+{# ── Limits ────────────────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Limits</h2>
+  <label for="ai_content_limit" class="text-sm font-medium text-gray-700">Article content limit</label>
+  <div class="flex items-center gap-2 mt-1">
+    <input type="text" inputmode="numeric" name="ai_content_limit" id="ai_content_limit"
+           value="{{ s.ai_content_limit }}"
+           class="w-28 border border-gray-300 rounded px-2 py-1.5 text-sm">
+    <span class="text-xs text-gray-500">characters</span>
   </div>
+  <p class="text-xs text-gray-500 mt-1">Maximum characters of normalized article text (HTML stripped, whitespace collapsed) sent to AI for summaries, context, and chat. Higher values improve quality for long articles at the cost of more tokens. Default: 20 000.</p>
 </section>
 
 <div class="mb-6">

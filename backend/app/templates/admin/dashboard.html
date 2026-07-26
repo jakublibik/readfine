@@ -184,6 +184,54 @@
 <p class="text-sm text-gray-400">No briefing errors.</p>
 {% endif %}
 
+{% if stats.auto_profile_errors %}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Interest profile generation errors</h2>
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  Scheduled interest-profile regeneration failed and has not recovered. The cause is
+  usually the user's own API key or credit; a schedule shown as off turned itself off
+  after repeated failures and will not retry.
+</p>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">User</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Failures</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Schedule</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last failed</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for p in stats.auto_profile_errors %}
+      <tr>
+        <td class="px-4 py-2 max-w-xs">
+          <div class="text-gray-700 truncate">{{ p.user.display_name if p.user else "Deleted user" }}</div>
+          {% if p.user %}<div class="text-xs text-gray-400 truncate">{{ p.user.email }}</div>{% endif %}
+        </td>
+        <td class="px-4 py-2 text-red-600 truncate max-w-xs" title="{{ p.ai_preference_last_error }}">{{ p.ai_preference_last_error }}</td>
+        <td class="px-4 py-2 text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          {% if p.ai_preference_auto_days %}
+            <span class="text-gray-400">every {{ p.ai_preference_auto_days }} days</span>
+          {% else %}
+            <span class="text-amber-600 text-xs">off - needs manual fix</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          {% if p.ai_preference_last_error_at %}
+            <time class="text-gray-400" datetime="{{ p.ai_preference_last_error_at.isoformat() }}">{{ p.ai_preference_last_error_at | utctime('short') }}</time>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
 {% if stats.redirect_conflicts %}
 <h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Feed redirect conflicts</h2>
 <p class="text-xs text-gray-400 mb-3 max-w-2xl">

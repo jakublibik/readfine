@@ -48,6 +48,7 @@ _Optional AI on your own provider key._
 - **Summaries:** A one-tap summary of any article.
 - **Chat over articles:** Ask questions about an article and get answers grounded in its text.
 - **Interest profile:** Describe what you care about, or have the AI draft it from what you read; it drives scoring and digests.
+- **Profile on a schedule:** Have the profile regenerate itself every 2 or 4 weeks as your reading shifts, with the replaced version one click away.
 - **Catch me up:** An on-demand digest of what happened in your feeds over a period and scope you choose.
 - **Scheduled briefings:** The same digest on a schedule, delivered to your inbox.
 - **Your choice of provider:** Anthropic, OpenAI, or Google Gemini. Keys are per-user, stored encrypted, and used only for your own requests.

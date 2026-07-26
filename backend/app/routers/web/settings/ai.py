@@ -2,6 +2,7 @@
 import html as html_module
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -23,6 +24,7 @@ from app.services.ai_service import (
     save_api_key,
     verify_ai_slot,
 )
+from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
 from app.services.stats_service import get_ai_cost_stats
 from app.templating import templates
 
@@ -39,6 +41,9 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     keys = await list_api_keys(user.id, db)
     cost_stats = await get_ai_cost_stats(user.id, db, days=30)
     strong_count = await get_preference_strong_count(user.id, db)
+    # Same call the scheduler job makes, so the status line cannot promise a
+    # run the job would skip.
+    auto_status, auto_detail = await preference_auto_status(s, db)
     return {
         "s": s,
         "keys": keys,
@@ -47,6 +52,9 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "pref_strong_count": strong_count,
+        "pref_auto_status": auto_status,
+        "pref_auto_detail": auto_detail,
+        "pref_auto_intervals": AUTO_INTERVALS,
         "default_summary_prompt": _DEFAULT_SUMMARY_PROMPT,
         "default_context_prompt": _DEFAULT_CONTEXT_PROMPT,
     }
@@ -133,17 +141,50 @@ async def settings_ai_preferences_save(
     s.ai_fast_model = (form.get("ai_fast_model") or "").strip() or None
     s.ai_quality_provider = quality_provider
     s.ai_quality_model = (form.get("ai_quality_model") or "").strip() or None
-    pref_text = (form.get("ai_preference_text") or "").strip() or None
-    if pref_text and len(pref_text) > 5000:
-        ctx = await _ai_page_context(user, db)
-        ctx["prefs_error"] = f"Interest profile is too long ({len(pref_text)} characters). Maximum is 5 000 characters."
-        ctx["pref_text_submitted"] = pref_text
-        return templates.TemplateResponse(request, "settings/ai.html", ctx)
-    s.ai_preference_text = pref_text
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
-    s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"
+
+    # Everything below belongs to scoring and is disabled in the form while
+    # scoring is off. A disabled control submits nothing, so applying these
+    # unconditionally would wipe the profile (and the schedule, and the score
+    # toggle) the moment someone saves with scoring turned off.
+    if "ai_preference_text" in form:
+        pref_text = (form.get("ai_preference_text") or "").strip() or None
+        if pref_text and len(pref_text) > 5000:
+            ctx = await _ai_page_context(user, db)
+            ctx["prefs_error"] = f"Interest profile is too long ({len(pref_text)} characters). Maximum is 5 000 characters."
+            ctx["pref_text_submitted"] = pref_text
+            return templates.TemplateResponse(request, "settings/ai.html", ctx)
+        # Order matters: the schedule and the text arrive in the same submit. A
+        # real text change stamps the timestamp (and resets the auto clock with
+        # it); switching the schedule on only stamps it when the text did not.
+        if pref_text != s.ai_preference_text:
+            s.ai_preference_text = pref_text
+            s.ai_preference_updated_at = datetime.now(timezone.utc)
+            s.ai_preference_source = "manual"
+
+    if "ai_preference_auto_days" in form:
+        try:
+            auto_days = int(form.get("ai_preference_auto_days") or 0)
+        except (TypeError, ValueError):
+            auto_days = 0
+        if auto_days not in AUTO_INTERVALS:
+            auto_days = 0
+        if auto_days and not s.ai_preference_auto_days:
+            s.ai_preference_fail_count = 0
+            s.ai_preference_last_error = None
+            s.ai_preference_last_error_at = None
+            # Turning the schedule on must not rewrite an existing profile the
+            # next morning: start the clock now and let the first run come one
+            # full interval later. An empty profile keeps NULL and generates
+            # right away.
+            if s.ai_preference_text and s.ai_preference_updated_at is None:
+                s.ai_preference_updated_at = datetime.now(timezone.utc)
+        s.ai_preference_auto_days = auto_days
+
+    if s.ai_scoring_enabled_default:
+        s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     _raw_limit = re.sub(r"\s", "", form.get("ai_content_limit") or "")
     _content_limit_reset = False
     try:
@@ -278,4 +319,35 @@ async def settings_ai_generate_preference(
         f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
         f' hx-swap-oob="true">{escaped}</textarea>'
         f'<div id="pref-cold-start-warning" hx-swap-oob="true">{warning_inner}</div>'
+    )
+
+
+@router.post("/ai/revert-preference", response_class=HTMLResponse)
+async def settings_ai_revert_preference(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    _ai: None = Depends(require_ai_enabled),
+):
+    """Swap the current profile with the version an automatic generation replaced.
+
+    Swapping rather than restoring means the button works both ways, so a revert
+    made by mistake is one more click away from being undone.
+    """
+    s = await _get_or_create_settings(user, db)
+    if not s.ai_preference_prev_text:
+        return HTMLResponse('<span class="text-gray-500 text-sm">No previous version stored.</span>')
+
+    s.ai_preference_text, s.ai_preference_prev_text = s.ai_preference_prev_text, s.ai_preference_text
+    s.ai_preference_updated_at = datetime.now(timezone.utc)
+    s.ai_preference_source = "manual"
+    await db.commit()
+
+    escaped = html_module.escape(s.ai_preference_text or "")
+    return HTMLResponse(
+        f'<span class="text-green-600 text-sm">Previous version restored.</span>'
+        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="7"'
+        f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
+        f' hx-swap-oob="true">{escaped}</textarea>'
+        f'<span id="pref-char-count" hx-swap-oob="true">{len(s.ai_preference_text or "")}</span>'
     )

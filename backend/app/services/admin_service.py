@@ -19,7 +19,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
-from app.models.user import User, UserCatchupConfig
+from app.models.user import User, UserCatchupConfig, UserSettings
 from app.auth.security import generate_token
 from app.services.scope_cleanup import strip_scope_references
 
@@ -212,6 +212,27 @@ async def list_briefing_errors(db: AsyncSession) -> list[UserCatchupConfig]:
         .options(selectinload(UserCatchupConfig.user))
         .where(UserCatchupConfig.briefing_last_error.is_not(None))
         .order_by(UserCatchupConfig.briefing_next_send_at.asc().nulls_first())
+    )
+    return result.scalars().all()
+
+
+async def list_auto_profile_errors(db: AsyncSession) -> list[UserSettings]:
+    """Users whose scheduled interest-profile update currently has an unresolved error.
+
+    ``ai_preference_last_error`` is cleared by the next successful generation
+    (``ai_profile_service``), so a non-null value means it has not recovered.
+    Most causes are the user's own (API key, credit), but on a hosted instance a
+    cluster of them is worth seeing. Rows where the schedule already switched
+    itself off sort first — those never retry on their own.
+    """
+    result = await db.execute(
+        select(UserSettings)
+        .options(selectinload(UserSettings.user))
+        .where(UserSettings.ai_preference_last_error.is_not(None))
+        .order_by(
+            UserSettings.ai_preference_auto_days.asc(),
+            UserSettings.ai_preference_last_error_at.desc().nulls_last(),
+        )
     )
     return result.scalars().all()
 
@@ -479,6 +500,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .limit(5)
     )).scalars().all()
     briefing_errors = await list_briefing_errors(db)
+    auto_profile_errors = await list_auto_profile_errors(db)
     redirect_conflicts_list = await list_redirect_conflicts(db)
     return {
         "user_count": user_count,
@@ -492,5 +514,6 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
         "briefing_errors": briefing_errors,
+        "auto_profile_errors": auto_profile_errors,
         "redirect_conflicts": redirect_conflicts_list,
     }
