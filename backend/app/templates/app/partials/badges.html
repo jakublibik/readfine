@@ -1,0 +1,9 @@
+{#- Article count badges for the sidebar rows.
+
+     Single source: the sidebar imports these macros, and the Python handlers that
+     swap a badge later (mark scope read, manual feed refresh, label OOB updates)
+     render the same macros, so an initial render and a later HTMX swap cannot
+     drift apart. Keep each macro body on one line — the output is injected into
+     flex rows where stray whitespace shows up as a gap. -#}
+{% macro badge_unread(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count|num }}</span>{% endmacro %}
+{% macro badge_total(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count|num }}</span>{% endmacro %}

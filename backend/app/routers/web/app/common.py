@@ -9,13 +9,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
 from app.services.ai_jobs import ai_enabled_globally
+from app.templating import templates
 
-_BADGE_UNREAD = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{}</span>'
-_BADGE_TOTAL  = '<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{}</span>'
+
+def _badge_macros():
+    """Macro module of the count-badge partial the sidebar renders from, so a
+    badge swapped in later can't drift from how it was first drawn."""
+    return templates.env.get_template("app/partials/badges.html").module
 
 
 def _badge_html(unread: int, total: int) -> str:
-    return _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
+    macros = _badge_macros()
+    return str(macros.badge_unread(unread) if unread > 0 else macros.badge_total(total))
+
+
+def _badge_total_html(total: int) -> str:
+    return str(_badge_macros().badge_total(total))
 
 
 def _catchup_available(ai_on: bool, settings: UserSettings | None) -> bool:

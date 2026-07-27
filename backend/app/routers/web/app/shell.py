@@ -20,7 +20,7 @@ from app.services.feed import list_user_feeds
 from app.services.label_service import list_labels
 from app.templating import templates
 
-from .common import _BADGE_TOTAL, _BADGE_UNREAD, _ai_availability
+from .common import _ai_availability, _badge_html, _badge_total_html
 
 router = APIRouter(tags=["web-app"])
 
@@ -229,7 +229,7 @@ async def htmx_mark_articles_read(
     )
     lid = int(label_id) if label_id else None
     total = await _mark_read_total(user, db, starred_only == "1", archived_only == "1", labeled_only == "1", lid)
-    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
 
@@ -253,7 +253,7 @@ async def htmx_mark_feed_read(
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .where(Article.feed_id == feed_id)
     )).scalar() or 0
-    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
 
@@ -276,7 +276,7 @@ async def htmx_mark_folder_read(
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .where(folder_cond)
     )).scalar() or 0
-    resp = HTMLResponse(_BADGE_TOTAL.format(total), status_code=200)
+    resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
 
@@ -391,7 +391,7 @@ async def htmx_refresh_feed(
         select(func.count(Article.id)).where(Article.feed_id == feed_id)
     ) or 0
 
-    badge = _BADGE_UNREAD.format(unread) if unread > 0 else _BADGE_TOTAL.format(total)
+    badge = _badge_html(unread, total)
     # Refresh the sidebar error indicator out-of-band: it lives outside the swapped
     # #feed-badge target, so a fetch that cleared Feed.status would otherwise leave
     # the red bar stale until a full sidebar reload.
