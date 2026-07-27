@@ -117,11 +117,14 @@ class TestNormalizePreferenceText:
 
 @pytest.mark.asyncio
 class TestPreferenceAutoStatus:
-    async def _status(self, settings, monkeypatch, strong=50, fresh=50):
+    async def _status(self, settings, monkeypatch, strong=50, fresh=50, has_key=True):
         async def fake_counts(user_id, since, db):
             return strong, fresh
         monkeypatch.setattr(svc, "signal_counts", fake_counts)
-        return await svc.preference_auto_status(settings, AsyncMock(), NOW)
+        # The only scalar() the function issues is the stored-key lookup.
+        db = AsyncMock()
+        db.scalar = AsyncMock(return_value="anthropic" if has_key else None)
+        return await svc.preference_auto_status(settings, db, NOW)
 
     async def test_off(self, monkeypatch):
         status, _ = await self._status(make_settings(ai_preference_auto_days=0), monkeypatch)
@@ -168,6 +171,17 @@ class TestPreferenceAutoStatus:
         settings = make_settings(ai_quality_model=None)
         status, _ = await self._status(settings, monkeypatch)
         assert status == "no_quality_model"
+
+    async def test_missing_api_key_is_not_reported_as_due(self, monkeypatch):
+        """A configured model with no key still means the job will skip.
+
+        get_ai_client needs the key, so run_auto_generation returns
+        skipped:no_quality_model. Saying "due" here would promise a nightly run that
+        never happens and leaves no error anywhere to explain itself.
+        """
+        status, detail = await self._status(make_settings(), monkeypatch, has_key=False)
+        assert status == "no_api_key"
+        assert detail["provider"] == "anthropic"
 
     async def test_cold_start(self, monkeypatch):
         status, detail = await self._status(make_settings(), monkeypatch, strong=5)

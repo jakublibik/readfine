@@ -202,6 +202,8 @@
           Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
         {% elif pref_auto_status == 'no_quality_model' %}
           Automatic generation needs a quality model configured.
+        {% elif pref_auto_status == 'no_api_key' %}
+          Automatic generation needs an API key for {{ pref_auto_detail.provider }}.
         {% elif pref_auto_status == 'due' %}
           The next generation runs tonight.
         {% endif %}

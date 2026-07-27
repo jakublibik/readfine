@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.ai import UserAiKey
 from app.models.article import AiUsageLog
 from app.models.user import UserSettings
 from app.services.ai_service import generate_preference_text, get_ai_client
@@ -133,7 +134,7 @@ async def preference_auto_status(
 
     Used by both the scheduler job and the settings page, so the status line can
     never claim something other than what the job actually does. Returns one of
-    ``off`` / ``up_to_date`` / ``cooldown`` / ``no_quality_model`` /
+    ``off`` / ``up_to_date`` / ``cooldown`` / ``no_quality_model`` / ``no_api_key`` /
     ``cold_start`` / ``not_enough_new`` / ``due`` plus details for the UI.
     """
     now = now or datetime.now(timezone.utc)
@@ -152,6 +153,20 @@ async def preference_auto_status(
 
     if not settings.ai_quality_provider or not settings.ai_quality_model:
         return "no_quality_model", {}
+
+    # A configured model the job cannot use is still a reason it will not run:
+    # get_ai_client returns nothing without a key, and the job skips. Checking only
+    # for the stored row, not decrypting it, keeps a settings page render out of the
+    # plaintext-key business (a key that exists but cannot be decrypted is an instance
+    # fault, logged by get_api_key, not a state the user can fix here).
+    has_key = await db.scalar(
+        select(UserAiKey.provider).where(
+            UserAiKey.user_id == settings.user_id,
+            UserAiKey.provider == settings.ai_quality_provider,
+        )
+    )
+    if has_key is None:
+        return "no_api_key", {"provider": settings.ai_quality_provider}
 
     strong, fresh = await signal_counts(settings.user_id, updated_at, db)
     if strong < MIN_STRONG_SIGNALS:
