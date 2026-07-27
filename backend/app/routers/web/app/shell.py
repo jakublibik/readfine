@@ -1,6 +1,5 @@
 """App shell: the main page, the sidebar and the actions it owns (mark scope read,
 manual feed refresh, search modal)."""
-import html as html_module
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -281,22 +280,11 @@ async def htmx_mark_folder_read(
     return resp
 
 
-# Sidebar feed error indicator — kept in sync with the markup in
-# app/partials/sidebar.html. The refresh endpoint returns this out-of-band so a
-# successful manual fetch that cleared Feed.status also clears the red bar,
-# which sits outside the swapped #feed-badge target.
-_FEED_ERROR_BAR = '<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{}"></span>'
-
-
 def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) -> str:
     """Out-of-band fragment that re-renders the sidebar error indicator for a feed
     from its current status (empty when healthy, red bar when error/disabled)."""
-    inner = (
-        _FEED_ERROR_BAR.format(html_module.escape(last_error or "Feed error"))
-        if status in ("error", "disabled")
-        else ""
-    )
-    return f'<span id="feed-error-{feed_id}" hx-swap-oob="true">{inner}</span>'
+    macros = templates.env.get_template("app/partials/feed_error.html").module
+    return str(macros.feed_error(feed_id, status, last_error, oob=True))
 
 
 async def _mark_read_total(
