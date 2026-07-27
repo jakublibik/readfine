@@ -33,9 +33,10 @@ class Feed(Base):
     # gets a couple of scheduled probes before being left alone. See
     # app.services.readable_service.retry_blocked_feeds.
     readable_revival_next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Cumulative over the feed's lifetime and never reset automatically — a feed that is
-    # re-disabled after a successful probe proves the probe lied, and resetting here
-    # would loop disable → revive → disable forever. Cleared only by a manual re-enable.
+    # Every probe the feed has been given, passing ones included. Cumulative over its
+    # lifetime and never reset automatically: a probe can pass while the feed is still
+    # blocked, so if a revival were free this would loop disable → revive → disable
+    # forever. Cleared only by a manual re-enable.
     readable_revival_attempts: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, default=0, server_default="0"
     )

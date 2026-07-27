@@ -79,11 +79,35 @@ class TestDeferRevival:
 
         This is the flapping guard: 403s are usually per-IP, so a probe can pass while
         the feed is still blocked. Extraction comes back, users collect 403s, the feed
-        is disabled again — and a reset counter would repeat that every few days.
+        is disabled again, and a reset counter would repeat that every few days.
         """
         feed = _feed(readable_revival_attempts=len(_REVIVAL_BACKOFF_DAYS),
                      readable_revived_at=datetime.now(timezone.utc))
         _defer_revival(feed, datetime.now(timezone.utc))
+        assert feed.readable_revival_next_at is None
+
+    async def test_flapping_feed_runs_out_of_tries(self):
+        """Walk the real path the guard above only asserts the end state of.
+
+        Each round is a probe that passed, a revival, and a re-disable one 403 later.
+        Nothing here sets the counter by hand: if a passing probe were free, every
+        round would schedule the same 3 days and the feed would flap forever.
+        """
+        feed = _feed(readable_revival_attempts=0)
+        db = AsyncMock()
+        uf_result = MagicMock()
+        uf_result.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(return_value=uf_result)
+        db.commit = AsyncMock()
+        now = datetime.now(timezone.utc)
+
+        await _revive_readable_for_feed(feed, db)
+        _defer_revival(feed, now)  # the probe lied; re-disabled
+        assert feed.readable_revival_next_at == now + timedelta(days=_REVIVAL_BACKOFF_DAYS[1])
+
+        await _revive_readable_for_feed(feed, db)
+        _defer_revival(feed, now)
+        assert feed.readable_revival_attempts == len(_REVIVAL_BACKOFF_DAYS)
         assert feed.readable_revival_next_at is None
 
 
@@ -105,7 +129,7 @@ class TestReviveReadableForFeed:
         assert ours.readable_auto_disabled is False
         assert ours.readable_auto_disabled_reason is None
 
-    async def test_records_revival_without_resetting_attempts(self):
+    async def test_records_revival_and_spends_the_attempt(self):
         feed = _feed(readable_revival_attempts=1)
         db = AsyncMock()
         uf_result = MagicMock()
@@ -117,7 +141,9 @@ class TestReviveReadableForFeed:
 
         assert feed.readable_revival_next_at is None
         assert feed.readable_revived_at is not None
-        assert feed.readable_revival_attempts == 1  # never reset by the job
+        # A passing probe costs an attempt too: it may have passed while the feed is
+        # still blocked, and only charging for it ends the disable → revive loop.
+        assert feed.readable_revival_attempts == 2
 
 
 class TestSchedulingOnDisable:

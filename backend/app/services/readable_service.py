@@ -582,13 +582,14 @@ _REVIVAL_BATCH_SIZE = 10  # feeds probed per scheduler run
 def _defer_revival(feed: Feed, now: datetime) -> None:
     """Point a feed at its next revival probe, or stop probing for good.
 
-    Reads Feed.readable_revival_attempts, which counts probes over the feed's whole
-    lifetime and is never reset by this module. Resetting it would be a trap: a 403 is
-    usually per-IP or rate-based rather than per-URL, so a probe can pass while the feed
-    is still blocked. Extraction comes back on, users collect 403s, three articles later
-    the feed is disabled again — and with a fresh counter it would all repeat every few
-    days forever. Keeping the count cumulative lets the loop end by itself, because a
-    re-disable after a passing probe is precisely the evidence that the probe lied.
+    Reads Feed.readable_revival_attempts, which counts every probe the feed has been
+    given over its whole lifetime, passing ones included, and is never reset by this
+    module. Both halves of that matter. A 403 is usually per-IP or rate-based rather
+    than per-URL, so a probe can pass while the feed is still blocked: extraction comes
+    back on, users collect 403s, one article later the feed is disabled again (the old
+    403 articles are still the newest terminal ones, so the streak check trips at once).
+    If a passing probe were free, or the counter reset on re-disable, that would repeat
+    every few days forever. Charging for it lets the loop end by itself.
     """
     attempts = feed.readable_revival_attempts or 0
     if attempts >= len(_REVIVAL_BACKOFF_DAYS):
@@ -747,6 +748,9 @@ async def _revive_readable_for_feed(feed: Feed, db: AsyncSession) -> int:
     Articles are left untouched. Old ones stay 'skipped' or 'failed'; the point is that
     new articles get extracted again, and that labelled ones reach AI scoring with the
     full text rather than the RSS stub (see filter_service._apply_filters_for_user).
+
+    Spends a revival attempt, so a feed revived by a probe that turned out to be wrong
+    is not handed the same number of tries all over again.
     """
     result = await db.execute(
         select(UserFeed).where(
@@ -761,9 +765,12 @@ async def _revive_readable_for_feed(feed: Feed, db: AsyncSession) -> int:
         uf.readable_auto_disabled = False
         uf.readable_auto_disabled_reason = None
 
+    # The probe is spent whether or not it told the truth. A 403 is usually per-IP or
+    # rate-based, so a probe can pass while the feed is still blocked; counting only the
+    # failed ones would let disable → revive → disable repeat every few days forever.
+    feed.readable_revival_attempts = (feed.readable_revival_attempts or 0) + 1
     feed.readable_revival_next_at = None
     feed.readable_revived_at = datetime.now(timezone.utc)
-    # readable_revival_attempts stays as it is — see _defer_revival.
     await db.commit()
     return len(user_feeds)
 
