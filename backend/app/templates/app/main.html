@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "app/partials/chat.html" import general_chat_area %}
 
 {% block title %}Readfine{% endblock %}
 
@@ -254,40 +255,7 @@
       </button>
     </div>
     <!-- Chat area (swapped by HTMX) -->
-    <div id="general-chat-area"
-         class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
-      <input type="hidden" id="general-chat-history" name="history" value="[]">
-      <input type="hidden" id="general-chat-article-id" name="article_id" value="">
-      <div id="general-chat-messages"
-           class="flex-1 overflow-y-auto overscroll-contain space-y-3 mb-3 min-h-0"></div>
-      <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
-        <textarea id="general-chat-input" name="message" rows="3"
-                  placeholder="Ask a question…"
-                  class="w-full text-sm border border-gray-200 dark:border-gray-600
-                         dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
-                  data-general-chat-input></textarea>
-        <div class="flex items-center pl-0.5">
-          <div class="flex items-center gap-1 min-w-0 flex-1">
-            <button type="button" id="general-chat-attach-btn"
-                    class="hidden w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 bg-transparent border-0 cursor-pointer flex-shrink-0"
-                    title="Attach article">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-              </svg>
-            </button>
-            <span id="general-chat-attach-title"
-                  class="hidden text-xs text-gray-400 dark:text-gray-500 truncate"></span>
-            <input type="checkbox" name="include_article" id="general-chat-include-article" class="sr-only">
-          </div>
-        </div>
-        <button id="general-chat-submit" class="hidden"
-                hx-post="/htmx/ai-chat"
-                hx-include="#general-chat-input,#general-chat-include-article,#general-chat-history,#general-chat-article-id"
-                hx-target="#general-chat-area"
-                hx-swap="outerHTML"></button>
-      </div>
-    </div>
+    {{ general_chat_area([]) }}
   </div>
 </div>
 {% endif %}

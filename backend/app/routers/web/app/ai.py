@@ -18,7 +18,6 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally, normalize_content
 from app.templating import templates
-from app.utils.markdown import md_render as _md_render
 
 router = APIRouter(tags=["web-app"])
 
@@ -59,115 +58,23 @@ def _ai_context_block(article_id: int, context: str) -> str:
 _CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
 
 
-def _chat_messages_html(container_id: str, messages: list[dict]) -> str:
-    parts = [f'<div id="{container_id}" class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">']
-    for msg in messages:
-        if msg["role"] == "user":
-            parts.append(
-                f'<div class="flex justify-end">'
-                f'<div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 '
-                f'border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm '
-                f'text-gray-800 dark:text-gray-200">'
-                f'{html_module.escape(msg["content"])}</div></div>'
-            )
-        else:
-            parts.append(
-                f'<div class="flex justify-start">'
-                f'<div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 '
-                f'border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 '
-                f'prose prose-sm dark:prose-invert max-w-none ai-text">'
-                f'{_md_render(msg["content"])}</div></div>'
-            )
-    parts.append('</div>')
-    return ''.join(parts)
-
-
-def _chat_input_html(
-    *,
-    input_id: str,
-    include_id: str,
-    area_id: str,
-    post_url: str,
-    hx_include_extra: str = "",
-    include_article: bool = True,
-    placeholder: str = "Ask a question…",
-    input_extra_attr: str = "",
-    attach_btn_id: str = "",
-    attach_visible: bool = True,
-    attach_tooltip: str = "Attach article",
-    attach_title_id: str = "",
-    attach_title_text: str = "",
-    submit_id: str = "",
-    error: str = "",
-) -> str:
-    article_chk = 'checked' if include_article else ''
-    hx_include = f"#{input_id},#{include_id}{hx_include_extra}"
-    submit_id_attr = f'id="{submit_id}" ' if submit_id else ''
-    input_extra = f' {input_extra_attr}' if input_extra_attr else ''
-    attach_btn_id_attr = f'id="{attach_btn_id}" ' if attach_btn_id else ''
-    attach_title_id_attr = f'id="{attach_title_id}" ' if attach_title_id else ''
-    attach_hidden_cls = '' if attach_visible else 'hidden '
-    attach_color = 'text-blue-500' if include_article else 'text-gray-400 hover:text-gray-600 dark:hover:text-gray-300'
-    error_html = f'<p class="text-xs text-red-500 py-1">{html_module.escape(error)}</p>' if error else ''
-    return (
-        f'{error_html}'
-        f'<div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">'
-        f'<textarea id="{input_id}" name="message" rows="3" '
-        f'placeholder="{html_module.escape(placeholder)}" '
-        f'class="w-full text-sm border border-gray-200 dark:border-gray-600 '
-        f'dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"'
-        f'{input_extra}></textarea>'
-        f'<div class="flex items-center pl-0.5">'
-        f'<div class="flex items-center gap-1 min-w-0 flex-1">'
-        f'<button type="button" {attach_btn_id_attr}'
-        f'class="{attach_hidden_cls}w-6 h-6 flex items-center justify-center rounded {attach_color} '
-        f'bg-transparent border-0 cursor-pointer flex-shrink-0" '
-        f'title="{html_module.escape(attach_tooltip)}">'
-        f'<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">'
-        f'<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" '
-        f'd="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656'
-        f'l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>'
-        f'</svg></button>'
-        f'<span {attach_title_id_attr}'
-        f'class="{attach_hidden_cls}text-xs text-gray-400 dark:text-gray-500 truncate">'
-        f'{html_module.escape(attach_title_text)}</span>'
-        f'<input type="checkbox" name="include_article" id="{include_id}" class="sr-only" {article_chk}>'
-        f'</div>'
-        f'<button {submit_id_attr}class="hidden" '
-        f'hx-post="{post_url}" '
-        f'hx-include="{hx_include}" '
-        f'hx-target="#{area_id}" hx-swap="outerHTML"></button>'
-        f'</div>'
-        f'</div>'
-    )
+def _chat_macros():
+    """Macro module for the chat panel — the same source article_detail.html and
+    main.html draw the panel from, so sending a message can't reshape it."""
+    return templates.env.get_template("app/partials/chat.html").module
 
 
 def _render_chat_area(article_id: int, messages: list[dict],
                       include_article: bool = True,
                       error: str = "",
                       article_title: str = "") -> str:
-    short = (article_title[:25] + '…') if len(article_title) > 25 else article_title
-    return (
-        f'<div id="chat-area-{article_id}" '
-        f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-        + _chat_messages_html(f"chat-messages-{article_id}", messages)
-        + _chat_input_html(
-            input_id=f"chat-input-{article_id}",
-            include_id=f"chat-article-{article_id}",
-            area_id=f"chat-area-{article_id}",
-            post_url=f"/htmx/articles/{article_id}/ai-chat",
-            include_article=include_article,
-            placeholder="Ask a question about this article…",
-            input_extra_attr=f'data-chat-input-id="{article_id}"',
-            attach_btn_id=f"chat-attach-btn-{article_id}",
-            attach_visible=True,
-            attach_tooltip="Attach article",
-            attach_title_id=f"chat-attach-title-{article_id}",
-            attach_title_text=short,
-            error=error,
-        )
-        + '</div>'
-    )
+    return str(_chat_macros().chat_area(
+        article_id, messages, include_article, error, article_title
+    ))
+
+
+def _render_general_chat_area(messages: list[dict], error: str = "") -> str:
+    return str(_chat_macros().general_chat_area(messages, error))
 
 
 def _ai_spinner(target_id: str, poll_url: str) -> str:
@@ -351,38 +258,6 @@ def _ai_chat_error_message(exc: Exception) -> str:
     if status and status >= 500:
         return "AI provider returned a server error — please try again."
     return "Chat failed — please try again."
-
-
-def _render_general_chat_area(messages: list[dict], error: str = "") -> str:
-    history_json = html_module.escape(json.dumps(messages, ensure_ascii=False))
-    extra_inputs = (
-        f'<input type="hidden" id="general-chat-history" name="history" value="{history_json}">'
-        f'<input type="hidden" id="general-chat-article-id" name="article_id" value="">'
-    )
-    return (
-        f'<div id="general-chat-area" '
-        f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-        + extra_inputs
-        + _chat_messages_html("general-chat-messages", messages)
-        + _chat_input_html(
-            input_id="general-chat-input",
-            include_id="general-chat-include-article",
-            area_id="general-chat-area",
-            post_url="/htmx/ai-chat",
-            hx_include_extra=",#general-chat-history,#general-chat-article-id",
-            include_article=False,
-            placeholder="Ask a question…",
-            input_extra_attr="data-general-chat-input",
-            attach_btn_id="general-chat-attach-btn",
-            attach_visible=False,
-            attach_tooltip="Attach article",
-            attach_title_id="general-chat-attach-title",
-            attach_title_text="",
-            submit_id="general-chat-submit",
-            error=error,
-        )
-        + '</div>'
-    )
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)
