@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_ai_enabled
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
@@ -91,8 +92,8 @@ async def settings_ai_dismiss_error(
     return HTMLResponse("", headers={"HX-Trigger": "ai-error-dismissed"})
 
 
-@limiter.limit("10/minute")
 @router.post("/ai/keys", response_class=HTMLResponse)
+@limiter.limit("10/minute")
 async def settings_ai_keys_save(
     request: Request,
     user: User = Depends(get_current_user),
@@ -208,8 +209,8 @@ async def settings_ai_preferences_save(
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
-@limiter.limit("5/minute")
 @router.post("/ai/verify/{slot}", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def settings_ai_verify(
     slot: str,
     request: Request,
@@ -235,8 +236,8 @@ async def settings_ai_verify(
     return HTMLResponse(html)
 
 
-@limiter.limit("5/minute")
 @router.post("/ai/bulk-summary", response_class=HTMLResponse)
+@limiter.limit("5/minute")
 async def settings_ai_bulk_summary(
     request: Request,
     user: User = Depends(get_current_user),
@@ -273,6 +274,7 @@ async def settings_ai_bulk_summary(
 
 
 @router.post("/ai/generate-preference", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_ai_preference)
 async def settings_ai_generate_preference(
     request: Request,
     user: User = Depends(get_current_user),

@@ -357,3 +357,54 @@ class TestSlowapi429Html:
         assert r.status_code == 429
         assert "text/html" in r.headers.get("content-type", "")
         assert "429" in r.text
+
+
+# ── Every declared limit is actually wired up ─────────────────────────────────
+
+class TestDeclaredLimitsAreActive:
+    """Guard against `@limiter.limit` sitting above `@router.post`.
+
+    Decorators apply bottom-up, so the route decorator registers the bare function
+    and returns it unchanged; a limiter applied afterwards wraps an object the
+    router no longer references. The endpoint then serves with no limit at all, and
+    nothing about the source says so. Three AI settings routes shipped that way.
+    """
+
+    @staticmethod
+    def _endpoints_declaring_a_limit():
+        import inspect
+
+        from app.main import app
+
+        found = []
+        for route in app.routes:
+            endpoint = getattr(route, "endpoint", None)
+            if endpoint is None or not getattr(endpoint, "__module__", "").startswith("app.routers"):
+                continue
+            try:
+                lines, _ = inspect.getsourcelines(endpoint)
+            except (OSError, TypeError):  # pragma: no cover - source always available here
+                continue
+            decorators = [ln.strip() for ln in lines if ln.strip().startswith("@")]
+            if any("limiter.limit" in d for d in decorators):
+                found.append((getattr(route, "path", "?"), endpoint))
+        return found
+
+    def test_limited_endpoints_are_wrapped(self):
+        # __wrapped__ is set by functools.wraps inside slowapi's decorator, so its
+        # presence on the registered endpoint means the limiter really is in the chain.
+        unwrapped = [
+            path for path, endpoint in self._endpoints_declaring_a_limit()
+            if not hasattr(endpoint, "__wrapped__")
+        ]
+        assert not unwrapped, (
+            "these routes declare @limiter.limit but serve unlimited — move the route "
+            f"decorator above it: {unwrapped}"
+        )
+
+    def test_the_check_sees_the_routes_it_is_meant_to_cover(self):
+        # A rename or refactor that stops matching would make the test above pass
+        # vacuously, so pin down that it still finds the real fleet.
+        paths = {path for path, _ in self._endpoints_declaring_a_limit()}
+        assert {"/login", "/register", "/settings/ai/generate-preference"} <= paths
+        assert len(paths) >= 20

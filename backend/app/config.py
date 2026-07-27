@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     rate_limit_ai_context: str = "6/minute"
     rate_limit_ai_chat: str = "20/minute"
     rate_limit_ai_catchup: str = "1/minute"
+    # Generating the interest profile builds its prompt from the whole reading history
+    # and runs on the quality model, so it is the most expensive thing a single click
+    # can start. The profile is meant to change every few weeks, hence an hourly cap.
+    rate_limit_ai_preference: str = "5/hour"
     rate_limit_feedback: str = "3/hour"
 
     @field_validator("fetch_schedule_offset_min", mode="after")
