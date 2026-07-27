@@ -392,10 +392,15 @@ def _permanent_redirect_target(original: str, candidate: str) -> str | None:
     :func:`_resolve_response`). Everything below is a reason to keep the stored URL
     even though the host said the resource moved:
 
-    * **Userinfo in the original.** ``https://user:pass@host/feed`` is a supported
-      feed form (see :func:`_pin_connection`), but a ``Location`` header never
-      carries userinfo, so adopting the target would silently drop the credentials
-      and turn every later fetch into a 401.
+    * **Userinfo on either side.** ``https://user:pass@host/feed`` is a supported
+      feed form (see :func:`_pin_connection`). In the *original* it must not be lost:
+      an honest ``Location`` header carries no userinfo, so adopting the target would
+      drop the credentials and turn every later fetch into a 401. In the *candidate*
+      it must not be gained: a hostile feed host can put anything in ``Location``, and
+      credentials arriving that way would be stored on a row the user never marked
+      private (so every subscriber starts sending them) and rendered into the feed
+      URL links, where ``https://trusted.example@evil.example/feed`` reads as the
+      wrong host. Credentials belong to whoever typed them into the feed form.
     * **A changed query string, either direction.** Losing it breaks feeds that
       carry a token (``?api_key=…``); gaining it bakes in a session/CDN parameter
       that expires in a few days. Only an unchanged query is safe to adopt.
@@ -408,7 +413,7 @@ def _permanent_redirect_target(original: str, candidate: str) -> str | None:
         before, after = urlparse(original), urlparse(candidate)
     except Exception:
         return None
-    if before.username:
+    if before.username or after.username:
         return None
     if before.query != after.query:
         return None

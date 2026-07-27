@@ -424,6 +424,16 @@ class TestPermanentRedirectTarget:
             (301, "https://example.com/moved"),
         ) is None
 
+    def test_userinfo_in_target_blocks_adoption(self):
+        # An honest Location carries no credentials, but a hostile feed host can put
+        # anything in one. Adopting them would store credentials on a row the user
+        # never marked private, so every subscriber would start sending them, and the
+        # feed URL links would render a host that is not the one being fetched.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://trusted.example@evil.example/feed"),
+        ) is None
+
     def test_query_gained_blocks_adoption(self):
         # A session/CDN parameter would be baked in and expire days later.
         assert self._chain(
