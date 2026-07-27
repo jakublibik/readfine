@@ -1,3 +1,4 @@
+{% from "app/partials/ai_blocks.html" import ai_summary, ai_context, ai_spinner, ai_indicator %}
 <!-- Mobile back bar (small bucket fullscreen mode only) -->
 <div id="article-detail-root" data-article-id="{{ article.id }}">
 <div id="mobile-detail-back-bar">
@@ -184,38 +185,16 @@
   <div class="mb-5 space-y-3">
 
     {% if article.ai_summary %}
-    <div id="ai-summary-{{ article.id }}" class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
-      <div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>
-      <div class="prose dark:prose-invert max-w-none ai-text">{{ article.ai_summary | markdown }}</div>
-    </div>
+    {{ ai_summary(article.id, article.ai_summary) }}
     {% elif summary_pending %}
-    <div id="ai-summary-{{ article.id }}"
-         hx-get="/htmx/articles/{{ article.id }}/ai-summary/poll"
-         hx-trigger="every 30s"
-         hx-swap="outerHTML"
-         class="flex items-center gap-2 text-sm text-gray-500 py-2">
-      <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-      </svg>
-      Generating summary…
-    </div>
+    {{ ai_spinner("ai-summary-" ~ article.id, "/htmx/articles/" ~ article.id ~ "/ai-summary/poll", "Generating summary…") }}
     {% else %}
-    <div id="ai-summary-{{ article.id }}" class="ai-loading-indicator items-center gap-2 text-sm text-gray-500 py-2">
-      <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-      </svg>
-      Generating summary…
-    </div>
+    {{ ai_indicator("ai-summary-" ~ article.id, "Generating summary…") }}
     {% endif %}
 
     <div id="ai-context-area-{{ article.id }}">
       {% if article.ai_context %}
-      <div id="ai-context-{{ article.id }}" class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">
-        <div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>
-        <div class="prose dark:prose-invert max-w-none ai-text">{{ article.ai_context | markdown }}</div>
-      </div>
+      {{ ai_context(article.id, article.ai_context) }}
       {% else %}
       <div id="ai-context-{{ article.id }}"></div>
       {% endif %}

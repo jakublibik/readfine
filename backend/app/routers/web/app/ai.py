@@ -17,6 +17,7 @@ from app.models.feed import UserFeed
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally, normalize_content
+from app.templating import templates
 from app.utils.markdown import md_render as _md_render
 
 router = APIRouter(tags=["web-app"])
@@ -41,24 +42,18 @@ async def _get_article_access(user: User, article_id: int, db: AsyncSession):
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+def _ai_macros():
+    """Macro module for the AI result blocks — the same source article_detail.html
+    renders from, so a generated block matches how a stored one is drawn."""
+    return templates.env.get_template("app/partials/ai_blocks.html").module
+
+
 def _ai_summary_block(article_id: int, summary: str) -> str:
-    return (
-        f'<div id="ai-summary-{article_id}" '
-        f'class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">'
-        f'<div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>'
-        f'<div class="prose dark:prose-invert max-w-none ai-text">{_md_render(summary)}</div>'
-        f'</div>'
-    )
+    return str(_ai_macros().ai_summary(article_id, summary))
 
 
 def _ai_context_block(article_id: int, context: str) -> str:
-    return (
-        f'<div id="ai-context-{article_id}" '
-        f'class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">'
-        f'<div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>'
-        f'<div class="prose dark:prose-invert max-w-none ai-text">{_md_render(context)}</div>'
-        f'</div>'
-    )
+    return str(_ai_macros().ai_context(article_id, context))
 
 
 _CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
@@ -176,17 +171,7 @@ def _render_chat_area(article_id: int, messages: list[dict],
 
 
 def _ai_spinner(target_id: str, poll_url: str) -> str:
-    return (
-        f'<div id="{target_id}" '
-        f'hx-get="{poll_url}" hx-trigger="every 30s" hx-swap="outerHTML" '
-        f'class="flex items-center gap-2 text-sm text-gray-500 py-2">'
-        f'<svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">'
-        f'<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>'
-        f'<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>'
-        f'</svg>'
-        f'Generating…'
-        f'</div>'
-    )
+    return str(_ai_macros().ai_spinner(target_id, poll_url, "Generating summary…"))
 
 
 async def _require_quality_ai_for_article(
