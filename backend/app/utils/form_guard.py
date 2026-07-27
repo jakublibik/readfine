@@ -52,18 +52,39 @@ def form_age_seconds(form_ts: str) -> float | None:
         return None
 
 
+def carry_form_ts(form_ts: str) -> str | None:
+    """Return *form_ts* if it can be reused, or None when a fresh one is needed.
+
+    Re-rendering the form after a validation error must not restart the clock.
+    Someone who has already been on the page for a minute would otherwise be handed
+    a brand-new stamp, and a password manager refilling both password fields in one
+    click can then submit inside MIN_FILL_SECONDS and be treated as a bot.
+
+    A stamp that is missing, forged or past MAX_FORM_AGE_SECONDS cannot be carried:
+    reissuing it would leave the person stuck on "submit again" forever.
+    """
+    age = form_age_seconds(form_ts)
+    if age is None or age > MAX_FORM_AGE_SECONDS:
+        return None
+    return form_ts
+
+
 def check_form(honeypot: str, form_ts: str) -> str | None:
     """Screen a submitted public form.
 
     Returns None when the submission looks human, otherwise a short reason:
 
-    ``"honeypot"`` / ``"too_fast"``
-        Almost certainly a bot. Callers should fake success so the script
-        cannot tell the trap apart from a real signup.
-    ``"stale"``
-        No valid stamp: either a bot posting straight at the endpoint, or a
-        real person whose tab sat open for hours. Callers should show the form
-        again with a retry message rather than silently swallowing it.
+    ``"honeypot"``
+        A bot, as good as certainly: the field is invisible and has nothing a
+        person could react to. Callers should fake success so the script cannot
+        tell the trap apart from a real signup.
+    ``"too_fast"`` / ``"stale"``
+        Suspicious, but only a heuristic, and both have an innocent reading. A
+        person can beat MIN_FILL_SECONDS on a second attempt when a password
+        manager refills the form in one click, and a stamp expires simply by
+        leaving the tab open. Callers should show the form again with a retry
+        message rather than swallowing the submission, which for a real person
+        is indistinguishable from the account silently never being created.
     """
     if honeypot.strip():
         return "honeypot"

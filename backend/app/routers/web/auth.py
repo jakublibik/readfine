@@ -19,7 +19,7 @@ from app.utils.formats import is_valid_format
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.services.app_settings_cache import get_registration_enabled
-from app.utils.form_guard import HONEYPOT_FIELD, check_form
+from app.utils.form_guard import HONEYPOT_FIELD, carry_form_ts, check_form
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
@@ -190,23 +190,32 @@ async def register(
 
     def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
-               "prefill_email": email, "prefill_display_name": display_name, **extra}
+               "prefill_email": email, "prefill_display_name": display_name,
+               # Keep the stamp this submit came with instead of minting a new one,
+               # so a retry does not start the fill-time clock over. See carry_form_ts.
+               "form_ts_carry": carry_form_ts(form_ts), **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
 
     # Bot traps, before any DB work or outbound mail. Registration is the one
     # public endpoint that emails an arbitrary attacker-supplied address, which
     # makes it usable as a relay for bombing third-party inboxes.
     trap = check_form(honeypot, form_ts)
-    if trap:
-        if trap == "stale":
-            # Could be a genuinely stale tab, so this one is not news.
-            logger.info("Registration form expired, from %s", get_client_ip(request))
-            return _err("This form expired. Please try again.")
-        # A caught bot is rare and worth seeing at the default log level.
-        logger.warning("Registration blocked by bot trap (%s) from %s", trap, get_client_ip(request))
+    if trap == "honeypot":
+        # Nothing legitimate fills a field that is invisible to eyes and to screen
+        # readers alike, so this one is safe to treat as a bot. Rare enough to be
+        # worth seeing at the default log level.
+        logger.warning("Registration blocked by honeypot from %s", get_client_ip(request))
         # Fake the success path so the script cannot tell it was caught.
         return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1",
                                 status_code=302)
+    if trap:
+        # "too_fast" and "stale" are heuristics with innocent readings (a password
+        # manager filling a retry in one click; a tab left open). Faking success on
+        # those loses a real signup with nothing to show the person, so send them
+        # back to the form. One message for both, so a script learns nothing about
+        # which check it tripped.
+        logger.info("Registration form rejected (%s), from %s", trap, get_client_ip(request))
+        return _err("This form is no longer valid. Please submit it again.")
 
     if not is_valid_email(email):
         return _err("Please enter a valid email address.")
