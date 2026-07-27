@@ -79,6 +79,7 @@ async def settings_preferences_save(
 
     s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
     s.mark_read_auto_advance = form.get("mark_read_auto_advance") == "on"
+    s.open_original_when_empty = form.get("open_original_when_empty") == "on"
 
     label_display = form.get("label_display", "indicator")
     if label_display not in {"none", "indicator", "dots"}:

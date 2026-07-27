@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-font-size="{{ reading_font_size | default('md') }}" data-font-family="{{ reading_font_family | default('sans') }}" data-label-display="{{ label_display | default('indicator') }}" data-bucket-small-max="{{ bucket_small_max | default(640) }}" data-bucket-medium-max="{{ bucket_medium_max | default(1100) }}">
+<html lang="en" data-font-size="{{ reading_font_size | default('md') }}" data-font-family="{{ reading_font_family | default('sans') }}" data-label-display="{{ label_display | default('indicator') }}" data-bucket-small-max="{{ bucket_small_max | default(640) }}" data-bucket-medium-max="{{ bucket_medium_max | default(1100) }}"{% if open_original_when_empty %} data-open-original-empty="1"{% endif %}>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">

@@ -46,6 +46,11 @@ categories:
           The full article text is pulled into the reader (`trafilatura`, with
           `readability-lxml` as a fallback), without the cookie banners and
           sidebars of the original page.
+      - title: Straight to the source
+        desc: >-
+          Feeds that carry only headlines and links leave nothing to read. Such
+          articles offer the original page as a button, and can open it in a new
+          tab on click if you turn that on.
       - title: Adaptive layout
         desc: >-
           Choose a 2- or 3-panel view per screen size, with breakpoints you set

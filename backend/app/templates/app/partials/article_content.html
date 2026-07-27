@@ -11,7 +11,7 @@
     {%- else -%}
       Readable content extraction failed{% if article.readable_error %}: {{ article.readable_error }}{% endif %}.
     {%- endif %}
-    Showing feed content.
+    {% if article.content %}Showing feed content.{% endif %}
   </p>
   {% endif %}
   <div class="prose max-w-none text-gray-800 article-body">
@@ -21,6 +21,30 @@
       {{ article.content | safe }}
     {% else %}
       <p class="text-gray-400 italic">No content available.</p>
+      {% if article.url %}
+      <div class="flex flex-wrap items-center gap-2 mt-4 not-prose">
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" data-external-link
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 no-underline">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+          </svg>
+          Open original
+        </a>
+        {% if article.readable_status == 'failed' %}
+        <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
+                hx-target="#article-content-{{ article.id }}"
+                hx-swap="outerHTML"
+                hx-indicator="#readable-retry-spinner-{{ article.id }}"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 bg-transparent cursor-pointer">
+          <svg id="readable-retry-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+          Retry extraction
+        </button>
+        {% endif %}
+      </div>
+      {% endif %}
     {% endif %}
   </div>
   {% if article.readable_active %}

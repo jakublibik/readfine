@@ -70,6 +70,27 @@ def _make_snippet(summary: str | None, content: str | None) -> str | None:
     return None
 
 
+def body_permanently_empty(article: Article, extract_readable: bool | None) -> bool:
+    """True when the article will never have a body to show, so the reader can be
+    sent straight to the source.
+
+    Deliberately narrower than the "nothing to render right now" branch in
+    article_content.html, which also covers articles still being extracted. The two
+    look alike but answer different questions and must not be merged.
+    """
+    if article.readable_status == "success" and article.readable_content:
+        return False
+    if article.content:
+        return False
+    if article.readable_status == "pending":
+        # Extraction in flight, or waiting on retry backoff.
+        return False
+    if article.readable_status == "skipped" and extract_readable:
+        # Opening the detail kicks off extraction (see htmx_article_detail).
+        return False
+    return True
+
+
 def _format_date(dt: datetime | None) -> str:
     # Uses the per-request viewer timezone (set in the auth dependency).
     return format_local(dt, current_viewer_tz.get(), "short")
@@ -118,6 +139,7 @@ async def list_articles(
         UserArticleState,
         Feed.title.label("feed_title"),
         UserFeed.custom_title.label("custom_title"),
+        UserFeed.extract_readable.label("extract_readable"),
     )
     uas_join = (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id)
     uf_join = (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id)
@@ -279,7 +301,7 @@ async def list_articles(
             labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
 
     items = []
-    for article, state, feed_title, custom_title in rows:
+    for article, state, feed_title, custom_title, extract_readable in rows:
         items.append(ArticleListItem(
             id=article.id,
             feed_id=article.feed_id,
@@ -289,6 +311,7 @@ async def list_articles(
             author=article.author,
             summary=article.summary,
             snippet=_make_snippet(article.summary, article.content),
+            body_permanently_empty=body_permanently_empty(article, extract_readable),
             published_at=article.published_at,
             formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,

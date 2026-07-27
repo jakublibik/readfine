@@ -11,6 +11,13 @@
   var _articleId = null;
   var _start = null;       // Date.now() when current visible period started, null when tab hidden
   var _accumulated = 0;   // seconds accumulated during previous visible periods
+  var _ext = null;        // { id, hiddenAt } while an auto-opened source tab is being timed
+
+  // Away-time bounds. Below the floor it is a mis-click or a stray tab switch; above
+  // the ceiling the reader walked off, so the value is clamped rather than dropped —
+  // discarding would score the longest reads as zero, the exact opposite of the truth.
+  var _EXT_MIN_SECONDS = 10;
+  var _EXT_MAX_SECONDS = 300;
 
   function _csrf() {
     var c = document.cookie.split('; ').find(function(r) { return r.startsWith('csrftoken='); });
@@ -22,6 +29,16 @@
     return _accumulated + vis;
   }
 
+  function _post(id, seconds) {
+    fetch('/htmx/articles/' + id + '/dwell', {
+      method: 'POST',
+      keepalive: true,
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-csrftoken': _csrf() },
+      body: 'seconds=' + seconds,
+    });
+  }
+
   function _send() {
     if (!_articleId) return;
     var seconds = _elapsed();
@@ -30,13 +47,31 @@
     _start = null;
     _accumulated = 0;
     if (seconds <= 3) return;
-    fetch('/htmx/articles/' + id + '/dwell', {
-      method: 'POST',
-      keepalive: true,
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'x-csrftoken': _csrf() },
-      body: 'seconds=' + seconds,
-    });
+    _post(id, seconds);
+  }
+
+  // Time spent on a source we opened ourselves. Cross-origin there is nothing else to
+  // observe, so this measures how long our own tab stayed in the background. It cannot
+  // tell reading from switching to another app, but it only ever runs for a tab this
+  // app just opened, never for arbitrary window switching.
+  window._trackExternalVisit = function (id) {
+    if (id) _ext = { id: id, hiddenAt: null };
+  };
+
+  // keepIfShort: pagehide fires right after the tab hides on mobile, so a not-yet-
+  // measurable visit must stay armed there — the reader is still on the source and the
+  // real duration arrives when the app comes back. On a return to visible we always
+  // settle, else a stale hiddenAt would later be read as one enormous visit.
+  function _extFinish(keepIfShort) {
+    if (!_ext) return;
+    // Never hidden: the browser opened the tab in the background, so there is nothing
+    // to measure. Better no reading than a fabricated one.
+    if (!_ext.hiddenAt) { if (!keepIfShort) _ext = null; return; }
+    var away = Math.round((Date.now() - _ext.hiddenAt) / 1000);
+    if (away < _EXT_MIN_SECONDS) { if (!keepIfShort) _ext = null; return; }
+    var id = _ext.id;
+    _ext = null;
+    _post(id, Math.min(away, _EXT_MAX_SECONDS));
   }
 
   function _onHtmxRequest(e) {
@@ -79,13 +114,18 @@
     // Flush on hide rather than just banking: beforeunload is unreliable when the
     // page is frozen/discarded on mobile (app switch, screen lock).
     if (document.visibilityState === 'hidden') {
+      if (_ext && !_ext.hiddenAt) _ext.hiddenAt = Date.now();
       _send();
     } else {
+      _extFinish(false);
       _rearm();
       if (_articleId) _start = Date.now();
     }
   });
-  window.addEventListener('pagehide', _send);
+  window.addEventListener('pagehide', function () {
+    _extFinish(true);
+    _send();
+  });
 })();
 </script>
 {% endblock %}

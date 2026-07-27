@@ -26,6 +26,10 @@ class ArticleListItem(BaseModel):
     author: str | None
     summary: str | None
     snippet: str | None  # pre-computed: summary or stripped content prefix
+    # "this article will never have a body", not "it has none right now" — an
+    # extraction still in flight is not permanently empty. Computed when the list
+    # renders, so a background extraction finishing afterwards leaves it stale.
+    body_permanently_empty: bool = False
     published_at: datetime | None
     # Display-only string, formatted per the viewer's number/date format profile
     # (order/separators vary). Parse `published_at` (ISO) for machine use.

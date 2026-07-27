@@ -50,6 +50,7 @@ class UserSettings(Base):
     list_density_mobile: Mapped[str] = mapped_column(String(20), default="comfortable")
     mark_read_on_scroll: Mapped[bool] = mapped_column(Boolean, default=True)
     mark_read_auto_advance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    open_original_when_empty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unread_filter: Mapped[str] = mapped_column(String(20), default="adaptive")
     default_sort_order: Mapped[str] = mapped_column(String(10), default="newest")
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)

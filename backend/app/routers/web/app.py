@@ -157,6 +157,7 @@ async def main_app(
         "reading_font_size": reading_font_size,
         "reading_font_family": reading_font_family,
         "label_display": label_display,
+        "open_original_when_empty": bool(settings and settings.open_original_when_empty),
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
         "open_article_id": open_article_id,

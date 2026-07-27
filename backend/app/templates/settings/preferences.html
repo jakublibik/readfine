@@ -140,6 +140,15 @@
       </div>
 
       <div class="flex items-center justify-between">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Open original for empty articles</label>
+          <p class="text-xs text-gray-500 mt-0.5">When an article has no readable text at all, open the source in a new tab instead of showing an empty pane</p>
+        </div>
+        <input type="checkbox" name="open_original_when_empty" {% if s.open_original_when_empty %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+      </div>
+
+      <div class="flex items-center justify-between">
         <label class="text-sm font-medium text-gray-700">Font size</label>
         <div class="flex rounded border border-gray-300 overflow-hidden text-sm">
           {% for val, label in [("sm", "Small"), ("md", "Medium"), ("lg", "Large")] %}

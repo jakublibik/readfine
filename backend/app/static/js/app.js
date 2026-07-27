@@ -795,20 +795,24 @@ document.body.addEventListener('click', function (e) {
 });
 
 // ── Link-opened tracking ───────────────────────────────────────────────────
+// Top-level so the auto-open handler below can report a programmatic window.open,
+// which never trips the delegated anchor listener.
+function recordLinkOpened(articleId) {
+  if (!articleId) return;
+  fetch('/htmx/articles/' + articleId + '/link-opened', {
+    method: 'POST',
+    keepalive: true,
+    credentials: 'include',
+    headers: { 'x-csrftoken': getCsrfToken() },
+  });
+}
+
 document.body.addEventListener('click', function (e) {
   var link = e.target.closest('a[target="_blank"]');
   if (!link) return;
   var row = link.closest('[data-article-id]');
   if (!row) return;
-  var articleId = row.dataset.articleId;
-  if (!articleId) return;
-  var csrf = getCsrfToken();
-  fetch('/htmx/articles/' + articleId + '/link-opened', {
-    method: 'POST',
-    keepalive: true,
-    credentials: 'include',
-    headers: { 'x-csrftoken': csrf },
-  });
+  recordLinkOpened(row.dataset.articleId);
 });
 
 // ── Search modal ───────────────────────────────────────────────────────────
@@ -1396,13 +1400,45 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   var INLINE_ID = 'inline-article-detail';
   var CONTENT_ID = INLINE_ID + '-content';
 
-  function openExternal(url) {
+  // sameTabFallback defaults to true: when the user clicked a link, navigating this
+  // tab is the honest outcome of a blocked popup. Pass false for opens the user did
+  // not ask for — throwing the reader out of the app on a plain row click would lose
+  // the list position and scroll. Returns whether a tab actually opened.
+  function openExternal(url, sameTabFallback) {
     // Do not pass a features string — window.open with 'noopener' intentionally returns null
     // even on success, making the blocked-popup check unreliable. Modern browsers apply
     // noopener by default for cross-origin _blank. Fall back to same-tab only when truly blocked.
     var w = window.open(url, '_blank');
-    if (!w) window.location.href = url;
+    if (!w && sameTabFallback !== false) window.location.href = url;
+    return !!w;
   }
+
+  function currentDetailArticleId() {
+    var el = document.querySelector('#article-detail [data-article-id]');
+    return el ? el.dataset.articleId : null;
+  }
+
+  // Articles with nothing to show: open the source straight from the click, while the
+  // user gesture is still live. Doing it after the HTMX response would be a bare
+  // window.open and the popup blocker would eat it.
+  document.addEventListener('click', function (e) {
+    if (document.documentElement.dataset.openOriginalEmpty !== '1') return;
+    var row = e.target.closest('.article-row');
+    if (!row || !row.dataset.noBody || !row.dataset.url) return;
+    // Star and label buttons, excluded from the row's own hx-trigger the same way.
+    if (e.target.closest('[data-stop-propagation]')) return;
+    // An expanded row is handled by the collapse path and by the title handler above,
+    // either of which would otherwise produce a second tab.
+    if (_shouldUseInline() && row.classList.contains('inline-expanded')) return;
+    // 3-panel has no expanded class, so without this a repeat click on the article
+    // already in the detail pane opens another tab.
+    if (currentDetailArticleId() === row.dataset.articleId) return;
+    if (!openExternal(row.dataset.url, false)) return;
+    // The delegated tracker already covers a real anchor click; avoid a duplicate POST.
+    if (!e.target.closest('a[target="_blank"]')) recordLinkOpened(row.dataset.articleId);
+    if (window._trackExternalVisit) window._trackExternalVisit(row.dataset.articleId);
+    // No preventDefault: HTMX still loads the detail behind the new tab.
+  }, true);
 
   // Title <a> click handling: prevent native navigation except when row is expanded in 2-panel
   document.addEventListener('click', function (e) {

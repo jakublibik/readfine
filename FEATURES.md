@@ -20,6 +20,7 @@ _Get content in, from anywhere._
 _A clean reader that adapts to your screen._
 
 - **Readable extraction:** The full article text is pulled into the reader (`trafilatura`, with `readability-lxml` as a fallback), without the cookie banners and sidebars of the original page.
+- **Straight to the source:** Feeds that carry only headlines and links leave nothing to read. Such articles offer the original page as a button, and can open it in a new tab on click if you turn that on.
 - **Adaptive layout:** Choose a 2- or 3-panel view per screen size, with breakpoints you set yourself.
 - **Dedicated mobile layout:** A real small-screen layout with a collapsible sidebar and inline or full-screen article view, not a squeezed-down desktop.
 - **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
