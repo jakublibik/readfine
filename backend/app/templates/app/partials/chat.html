@@ -1,0 +1,93 @@
+{#- The AI chat panel: message list plus the input toolbar under it.
+
+     Single source for three render paths that used to be three hand-kept copies:
+     article_detail.html (per-article panel, first open), main.html (general
+     panel, first open) and routers/web/app/ai.py, which re-renders the whole
+     area after every message, error and clear. Any drift between them showed up
+     as the panel changing shape the moment you sent the first message.
+
+     Output is deliberately compact — the whitespace-control markers keep the
+     rendered HTML free of the newlines this file is indented with. -#}
+
+{%- macro chat_messages(container_id, messages, extra_class="") -%}
+<div id="{{ container_id }}" class="flex-1 overflow-y-auto {{ extra_class }}space-y-3 mb-3 min-h-0">
+{%- for msg in messages -%}
+{%- if msg.role == "user" -%}
+<div class="flex justify-end"><div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200">{{ msg.content }}</div></div>
+{%- else -%}
+<div class="flex justify-start"><div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | markdown }}</div></div>
+{%- endif -%}
+{%- endfor -%}
+{#- -#}</div>
+{%- endmacro -%}
+
+{%- macro chat_input(input_id, include_id, area_id, post_url, hx_include_extra="",
+                     include_article=true, placeholder="Ask a question…",
+                     input_data_attr="", input_data_value=none,
+                     attach_btn_id="", attach_visible=true,
+                     attach_tooltip="Attach article", attach_title_id="",
+                     attach_title_text="", submit_id="", error="") -%}
+{%- set attach_hidden = "" if attach_visible else "hidden " -%}
+{%- set attach_color = "text-blue-500" if include_article else "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" -%}
+{%- if error %}<p class="text-xs text-red-500 py-1">{{ error }}</p>{% endif -%}
+<div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
+{#- The textarea carries a data-* hook the chat JS binds to (Enter to send,
+    autosize); it differs per panel, so the caller names it. -#}
+<textarea id="{{ input_id }}" name="message" rows="3" placeholder="{{ placeholder }}" class="w-full text-sm border border-gray-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
+{%- if input_data_attr %} {{ input_data_attr }}{% if input_data_value is not none %}="{{ input_data_value }}"{% endif %}{% endif -%}
+></textarea>
+{#- -#}<div class="flex items-center pl-0.5">
+{#- -#}<div class="flex items-center gap-1 min-w-0 flex-1">
+{#- -#}<button type="button"{% if attach_btn_id %} id="{{ attach_btn_id }}"{% endif %} class="{{ attach_hidden }}w-6 h-6 flex items-center justify-center rounded {{ attach_color }} bg-transparent border-0 cursor-pointer flex-shrink-0" title="{{ attach_tooltip }}"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg></button>
+{#- -#}<span{% if attach_title_id %} id="{{ attach_title_id }}"{% endif %} class="{{ attach_hidden }}text-xs text-gray-400 dark:text-gray-500 truncate">{{ attach_title_text }}</span>
+{#- -#}<input type="checkbox" name="include_article" id="{{ include_id }}" class="sr-only"{% if include_article %} checked{% endif %}>
+{#- -#}</div>
+{#- Hidden button: the JS clicks it so Enter and the send icon go through one
+    HTMX request definition rather than two. -#}
+{#- -#}<button{% if submit_id %} id="{{ submit_id }}"{% endif %} class="hidden" hx-post="{{ post_url }}" hx-include="#{{ input_id }},#{{ include_id }}{{ hx_include_extra }}" hx-target="#{{ area_id }}" hx-swap="outerHTML"></button>
+{#- -#}</div>{#- -#}</div>
+{%- endmacro -%}
+
+{%- macro chat_area(article_id, messages, include_article=true, error="", article_title="") -%}
+<div id="chat-area-{{ article_id }}" class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
+{{- chat_messages("chat-messages-" ~ article_id, messages) -}}
+{{- chat_input(
+      input_id="chat-input-" ~ article_id,
+      include_id="chat-article-" ~ article_id,
+      area_id="chat-area-" ~ article_id,
+      post_url="/htmx/articles/" ~ article_id ~ "/ai-chat",
+      include_article=include_article,
+      placeholder="Ask a question about this article…",
+      input_data_attr="data-chat-input-id", input_data_value=article_id,
+      attach_btn_id="chat-attach-btn-" ~ article_id,
+      attach_title_id="chat-attach-title-" ~ article_id,
+      attach_title_text=(article_title[:25] ~ "…") if article_title|length > 25 else article_title,
+      error=error) -}}
+{#- -#}</div>
+{%- endmacro -%}
+
+{%- macro general_chat_area(messages, error="") -%}
+<div id="general-chat-area" class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
+{#- The general panel has no server-side conversation record, so its history
+    rides along in a hidden field and the attached article is whichever one the
+    reader had open when they hit send. -#}
+{#- Single-quoted on purpose: tojson escapes ' for exactly this position but
+    leaves " alone, so a double-quoted value would break on any quoted message. -#}
+{#- -#}<input type="hidden" id="general-chat-history" name="history" value='{{ messages | tojson }}'>
+{#- -#}<input type="hidden" id="general-chat-article-id" name="article_id" value="">
+{{- chat_messages("general-chat-messages", messages, "overscroll-contain ") -}}
+{{- chat_input(
+      input_id="general-chat-input",
+      include_id="general-chat-include-article",
+      area_id="general-chat-area",
+      post_url="/htmx/ai-chat",
+      hx_include_extra=",#general-chat-history,#general-chat-article-id",
+      include_article=false,
+      input_data_attr="data-general-chat-input",
+      attach_btn_id="general-chat-attach-btn",
+      attach_visible=false,
+      attach_title_id="general-chat-attach-title",
+      submit_id="general-chat-submit",
+      error=error) -}}
+{#- -#}</div>
+{%- endmacro -%}

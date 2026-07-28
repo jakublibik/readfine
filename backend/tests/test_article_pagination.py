@@ -18,7 +18,7 @@ from app.config import settings as app_settings
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
-from app.routers.web.app import _build_more_qs
+from app.routers.web.app.articles import _build_more_qs
 from app.schemas.article import ArticleListItem
 from app.services.article import list_articles
 

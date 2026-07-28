@@ -15,8 +15,10 @@ from app.fetcher.scrape import (
     extract_article_links,
     fetch_scrape_feed,
 )
+from app.fetcher.failure import BLOCK_BACKOFF_BASE
 from app.models.fetch_log import FetchLog
 from app.utils.scrape_ai import generate_selector_prompt
+from app.utils.url_validator import PageResponse
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -30,6 +32,7 @@ def _make_scrape_feed(**kwargs) -> SimpleNamespace:
         "fetch_auth_user": None,
         "fetch_auth_pass_encrypted": None,
         "fetch_error_count": 0,
+        "block_count": 0,
         "status": "active",
         "last_fetched_at": None,
         "last_fetch_duration_ms": None,
@@ -48,6 +51,11 @@ def _make_session() -> AsyncMock:
     result.scalars.return_value = MagicMock(return_value=[])
     session.execute = AsyncMock(return_value=result)
     return session
+
+
+def _page(text: str, permanent_url: str | None = None) -> PageResponse:
+    """A fetched page, optionally one that permanently redirected."""
+    return PageResponse(text, permanent_url)
 
 
 _HTML_WITH_ARTICLES = """
@@ -406,7 +414,7 @@ class TestFetchScrapeFeedSuccess:
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # url_normalized
             extract_readable_result,  # extract_readable query
         ])
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             count = await fetch_scrape_feed(feed, session)
         assert count == 3
@@ -418,7 +426,7 @@ class TestFetchScrapeFeedSuccess:
             retry_after_until=datetime.now(timezone.utc) + timedelta(hours=1),
         )
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             await fetch_scrape_feed(feed, session)
         assert feed.status == "active"
@@ -449,7 +457,7 @@ class TestFetchScrapeFeedSuccess:
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # guid_hash
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # url_normalized
         ])
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)), \
              patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
             await fetch_scrape_feed(feed, session)
 
@@ -462,7 +470,7 @@ class TestFetchScrapeFeedErrors:
     async def test_zero_links_triggers_error_state(self):
         feed = _make_scrape_feed(type_config={"article_links_selector": "div.nonexistent a"})
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)):
             result = await fetch_scrape_feed(feed, session)
         assert result == 0
         session.execute.assert_called()
@@ -470,21 +478,21 @@ class TestFetchScrapeFeedErrors:
     async def test_zero_links_returns_zero(self):
         feed = _make_scrape_feed(type_config={"article_links_selector": "div.nothing"})
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)):
             count = await fetch_scrape_feed(feed, session)
         assert count == 0
 
     async def test_network_error_returns_zero(self):
         feed = _make_scrape_feed()
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=ValueError("timeout")):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=ValueError("timeout")):
             result = await fetch_scrape_feed(feed, session)
         assert result == 0
 
     async def test_network_error_adds_fetchlog(self):
         feed = _make_scrape_feed()
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=ValueError("timeout")):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=ValueError("timeout")):
             await fetch_scrape_feed(feed, session)
         assert session.add.called
         added = session.add.call_args[0][0]
@@ -499,14 +507,14 @@ class TestFetchScrapeFeedErrors:
         request = httpx.Request("GET", feed.feed_url)
         response = httpx.Response(404, request=request)
         exc = httpx.HTTPStatusError("404", request=request, response=response)
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=exc):
             await fetch_scrape_feed(feed, session)
         assert session.execute.called
 
     async def test_missing_type_config_returns_zero(self):
         feed = _make_scrape_feed(type_config=None)
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+        with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)):
             result = await fetch_scrape_feed(feed, session)
         assert result == 0
 
@@ -535,41 +543,47 @@ class TestFetchScrapeFeed429Transient:
     async def test_429_does_not_disable(self):
         feed = _make_scrape_feed()
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(429)):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(429)):
             await fetch_scrape_feed(feed, session)
         assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
     async def test_429_sets_retry_after_until_from_header(self):
+        # A 429 is a block: the feed always gets at least BLOCK_BACKOFF_BASE, and a
+        # longer Retry-After from the host wins over it.
         feed = _make_scrape_feed()
         session = _make_session()
-        exc = _scrape_http_error(429, headers={"Retry-After": "600"})
+        exc = _scrape_http_error(429, headers={"Retry-After": "3600"})
         before = datetime.now(timezone.utc)
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=exc):
             await fetch_scrape_feed(feed, session)
         rau = _scrape_update_values(session)["retry_after_until"].value
         assert rau is not None
-        assert before + timedelta(seconds=590) <= rau <= before + timedelta(seconds=610)
+        assert before + timedelta(seconds=3590) <= rau <= before + timedelta(seconds=3610)
 
     async def test_403_does_not_disable_on_first_hit(self):
         feed = _make_scrape_feed()
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(403)):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(403)):
             await fetch_scrape_feed(feed, session)
         assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
-    async def test_403_leaves_retry_after_null(self):
-        # 403 carries no rate-limit signal: no Retry-After honored.
+    async def test_403_backs_off_on_the_block_tier(self):
+        # A bare 403 arms the block backoff rather than the feed's error tier, so the
+        # scheduler stops retrying a refusing host on the normal interval.
         feed = _make_scrape_feed()
         session = _make_session()
-        exc = _scrape_http_error(403, headers={"Retry-After": "600"})
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=exc):
+        before = datetime.now(timezone.utc)
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(403)):
             await fetch_scrape_feed(feed, session)
-        assert _scrape_update_values(session)["retry_after_until"].value is None
+        vals = _scrape_update_values(session)
+        rau = vals["retry_after_until"].value
+        assert abs((rau - (before + BLOCK_BACKOFF_BASE)).total_seconds()) < 5
+        assert "fetch_error_count" not in vals
 
     async def test_permanent_4xx_still_disables(self):
         feed = _make_scrape_feed()
         session = _make_session()
-        with patch("app.fetcher.scrape.fetch_url_with_ssrf_check", side_effect=_scrape_http_error(404)):
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(404)):
             await fetch_scrape_feed(feed, session)
         assert _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
@@ -617,7 +631,7 @@ class TestSubscribeScrape:
             coro.close()
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES), \
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)), \
              patch("app.services.feed.asyncio.create_task", side_effect=_close_coro):
             uf = await subscribe_scrape(
                 user=user, url="https://example.com/news",
@@ -636,7 +650,7 @@ class TestSubscribeScrape:
         db = self._make_db(existing_feed=existing, existing_subscription=None, feed_count=1)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)):
             await subscribe_scrape(
                 user=user, url="https://example.com/news",
                 selector="article a", title="Example News",
@@ -656,7 +670,7 @@ class TestSubscribeScrape:
         db = self._make_db(existing_feed=existing, existing_subscription=existing_sub, feed_count=1)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=_HTML_WITH_ARTICLES):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)):
             with pytest.raises(ValueError, match="Already subscribed"):
                 await subscribe_scrape(
                     user=user, url="https://example.com/news",
@@ -718,7 +732,7 @@ class TestSubscribeScrape:
         empty_html = "<html><body><nav><a href='/about'>About</a></nav></body></html>"
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", return_value=empty_html):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=empty_html)):
             with pytest.raises(ValueError, match="matched no article links"):
                 await subscribe_scrape(
                     user=user, url="https://example.com",
@@ -734,7 +748,7 @@ class TestSubscribeScrape:
         db = self._make_db(feed_count=0)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
-             patch("app.services.feed.fetch_url_with_ssrf_check", side_effect=Exception("timeout")):
+             patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(side_effect=Exception("timeout"))):
             with pytest.raises(ValueError, match="Could not fetch the page"):
                 await subscribe_scrape(
                     user=user, url="https://example.com",

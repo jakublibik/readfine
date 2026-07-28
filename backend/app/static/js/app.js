@@ -1,3 +1,10 @@
+// ── CSRF token from the double-submit cookie, for hand-rolled fetch() calls.
+// (HTMX requests get it automatically via csrf.js.) ──
+function getCsrfToken() {
+  var m = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
+  return m ? m.split('=')[1] : '';
+}
+
 // ── Generic: clear named input after HTMX swap (data-clear-on-swap="fieldname") ──
 document.addEventListener('htmx:afterSwap', function (e) {
   var form = e.detail && e.detail.elt;
@@ -558,8 +565,7 @@ function _flushMarkRead() {
   if (_pendingMarkRead.size === 0) return;
   var ids = Array.from(_pendingMarkRead);
   _pendingMarkRead.clear();
-  var csrfToken = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
-  csrfToken = csrfToken ? csrfToken.split('=')[1] : '';
+  var csrfToken = getCsrfToken();
   fetch('/htmx/articles/set-read-batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-csrftoken': csrfToken },
@@ -705,8 +711,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       });
     } else {
       // Article no longer in view — mark as read server-side only, skip UI swap
-      var csrfToken = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
-      csrfToken = csrfToken ? csrfToken.split('=')[1] : '';
+      var csrfToken = getCsrfToken();
       fetch('/htmx/articles/' + articleId + '/set-read?state=true', {
         method: 'POST',
         headers: { 'x-csrftoken': csrfToken },
@@ -738,8 +743,7 @@ document.addEventListener('DOMContentLoaded', function () {
     btn.classList.add('opacity-50', 'cursor-not-allowed');
     busy.classList.remove('hidden');
     busy.classList.add('inline-flex');
-    var token = document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); });
-    token = token ? token.split('=')[1] : '';
+    var token = getCsrfToken();
     fetch(form.action, {
       method: 'POST',
       headers: { 'x-csrftoken': token },
@@ -791,20 +795,24 @@ document.body.addEventListener('click', function (e) {
 });
 
 // ── Link-opened tracking ───────────────────────────────────────────────────
+// Top-level so the auto-open handler below can report a programmatic window.open,
+// which never trips the delegated anchor listener.
+function recordLinkOpened(articleId) {
+  if (!articleId) return;
+  fetch('/htmx/articles/' + articleId + '/link-opened', {
+    method: 'POST',
+    keepalive: true,
+    credentials: 'include',
+    headers: { 'x-csrftoken': getCsrfToken() },
+  });
+}
+
 document.body.addEventListener('click', function (e) {
   var link = e.target.closest('a[target="_blank"]');
   if (!link) return;
   var row = link.closest('[data-article-id]');
   if (!row) return;
-  var articleId = row.dataset.articleId;
-  if (!articleId) return;
-  var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
-  fetch('/htmx/articles/' + articleId + '/link-opened', {
-    method: 'POST',
-    keepalive: true,
-    credentials: 'include',
-    headers: { 'x-csrftoken': csrf },
-  });
+  recordLinkOpened(row.dataset.articleId);
 });
 
 // ── Search modal ───────────────────────────────────────────────────────────
@@ -999,7 +1007,7 @@ function saveConfigRename(configId) {
   var newName = input.value.trim();
   if (!newName) { input.focus(); return; }
 
-  var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
+  var csrf = getCsrfToken();
   var form = new FormData();
   form.append('name', newName);
 
@@ -1054,7 +1062,7 @@ document.addEventListener('click', function (e) {
   }
   if (action === 'delete-config') {
     var id = el.dataset.configId;
-    var csrf = (document.cookie.split('; ').find(function (r) { return r.startsWith('csrftoken='); }) || '').split('=')[1] || '';
+    var csrf = getCsrfToken();
     fetch('/htmx/catchup-configs/' + id, {
       method: 'DELETE',
       credentials: 'include',
@@ -1158,27 +1166,47 @@ document.addEventListener('articleStarChanged', function (e) {
   btn.title = isStarred ? 'Remove star' : 'Star article';
 });
 
-// Optimistic star toggle: fire articleStarChanged immediately on click, revert on error
-document.addEventListener('click', function (e) {
-  var btn = e.target.closest('[data-star-btn]');
-  if (!btn) return;
+// Optimistic star toggle: fire articleStarChanged immediately on click, revert on error.
+// One path for list rows ([data-star-btn]), the detail bottom bar ([data-bottom-star])
+// and the detail header menu ([data-header-star]).
+var _STAR_SELECTOR = '[data-star-btn], [data-bottom-star], [data-header-star]';
+
+function _starArticleId(btn) {
   var row = btn.closest('.article-row');
-  if (!row || !row.dataset.articleId) return;
-  var span = btn.querySelector('span');
-  var wasStarred = span && span.textContent.trim() === '★';
+  if (row) return row.dataset.articleId ? parseInt(row.dataset.articleId, 10) : NaN;
+  var bar = btn.closest('.article-bottom-bar');
+  if (bar) return bar.dataset.articleId ? parseInt(bar.dataset.articleId, 10) : NaN;
+  // header-menu star: the id lives on the visible detail element
+  var el = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
+  return el ? parseInt(el.dataset.articleId, 10) : NaN;
+}
+
+function _starIsStarred(btn) {
+  var svg = btn.querySelector('svg');           // detail header star
+  if (svg) return svg.getAttribute('fill') === 'currentColor';
+  var span = btn.querySelector('span');         // list rows + bottom bar use a ★ glyph
+  return !!(span && span.textContent.trim() === '\u2605');
+}
+
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest(_STAR_SELECTOR);
+  if (!btn) return;
+  var articleId = _starArticleId(btn);
+  if (isNaN(articleId)) return;
+  var wasStarred = _starIsStarred(btn);
   btn._optimisticStarred = wasStarred;
   document.dispatchEvent(new CustomEvent('articleStarChanged', {
-    detail: { id: parseInt(row.dataset.articleId, 10), isStarred: !wasStarred }
+    detail: { id: articleId, isStarred: !wasStarred }
   }));
 }, true);
 
 function _revertOptimisticStar(elt) {
-  var btn = elt && elt.closest ? elt.closest('[data-star-btn]') : null;
+  var btn = elt && elt.closest ? elt.closest(_STAR_SELECTOR) : null;
   if (!btn || typeof btn._optimisticStarred === 'undefined') return;
-  var row = btn.closest('.article-row');
-  if (!row || !row.dataset.articleId) return;
+  var articleId = _starArticleId(btn);
+  if (isNaN(articleId)) return;
   document.dispatchEvent(new CustomEvent('articleStarChanged', {
-    detail: { id: parseInt(row.dataset.articleId, 10), isStarred: btn._optimisticStarred }
+    detail: { id: articleId, isStarred: btn._optimisticStarred }
   }));
   delete btn._optimisticStarred;
 }
@@ -1186,56 +1214,7 @@ function _revertOptimisticStar(elt) {
 document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisticStar(e.detail.elt); });
 document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticStar(e.detail.elt); });
 document.body.addEventListener('htmx:afterRequest', function (e) {
-  var btn = e.detail.elt && e.detail.elt.closest ? e.detail.elt.closest('[data-star-btn]') : null;
-  if (btn) delete btn._optimisticStarred;
-});
-
-// Optimistic star toggle for detail bottom-bar and header-menu star buttons
-document.addEventListener('click', function (e) {
-  var btn = e.target.closest('[data-bottom-star], [data-header-star]');
-  if (!btn) return;
-  var articleId, wasStarred;
-  if (btn.hasAttribute('data-bottom-star')) {
-    var bar = btn.closest('.article-bottom-bar');
-    if (!bar || !bar.dataset.articleId) return;
-    articleId = parseInt(bar.dataset.articleId, 10);
-    var span = btn.querySelector('span');
-    wasStarred = !!(span && span.textContent.trim() === '★');
-  } else {
-    var articleEl = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
-    if (!articleEl) return;
-    articleId = parseInt(articleEl.dataset.articleId, 10);
-    var svg = btn.querySelector('svg');
-    wasStarred = !!(svg && svg.getAttribute('fill') === 'currentColor');
-  }
-  btn._optimisticStarred = wasStarred;
-  document.dispatchEvent(new CustomEvent('articleStarChanged', {
-    detail: { id: articleId, isStarred: !wasStarred }
-  }));
-}, true);
-
-function _revertOptimisticDetailStar(elt) {
-  var btn = elt && elt.closest ? (elt.closest('[data-bottom-star]') || elt.closest('[data-header-star]')) : null;
-  if (!btn || typeof btn._optimisticStarred === 'undefined') return;
-  var articleId;
-  if (btn.hasAttribute('data-bottom-star')) {
-    var bar = btn.closest('.article-bottom-bar');
-    if (!bar || !bar.dataset.articleId) return;
-    articleId = parseInt(bar.dataset.articleId, 10);
-  } else {
-    var articleEl = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
-    if (!articleEl) return;
-    articleId = parseInt(articleEl.dataset.articleId, 10);
-  }
-  document.dispatchEvent(new CustomEvent('articleStarChanged', {
-    detail: { id: articleId, isStarred: btn._optimisticStarred }
-  }));
-  delete btn._optimisticStarred;
-}
-document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisticDetailStar(e.detail.elt); });
-document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticDetailStar(e.detail.elt); });
-document.body.addEventListener('htmx:afterRequest', function (e) {
-  var btn = e.detail.elt && e.detail.elt.closest ? (e.detail.elt.closest('[data-bottom-star]') || e.detail.elt.closest('[data-header-star]')) : null;
+  var btn = e.detail.elt && e.detail.elt.closest ? e.detail.elt.closest(_STAR_SELECTOR) : null;
   if (btn) delete btn._optimisticStarred;
 });
 
@@ -1421,13 +1400,45 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   var INLINE_ID = 'inline-article-detail';
   var CONTENT_ID = INLINE_ID + '-content';
 
-  function openExternal(url) {
+  // sameTabFallback defaults to true: when the user clicked a link, navigating this
+  // tab is the honest outcome of a blocked popup. Pass false for opens the user did
+  // not ask for — throwing the reader out of the app on a plain row click would lose
+  // the list position and scroll. Returns whether a tab actually opened.
+  function openExternal(url, sameTabFallback) {
     // Do not pass a features string — window.open with 'noopener' intentionally returns null
     // even on success, making the blocked-popup check unreliable. Modern browsers apply
     // noopener by default for cross-origin _blank. Fall back to same-tab only when truly blocked.
     var w = window.open(url, '_blank');
-    if (!w) window.location.href = url;
+    if (!w && sameTabFallback !== false) window.location.href = url;
+    return !!w;
   }
+
+  function currentDetailArticleId() {
+    var el = document.querySelector('#article-detail [data-article-id]');
+    return el ? el.dataset.articleId : null;
+  }
+
+  // Articles with nothing to show: open the source straight from the click, while the
+  // user gesture is still live. Doing it after the HTMX response would be a bare
+  // window.open and the popup blocker would eat it.
+  document.addEventListener('click', function (e) {
+    if (document.documentElement.dataset.openOriginalEmpty !== '1') return;
+    var row = e.target.closest('.article-row');
+    if (!row || !row.dataset.noBody || !row.dataset.url) return;
+    // Star and label buttons, excluded from the row's own hx-trigger the same way.
+    if (e.target.closest('[data-stop-propagation]')) return;
+    // An expanded row is handled by the collapse path and by the title handler above,
+    // either of which would otherwise produce a second tab.
+    if (_shouldUseInline() && row.classList.contains('inline-expanded')) return;
+    // 3-panel has no expanded class, so without this a repeat click on the article
+    // already in the detail pane opens another tab.
+    if (currentDetailArticleId() === row.dataset.articleId) return;
+    if (!openExternal(row.dataset.url, false)) return;
+    // The delegated tracker already covers a real anchor click; avoid a duplicate POST.
+    if (!e.target.closest('a[target="_blank"]')) recordLinkOpened(row.dataset.articleId);
+    if (window._trackExternalVisit) window._trackExternalVisit(row.dataset.articleId);
+    // No preventDefault: HTMX still loads the detail behind the new tab.
+  }, true);
 
   // Title <a> click handling: prevent native navigation except when row is expanded in 2-panel
   document.addEventListener('click', function (e) {

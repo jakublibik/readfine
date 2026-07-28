@@ -12,8 +12,11 @@ from app.utils.url_validator import (
     TRANSIENT_HTTP_STATUSES,
     _pin_connection,
     fetch_url_conditional,
+    fetch_url_page,
     fetch_url_with_ssrf_check,
+    is_bot_block,
     parse_retry_after,
+    rate_limited_until,
     redact_url,
     spacing_from_headers,
     validate_feed_url,
@@ -33,9 +36,24 @@ class TestSpacingFromHeaders:
     def test_single_call_window_equals_reset(self):
         assert spacing_from_headers(self._h(ratelimit_remaining=1, ratelimit_reset=60), _NOW) == 60.0
 
-    def test_exhausted_budget_floors_remaining_to_one(self):
-        # remaining=0 → spread the full reset window rather than dividing by zero.
-        assert spacing_from_headers(self._h(ratelimit_remaining=0, ratelimit_reset=30), _NOW) == 30.0
+    def test_exhausted_budget_yields_no_spacing(self):
+        # remaining=0 → `reset` is the phase left in the current window, not a period.
+        # It depends on when we asked, not on any rate: Reddit answers every request
+        # with remaining=0 and a reset that counts down to the next wall-clock minute,
+        # so consecutive requests 84s apart report 59, then 35, then 11. Feeding that
+        # to the monotonic ratchet in host_throttle "learned" the window length from
+        # sampling noise. The deadline reading belongs to rate_limited_until instead.
+        assert spacing_from_headers(self._h(ratelimit_remaining=0, ratelimit_reset=30), _NOW) is None
+
+    def test_exhausted_budget_still_yields_a_cooldown(self):
+        # The same headers remain a valid "not before now + reset" deadline.
+        h = self._h(ratelimit_remaining=0, ratelimit_reset=30)
+        assert rate_limited_until(h, _NOW) == _NOW + timedelta(seconds=30)
+
+    def test_budget_with_room_still_yields_a_rate(self):
+        # The fix must not silence the case the function exists for: a live budget
+        # with requests left in it really is reset/remaining.
+        assert spacing_from_headers(self._h(ratelimit_remaining=4, ratelimit_reset=60), _NOW) == 15.0
 
     def test_legacy_x_spelling(self):
         h = self._h(**{"x-ratelimit-remaining": 4, "x-ratelimit-reset": 40})
@@ -68,6 +86,38 @@ def _mock_httpx_client(handler):
 
     with patch("app.utils.url_validator.httpx.Client", factory):
         yield
+
+
+class TestIsBotBlock:
+    """403/429 without WWW-Authenticate = the host refusing automation."""
+
+    def _h(self, **kw):
+        return httpx.Headers({k.replace("_", "-"): str(v) for k, v in kw.items()})
+
+    def test_bare_403_is_a_block(self):
+        assert is_bot_block(403, self._h()) is True
+
+    def test_bare_429_is_a_block(self):
+        assert is_bot_block(429, self._h()) is True
+
+    def test_403_with_www_authenticate_is_an_auth_failure(self):
+        h = self._h(**{"www-authenticate": 'Basic realm="feeds"'})
+        assert is_bot_block(403, h) is False
+
+    def test_403_with_ratelimit_headers_is_still_a_block(self):
+        # Reddit sends both shapes for the same condition; a throttle is not a feed fault.
+        h = self._h(**{"x-ratelimit-remaining": 0, "x-ratelimit-reset": 45})
+        assert is_bot_block(403, h) is True
+
+    def test_404_is_not_a_block(self):
+        assert is_bot_block(404, self._h()) is False
+
+    def test_500_is_not_a_block(self):
+        assert is_bot_block(500, self._h()) is False
+
+    def test_no_status_is_not_a_block(self):
+        # Timeouts and DNS failures reach the caller with no status at all.
+        assert is_bot_block(None, self._h()) is False
 
 
 class TestSchemeValidation:
@@ -223,7 +273,7 @@ class TestFetchUrlConditional:
 
     def test_validators_sent_as_conditional_headers(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(304)) as mock_resolve:
+                   return_value=(httpx.Response(304), None)) as mock_resolve:
             fetch_url_conditional(
                 "https://example.com/feed.xml",
                 etag='"abc"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
@@ -234,7 +284,7 @@ class TestFetchUrlConditional:
 
     def test_no_conditional_headers_without_validators(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(200)) as mock_resolve:
+                   return_value=(httpx.Response(200), None)) as mock_resolve:
             fetch_url_conditional("https://example.com/feed.xml", headers={"User-Agent": "x"})
         headers = mock_resolve.call_args[0][3]
         assert "If-None-Match" not in headers
@@ -243,7 +293,7 @@ class TestFetchUrlConditional:
 
     def test_304_passthrough(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=httpx.Response(304)):
+                   return_value=(httpx.Response(304), None)):
             result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
         assert result.status_code == 304
         assert result.text == ""
@@ -253,7 +303,7 @@ class TestFetchUrlConditional:
             200, text="<rss/>",
             headers={"ETag": '"new"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
         )
-        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert result.text == "<rss/>"
@@ -262,7 +312,7 @@ class TestFetchUrlConditional:
 
     def test_long_validators_truncated_to_255(self):
         resp = httpx.Response(200, headers={"ETag": "x" * 400})
-        with patch("app.utils.url_validator._resolve_response", return_value=resp):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert len(result.etag) == 255
 
@@ -310,6 +360,120 @@ class TestResolveResponseIntegration:
                 result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert "ok" in result.text
+
+
+class TestPermanentRedirectTarget:
+    """The address a stored feed URL may safely be rewritten to.
+
+    End-to-end through the real redirect loop: the interesting behaviour is which
+    hop the permanent prefix stops at, which a unit test of the guard alone misses.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _chain(self, start, *hops):
+        """Fetch *start* through *hops* ((status, location), …), return permanent_url.
+
+        Hops are served in order and the last request answers 200, so a chain may
+        revisit the same path (http → https on one URL) without looping.
+        """
+        remaining = list(hops)
+
+        def handler(request):
+            if not remaining:
+                return httpx.Response(200, text="<rss/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                return fetch_url_page(start).permanent_url
+
+    def test_all_permanent_chain_yields_final_url(self):
+        # The vice.com shape: http → 301 https → 301 trailing slash → 200.
+        assert self._chain(
+            "http://example.com/feed",
+            (301, "https://example.com/feed"),
+            (301, "https://example.com/feed/"),
+        ) == "https://example.com/feed/"
+
+    def test_permanent_prefix_survives_a_later_temporary_hop(self):
+        # The 301 said "/feed moved to /moved" for good; whatever the 302 does after
+        # that cannot unsay it, so the permanent prefix is still worth storing.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://example.com/moved"),
+            (302, "https://example.com/temporary"),
+        ) == "https://example.com/moved"
+
+    def test_temporary_first_hop_yields_nothing(self):
+        assert self._chain(
+            "https://example.com/feed",
+            (302, "https://example.com/elsewhere"),
+            (301, "https://example.com/final"),
+        ) is None
+
+    def test_no_redirect_yields_nothing(self):
+        assert self._chain("https://example.com/feed") is None
+
+    def test_userinfo_in_original_blocks_adoption(self):
+        # A Location header never carries credentials, so adopting the target would
+        # silently drop them and turn every later fetch into a 401.
+        assert self._chain(
+            "https://user:pass@example.com/feed",
+            (301, "https://example.com/moved"),
+        ) is None
+
+    def test_userinfo_in_target_blocks_adoption(self):
+        # An honest Location carries no credentials, but a hostile feed host can put
+        # anything in one. Adopting them would store credentials on a row the user
+        # never marked private, so every subscriber would start sending them, and the
+        # feed URL links would render a host that is not the one being fetched.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://trusted.example@evil.example/feed"),
+        ) is None
+
+    def test_query_gained_blocks_adoption(self):
+        # A session/CDN parameter would be baked in and expire days later.
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "https://example.com/feed?session=abc"),
+        ) is None
+
+    def test_query_lost_blocks_adoption(self):
+        # Feeds authenticated by a query token must not lose it.
+        assert self._chain(
+            "https://example.com/feed?api_key=secret",
+            (301, "https://example.com/feed"),
+        ) is None
+
+    def test_unchanged_query_is_adopted(self):
+        assert self._chain(
+            "https://example.com/feed?format=rss",
+            (301, "https://www.example.com/feed?format=rss"),
+        ) == "https://www.example.com/feed?format=rss"
+
+    def test_https_to_http_downgrade_blocks_adoption(self):
+        assert self._chain(
+            "https://example.com/feed",
+            (301, "http://example.com/feed"),
+        ) is None
+
+    def test_conditional_fetch_reports_permanent_url_too(self):
+        served = []
+
+        def handler(request):
+            served.append(request)
+            if len(served) == 1:
+                return httpx.Response(301, headers={"Location": "https://example.com/moved"})
+            return httpx.Response(304)
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                result = fetch_url_conditional("https://example.com/feed", etag='"abc"')
+        assert result.status_code == 304
+        assert result.permanent_url == "https://example.com/moved"
 
 
 class TestPinConnection:
@@ -446,3 +610,66 @@ class TestOutboundLogging:
     def test_never_raises(self, caplog):
         # A malformed response object must not propagate out of the logger.
         assert self._log(caplog, enabled=True, response=object()) is not None
+
+
+class TestProtocolErrorRetry:
+    """A connection dying mid-request is retried once; other failures are not."""
+
+    def _pin_localhost(self):
+        return patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))])
+
+    def test_goaway_is_retried_and_succeeds(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            if len(attempts) == 1:
+                raise httpx.RemoteProtocolError(
+                    "<ConnectionTerminated error_code:0>", request=request
+                )
+            return httpx.Response(200, text="feed body")
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            body = fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert body == "feed body"
+        assert len(attempts) == 2
+
+    def test_second_protocol_error_gives_up(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            raise httpx.RemoteProtocolError("Server disconnected", request=request)
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            with pytest.raises(httpx.RemoteProtocolError):
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert len(attempts) == 2  # one retry, then the error is the answer
+
+    def test_timeout_is_not_retried(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            with pytest.raises(httpx.ReadTimeout):
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert len(attempts) == 1
+
+    def test_retry_reuses_the_pinned_ip(self):
+        hosts = []
+
+        def handler(request):
+            hosts.append((request.url.host, request.headers.get("host")))
+            if len(hosts) == 1:
+                raise httpx.RemoteProtocolError("GOAWAY", request=request)
+            return httpx.Response(200, text="ok")
+
+        with _mock_httpx_client(handler):
+            with self._pin_localhost() as resolve:
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        # Same validated IP both times, and DNS was consulted only once.
+        assert hosts == [("93.184.216.34", "example.com")] * 2
+        assert resolve.call_count == 1

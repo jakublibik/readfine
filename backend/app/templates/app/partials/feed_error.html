@@ -1,0 +1,14 @@
+{#- Sidebar feed error indicator: a red bar shown for a feed in error/disabled
+     state, and nothing at all for a healthy one.
+
+     Single source for both renders of it. The sidebar draws it inline; the manual
+     refresh endpoint returns it out-of-band (oob=true) because it sits outside the
+     swapped #feed-badge target, so a fetch that cleared the error would otherwise
+     leave the bar stale until a full sidebar reload. -#}
+{%- macro feed_error(feed_id, status, last_error, oob=false) -%}
+<span id="feed-error-{{ feed_id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
+{%- if status in ('error', 'disabled') -%}
+<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ last_error or 'Feed error' }}"></span>
+{%- endif -%}
+</span>
+{%- endmacro -%}

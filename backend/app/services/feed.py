@@ -17,9 +17,34 @@ from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.url_validator import async_validate_feed_url
 
 logger = logging.getLogger(__name__)
+
+
+class FeedSubscriptionError(ValueError):
+    """Base for subscribe errors.
+
+    Subclasses ``ValueError`` so existing ``except ValueError`` handlers keep
+    working; the typed subclasses let callers map the failure to the right HTTP
+    status (or import-loop action) without string-matching the message.
+    """
+
+
+class FeedLimitReached(FeedSubscriptionError):
+    """The user is already at their feed-subscription cap."""
+
+    def __init__(self, max_feeds: int):
+        self.max_feeds = max_feeds
+        super().__init__(f"Feed limit reached ({max_feeds})")
+
+
+class AlreadySubscribed(FeedSubscriptionError):
+    """The user already subscribes to this feed."""
+
+    def __init__(self, message: str = "Already subscribed to this feed"):
+        super().__init__(message)
+
 
 # Feed IDs for which an initial fetch task is already running.
 # Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
@@ -32,27 +57,44 @@ _initial_fetch_in_progress: set[int] = set()
 # the (normalized) feed URL. In-process cache — fine for the single-process deploy,
 # same as _initial_fetch_in_progress.
 _FEED_PREVIEW_TTL = 120.0  # seconds
-_feed_preview_cache: dict[str, tuple[float, feedparser.FeedParserDict]] = {}
+# url → (expiry, parsed, permanent_url). The third element is the address the URL
+# permanently redirects to, so subscribe() can create the feed row on the real
+# address without spending a second request to discover it.
+_feed_preview_cache: dict[str, tuple[float, feedparser.FeedParserDict, str | None]] = {}
 
 
-def cache_feed_preview(url: str, parsed: feedparser.FeedParserDict) -> None:
+def cache_feed_preview(
+    url: str, parsed: feedparser.FeedParserDict, permanent_url: str | None = None
+) -> None:
     """Store a successful public-feed parse for brief reuse by subscribe()."""
     now = time.monotonic()
-    for stale in [k for k, (exp, _) in _feed_preview_cache.items() if exp <= now]:
+    for stale in [k for k, (exp, _, _) in _feed_preview_cache.items() if exp <= now]:
         _feed_preview_cache.pop(stale, None)
-    _feed_preview_cache[url] = (now + _FEED_PREVIEW_TTL, parsed)
+    _feed_preview_cache[url] = (now + _FEED_PREVIEW_TTL, parsed, permanent_url)
+
+
+def _live_preview(url: str) -> tuple[feedparser.FeedParserDict, str | None] | None:
+    """Return the still-fresh cache entry for *url*, evicting an expired one."""
+    entry = _feed_preview_cache.get(url)
+    if entry is None:
+        return None
+    expiry, parsed, permanent_url = entry
+    if expiry <= time.monotonic():
+        _feed_preview_cache.pop(url, None)
+        return None
+    return parsed, permanent_url
 
 
 def get_cached_feed_preview(url: str) -> feedparser.FeedParserDict | None:
     """Return a still-fresh cached parse for *url*, else None (evicting if expired)."""
-    entry = _feed_preview_cache.get(url)
-    if entry is None:
-        return None
-    expiry, parsed = entry
-    if expiry <= time.monotonic():
-        _feed_preview_cache.pop(url, None)
-        return None
-    return parsed
+    entry = _live_preview(url)
+    return entry[0] if entry else None
+
+
+def get_cached_permanent_url(url: str) -> str | None:
+    """Return the permanent redirect target recorded with *url*'s cached parse."""
+    entry = _live_preview(url)
+    return entry[1] if entry else None
 
 
 async def subscribe(
@@ -98,36 +140,49 @@ async def subscribe(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         if (count_result.scalar() or 0) >= max_feeds:
-            raise ValueError(f"Feed limit reached ({max_feeds})")
+            raise FeedLimitReached(max_feeds)
 
     feed: Feed | None = None
     parsed = None
 
-    if not is_private:
-        # Look for existing public feed
+    async def _existing_public_feed(feed_url: str) -> Feed | None:
+        """The shared public feed row at *feed_url*, if any (raises if subscribed)."""
+        if is_private:
+            return None
         existing = await db.execute(
-            select(Feed).where(Feed.feed_url == url, Feed.is_private == False)
+            select(Feed).where(Feed.feed_url == feed_url, Feed.is_private == False)
         )
-        feed = existing.scalar_one_or_none()
-
-        if feed:
-            # Check if already subscribed
+        found = existing.scalar_one_or_none()
+        if found:
             already = await db.execute(
                 select(UserFeed).where(
                     UserFeed.user_id == user.id,
-                    UserFeed.feed_id == feed.id,
+                    UserFeed.feed_id == found.id,
                 )
             )
             if already.scalar_one_or_none():
-                raise ValueError("Already subscribed to this feed")
+                raise AlreadySubscribed()
+        return found
+
+    feed = await _existing_public_feed(url)
 
     if feed is None:
         # Reuse a recent Test-step parse if available so the whole add flow is a
         # single network request (avoids tripping rate limits like Reddit's). Only
         # public feeds are cached; private/auth feeds always fetch fresh.
         parsed = None if is_private else get_cached_feed_preview(url)
+        permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed = await fetch_and_parse_url(url)
+            parsed, permanent_url = await fetch_and_parse_url(url)
+
+        # Create the row on the address the host actually serves. Storing the URL the
+        # user typed would make every later poll walk the same redirect chain, and on
+        # an OPML re-import it would create a second row for a feed we already have.
+        if permanent_url and permanent_url != url:
+            url = permanent_url
+            feed = await _existing_public_feed(url)
+
+    if feed is None:
         title = (
             custom_title
             or parsed.feed.get("title")
@@ -182,7 +237,7 @@ async def subscribe(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ValueError("Already subscribed to this feed")
+        raise AlreadySubscribed()
     await db.refresh(user_feed)
     user_feed.feed = feed
 
@@ -280,7 +335,7 @@ async def subscribe_scrape(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         if (count_result.scalar() or 0) >= max_feeds:
-            raise ValueError(f"Feed limit reached ({max_feeds})")
+            raise FeedLimitReached(max_feeds)
 
     selector = selector.strip()
     if not selector:
@@ -290,13 +345,9 @@ async def subscribe_scrape(
 
     # Validate selector against the live page before saving
     if validate_selector:
-        from app.fetcher.scrape import extract_article_links
-        loop = asyncio.get_running_loop()
+        from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
-            html = await loop.run_in_executor(
-                None, fetch_url_with_ssrf_check, url, None, 30,
-                {"User-Agent": "Readfine/1.0", "Accept": "text/html,*/*"},
-            )
+            html = await fetch_page_html(url)
         except Exception as exc:
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)
@@ -323,7 +374,7 @@ async def subscribe_scrape(
             select(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
         )
         if already.scalar_one_or_none():
-            raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+            raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     else:
         feed = Feed(
             feed_url=url[:2048],
@@ -353,7 +404,7 @@ async def subscribe_scrape(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise ValueError(f"Already subscribed to this URL with the same CSS selector ({selector})")
+        raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     await db.refresh(user_feed)
 
     # Mark in-progress synchronously before spawning (see subscribe() for why).

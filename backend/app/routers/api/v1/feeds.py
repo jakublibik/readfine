@@ -8,7 +8,7 @@ from app.database import get_db
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
-from app.services.feed import attach_unread_counts, list_user_feeds, subscribe, unsubscribe
+from app.services.feed import AlreadySubscribed, attach_unread_counts, list_user_feeds, subscribe, unsubscribe
 from app.utils.crypto import encrypt
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
@@ -38,9 +38,10 @@ async def subscribe_feed(
             fetch_auth_pass=payload.fetch_auth_pass.get_secret_value() if payload.fetch_auth_pass else None,
             db=db,
         )
+    except AlreadySubscribed as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValueError as e:
-        status_code = status.HTTP_409_CONFLICT if "already subscribed" in str(e).lower() else status.HTTP_400_BAD_REQUEST
-        raise HTTPException(status_code=status_code, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     # Reload with feed relationship
     result = await db.execute(
@@ -116,6 +117,7 @@ async def update_feed(
         if feed.status == "disabled":
             feed.status = "active"
         feed.fetch_error_count = 0
+        feed.block_count = 0
         if not feed.is_private:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

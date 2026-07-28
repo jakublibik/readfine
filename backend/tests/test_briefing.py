@@ -539,7 +539,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_interval_returns_validation_error(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         config = make_config()
         db = make_mock_db()
@@ -556,7 +556,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_weekly_without_day_returns_validation_error(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         config = make_config()
         db = make_mock_db()
@@ -573,7 +573,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_time_format_returns_validation_error(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         config = make_config()
         db = make_mock_db()
@@ -590,7 +590,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_too_many_recipients_returns_validation_error(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         config = make_config()
         db = make_mock_db()
@@ -608,7 +608,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_invalid_email_format_returns_validation_error(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         config = make_config()
         db = make_mock_db()
@@ -626,7 +626,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_valid_save_sets_hx_trigger(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
 
         config = make_config()
@@ -639,7 +639,7 @@ class TestBriefingEndpointValidation:
                 else make_scalar_result(user_settings)
         db.execute.side_effect = execute_side_effect
 
-        with patch("app.routers.web.app._catchup_configs_list_html",
+        with patch("app.routers.web.app.catchup._catchup_configs_list_html",
                    new_callable=AsyncMock) as mock_list:
             from fastapi.responses import HTMLResponse
             mock_list.return_value = HTMLResponse("<ul></ul>")
@@ -654,7 +654,7 @@ class TestBriefingEndpointValidation:
 
     @pytest.mark.asyncio
     async def test_config_not_found_returns_404(self):
-        from app.routers.web.app import htmx_briefing_modal_save
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
         from tests.conftest import make_mock_db, make_scalar_result
         db = make_mock_db()
         db.execute.return_value = make_scalar_result(None)

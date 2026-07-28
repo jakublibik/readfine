@@ -1,5 +1,5 @@
-{% macro badge_unread(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">{{ count|num }}</span>{% endmacro %}
-{% macro badge_total(count) %}<span class="mark-read-badge ml-auto flex-shrink-0 text-xs text-gray-400 px-1.5 py-0.5">{{ count|num }}</span>{% endmacro %}
+{% from "app/partials/badges.html" import badge_unread, badge_total %}
+{% from "app/partials/feed_error.html" import feed_error %}
 
 {# Both the collapsed rail and the full sidebar are always rendered; CSS (base.html)
    shows exactly one based on pinned / mobile-overlay state, so collapse/expand is a
@@ -288,11 +288,7 @@
         <a class="nav-item flex items-center pl-6 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
            hx-get="/htmx/articles?feed_id={{ uf.feed_id }}" hx-target="#article-list" hx-swap="innerHTML"
            hx-push-url="false">
-          <span id="feed-error-{{ uf.feed_id }}">
-            {%- if uf.feed.status in ('error', 'disabled') -%}
-            <span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ uf.feed.last_error or 'Feed error' }}"></span>
-            {%- endif -%}
-          </span>
+          {{ feed_error(uf.feed_id, uf.feed.status, uf.feed.last_error) }}
           <span class="flex-1 truncate">{{ uf.custom_title or uf.feed.title }}</span>
           <span id="feed-badge-{{ uf.feed_id }}">
             {% set fu = feed_unread_counts.get(uf.feed_id, 0) %}

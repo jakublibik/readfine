@@ -111,6 +111,40 @@
 <p class="text-sm text-gray-400 mb-8">No readable extraction failures.</p>
 {% endif %}
 
+{% if stats.readable_revived_recent or stats.readable_revival_pending %}
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Readable extraction revival
+  {% if stats.readable_revival_pending %}<span class="font-normal text-gray-400">({{ stats.readable_revival_pending|num }} feed{{ "s" if stats.readable_revival_pending != 1 }} awaiting a probe)</span>{% endif %}
+</h2>
+{% if stats.readable_revived_recent %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Probes used</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Re-enabled</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for feed in stats.readable_revived_recent %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">{{ feed.title }}</td>
+        <td class="px-4 py-2 text-gray-400">{{ feed.readable_revival_attempts }}</td>
+        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+          <time datetime="{{ feed.readable_revived_at.isoformat() }}">{{ feed.readable_revived_at | utctime('short') }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<p class="text-sm text-gray-400 mb-8">No feeds revived in the last 30 days.</p>
+{% endif %}
+{% endif %}
+
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Recent fetch errors <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.recent_errors %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -182,5 +216,88 @@
 </div>
 {% else %}
 <p class="text-sm text-gray-400">No briefing errors.</p>
+{% endif %}
+
+{% if stats.auto_profile_errors %}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Interest profile generation errors</h2>
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  Scheduled interest-profile regeneration failed and has not recovered. The cause is
+  usually the user's own API key or credit; a schedule shown as off turned itself off
+  after repeated failures and will not retry.
+</p>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">User</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Failures</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Schedule</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last failed</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for p in stats.auto_profile_errors %}
+      <tr>
+        <td class="px-4 py-2 max-w-xs">
+          <div class="text-gray-700 truncate">{{ p.user.display_name if p.user else "Deleted user" }}</div>
+          {% if p.user %}<div class="text-xs text-gray-400 truncate">{{ p.user.email }}</div>{% endif %}
+        </td>
+        <td class="px-4 py-2 text-red-600 truncate max-w-xs" title="{{ p.ai_preference_last_error }}">{{ p.ai_preference_last_error }}</td>
+        <td class="px-4 py-2 text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          {% if p.ai_preference_auto_days %}
+            <span class="text-gray-400">every {{ p.ai_preference_auto_days }} days</span>
+          {% else %}
+            <span class="text-amber-600 text-xs">off - needs manual fix</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          {% if p.ai_preference_last_error_at %}
+            <time class="text-gray-400" datetime="{{ p.ai_preference_last_error_at.isoformat() }}">{{ p.ai_preference_last_error_at | utctime('short') }}</time>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
+{% if stats.redirect_conflicts %}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Feed redirect conflicts</h2>
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  These feeds permanently redirect to a URL another feed already occupies, so the
+  address cannot be updated and the feed re-walks its redirect on every fetch. Merge
+  the pair by hand: move the subscribers to the target feed and remove this one.
+</p>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Redirects to</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Held by</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Detected</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for c in stats.redirect_conflicts %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.feed_title }} <span class="text-xs text-gray-400">#{{ c.feed_id }}</span></td>
+        <td class="px-4 py-2 text-gray-500 truncate max-w-xs" title="{{ c.target_url }}">{{ c.target_url }}</td>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.holder_title }} <span class="text-xs text-gray-400">#{{ c.holder_id }}</span></td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          <time class="text-gray-400" datetime="{{ c.detected_at.isoformat() }}">{{ c.detected_at | utctime('short') }}</time>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
 {% endif %}
 {% endblock %}

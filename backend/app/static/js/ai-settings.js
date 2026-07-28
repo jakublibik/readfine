@@ -7,6 +7,21 @@ document.addEventListener('htmx:beforeRequest', function (e) {
   if (el) el.innerHTML = '<span class="text-gray-400 text-sm">' + (btn.dataset.loadingText || 'Loading…') + '</span>';
 });
 
+// Scoring checkbox → enable/disable everything that only applies to scoring
+// (score in list, interest profile, generate, auto-update, revert), the moment
+// it is clicked. Delegated, because saving the form swaps the page in via
+// hx-boost and any handler bound to the old elements would be gone.
+document.addEventListener('change', function (e) {
+  if (!e.target || e.target.id !== 'ai_scoring_enabled_default') return;
+  var dependent = document.getElementById('scoring-dependent');
+  if (!dependent) return;
+  var off = !e.target.checked;
+  dependent.classList.toggle('opacity-50', off);
+  dependent.querySelectorAll('input, textarea, select, button').forEach(function (el) {
+    el.disabled = off;
+  });
+});
+
 document.addEventListener('DOMContentLoaded', function () {
   // Provider select → update "Available models" link
   document.querySelectorAll('select[data-slot]').forEach(function (sel) {
@@ -23,20 +38,6 @@ document.addEventListener('DOMContentLoaded', function () {
       }
     });
   });
-
-  // Scoring enabled checkbox → toggle preference section
-  var chk = document.getElementById('chk-scoring-enabled');
-  if (chk) {
-    chk.addEventListener('change', function () {
-      var on = chk.checked;
-      var ta = document.getElementById('ai_preference_text');
-      var btn = document.getElementById('btn-generate-preference');
-      var sec = document.getElementById('preference-section');
-      if (ta) ta.disabled = !on;
-      if (btn) btn.disabled = !on;
-      if (sec) sec.classList.toggle('opacity-50', !on);
-    });
-  }
 
   // Remove API key button → clear password input before submit
   document.querySelectorAll('button[data-clear-key]').forEach(function (btn) {
@@ -69,15 +70,15 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // Preference text character counter
-  var ta = document.getElementById('ai_preference_text');
-  var counter = document.getElementById('pref-char-count');
-  if (ta && counter) {
-    ta.addEventListener('input', function () {
-      var n = ta.value.length;
-      counter.textContent = n;
-      counter.parentElement.classList.toggle('text-red-500', n > 5000);
-      counter.parentElement.classList.toggle('text-gray-400', n <= 5000);
-    });
-  }
+  // Preference text character counter. Delegated, because generating or
+  // reverting the profile swaps the textarea node out from under us.
+  document.addEventListener('input', function (e) {
+    if (!e.target || e.target.id !== 'ai_preference_text') return;
+    var counter = document.getElementById('pref-char-count');
+    if (!counter) return;
+    var n = e.target.value.length;
+    counter.textContent = n;
+    counter.parentElement.classList.toggle('text-red-500', n > 5000);
+    counter.parentElement.classList.toggle('text-gray-400', n <= 5000);
+  });
 });

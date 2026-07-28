@@ -1,6 +1,5 @@
 """Admin service: user management, app settings, invitations, audit log."""
 import logging
-import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, delete, func, select
@@ -20,7 +19,8 @@ from app.models.feed import Feed, UserFeed
 from app.models.filter import Filter
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
-from app.models.user import User, UserCatchupConfig
+from app.models.user import User, UserCatchupConfig, UserSettings
+from app.auth.security import generate_token
 from app.services.scope_cleanup import strip_scope_references
 
 logger = logging.getLogger(__name__)
@@ -167,7 +167,7 @@ async def create_invitation(
 ) -> Invitation:
     inv = Invitation(
         created_by=admin_id,
-        token=secrets.token_urlsafe(32),
+        token=generate_token(),
         email=email or None,
         expires_at=expires_at,
     )
@@ -214,6 +214,65 @@ async def list_briefing_errors(db: AsyncSession) -> list[UserCatchupConfig]:
         .order_by(UserCatchupConfig.briefing_next_send_at.asc().nulls_first())
     )
     return result.scalars().all()
+
+
+async def list_auto_profile_errors(db: AsyncSession) -> list[UserSettings]:
+    """Users whose scheduled interest-profile update currently has an unresolved error.
+
+    ``ai_preference_last_error`` is cleared by the next successful generation
+    (``ai_profile_service``), so a non-null value means it has not recovered.
+    Most causes are the user's own (API key, credit), but on a hosted instance a
+    cluster of them is worth seeing. Rows where the schedule already switched
+    itself off sort first — those never retry on their own.
+    """
+    result = await db.execute(
+        select(UserSettings)
+        .options(selectinload(UserSettings.user))
+        .where(UserSettings.ai_preference_last_error.is_not(None))
+        .order_by(
+            UserSettings.ai_preference_auto_days.asc(),
+            UserSettings.ai_preference_last_error_at.desc().nulls_last(),
+        )
+    )
+    return result.scalars().all()
+
+
+async def list_redirect_conflicts(db: AsyncSession) -> list[dict]:
+    """Feeds that permanently redirect onto a URL another feed already holds.
+
+    The stored address cannot be rewritten in that case (it would collide on the
+    public-feed unique index), so the feed keeps walking its redirect on every
+    fetch. New convergence no longer arises, since subscribe and OPML import resolve
+    the address before creating a row, so a non-empty list is an existing pair worth
+    merging by hand. Reads the in-process registry populated by ``adopt_permanent_url``
+    and joins in the feed titles; returns newest-detected first.
+    """
+    from app.fetcher.redirects import redirect_conflicts
+    from app.utils.url_validator import redact_url
+
+    conflicts = redirect_conflicts()
+    if not conflicts:
+        return []
+    ids = set(conflicts) | {c.holder_id for c in conflicts.values()}
+    titles = dict((await db.execute(
+        select(Feed.id, Feed.title).where(Feed.id.in_(ids))
+    )).all())
+    rows = [
+        {
+            "feed_id": feed_id,
+            "feed_title": titles.get(feed_id, "—"),
+            # Redacted: the query is unchanged from the feed's own URL (the adoption
+            # guard requires it), so it can carry a token like ?api_key=… that the
+            # dashboard should not print in full.
+            "target_url": redact_url(c.target_url),
+            "holder_id": c.holder_id,
+            "holder_title": titles.get(c.holder_id, "(deleted)"),
+            "detected_at": c.detected_at,
+        }
+        for feed_id, c in conflicts.items()
+    ]
+    rows.sort(key=lambda r: r["detected_at"], reverse=True)
+    return rows
 
 
 async def list_audit_logs(db: AsyncSession, limit: int = 100) -> list[AuditLog]:
@@ -440,7 +499,22 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .order_by(Article.readable_failed_at.desc())
         .limit(5)
     )).scalars().all()
+    # Feeds whose readable extraction was auto-disabled for 403s: awaiting a probe, or
+    # brought back by one. Read from the feed rows rather than kept in memory, since a
+    # revival is rare and the job runs at night — an in-process registry would be wiped
+    # by the next restart or deploy and the panel would sit empty.
+    readable_revival_pending = (await db.execute(
+        select(func.count(Feed.id)).where(Feed.readable_revival_next_at.isnot(None))
+    )).scalar() or 0
+    readable_revived_recent = (await db.execute(
+        select(Feed)
+        .where(Feed.readable_revived_at >= since)
+        .order_by(Feed.readable_revived_at.desc())
+        .limit(5)
+    )).scalars().all()
     briefing_errors = await list_briefing_errors(db)
+    auto_profile_errors = await list_auto_profile_errors(db)
+    redirect_conflicts_list = await list_redirect_conflicts(db)
     return {
         "user_count": user_count,
         "active_user_count": active_user_count,
@@ -452,5 +526,9 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "readable_failed": readable_failed,
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
+        "readable_revival_pending": readable_revival_pending,
+        "readable_revived_recent": readable_revived_recent,
         "briefing_errors": briefing_errors,
+        "auto_profile_errors": auto_profile_errors,
+        "redirect_conflicts": redirect_conflicts_list,
     }

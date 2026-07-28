@@ -1,8 +1,16 @@
 <div id="rate-limits-content">
   <p class="text-xs text-gray-500 mb-4">
-    Readfine learns a minimum gap between fetches for hosts that rate-limit us (HTTP 429),
-    so it stops hammering into the limit. Values only tighten automatically; loosening a
-    host again means clearing it here so Readfine re-learns from scratch.
+    Readfine learns a minimum gap between fetches from what a host advertises: a
+    <code>RateLimit-*</code> budget with requests left in it, or a <code>Retry-After</code>
+    on repeated HTTP 429s. Most hosts advertise nothing, so this table is normally short or
+    empty. Values only tighten automatically; loosening a host again means clearing it here
+    so Readfine re-learns from scratch.
+  </p>
+  <p class="text-xs text-gray-500 mb-4">
+    Sites that block automated clients outright (HTTP 403, or a 429 with no timing) do not
+    appear here — there is no rate to learn. Those are tracked per feed instead and show up
+    as <span class="px-1.5 py-0.5 text-xs rounded bg-amber-100 text-amber-700">throttled</span>
+    in the feed list.
   </p>
 
   {% if spacings %}

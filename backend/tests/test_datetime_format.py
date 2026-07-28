@@ -122,7 +122,7 @@ class TestTimezoneHelpers:
 class TestRescheduleBriefings:
     @pytest.mark.asyncio
     async def test_recomputes_active_briefings(self):
-        from app.routers.web.settings import _reschedule_briefings
+        from app.routers.web.settings.preferences import _reschedule_briefings
         from tests.conftest import make_mock_db, make_scalar_result
 
         active = SimpleNamespace(

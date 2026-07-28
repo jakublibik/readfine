@@ -165,13 +165,16 @@ class TestRegex:
         # heuristic must not freeze evaluation: it is capped by the per-match
         # timeout and treated as "no match" rather than hanging the event loop.
         import time
+        from app.services.filter_service import _REGEX_MATCH_TIMEOUT_S
         article = make_article(title="a" * 60 + "!")
         cond = make_condition("title", "regex", r"(a|a|a)+$")
         start = time.monotonic()
         result = _matches_condition(cond, article, None)
         elapsed = time.monotonic() - start
         assert result is False
-        assert elapsed < 1.0  # bounded by _REGEX_MATCH_TIMEOUT_S, not exponential
+        # Bounded by the timeout (plus slack for check granularity), not exponential:
+        # this pattern would run for years unbounded.
+        assert elapsed < _REGEX_MATCH_TIMEOUT_S * 2
 
     def test_large_input_still_matches(self):
         # The input cap is a safety net far above any real article; a legitimate

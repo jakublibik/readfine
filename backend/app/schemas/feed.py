@@ -63,6 +63,9 @@ class FeedResponse(BaseModel):
     status: str
     last_fetched_at: datetime | None
     last_error: str | None
+    # Consecutive fetches the host refused (anti-bot 403 / bare 429). Status stays
+    # "active" through those, so this is the only signal that a feed is being blocked.
+    block_count: int
     subscriber_count: int
     feed_type: str
 

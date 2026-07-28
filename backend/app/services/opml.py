@@ -18,7 +18,7 @@ from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import Label
 from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
-from app.services.feed import subscribe, subscribe_scrape
+from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.utils.datetime_format import is_valid_timezone
 
@@ -26,9 +26,6 @@ logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 1 * 1024 * 1024  # 1 MB
 
-
-class _FeedLimitReached(Exception):
-    """Raised when the user's feed subscription limit is hit during OPML import."""
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
 
@@ -352,7 +349,7 @@ async def import_opml(
             xml_url = outline.get("xmlUrl", "")
             try:
                 added_id = await _import_feed(user, outline, folder_id, result, db)
-            except _FeedLimitReached:
+            except FeedLimitReached:
                 result.warnings.append("Feed limit reached — remaining feeds skipped")
                 break
             if added_id and xml_url:
@@ -581,16 +578,11 @@ async def _import_feed(
         )
         result.feeds_added += 1
         return uf.feed_id
-    except ValueError as exc:
-        msg = str(exc)
-        if "Already subscribed" in msg:
-            result.feeds_skipped += 1
-        elif "Feed limit" in msg:
-            raise _FeedLimitReached()
-        else:
-            result.feeds_failed += 1
-            result.warnings.append(f"Failed to import {xml_url}: {msg}")
+    except AlreadySubscribed:
+        result.feeds_skipped += 1
         return None
+    except FeedLimitReached:
+        raise  # propagate to the import loop, which stops and warns
     except Exception as exc:
         result.feeds_failed += 1
         result.warnings.append(f"Failed to import {xml_url}: {exc}")

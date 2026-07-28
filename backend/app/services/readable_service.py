@@ -16,14 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
+from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.http_client import READFINE_UA
 
 logger = logging.getLogger(__name__)
 
-# Extraction settings
+# Extraction settings. MAX_RETRIES / BACKOFF_MINUTES are shared with the AI job
+# services (app.services.ai_jobs) so the retry cadence stays consistent; readable's
+# own failure handling (below) applies them to Article rows, not ArticleAiJob.
 _TIMEOUT = 15  # seconds per HTTP request
-_MAX_RETRIES = 3
-_BACKOFF_MINUTES = [5, 30, 120]  # retry delays after 1st, 2nd, 3rd failure
 _BATCH_SIZE = 20  # articles processed per scheduler run
 _MAX_REDIRECTS = 5  # maximum followed redirects per request
 
@@ -335,12 +336,12 @@ def apply_readable_result(
     else:
         retries = (article.readable_retries or 0) + 1
         article.readable_retries = retries
-        if retries >= _MAX_RETRIES:
+        if retries >= MAX_RETRIES:
             article.readable_status = "failed"
             article.readable_failed_at = datetime.now(timezone.utc)
             article.readable_next_retry_at = None
         else:
-            delay_min = _BACKOFF_MINUTES[min(retries - 1, len(_BACKOFF_MINUTES) - 1)]
+            delay_min = BACKOFF_MINUTES[min(retries - 1, len(BACKOFF_MINUTES) - 1)]
             article.readable_next_retry_at = datetime.now(timezone.utc) + timedelta(minutes=delay_min)
     return is_403
 
@@ -570,6 +571,32 @@ _CONSECUTIVE_403_THRESHOLD = 3
 # nothing on an otherwise-good feed), so require a longer streak before disabling.
 _CONSECUTIVE_EMPTY_THRESHOLD = 5
 
+# Days before a feed disabled for 403s is probed again, indexed by attempts already
+# spent. Two tries for the feed's whole lifetime: the first catches a fix on our side
+# (the switch to HTTP/2 was exactly that), the second a change on theirs. A site still
+# refusing after a fortnight is refusing on purpose.
+_REVIVAL_BACKOFF_DAYS = [3, 14]
+_REVIVAL_BATCH_SIZE = 10  # feeds probed per scheduler run
+
+
+def _defer_revival(feed: Feed, now: datetime) -> None:
+    """Point a feed at its next revival probe, or stop probing for good.
+
+    Reads Feed.readable_revival_attempts, which counts every probe the feed has been
+    given over its whole lifetime, passing ones included, and is never reset by this
+    module. Both halves of that matter. A 403 is usually per-IP or rate-based rather
+    than per-URL, so a probe can pass while the feed is still blocked: extraction comes
+    back on, users collect 403s, one article later the feed is disabled again (the old
+    403 articles are still the newest terminal ones, so the streak check trips at once).
+    If a passing probe were free, or the counter reset on re-disable, that would repeat
+    every few days forever. Charging for it lets the loop end by itself.
+    """
+    attempts = feed.readable_revival_attempts or 0
+    if attempts >= len(_REVIVAL_BACKOFF_DAYS):
+        feed.readable_revival_next_at = None
+    else:
+        feed.readable_revival_next_at = now + timedelta(days=_REVIVAL_BACKOFF_DAYS[attempts])
+
 
 async def _disable_readable_for_feed(
     feed_id: int, db: AsyncSession, *, pending_error: str
@@ -625,6 +652,13 @@ async def _disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
         " (cancelled %d pending articles)",
         feed_id, _CONSECUTIVE_403_THRESHOLD, cancelled,
     )
+    # Only 403s get a revival probe. An empty extraction means the page downloaded
+    # fine and simply held nothing we could use, which waiting a fortnight will not
+    # change, so _disable_readable_for_empty deliberately schedules nothing.
+    feed = await db.get(Feed, feed_id)
+    if feed is not None:
+        _defer_revival(feed, datetime.now(timezone.utc))
+        await db.commit()
 
 
 async def _disable_readable_for_empty(feed_id: int, db: AsyncSession) -> None:
@@ -700,3 +734,150 @@ async def _maybe_disable_readable_for_empty(feed_id: int, db: AsyncSession) -> N
         return
 
     await _disable_readable_for_empty(feed_id, db)
+
+
+# ── revival of feeds disabled for 403s ────────────────────────────────────────
+
+async def _revive_readable_for_feed(feed: Feed, db: AsyncSession) -> int:
+    """Turn readable extraction back on for a feed whose block is gone.
+
+    Mirror of _disable_readable_for_feed. Only touches subscribers we disabled
+    ourselves: readable_auto_disabled is the marker for "this was us", and saving the
+    feed form clears it, so anyone who turned extraction off by hand keeps it off.
+
+    Articles are left untouched. Old ones stay 'skipped' or 'failed'; the point is that
+    new articles get extracted again, and that labelled ones reach AI scoring with the
+    full text rather than the RSS stub (see filter_service._apply_filters_for_user).
+
+    Spends a revival attempt, so a feed revived by a probe that turned out to be wrong
+    is not handed the same number of tries all over again.
+    """
+    result = await db.execute(
+        select(UserFeed).where(
+            UserFeed.feed_id == feed.id,
+            UserFeed.readable_auto_disabled == True,
+            UserFeed.readable_auto_disabled_reason == "blocked",
+        )
+    )
+    user_feeds = result.scalars().all()
+    for uf in user_feeds:
+        uf.extract_readable = True
+        uf.readable_auto_disabled = False
+        uf.readable_auto_disabled_reason = None
+
+    # The probe is spent whether or not it told the truth. A 403 is usually per-IP or
+    # rate-based, so a probe can pass while the feed is still blocked; counting only the
+    # failed ones would let disable → revive → disable repeat every few days forever.
+    feed.readable_revival_attempts = (feed.readable_revival_attempts or 0) + 1
+    feed.readable_revival_next_at = None
+    feed.readable_revived_at = datetime.now(timezone.utc)
+    await db.commit()
+    return len(user_feeds)
+
+
+async def retry_blocked_feeds(db: AsyncSession) -> int:
+    """Probe feeds whose readable extraction was auto-disabled for repeated 403s.
+
+    One HTTP request per feed, against its newest article, answering a single question:
+    does the host still refuse us? A page that downloads but extracts to nothing counts
+    as a pass, because the subject here is the block, not this article's markup — a
+    video post or live blog at the top of the feed must not condemn the whole feed.
+
+    Returns the number of feeds revived.
+    """
+    now = datetime.now(timezone.utc)
+    result = await db.execute(
+        select(Feed)
+        .where(
+            Feed.readable_revival_next_at.isnot(None),
+            Feed.readable_revival_next_at <= now,
+        )
+        .order_by(Feed.readable_revival_next_at)  # longest-waiting first, no starvation
+        .limit(_REVIVAL_BATCH_SIZE)
+    )
+    feeds = result.scalars().all()
+    if not feeds:
+        return 0
+
+    import asyncio
+    loop = asyncio.get_running_loop()
+    revived = 0
+
+    for feed in feeds:
+        still_disabled = await db.scalar(
+            select(func.count(UserFeed.id)).where(
+                UserFeed.feed_id == feed.id,
+                UserFeed.readable_auto_disabled == True,
+                UserFeed.readable_auto_disabled_reason == "blocked",
+            )
+        )
+        if not still_disabled:
+            # Everyone has since sorted it out by hand; nothing left to revive.
+            feed.readable_revival_next_at = None
+            await db.commit()
+            continue
+
+        article_url = await db.scalar(
+            select(Article.url)
+            .where(
+                Article.feed_id == feed.id,
+                Article.url.isnot(None),
+                Article.url != "",
+                Article.trimmed_at.is_(None),  # a trimmed stub has no page to fetch
+            )
+            .order_by(Article.id.desc())
+            .limit(1)
+        )
+        if not article_url:
+            # Nothing to probe. Spend the attempt anyway: leaving next_at in the past
+            # would burn a batch slot every single day, and an empty feed has nothing
+            # to offer a later probe either.
+            feed.readable_revival_attempts = (feed.readable_revival_attempts or 0) + 1
+            _defer_revival(feed, now)
+            await db.commit()
+            continue
+
+        auth_pass: Optional[str] = None
+        if feed.fetch_auth_pass_encrypted:
+            try:
+                from app.utils.crypto import decrypt
+                auth_pass = decrypt(feed.fetch_auth_pass_encrypted)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to decrypt fetch_auth_pass for feed %d: %s", feed.id, exc
+                )
+
+        try:
+            content, error, http_status, _ = await loop.run_in_executor(
+                None, extract_readable, article_url, feed.fetch_auth_user, auth_pass
+            )
+        except Exception as exc:
+            content, error, http_status = None, str(exc)[:200], None
+            logger.warning("readable revival probe failed for feed %d: %s", feed.id, exc)
+
+        # Pass = the page provably came down. Content is the obvious case; the empty
+        # message is the other one, since extraction only runs on a body we received.
+        # Everything else (403, but also a timeout or DNS failure) proves nothing, so
+        # it spends an attempt. The probe deliberately does not touch the article: it
+        # is diagnostic only, and reviving old articles is out of scope.
+        downloaded = bool(content and content.strip()) or error == _EMPTY_CONTENT_MSG
+
+        if not downloaded:
+            feed.readable_revival_attempts = (feed.readable_revival_attempts or 0) + 1
+            _defer_revival(feed, now)
+            await db.commit()
+            logger.info(
+                "readable revival: feed %d still blocked (attempt %d/%d, http %s, %s)",
+                feed.id, feed.readable_revival_attempts, len(_REVIVAL_BACKOFF_DAYS),
+                http_status, error,
+            )
+            continue
+
+        subscribers = await _revive_readable_for_feed(feed, db)
+        revived += 1
+        logger.info(
+            "readable revival: re-enabled extraction for feed %d (%d subscribers)",
+            feed.id, subscribers,
+        )
+
+    return revived

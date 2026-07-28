@@ -1,3 +1,5 @@
+{% from "app/partials/ai_blocks.html" import ai_summary, ai_context, ai_spinner, ai_indicator %}
+{% from "app/partials/chat.html" import chat_area %}
 <!-- Mobile back bar (small bucket fullscreen mode only) -->
 <div id="article-detail-root" data-article-id="{{ article.id }}">
 <div id="mobile-detail-back-bar">
@@ -184,38 +186,16 @@
   <div class="mb-5 space-y-3">
 
     {% if article.ai_summary %}
-    <div id="ai-summary-{{ article.id }}" class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
-      <div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>
-      <div class="prose dark:prose-invert max-w-none ai-text">{{ article.ai_summary | markdown }}</div>
-    </div>
+    {{ ai_summary(article.id, article.ai_summary) }}
     {% elif summary_pending %}
-    <div id="ai-summary-{{ article.id }}"
-         hx-get="/htmx/articles/{{ article.id }}/ai-summary/poll"
-         hx-trigger="every 30s"
-         hx-swap="outerHTML"
-         class="flex items-center gap-2 text-sm text-gray-500 py-2">
-      <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-      </svg>
-      Generating summary…
-    </div>
+    {{ ai_spinner("ai-summary-" ~ article.id, "/htmx/articles/" ~ article.id ~ "/ai-summary/poll", "Generating summary…") }}
     {% else %}
-    <div id="ai-summary-{{ article.id }}" class="ai-loading-indicator items-center gap-2 text-sm text-gray-500 py-2">
-      <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24">
-        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
-      </svg>
-      Generating summary…
-    </div>
+    {{ ai_indicator("ai-summary-" ~ article.id, "Generating summary…") }}
     {% endif %}
 
     <div id="ai-context-area-{{ article.id }}">
       {% if article.ai_context %}
-      <div id="ai-context-{{ article.id }}" class="border-l-2 border-amber-400 dark:border-amber-500 pl-4 text-gray-700 dark:text-gray-300">
-        <div class="text-xs font-semibold text-amber-500 dark:text-amber-400 mb-1">AI context</div>
-        <div class="prose dark:prose-invert max-w-none ai-text">{{ article.ai_context | markdown }}</div>
-      </div>
+      {{ ai_context(article.id, article.ai_context) }}
       {% else %}
       <div id="ai-context-{{ article.id }}"></div>
       {% endif %}
@@ -281,56 +261,7 @@
         </button>
     </div>
     <!-- Chat area (swapped by HTMX) -->
-    <div id="chat-area-{{ article.id }}"
-         class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">
-      <div id="chat-messages-{{ article.id }}"
-           class="flex-1 overflow-y-auto space-y-3 mb-3 min-h-0">
-        {% for msg in chat_messages %}
-          {% if msg.role == "user" %}
-          <div class="flex justify-end">
-            <div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border
-                        border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2
-                        text-sm text-gray-800 dark:text-gray-200">{{ msg.content }}</div>
-          </div>
-          {% else %}
-          <div class="flex justify-start">
-            <div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border
-                        border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2
-                        prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | markdown }}</div>
-          </div>
-          {% endif %}
-        {% endfor %}
-      </div>
-      <!-- Input area -->
-      <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
-        <textarea id="chat-input-{{ article.id }}" name="message" rows="3"
-                  placeholder="Ask a question about this article…"
-                  class="w-full text-sm border border-gray-200 dark:border-gray-600
-                         dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
-                  data-chat-input-id="{{ article.id }}"></textarea>
-        <!-- Toolbar -->
-        <div class="flex items-center pl-0.5">
-          <div class="flex items-center gap-1 min-w-0 flex-1">
-            <button type="button" id="chat-attach-btn-{{ article.id }}"
-                    class="w-6 h-6 flex items-center justify-center rounded text-blue-500 bg-transparent border-0 cursor-pointer flex-shrink-0"
-                    title="Attach article">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-              </svg>
-            </button>
-            <span class="text-xs text-gray-400 dark:text-gray-500 truncate">{{ article.title[:25] }}{% if article.title|length > 25 %}…{% endif %}</span>
-            <input type="checkbox" name="include_article"
-                   id="chat-article-{{ article.id }}" checked class="sr-only">
-          </div>
-        </div>
-        <button class="hidden"
-                hx-post="/htmx/articles/{{ article.id }}/ai-chat"
-                hx-include="#chat-input-{{ article.id }},#chat-article-{{ article.id }}"
-                hx-target="#chat-area-{{ article.id }}"
-                hx-swap="outerHTML"></button>
-      </div>
-    </div>
+    {{ chat_area(article.id, chat_messages, true, "", article.title or "") }}
   </div>
 </div>
 {% endif %}

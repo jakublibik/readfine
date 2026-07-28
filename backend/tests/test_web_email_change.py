@@ -137,8 +137,8 @@ class TestSettingsProfileEmailPending:
         # execute: existing-email check → None ; scalar: AppSettings with SMTP
         mock_db.execute.return_value = _scalar(None)
         mock_db.scalar = AsyncMock(return_value=_make_app_settings())
-        with patch("app.routers.web.settings.verify_password", return_value=True), \
-             patch("app.routers.web.settings.send_email"):
+        with patch("app.routers.web.settings.profile.verify_password", return_value=True), \
+             patch("app.routers.web.settings.profile.send_email"):
             resp = auth_client.post("/settings/profile/email", data={
                 "email": "new@test.com",
                 "current_password": "pw",
@@ -173,7 +173,7 @@ class TestSettingsProfileEmailPending:
     def test_no_smtp_changes_email_immediately(self, auth_client, mock_db):
         mock_db.execute.return_value = _scalar(None)
         mock_db.scalar = AsyncMock(return_value=_make_app_settings(smtp_host=None))
-        with patch("app.routers.web.settings.verify_password", return_value=True):
+        with patch("app.routers.web.settings.profile.verify_password", return_value=True):
             resp = auth_client.post("/settings/profile/email", data={
                 "email": "new@test.com",
                 "current_password": "pw",

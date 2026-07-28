@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi.responses import HTMLResponse
 from sqlalchemy import Delete
 
-from app.routers.web.app import _summary_after_star_bg
+from app.routers.web.app.articles import _summary_after_star_bg
 
 
 def _session_factory(db):
@@ -33,7 +33,7 @@ class TestSummaryAfterStarBg:
         article = SimpleNamespace(id=7)
         db = _bg_db(state, article)
         with (
-            patch("app.routers.web.app._STAR_SUMMARY_DEBOUNCE_S", 0),
+            patch("app.routers.web.app.articles._STAR_SUMMARY_DEBOUNCE_S", 0),
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.ai_pipeline_service._run_summary_now", new=AsyncMock()) as run_now,
         ):
@@ -46,7 +46,7 @@ class TestSummaryAfterStarBg:
         state = SimpleNamespace(is_starred=False, ai_summary=None)
         db = _bg_db(state, None)
         with (
-            patch("app.routers.web.app._STAR_SUMMARY_DEBOUNCE_S", 0),
+            patch("app.routers.web.app.articles._STAR_SUMMARY_DEBOUNCE_S", 0),
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.ai_pipeline_service._run_summary_now", new=AsyncMock()) as run_now,
         ):
@@ -58,7 +58,7 @@ class TestSummaryAfterStarBg:
         state = SimpleNamespace(is_starred=True, ai_summary="already here")
         db = _bg_db(state, None)
         with (
-            patch("app.routers.web.app._STAR_SUMMARY_DEBOUNCE_S", 0),
+            patch("app.routers.web.app.articles._STAR_SUMMARY_DEBOUNCE_S", 0),
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.ai_pipeline_service._run_summary_now", new=AsyncMock()) as run_now,
         ):
@@ -68,7 +68,7 @@ class TestSummaryAfterStarBg:
     async def test_skips_when_state_missing(self):
         db = _bg_db(None, None)
         with (
-            patch("app.routers.web.app._STAR_SUMMARY_DEBOUNCE_S", 0),
+            patch("app.routers.web.app.articles._STAR_SUMMARY_DEBOUNCE_S", 0),
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.ai_pipeline_service._run_summary_now", new=AsyncMock()) as run_now,
         ):
@@ -98,10 +98,10 @@ class TestStarRouteSummaryGating:
         ])
         enqueue = AsyncMock(return_value=True)
         with (
-            patch("app.routers.web.app.toggle_article_state",
+            patch("app.routers.web.app.articles.toggle_article_state",
                   new=AsyncMock(return_value=SimpleNamespace(is_starred=True))),
-            patch("app.routers.web.app._star_response", return_value=HTMLResponse("ok")),
-            patch("app.routers.web.app._summary_after_star_bg",
+            patch("app.routers.web.app.articles._star_response", return_value=HTMLResponse("ok")),
+            patch("app.routers.web.app.articles._summary_after_star_bg",
                   new=_noop_coro_factory(scheduled)),
             patch("app.services.ai_summary_service.enqueue_summary_job", new=enqueue),
         ):
@@ -119,10 +119,10 @@ class TestStarRouteSummaryGating:
         ])
         enqueue = AsyncMock(return_value=True)
         with (
-            patch("app.routers.web.app.toggle_article_state",
+            patch("app.routers.web.app.articles.toggle_article_state",
                   new=AsyncMock(return_value=SimpleNamespace(is_starred=True))),
-            patch("app.routers.web.app._star_response", return_value=HTMLResponse("ok")),
-            patch("app.routers.web.app._summary_after_star_bg",
+            patch("app.routers.web.app.articles._star_response", return_value=HTMLResponse("ok")),
+            patch("app.routers.web.app.articles._summary_after_star_bg",
                   new=_noop_coro_factory(scheduled)),
             patch("app.services.ai_summary_service.enqueue_summary_job", new=enqueue),
         ):
@@ -141,10 +141,10 @@ class TestStarRouteSummaryGating:
         ])
         enqueue = AsyncMock(return_value=False)
         with (
-            patch("app.routers.web.app.toggle_article_state",
+            patch("app.routers.web.app.articles.toggle_article_state",
                   new=AsyncMock(return_value=SimpleNamespace(is_starred=True))),
-            patch("app.routers.web.app._star_response", return_value=HTMLResponse("ok")),
-            patch("app.routers.web.app._summary_after_star_bg",
+            patch("app.routers.web.app.articles._star_response", return_value=HTMLResponse("ok")),
+            patch("app.routers.web.app.articles._summary_after_star_bg",
                   new=_noop_coro_factory(scheduled)),
             patch("app.services.ai_summary_service.enqueue_summary_job", new=enqueue),
         ):
@@ -157,9 +157,9 @@ class TestStarRouteSummaryGating:
         """Unstarring deletes a not-yet-run summary job so a mis-click bills nothing."""
         mock_db.execute = AsyncMock()
         with (
-            patch("app.routers.web.app.toggle_article_state",
+            patch("app.routers.web.app.articles.toggle_article_state",
                   new=AsyncMock(return_value=SimpleNamespace(is_starred=False))),
-            patch("app.routers.web.app._star_response", return_value=HTMLResponse("ok")),
+            patch("app.routers.web.app.articles._star_response", return_value=HTMLResponse("ok")),
         ):
             resp = client.post("/htmx/articles/5/star")
         assert resp.status_code == 200

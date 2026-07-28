@@ -9,6 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import and_, case, func, literal_column, or_, select
 
 import app.database as db
+from app.config import settings
 from app.fetcher import host_throttle
 from app.fetcher.host_throttle import host_key
 from app.fetcher.interval import (
@@ -49,6 +50,11 @@ _COOLDOWN_BUFFER = timedelta(seconds=5)
 # instead of slipping a whole 15-min slot. Keep the selection query, its pure mirror
 # (_feed_due_for_selection), and the UI prediction (compute_next_fetch_at) in sync.
 _DUE_GRACE = timedelta(minutes=2)
+
+# Phase offset (0–14 min) for the four 15-min fetch ticks. 0 keeps the historical
+# :00/:15/:30/:45; a non-zero value (e.g. staging) shifts them so co-hosted instances
+# don't fetch at the same wall-clock moment. Config already folds it into 0–14.
+_SLOT_OFFSET_MIN = settings.fetch_schedule_offset_min % 15
 
 _T = TypeVar("_T")
 
@@ -163,10 +169,15 @@ async def _run_throttled(
     return await asyncio.gather(*[_run(item) for item in items], return_exceptions=True)
 
 
-def _ceil_to_slot(dt: datetime) -> datetime:
-    """Round *dt* up to the next scheduler tick (:00/:15/:30/:45)."""
+def _ceil_to_slot(dt: datetime, offset: int = _SLOT_OFFSET_MIN) -> datetime:
+    """Round *dt* up to the next scheduler tick.
+
+    Ticks fall every 15 min at minutes congruent to *offset* (mod 15); *offset* 0
+    gives the historical :00/:15/:30/:45. Mirrors the cron trigger built in
+    :func:`create_scheduler` so the UI next-fetch prediction lands on the real tick.
+    """
     floored = dt.replace(second=0, microsecond=0)
-    rem = floored.minute % 15
+    rem = (floored.minute - offset) % 15
     if rem == 0 and floored == dt:
         return floored
     return floored - timedelta(minutes=rem) + timedelta(minutes=15)
@@ -451,6 +462,15 @@ async def _process_readable() -> None:
         await process_pending_readable(session)
 
 
+async def _retry_blocked_readable() -> None:
+    """Job: probe feeds whose readable extraction was auto-disabled for 403s."""
+    if db.async_session_factory is None:
+        return
+    from app.services.readable_service import retry_blocked_feeds
+    async with db.async_session_factory() as session:
+        await retry_blocked_feeds(session)
+
+
 async def _process_ai_scoring() -> None:
     """Job: process pending AI scoring jobs."""
     if db.async_session_factory is None:
@@ -584,6 +604,69 @@ async def _cleanup_expired_pending_emails() -> None:
         await session.commit()
 
 
+async def _generate_due_preferences() -> None:
+    """Job: regenerate interest profiles for users who have it on a schedule.
+
+    Candidates are only checked here; ``run_auto_generation`` owns the decision
+    whether a run is actually due. Generations are capped per run because a
+    quality-model call takes seconds and the batch is sequential — skips are
+    plain SQL and do not count against the cap.
+    """
+    if db.async_session_factory is None:
+        return
+
+    from app.models.user import User, UserSettings
+    from app.services.ai_profile_service import run_auto_generation
+
+    max_generations = 50
+
+    async with db.async_session_factory() as session:
+        app_settings_row = (await session.execute(
+            select(AppSettings).where(AppSettings.id == 1)
+        )).scalar_one_or_none()
+        if not app_settings_row or not app_settings_row.ai_enabled:
+            return
+
+        # Users inactive for a month drop out entirely; they re-enter on their
+        # next visit (last_active_at is bumped hourly while browsing).
+        active_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        user_ids = (await session.execute(
+            select(UserSettings.user_id)
+            .join(User, User.id == UserSettings.user_id)
+            .where(
+                UserSettings.ai_preference_auto_days > 0,
+                UserSettings.ai_scoring_enabled_default.is_(True),
+                User.is_active.is_(True),
+                User.last_active_at >= active_cutoff,
+            )
+            .order_by(UserSettings.ai_preference_updated_at.asc().nulls_first())
+        )).scalars().all()
+
+    generated = skipped = failed = 0
+    for user_id in user_ids:
+        if generated >= max_generations:
+            break
+        async with db.async_session_factory() as session:
+            try:
+                outcome = await run_auto_generation(user_id, session)
+            except Exception as exc:  # never let one user stop the batch
+                logger.error("Auto profile job crashed for user %d: %s", user_id, exc)
+                failed += 1
+                continue
+        if outcome == "generated":
+            generated += 1
+        elif outcome.startswith("failed"):
+            failed += 1
+        else:
+            skipped += 1
+
+    if generated or failed:
+        logger.info(
+            "Auto interest profiles: generated=%d skipped=%d failed=%d",
+            generated, skipped, failed,
+        )
+
+
 async def _send_due_briefings() -> None:
     """Job: send scheduled briefing emails for all due configs."""
     import smtplib
@@ -656,10 +739,11 @@ async def _send_due_briefings() -> None:
 
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
+    fetch_minutes = ",".join(str(_SLOT_OFFSET_MIN + 15 * k) for k in range(4))
     scheduler.add_job(
         _fetch_due_feeds,
         trigger="cron",
-        minute="0,15,30,45",
+        minute=fetch_minutes,
         id="fetch_due_feeds",
         replace_existing=True,
         max_instances=1,
@@ -729,6 +813,26 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _generate_due_preferences,
+        trigger="cron",
+        hour=4,
+        minute=20,
+        id="generate_due_preferences",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _retry_blocked_readable,
+        trigger="cron",
+        hour=4,
+        minute=40,
+        id="retry_blocked_readable",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _cleanup_unverified_users,

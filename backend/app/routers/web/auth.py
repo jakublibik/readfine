@@ -1,7 +1,5 @@
 import asyncio
-import hashlib
 import logging
-import secrets
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
@@ -13,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, timedelta, timezone
 
-from app.auth.security import dummy_verify_password, hash_password, password_within_limit, verify_password
+from app.auth.security import dummy_verify_password, generate_token, hash_password, hash_token, password_within_limit, verify_password
 from app.utils.email_validate import is_valid_email
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
@@ -21,7 +19,7 @@ from app.utils.formats import is_valid_format
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.services.app_settings_cache import get_registration_enabled
-from app.utils.form_guard import HONEYPOT_FIELD, check_form
+from app.utils.form_guard import HONEYPOT_FIELD, carry_form_ts, check_form
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
 from app.models.user import User, UserSettings
@@ -192,23 +190,32 @@ async def register(
 
     def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
-               "prefill_email": email, "prefill_display_name": display_name, **extra}
+               "prefill_email": email, "prefill_display_name": display_name,
+               # Keep the stamp this submit came with instead of minting a new one,
+               # so a retry does not start the fill-time clock over. See carry_form_ts.
+               "form_ts_carry": carry_form_ts(form_ts), **extra}
         return templates.TemplateResponse(request, "auth/register.html", ctx, status_code=http_status)
 
     # Bot traps, before any DB work or outbound mail. Registration is the one
     # public endpoint that emails an arbitrary attacker-supplied address, which
     # makes it usable as a relay for bombing third-party inboxes.
     trap = check_form(honeypot, form_ts)
-    if trap:
-        if trap == "stale":
-            # Could be a genuinely stale tab, so this one is not news.
-            logger.info("Registration form expired, from %s", get_client_ip(request))
-            return _err("This form expired. Please try again.")
-        # A caught bot is rare and worth seeing at the default log level.
-        logger.warning("Registration blocked by bot trap (%s) from %s", trap, get_client_ip(request))
+    if trap == "honeypot":
+        # Nothing legitimate fills a field that is invisible to eyes and to screen
+        # readers alike, so this one is safe to treat as a bot. Rare enough to be
+        # worth seeing at the default log level.
+        logger.warning("Registration blocked by honeypot from %s", get_client_ip(request))
         # Fake the success path so the script cannot tell it was caught.
         return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1",
                                 status_code=302)
+    if trap:
+        # "too_fast" and "stale" are heuristics with innocent readings (a password
+        # manager filling a retry in one click; a tab left open). Faking success on
+        # those loses a real signup with nothing to show the person, so send them
+        # back to the form. One message for both, so a script learns nothing about
+        # which check it tripped.
+        logger.info("Registration form rejected (%s), from %s", trap, get_client_ip(request))
+        return _err("This form is no longer valid. Please submit it again.")
 
     if not is_valid_email(email):
         return _err("Please enter a valid email address.")
@@ -249,7 +256,7 @@ async def register(
 
     token = None
     if needs_verification:
-        token = secrets.token_urlsafe(32)
+        token = generate_token()
 
     user = User(
         email=email,
@@ -257,7 +264,7 @@ async def register(
         display_name=display_name,
         role="user",
         email_verified=not needs_verification,
-        email_verification_token_hash=hashlib.sha256(token.encode()).hexdigest() if token else None,
+        email_verification_token_hash=hash_token(token) if token else None,
         email_verification_expires_at=datetime.now(timezone.utc) + timedelta(hours=24) if token else None,
     )
     db.add(user)
@@ -318,7 +325,7 @@ async def verify_email(request: Request, token: str = "", db: AsyncSession = Dep
     if not token:
         return templates.TemplateResponse(request, "auth/check_email.html",
                                           {"verify_error": True, "email": ""})
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.email_verification_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.email_verification_expires_at:
@@ -349,8 +356,8 @@ async def resend_verification(
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
         if user and not user.email_verified:
-            token = secrets.token_urlsafe(32)
-            user.email_verification_token_hash = hashlib.sha256(token.encode()).hexdigest()
+            token = generate_token()
+            user.email_verification_token_hash = hash_token(token)
             user.email_verification_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
             await db.commit()
             verify_url = str(request.base_url) + f"verify-email?token={token}"
@@ -378,7 +385,7 @@ async def verify_email_change(request: Request, token: str = "", db: AsyncSessio
 
     if not token:
         return _result(False, "This confirmation link is invalid.")
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.pending_email_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.pending_email or not user.pending_email_expires_at:
@@ -432,8 +439,8 @@ async def reset_password_request(
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
     if user and user.is_active:
-        token = secrets.token_urlsafe(32)
-        user.password_reset_token_hash = hashlib.sha256(token.encode()).hexdigest()
+        token = generate_token()
+        user.password_reset_token_hash = hash_token(token)
         user.password_reset_expires_at = datetime.now(timezone.utc) + timedelta(hours=1)
         await db.commit()
 
@@ -500,7 +507,7 @@ async def reset_password_confirm(
 
 
 async def _get_user_by_reset_token(db: AsyncSession, token: str) -> User | None:
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.password_reset_token_hash == token_hash))
     user = result.scalar_one_or_none()
     if not user or not user.password_reset_expires_at:

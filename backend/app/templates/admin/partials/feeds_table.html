@@ -8,13 +8,23 @@
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
     {% if f.status == 'error' and f.last_error %}
     <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
+    {% elif f.status == 'active' and f.block_count >= block_badge_threshold %}
+    {# Explains the badge without a hover (there is none on touch) and shows the run-up
+       to being switched off. Gray, not red: the feed is fine and this clears itself. #}
+    <div class="text-xs text-gray-500 truncate mt-0.5">Site refused the last {{ f.block_count }} fetches (switched off after {{ block_disable_threshold }})</div>
     {% endif %}
   </td>
   <td class="px-2 py-2">
     <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
   </td>
   <td class="px-2 py-2">
-    {% if f.status == 'active' %}
+    {% if f.status == 'active' and f.block_count >= block_badge_threshold %}
+      {# Host is refusing automated requests — amber, not red: the feed is fine and
+         resumes on its own. One word like the other badges, or the column wraps.
+         See app/fetcher/failure.py for the two tiers. #}
+      <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700"
+            title="The site is refusing automated requests. Nothing is wrong with the feed; fetching backs off and resumes on its own.">throttled</span>
+    {% elif f.status == 'active' %}
       <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
     {% elif f.status == 'error' %}
       <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700">error</span>

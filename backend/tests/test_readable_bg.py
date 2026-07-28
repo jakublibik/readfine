@@ -3,7 +3,7 @@ the label-deferred AI pipeline, mirroring the batch readable path (#9)."""
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.routers.web.app import _extract_readable_bg
+from app.routers.web.app.articles import _extract_readable_bg
 
 
 def _session_factory(db):
@@ -35,7 +35,7 @@ class TestExtractReadableBg:
         with (
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.readable_service.extract_readable", return_value=("body text", None, 200, None)),
-            patch("app.routers.web.app.apply_readable_result", side_effect=fake_apply),
+            patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
             await _extract_readable_bg(7, "https://example.com/a", None, None)
@@ -54,7 +54,7 @@ class TestExtractReadableBg:
         with (
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.readable_service.extract_readable", return_value=(None, "err", 500, None)),
-            patch("app.routers.web.app.apply_readable_result", side_effect=fake_apply),
+            patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
             await _extract_readable_bg(7, "https://example.com/a", None, None)
@@ -72,7 +72,7 @@ class TestExtractReadableBg:
         with (
             patch("app.database.async_session_factory", _session_factory(db)),
             patch("app.services.readable_service.extract_readable", return_value=(None, "403", 403, None)),
-            patch("app.routers.web.app.apply_readable_result", side_effect=fake_apply),
+            patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
             await _extract_readable_bg(7, "https://example.com/a", None, None)

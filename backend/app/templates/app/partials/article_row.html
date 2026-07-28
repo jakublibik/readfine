@@ -16,6 +16,7 @@
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      data-url="{{ article.url or '' }}"
+     {% if article.body_permanently_empty %}data-no-body="1"{% endif %}
      hx-get="/htmx/articles/{{ article.id }}"
      hx-trigger="click[!event.target.closest('[data-stop-propagation]')]"
      hx-target="#article-detail"

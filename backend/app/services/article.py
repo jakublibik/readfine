@@ -1,7 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
-import json
 import logging
-import re
 from datetime import date, datetime, timezone
 
 from sqlalchemy import func, literal, literal_column, or_, select, tuple_, update
@@ -13,37 +11,51 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
+from app.utils.text import strip_html
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_label_filter(label_filter: str | None) -> tuple[bool, list[int]]:
-    """Parse the label-filter JSON (same shape as the scope selector).
+# ── article access (tenant isolation — single source of truth) ────────────────
 
-    Returns (any_label, label_ids). "any" means "has at least one label" and
-    takes precedence over specific ids. Empty/invalid means no label filtering.
+def add_article_access_joins(stmt, user_id: int):
+    """Outer-join UserFeed and UserArticleState for the access predicate.
+
+    Both joins are user-scoped in their ON clause, so ``article_access_predicate``
+    can decide visibility purely from whether a row matched. Pair the two: every
+    article read/write path uses this + ``article_access_predicate`` so the access
+    rule lives in exactly one place.
     """
-    if not label_filter:
-        return False, []
-    try:
-        items = json.loads(label_filter)
-    except (json.JSONDecodeError, TypeError):
-        return False, []
-    if "any" in items:
-        return True, []
-    ids: list[int] = []
-    for item in items:
-        if isinstance(item, str) and item.startswith("label:"):
-            try:
-                ids.append(int(item[6:]))
-            except ValueError:
-                pass
-    return False, ids
+    return (
+        stmt
+        .outerjoin(
+            UserFeed,
+            (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id),
+        )
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
+        )
+    )
 
 
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
+def article_access_predicate():
+    """WHERE clause for "this user may act on this article".
+
+    True when the user is subscribed to the article's feed, OR has starred/archived
+    it (access survives unsubscribe / feed deletion). Requires the query to have
+    added ``add_article_access_joins(user_id)`` first — the user scoping lives in
+    those joins' ON clauses, so this predicate only checks whether a row matched.
+    """
+    return (
+        UserFeed.id.is_not(None)
+        | UserArticleState.is_starred.is_(True)
+        | UserArticleState.is_archived.is_(True)
+    )
+
+
 _SNIPPET_LEN = 200
 
 
@@ -52,11 +64,31 @@ def _make_snippet(summary: str | None, content: str | None) -> str | None:
     for source in (summary, content):
         if not source:
             continue
-        text = _HTML_TAG_RE.sub(" ", source)
-        text = _WHITESPACE_RE.sub(" ", text).strip()
+        text = strip_html(source)
         if len(text) > 20:
             return text[:_SNIPPET_LEN].rsplit(" ", 1)[0] if len(text) > _SNIPPET_LEN else text
     return None
+
+
+def body_permanently_empty(article: Article, extract_readable: bool | None) -> bool:
+    """True when the article will never have a body to show, so the reader can be
+    sent straight to the source.
+
+    Deliberately narrower than the "nothing to render right now" branch in
+    article_content.html, which also covers articles still being extracted. The two
+    look alike but answer different questions and must not be merged.
+    """
+    if article.readable_status == "success" and article.readable_content:
+        return False
+    if article.content:
+        return False
+    if article.readable_status == "pending":
+        # Extraction in flight, or waiting on retry backoff.
+        return False
+    if article.readable_status == "skipped" and extract_readable:
+        # Opening the detail kicks off extraction (see htmx_article_detail).
+        return False
+    return True
 
 
 def _format_date(dt: datetime | None) -> str:
@@ -107,6 +139,7 @@ async def list_articles(
         UserArticleState,
         Feed.title.label("feed_title"),
         UserFeed.custom_title.label("custom_title"),
+        UserFeed.extract_readable.label("extract_readable"),
     )
     uas_join = (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id)
     uf_join = (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id)
@@ -146,8 +179,7 @@ async def list_articles(
     # Empty lists mean "all feeds" — no restriction. Feed ownership is already
     # enforced by the UserFeed join above, so unknown ids simply match nothing.
     if scope_include:
-        from app.services.catchup_service import _parse_scope  # noqa: PLC0415
-        scope_feed_ids, scope_folder_ids = _parse_scope(scope_include)
+        scope_feed_ids, scope_folder_ids = parse_scope_tokens(scope_include)
         if scope_feed_ids or scope_folder_ids:
             clauses = []
             if scope_feed_ids:
@@ -179,7 +211,7 @@ async def list_articles(
     # Search label filter (multi-select): "any" = has at least one label,
     # otherwise articles carrying at least one of the selected labels.
     if label_filter:
-        any_label, lf_ids = _parse_label_filter(label_filter)
+        any_label, lf_ids = parse_label_tokens(label_filter)
         cond = (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id)
         if any_label:
             stmt = stmt.where(select(ArticleLabel.article_id).where(cond).exists())
@@ -258,7 +290,6 @@ async def list_articles(
     # Batch-fetch labels for all articles
     labels_by_article: dict[int, list[dict]] = {}
     if rows:
-        from app.models.label import Label
         article_ids = [row[0].id for row in rows]
         labels_rows = (await db.execute(
             select(ArticleLabel.article_id, Label.id, Label.name, Label.color)
@@ -270,7 +301,7 @@ async def list_articles(
             labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
 
     items = []
-    for article, state, feed_title, custom_title in rows:
+    for article, state, feed_title, custom_title, extract_readable in rows:
         items.append(ArticleListItem(
             id=article.id,
             feed_id=article.feed_id,
@@ -280,6 +311,7 @@ async def list_articles(
             author=article.author,
             summary=article.summary,
             snippet=_make_snippet(article.summary, article.content),
+            body_permanently_empty=body_permanently_empty(article, extract_readable),
             published_at=article.published_at,
             formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,
@@ -295,7 +327,6 @@ async def list_articles(
 
 
 async def _fetch_labels(article_id: int, user_id: int, db: AsyncSession) -> list[dict]:
-    from app.models.label import Label
     rows = (await db.execute(
         select(ArticleLabel.label_id, Label.name, Label.color)
         .join(Label, Label.id == ArticleLabel.label_id)
@@ -311,26 +342,17 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     Access is granted if the user subscribes to the feed, OR has a starred/archived
     state for the article (remains accessible after unsubscribing).
     """
-    stmt = (
+    stmt = add_article_access_joins(
         select(
             Article,
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            UserFeed.id.is_not(None)
-            | UserArticleState.is_starred.is_(True)
-            | UserArticleState.is_archived.is_(True),
-        )
+        ).outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(
+        Article.id == article_id,
+        article_access_predicate(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
@@ -392,8 +414,6 @@ async def mark_scope_read(
     Starred/archived scopes only UPDATE (state row is guaranteed to exist).
     All other scopes upsert to handle articles with and without existing state rows.
     """
-    from app.models.label import ArticleLabel
-
     now = datetime.now(timezone.utc)
 
     if starred_only or archived_only:
@@ -484,17 +504,9 @@ async def filter_accessible_article_ids(
     if not article_ids:
         return []
     rows = await db.execute(
-        select(Article.id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
-        )
-        .where(
+        add_article_access_joins(select(Article.id), user_id).where(
             Article.id.in_(article_ids),
-            UserFeed.id.is_not(None)
-            | UserArticleState.is_starred.is_(True)
-            | UserArticleState.is_archived.is_(True),
+            article_access_predicate(),
         )
     )
     return [r[0] for r in rows.all()]
@@ -541,60 +553,36 @@ def _apply_star_side_effects(state, article, *, starred: bool, extract_readable:
             state.ever_starred = False
 
 
-async def toggle_article_state(
-    user: User,
-    article_id: int,
-    field: str,
-    db: AsyncSession,
-) -> ArticleResponse | None:
-    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
-    assert field in {"is_read", "is_starred", "is_archived"}
-    current_value = {field: True}  # payload with inverted value – determined after load
-    # Load current state first via the same single-query path as update_article_state
-    stmt = (
+async def _load_article_for_write(user: User, article_id: int, db: AsyncSession):
+    """Load an article the user may act on, plus their state (created if missing) and
+    the display fields. Returns ``(article, state, feed_title, custom_title,
+    extract_readable)`` or ``None`` when inaccessible. Shared by the toggle and
+    update paths so both use one query and one access check."""
+    stmt = add_article_access_joins(
         select(
             Article,
             UserArticleState,
             Feed.title.label("feed_title"),
             UserFeed.custom_title.label("custom_title"),
             UserFeed.extract_readable,
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
+        ).outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(
+        Article.id == article_id,
+        article_access_predicate(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
         return None
-
     article, state, feed_title, custom_title, extract_readable = row
-
     if state is None:
         state = UserArticleState(user_id=user.id, article_id=article_id)
         db.add(state)
+    return article, state, feed_title, custom_title, extract_readable
 
-    new_value = not getattr(state, field, False)
-    setattr(state, field, new_value)
 
-    if field == "is_read":
-        state.read_at = datetime.now(timezone.utc) if new_value else None
-
-    if field == "is_starred":
-        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
-
-    await db.commit()
-    await db.refresh(state)
-
+def _state_response(article, state, feed_title, custom_title, labels) -> ArticleResponse:
+    """Build the ArticleResponse returned by the state-write endpoints."""
     return ArticleResponse(
         id=article.id,
         feed_id=article.feed_id,
@@ -615,8 +603,36 @@ async def toggle_article_state(
         is_starred=state.is_starred,
         is_archived=state.is_archived,
         read_at=state.read_at,
-        labels=await _fetch_labels(article_id, user.id, db),
+        labels=labels,
     )
+
+
+async def toggle_article_state(
+    user: User,
+    article_id: int,
+    field: str,
+    db: AsyncSession,
+) -> ArticleResponse | None:
+    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
+    assert field in {"is_read", "is_starred", "is_archived"}
+    loaded = await _load_article_for_write(user, article_id, db)
+    if loaded is None:
+        return None
+    article, state, feed_title, custom_title, extract_readable = loaded
+
+    new_value = not getattr(state, field, False)
+    setattr(state, field, new_value)
+
+    if field == "is_read":
+        state.read_at = datetime.now(timezone.utc) if new_value else None
+
+    if field == "is_starred":
+        _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
+
+    await db.commit()
+    await db.refresh(state)
+    labels = await _fetch_labels(article_id, user.id, db)
+    return _state_response(article, state, feed_title, custom_title, labels)
 
 
 async def update_article_state(
@@ -625,42 +641,12 @@ async def update_article_state(
     payload: ArticleStateUpdate,
     db: AsyncSession,
 ) -> ArticleResponse | None:
-    """Toggle is_read / is_starred / is_archived. Creates UserArticleState if needed.
-
-    Single round-trip: loads Article + Feed title + UserFeed + state in one query,
-    applies changes, commits, and builds the response from already-loaded data.
-    """
-    stmt = (
-        select(
-            Article,
-            UserArticleState,
-            Feed.title.label("feed_title"),
-            UserFeed.custom_title.label("custom_title"),
-            UserFeed.extract_readable,
-        )
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id)
-            & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
-    )
-    row = (await db.execute(stmt)).first()
-    if not row:
+    """Set is_read / is_starred / is_archived from a payload. Creates UserArticleState
+    if needed. One round-trip: load, apply, commit, respond from loaded data."""
+    loaded = await _load_article_for_write(user, article_id, db)
+    if loaded is None:
         return None
-
-    article, state, feed_title, custom_title, extract_readable = row
-
-    if state is None:
-        state = UserArticleState(user_id=user.id, article_id=article_id)
-        db.add(state)
+    article, state, feed_title, custom_title, extract_readable = loaded
 
     if payload.is_read is not None:
         state.is_read = payload.is_read
@@ -679,26 +665,5 @@ async def update_article_state(
 
     await db.commit()
     await db.refresh(state)
-
-    return ArticleResponse(
-        id=article.id,
-        feed_id=article.feed_id,
-        feed_title=custom_title or feed_title,
-        url=article.url,
-        title=article.title,
-        author=article.author,
-        content=article.content,
-        content_source=article.content_source,
-        readable_content=article.readable_content,
-        readable_status=article.readable_status,
-        readable_error=article.readable_error,
-        published_at=article.published_at,
-        estimated_read_min=article.estimated_read_min,
-        word_count=article.word_count,
-        image_url=article.image_url,
-        is_read=state.is_read,
-        is_starred=state.is_starred,
-        is_archived=state.is_archived,
-        read_at=state.read_at,
-        labels=await _fetch_labels(article_id, user.id, db),
-    )
+    labels = await _fetch_labels(article_id, user.id, db)
+    return _state_response(article, state, feed_title, custom_title, labels)

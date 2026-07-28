@@ -407,16 +407,27 @@ class TestRegisterBotTraps:
         assert r.headers["location"].startswith("/register/check-email")
 
     def test_instant_submit_creates_no_account(self, web_client, mock_db):
+        # Sent back to the form, not faked as success: unlike the honeypot this is a
+        # heuristic, and a person can trip it (see the carry test below). Swallowing
+        # it would lose a real signup with nothing on screen to explain why.
         r = web_client.post("/register", data={**VALID_FORM, "form_ts": issue_form_ts()})
-        assert r.status_code == 302
-        assert r.headers["location"].startswith("/register/check-email")
+        assert r.status_code == 422
         mock_db.add.assert_not_called()
         mock_db.commit.assert_not_called()
+
+    def test_rejected_stamps_do_not_say_which_check_failed(self, web_client, mock_db):
+        # One message for too_fast and stale alike, so a script cannot use the
+        # response to work out that it just needs to wait longer.
+        fast = web_client.post("/register", data={**VALID_FORM, "form_ts": issue_form_ts()})
+        stale = web_client.post("/register", data={**VALID_FORM, "form_ts": ""})
+        assert fast.status_code == stale.status_code == 422
+        assert "no longer valid" in fast.text.lower()
+        assert "no longer valid" in stale.text.lower()
 
     def test_missing_stamp_creates_no_account(self, web_client, mock_db):
         r = web_client.post("/register", data={**VALID_FORM, "form_ts": ""})
         assert r.status_code == 422
-        assert "expired" in r.text.lower()
+        assert "no longer valid" in r.text.lower()
         mock_db.add.assert_not_called()
         mock_db.commit.assert_not_called()
 
@@ -447,6 +458,31 @@ class TestRegisterBotTraps:
         assert r.status_code == 302
         assert r.headers["location"] == "/app"
 
+    def test_validation_error_keeps_the_original_stamp(self, web_client, mock_db):
+        """The retry must not restart the fill-time clock.
+
+        Someone who mistypes a password gets the form back and a password manager
+        refills both fields in one click. With a fresh stamp that resubmit lands
+        inside MIN_FILL_SECONDS and reads as a bot, so the signup disappears.
+        """
+        # Open registration + no existing user, so the request reaches the password check.
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
+        stamp = issue_form_ts(time.time() - 60)
+        r = web_client.post("/register", data={
+            **VALID_FORM, "confirm_password": "different", "form_ts": stamp,
+        })
+        assert r.status_code == 422
+        assert f'name="form_ts" value="{stamp}"' in r.text
+
+    def test_unusable_stamp_is_not_carried_into_the_retry(self, web_client, mock_db):
+        # Carrying a forged or expired stamp would leave the person stuck on
+        # "submit it again" forever, so the re-render mints a fresh one.
+        forged = f"{int(time.time()) - 60}.bogussignature"
+        r = web_client.post("/register", data={**VALID_FORM, "form_ts": forged})
+        assert r.status_code == 422
+        assert forged not in r.text
+        assert 'name="form_ts" value="' in r.text
+
     def test_register_page_renders_the_traps(self, web_client, mock_db):
         from app.services.app_settings_cache import invalidate_registration_cache
         # The open/closed flag is cached process-wide; another test may have
@@ -466,10 +502,24 @@ class TestFormGuardUnit:
         assert age is not None
         assert 29 <= age <= 32
 
-    def test_tampered_stamp_has_no_age(self):
+    def test_tampered_timestamp_has_no_age(self):
+        # Rewrite the timestamp and keep the original signature — the forgery a bot
+        # would actually attempt, backdating the stamp to clear the too_fast check.
         from app.utils.form_guard import form_age_seconds
-        stamp = issue_form_ts(time.time() - 30)
-        assert form_age_seconds(stamp[:-1] + ("x" if stamp[-1] != "x" else "y")) is None
+        payload, _, signature = issue_form_ts(time.time() - 30).partition(".")
+        forged = str(int(payload) - 600) + "." + signature
+        assert form_age_seconds(forged) is None
+
+    def test_tampered_signature_has_no_age(self):
+        # Mutate the *first* signature character, not the last. The signature is 20
+        # HMAC-SHA1 bytes in 27 base64url characters, so its final character carries
+        # two unused bits and four different characters decode to identical bytes:
+        # flipping only that one left the stamp valid in ~7 % of runs, and the test
+        # went red for no reason.
+        from app.utils.form_guard import form_age_seconds
+        payload, _, signature = issue_form_ts(time.time() - 30).partition(".")
+        flipped = ("b" if signature[0] != "b" else "c") + signature[1:]
+        assert form_age_seconds(payload + "." + flipped) is None
 
     def test_unsigned_stamp_rejected(self):
         from app.utils.form_guard import form_age_seconds

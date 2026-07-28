@@ -5,6 +5,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from app.services.ai_jobs import MAX_RETRIES
 from app.services.readable_service import (
     apply_readable_result,
     extract_readable,
@@ -17,8 +18,6 @@ from app.services.readable_service import (
     _sanitize,
     _drop_empty_blocks,
     _EMPTY_CONTENT_MSG,
-    _MAX_RETRIES,
-    _BACKOFF_MINUTES,
 )
 
 
@@ -303,10 +302,10 @@ class TestApplyReadableResultRetry:
         assert article.readable_next_retry_at is not None
 
     def test_max_retries_marks_failed(self):
-        article = _make_article(retries=_MAX_RETRIES - 1)
+        article = _make_article(retries=MAX_RETRIES - 1)
         apply_readable_result(article, None, "Timeout", None)
         assert article.readable_status == "failed"
-        assert article.readable_retries == _MAX_RETRIES
+        assert article.readable_retries == MAX_RETRIES
 
     def test_below_max_retries_stays_pending(self):
         article = _make_article(retries=0)

@@ -50,6 +50,7 @@ class UserSettings(Base):
     list_density_mobile: Mapped[str] = mapped_column(String(20), default="comfortable")
     mark_read_on_scroll: Mapped[bool] = mapped_column(Boolean, default=True)
     mark_read_auto_advance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    open_original_when_empty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     unread_filter: Mapped[str] = mapped_column(String(20), default="adaptive")
     default_sort_order: Mapped[str] = mapped_column(String(10), default="newest")
     articles_per_page: Mapped[int] = mapped_column(SmallInteger, default=50)
@@ -69,6 +70,18 @@ class UserSettings(Base):
     ai_quality_provider: Mapped[str | None] = mapped_column(String(30))
     ai_quality_model: Mapped[str | None] = mapped_column(String(100))
     ai_preference_text: Mapped[str | None] = mapped_column(Text)
+    # Interest profile bookkeeping: when the text last changed, who changed it,
+    # and the automatic regeneration schedule (0 = off, otherwise 14 or 28 days).
+    ai_preference_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_preference_source: Mapped[str | None] = mapped_column(String(10))
+    ai_preference_auto_days: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    # Last attempt that actually spent tokens (success, error or rejected output),
+    # so a failure waits a full interval instead of retrying every day.
+    ai_preference_last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_preference_prev_text: Mapped[str | None] = mapped_column(Text)
+    ai_preference_last_error: Mapped[str | None] = mapped_column(Text)
+    ai_preference_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ai_preference_fail_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_prompt: Mapped[str | None] = mapped_column(Text)

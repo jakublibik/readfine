@@ -20,6 +20,7 @@ _Get content in, from anywhere._
 _A clean reader that adapts to your screen._
 
 - **Readable extraction:** The full article text is pulled into the reader (`trafilatura`, with `readability-lxml` as a fallback), without the cookie banners and sidebars of the original page.
+- **Straight to the source:** Feeds that carry only headlines and links leave nothing to read. Such articles offer the original page as a button, and can open it in a new tab on click if you turn that on.
 - **Adaptive layout:** Choose a 2- or 3-panel view per screen size, with breakpoints you set yourself.
 - **Dedicated mobile layout:** A real small-screen layout with a collapsible sidebar and inline or full-screen article view, not a squeezed-down desktop.
 - **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
@@ -48,6 +49,7 @@ _Optional AI on your own provider key._
 - **Summaries:** A one-tap summary of any article.
 - **Chat over articles:** Ask questions about an article and get answers grounded in its text.
 - **Interest profile:** Describe what you care about, or have the AI draft it from what you read; it drives scoring and digests.
+- **Profile on a schedule:** Have the profile regenerate itself every 2 or 4 weeks as your reading shifts, with the replaced version one click away.
 - **Catch me up:** An on-demand digest of what happened in your feeds over a period and scope you choose.
 - **Scheduled briefings:** The same digest on a schedule, delivered to your inbox.
 - **Your choice of provider:** Anthropic, OpenAI, or Google Gemini. Keys are per-user, stored encrypted, and used only for your own requests.
