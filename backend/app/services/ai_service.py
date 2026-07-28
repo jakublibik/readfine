@@ -52,6 +52,14 @@ PROVIDER_DOCS_URLS: dict[str, str] = {
 
 SUPPORTED_PROVIDERS = list(PROVIDER_DOCS_URLS.keys())
 
+# How each provider writes its own name. The stored identifier is lowercase and
+# cannot be capitalised into these ("Openai"), so the UI reads them from here.
+PROVIDER_LABELS: dict[str, str] = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "gemini": "Gemini",
+}
+
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
 # Last updated: 2026-07-07

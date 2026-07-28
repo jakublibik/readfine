@@ -45,7 +45,7 @@
           class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <input type="hidden" name="provider" value="{{ provider }}">
       <div class="flex items-center gap-3">
-        <span class="w-24 text-sm text-gray-700 capitalize">{{ provider }}</span>
+        <span class="w-24 text-sm text-gray-700">{{ provider_labels[provider] or provider }}</span>
         {% if keys[provider] %}
           <span class="text-xs text-green-600">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
         {% endif %}
@@ -103,7 +103,7 @@
                 class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
           <option value="">— provider —</option>
           {% for p in providers %}
-          <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ p }}</option>
+          <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ provider_labels[p] or p }}</option>
           {% endfor %}
         </select>
       </div>
@@ -203,7 +203,7 @@
         {% elif pref_auto_status == 'no_quality_model' %}
           Automatic generation needs a quality model configured.
         {% elif pref_auto_status == 'no_api_key' %}
-          Automatic generation needs an API key for {{ pref_auto_detail.provider }}.
+          Automatic generation needs an API key for {{ provider_labels[pref_auto_detail.provider] or pref_auto_detail.provider }}.
         {% elif pref_auto_status == 'due' %}
           The next generation runs tonight.
         {% endif %}

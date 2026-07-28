@@ -16,6 +16,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_service import (
     PROVIDER_DOCS_URLS,
+    PROVIDER_LABELS,
     SUPPORTED_PROVIDERS,
     delete_api_key,
     generate_preference_text,
@@ -52,6 +53,7 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "active_days": 30,
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
+        "provider_labels": PROVIDER_LABELS,
         "pref_strong_count": strong_count,
         "pref_auto_status": auto_status,
         "pref_auto_detail": auto_detail,
