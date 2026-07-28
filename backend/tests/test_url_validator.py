@@ -610,3 +610,66 @@ class TestOutboundLogging:
     def test_never_raises(self, caplog):
         # A malformed response object must not propagate out of the logger.
         assert self._log(caplog, enabled=True, response=object()) is not None
+
+
+class TestProtocolErrorRetry:
+    """A connection dying mid-request is retried once; other failures are not."""
+
+    def _pin_localhost(self):
+        return patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))])
+
+    def test_goaway_is_retried_and_succeeds(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            if len(attempts) == 1:
+                raise httpx.RemoteProtocolError(
+                    "<ConnectionTerminated error_code:0>", request=request
+                )
+            return httpx.Response(200, text="feed body")
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            body = fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert body == "feed body"
+        assert len(attempts) == 2
+
+    def test_second_protocol_error_gives_up(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            raise httpx.RemoteProtocolError("Server disconnected", request=request)
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            with pytest.raises(httpx.RemoteProtocolError):
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert len(attempts) == 2  # one retry, then the error is the answer
+
+    def test_timeout_is_not_retried(self):
+        attempts = []
+
+        def handler(request):
+            attempts.append(request.url)
+            raise httpx.ReadTimeout("timed out", request=request)
+
+        with _mock_httpx_client(handler), self._pin_localhost():
+            with pytest.raises(httpx.ReadTimeout):
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert len(attempts) == 1
+
+    def test_retry_reuses_the_pinned_ip(self):
+        hosts = []
+
+        def handler(request):
+            hosts.append((request.url.host, request.headers.get("host")))
+            if len(hosts) == 1:
+                raise httpx.RemoteProtocolError("GOAWAY", request=request)
+            return httpx.Response(200, text="ok")
+
+        with _mock_httpx_client(handler):
+            with self._pin_localhost() as resolve:
+                fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        # Same validated IP both times, and DNS was consulted only once.
+        assert hosts == [("93.184.216.34", "example.com")] * 2
+        assert resolve.call_count == 1

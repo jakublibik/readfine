@@ -424,6 +424,46 @@ def _permanent_redirect_target(original: str, candidate: str) -> str | None:
     return candidate
 
 
+def _get_once_retrying_protocol_error(
+    client: httpx.Client,
+    logical_url: str,
+    connect_url: str,
+    host_overlay: dict,
+    extensions: dict,
+) -> httpx.Response:
+    """GET *connect_url*, retrying once if the connection dies mid-request.
+
+    ``RemoteProtocolError`` covers "server disconnected without sending a response"
+    and HTTP/2 ``GOAWAY`` on a pooled connection — a connection that expired between
+    our reusing it and the server noticing, not a verdict on the request. httpx
+    discards the broken connection, so the retry opens a fresh one and usually
+    succeeds. Retrying is safe here because every request this module makes is a GET.
+
+    Only this one error class is retried. A timeout would double an already-spent 30 s
+    budget, and a connect failure or bad status is a real answer about the host. The
+    failed attempt is still logged, so the log shows the error followed by the retry
+    rather than hiding the flakiness.
+
+    The pinned IP from :func:`_pin_connection` is deliberately reused: re-resolving
+    for the retry would reopen the DNS-rebinding window the pinning exists to close.
+    """
+    for attempt in range(2):
+        started = time.monotonic()
+        try:
+            response = client.get(connect_url, headers=host_overlay, extensions=extensions)
+        except httpx.RemoteProtocolError as exc:
+            log_outbound(logical_url, None, started, error=type(exc).__name__)
+            if attempt:
+                raise
+        except Exception as exc:
+            log_outbound(logical_url, None, started, error=type(exc).__name__)
+            raise
+        else:
+            log_outbound(logical_url, response, started)
+            return response
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _resolve_response(
     url: str,
     auth=None,
@@ -463,13 +503,9 @@ def _resolve_response(
             # (with the original Host header and HTTPS SNI) removes the re-resolve
             # that would otherwise reopen the DNS-rebinding window.
             connect_url, host_overlay, extensions = _pin_connection(current_url)
-            started = time.monotonic()
-            try:
-                response = client.get(connect_url, headers=host_overlay, extensions=extensions)
-            except Exception as exc:
-                log_outbound(current_url, None, started, error=type(exc).__name__)
-                raise
-            log_outbound(current_url, response, started)
+            response = _get_once_retrying_protocol_error(
+                client, current_url, connect_url, host_overlay, extensions
+            )
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.
             if not response.has_redirect_location:

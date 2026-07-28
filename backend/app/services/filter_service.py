@@ -44,7 +44,15 @@ _REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w
 # ``timeout`` (raising ``TimeoutError``), so a pathological pattern is capped instead
 # of hanging. The input is also truncated as a belt-and-suspenders safety net — the
 # cap is far larger than any real article body, so legitimate matches are unaffected.
-_REGEX_MATCH_TIMEOUT_S = 0.1
+#
+# The budget is generous on purpose. It is wall-clock time measured on a shared box,
+# and an aborted match is silently reported as "no match" — a filter the user wrote
+# simply does not fire. A cap tight enough to occasionally catch an innocent pattern
+# buys nothing: `\bAI\b` over the full input cap costs ~25 ms, and 0.1 s left so
+# little headroom that a busy fetch cycle tripped it in production. One second still
+# stops a catastrophically backtracking pattern from freezing the event loop, which
+# is the only thing this guard exists for.
+_REGEX_MATCH_TIMEOUT_S = 1.0
 _REGEX_INPUT_CAP = 1_000_000
 
 
