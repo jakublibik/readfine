@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-30
+
 ### Added
 
 - Articles with nothing to read now offer the original page. Feeds that carry only a headline and a link (Hacker News is the clearest case) produce articles with no text at all, and opening one showed a blank pane and a line saying so. Such an article now shows an "Open original" button, plus "Retry extraction" when a previous attempt failed, so a source that was temporarily unreachable can be tried again without digging through the menu. Settings → Preferences adds "Open original for empty articles", off by default: with it on, clicking one of these articles opens the source in a new tab straight away, while the article itself still opens in the reader behind it, so it is marked read and stays starrable and labellable. Only articles that will never have text are affected, never one whose extraction is still running or could still be started. Time spent on the source counts towards reading time.
