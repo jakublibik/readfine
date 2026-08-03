@@ -2212,11 +2212,18 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   });
 
+  // The article's url/title live on the <article> element, not on the wrapper div
+  // that also carries data-article-id. Matching on the tag keeps a bare
+  // '[data-article-id]' query from picking up the wrapper and losing the source URL.
+  function currentDetailArticleEl() {
+    return (document.querySelector('#article-detail article[data-article-id]') ||
+            document.querySelector('#inline-article-detail-content article[data-article-id]'));
+  }
+
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#detail-share-pick-original')) return;
     document.getElementById('detail-share-picker').classList.add('hidden');
-    var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
-                     document.querySelector('#inline-article-detail-content [data-article-id]'));
+    var articleEl = currentDetailArticleEl();
     if (!articleEl) return;
     doShare(articleEl.dataset.title || '', articleEl.dataset.url || window.location.href);
   });
@@ -2224,8 +2231,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#detail-share-pick-readfine')) return;
     document.getElementById('detail-share-picker').classList.add('hidden');
-    var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
-                     document.querySelector('#inline-article-detail-content [data-article-id]'));
+    var articleEl = currentDetailArticleEl();
     if (!articleEl) return;
     var id = articleEl.dataset.articleId;
     var title = articleEl.dataset.title || '';
@@ -2353,7 +2359,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // Topbar/bottom next: mark current as read, load next article from list
   document.addEventListener('click', function (e) {
     if (!isMobile() || (!e.target.closest('#detail-topbar-next') && !e.target.closest('[data-bottom-next]'))) return;
-    var detailArticle = document.querySelector('#article-detail [data-article-id]');
+    var detailArticle = currentDetailArticleEl();
     if (!detailArticle) return;
     var currentId = detailArticle.dataset.articleId;
     htmx.ajax('POST', '/htmx/articles/' + currentId + '/set-read?state=true', { swap: 'none' });

@@ -9,6 +9,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Fixed
+
+- Share → "Original article" copied a link to Readfine instead of the article's own address. The share menu reads the source URL off the article in the reading pane, but a wrapper element added around it later was picked up first, and it carries no URL, so the code fell back to the page you were on. Sharing to Readfine was affected too, in a smaller way: the shared link itself was right, but the title handed to the system share sheet was empty.
+
 ## [0.14.0] - 2026-07-30
 
 ### Added
