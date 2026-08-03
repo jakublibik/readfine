@@ -604,14 +604,63 @@ async def htmx_readable_poll(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Polling endpoint: returns article content fragment. HTMX polling stops once status leaves 'pending'."""
+    """Polling endpoint for a running readable extraction.
+
+    While the extraction runs, only the small progress strip is returned — swapping
+    the whole content block every 2s relaid out the article (images, bottom bar) and
+    made it jump. Once it finishes, the full content block is returned and the swap
+    is retargeted at the content container, so the article is rebuilt exactly once.
+    """
     article = await get_article(user, article_id, db)
     if not article:
         return HTMLResponse("", status_code=404)
-    return _content_with_readtime_oob(request, article)
+    if article.readable_active:
+        return HTMLResponse(
+            templates.env.get_template("app/partials/readable_progress.html").render(
+                request=request, article=article
+            )
+        )
+    response = _content_with_readtime_oob(
+        request, article, extra_oob=await _summary_refresh_oob(article, user, db)
+    )
+    response.headers["HX-Retarget"] = f"#article-content-{article.id}"
+    response.headers["HX-Reswap"] = "outerHTML"
+    return response
 
 
-def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
+async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
+    """OOB refresh of the AI summary block, or "" when there is nothing to show.
+
+    Finishing a readable extraction runs the AI pipeline, so a summary can be
+    produced (or queued) after the detail was rendered. Without this the reader is
+    left with an empty spot and only sees the summary by reopening the article.
+    """
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    ai = await _ai_availability(settings, db)
+    if not ai.quality:
+        return ""
+    macros = templates.env.get_template("app/partials/ai_blocks.html").module
+    if article.ai_summary:
+        return str(macros.ai_summary(article.id, article.ai_summary, oob=True))
+    pending = await db.scalar(
+        select(ArticleAiJob.id).where(
+            ArticleAiJob.article_id == article.id,
+            ArticleAiJob.user_id == user.id,
+            ArticleAiJob.operation == "summary",
+            ArticleAiJob.status == "pending",
+        )
+    )
+    if not pending:
+        return ""
+    return str(macros.ai_spinner(
+        f"ai-summary-{article.id}",
+        f"/htmx/articles/{article.id}/ai-summary/poll",
+        "Generating summary…",
+        oob=True,
+    ))
+
+
+def _content_with_readtime_oob(request: Request, article, extra_oob: str = "") -> HTMLResponse:
     """Return article_content.html + OOB span to update the reading-time metadata."""
     content_html = templates.env.get_template("app/partials/article_content.html").render(
         request=request, article=article, chat_available=False
@@ -626,15 +675,21 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     date_oob = templates.env.get_template("app/partials/article_meta_date.html").render(
         request=request, article=article, oob=True
     )
-    return HTMLResponse(content_html + oob + date_oob)
+    return HTMLResponse(content_html + oob + date_oob + extra_oob)
 
 
-def _state_button_response(request: Request, article, *, template: str, event: str, payload: dict) -> HTMLResponse:
+def _state_button_response(
+    request: Request, article, *, template: str, event: str, payload: dict,
+    extra_events: dict | None = None,
+) -> HTMLResponse:
     """Render a state button/icon partial + fire an HX-Trigger event (no OOB row
     swap, to avoid flicker). Shared by the read / star / archive toggles."""
     btn_html = templates.env.get_template(template).render(article=article, request=request)
     response = HTMLResponse(btn_html)
-    response.headers["HX-Trigger"] = json.dumps({"sidebarRefresh": True, event: payload})
+    events = {"sidebarRefresh": True, event: payload}
+    if extra_events:
+        events.update(extra_events)
+    response.headers["HX-Trigger"] = json.dumps(events)
     return response
 
 
@@ -647,12 +702,15 @@ def _read_response(request: Request, article) -> HTMLResponse:
     )
 
 
-def _star_response(request: Request, article) -> HTMLResponse:
+def _star_response(request: Request, article, *, summary_started: bool = False) -> HTMLResponse:
+    # summaryStarted lets an open article swap in the "Generating summary…" spinner;
+    # the summary runs in the background, so otherwise nothing on screen says so.
     return _state_button_response(
         request, article,
         template="app/partials/star_icon.html",
         event="articleStarChanged",
         payload={"id": article.id, "isStarred": article.is_starred},
+        extra_events={"summaryStarted": {"id": article.id}} if summary_started else None,
     )
 
 
@@ -749,6 +807,7 @@ async def htmx_toggle_star(
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
 
+    summary_started = False
     if article.is_starred:
         settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
         if settings and settings.ai_summary_enabled_default:
@@ -758,6 +817,7 @@ async def htmx_toggle_star(
                 enqueued = await enqueue_summary_job(article_obj, user.id, db)
                 await db.commit()
                 if enqueued:
+                    summary_started = True
                     asyncio.create_task(_summary_after_star_bg(article_id, user.id))
     else:
         # Unstarred — cancel a not-yet-run summary job so a mis-click doesn't
@@ -772,7 +832,7 @@ async def htmx_toggle_star(
         )
         await db.commit()
 
-    return _star_response(request, article)
+    return _star_response(request, article, summary_started=summary_started)
 
 
 @router.post("/htmx/articles/{article_id}/archive", response_class=HTMLResponse)

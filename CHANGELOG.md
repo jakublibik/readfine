@@ -11,6 +11,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- An article no longer jumps around while its full text is being extracted. Opening an article whose extraction had not run yet starts one in the background, and the reader checked on it every two seconds by redrawing the entire article, which re-laid out the text, reloaded the images and flashed the action bar on every check. Most obvious on a phone, where the page visibly hopped every couple of seconds. The check now touches only the small "Extracting full content…" line, and the article itself is rebuilt once, when the text is ready.
+- A summary that starts on its own now says so. Starring an article with auto-summary on, or opening a starred article whose extraction finishes and produces one, generated the summary in the background with nothing on screen to show for it, so the only way to find out was to open the article again. The "Generating summary…" spinner now appears in both cases, and a summary that arrives while you are reading is shown straight away. Unstarring while it spins removes it instead of leaving it turning forever.
 - Share → "Original article" copied a link to Readfine instead of the article's own address. The share menu reads the source URL off the article in the reading pane, but a wrapper element added around it later was picked up first, and it carries no URL, so the code fell back to the page you were on. Sharing to Readfine was affected too, in a smaller way: the shared link itself was right, but the title handed to the system share sheet was empty.
 
 ## [0.14.0] - 2026-07-30

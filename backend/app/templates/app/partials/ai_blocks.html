@@ -10,8 +10,8 @@
 <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/></svg>
 {%- endmacro -%}
 
-{%- macro ai_summary(article_id, summary) -%}
-<div id="ai-summary-{{ article_id }}" class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
+{%- macro ai_summary(article_id, summary, oob=false) -%}
+<div id="ai-summary-{{ article_id }}"{% if oob %} hx-swap-oob="true"{% endif %} class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
 <div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>
 <div class="prose dark:prose-invert max-w-none ai-text">{{ summary | markdown }}</div>
 </div>
@@ -26,8 +26,8 @@
 
 {#- Polling spinner: re-fetches itself until the job leaves "pending", at which
     point the endpoint answers with the finished block instead. -#}
-{%- macro ai_spinner(target_id, poll_url, label) -%}
-<div id="{{ target_id }}" hx-get="{{ poll_url }}" hx-trigger="every 30s" hx-swap="outerHTML" class="flex items-center gap-2 text-sm text-gray-500 py-2">{{ spinner_svg() }}{{ label }}</div>
+{%- macro ai_spinner(target_id, poll_url, label, oob=false) -%}
+<div id="{{ target_id }}"{% if oob %} hx-swap-oob="true"{% endif %} hx-get="{{ poll_url }}" hx-trigger="every 5s" hx-swap="outerHTML" class="flex items-center gap-2 text-sm text-gray-500 py-2">{{ spinner_svg() }}{{ label }}</div>
 {%- endmacro -%}
 
 {#- Same spinner driven by htmx's own indicator class rather than by polling,

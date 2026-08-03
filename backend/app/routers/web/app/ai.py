@@ -156,7 +156,12 @@ async def htmx_ai_summary_poll(
         )
     )
 
-    if job is None or job.status == "pending":
+    if job is None:
+        # No job (never queued, or cancelled by unstarring) — stop polling instead
+        # of spinning forever on a summary that is not coming.
+        return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
+
+    if job.status == "pending":
         return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
 
     if job.status == "failed":

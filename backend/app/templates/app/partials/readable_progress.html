@@ -1,0 +1,18 @@
+{#- Progress strip shown while a readable extraction is running.
+
+    The poll lives here, on a tiny element that swaps only itself, instead of on
+    the whole content block: re-rendering the article body every 2s made images
+    relayout and the bottom bar flash, so the page kept jumping while extracting.
+    When the extraction finishes, the poll endpoint answers with the full content
+    block and retargets the swap to #article-content-<id>. -#}
+<div id="readable-poll-{{ article.id }}"
+     hx-get="/htmx/articles/{{ article.id }}/readable-poll"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     class="flex items-center gap-2 text-xs text-gray-400 italic mt-4">
+  <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+  </svg>
+  Extracting full content…
+</div>

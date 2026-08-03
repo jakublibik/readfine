@@ -1166,6 +1166,15 @@ document.addEventListener('articleStarChanged', function (e) {
   btn.title = isStarred ? 'Remove star' : 'Star article';
 });
 
+// Starring queues a summary that runs in the background. If the article is open,
+// pull in the polling spinner so the reader can see one is being generated.
+document.addEventListener('summaryStarted', function (e) {
+  var id = e.detail && e.detail.id;
+  var block = id ? document.getElementById('ai-summary-' + id) : null;
+  if (!block) return;
+  htmx.ajax('GET', '/htmx/articles/' + id + '/ai-summary/poll', { target: block, swap: 'outerHTML' });
+});
+
 // Optimistic star toggle: fire articleStarChanged immediately on click, revert on error.
 // One path for list rows ([data-star-btn]), the detail bottom bar ([data-bottom-star])
 // and the detail header menu ([data-header-star]).

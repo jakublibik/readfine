@@ -128,11 +128,13 @@ class TestHtmxAiSummaryTrigger:
 # ── GET /htmx/articles/{id}/ai-summary/poll ──────────────────────────────────
 
 class TestHtmxAiSummaryPoll:
-    def test_no_job_returns_spinner(self, client, mock_db):
+    def test_no_job_stops_polling(self, client, mock_db):
+        # Cancelled (unstarred) or never queued — the spinner must not keep spinning.
         mock_db.scalar = AsyncMock(return_value=None)
         resp = client.get("/htmx/articles/10/ai-summary/poll")
         assert resp.status_code == 200
-        assert "hx-get" in resp.text  # spinner has poll trigger
+        assert "hx-get" not in resp.text
+        assert 'id="ai-summary-10"' in resp.text
 
     def test_pending_job_returns_spinner(self, client, mock_db):
         mock_db.scalar = AsyncMock(return_value=make_job(status="pending"))
