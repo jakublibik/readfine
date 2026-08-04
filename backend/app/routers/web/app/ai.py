@@ -35,7 +35,8 @@ async def _get_article_access(user: User, article_id: int, db: AsyncSession):
             Article.id == article_id,
             (UserFeed.id != None)
             | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
+            | (UserArticleState.is_archived == True)
+            | (UserArticleState.saved_at.is_not(None)),
         )
     )
     return (await db.execute(stmt)).scalar_one_or_none()

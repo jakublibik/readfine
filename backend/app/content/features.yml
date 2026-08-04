@@ -82,6 +82,11 @@ categories:
         desc: Mark articles read, star favourites, and archive what you want out of the way.
       - title: Labels
         desc: Your own colour-coded tags for sorting articles by hand.
+      - title: Save by URL
+        desc: >-
+          Paste a link to keep an article that is not in any of your feeds. It goes
+          through the same readable extraction, lands in Saved, and is kept until you
+          remove it.
 
   - name: Filtering & scoring
     summary: Trim the stream down to what matters.

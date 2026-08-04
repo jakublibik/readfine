@@ -91,6 +91,26 @@ async def htmx_sidebar(
     nav_unread_starred = uas_row.unread_starred or 0
     nav_archived = uas_row.archived or 0
     nav_unread_archived = uas_row.unread_archived or 0
+    # Counted separately from the aggregate above because it joins Article to apply
+    # trimmed_at IS NULL. The starred/archived counters skip that filter and can
+    # therefore exceed the rows the list renders — a pre-existing drift not worth
+    # widening to Saved, where a deduped-then-trimmed article would be counted but
+    # never shown.
+    saved_row = (await db.execute(
+        select(
+            func.count().label("saved"),
+            func.count().filter(UserArticleState.is_read == False).label("unread_saved"),
+        )
+        .select_from(UserArticleState)
+        .join(Article, Article.id == UserArticleState.article_id)
+        .where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.saved_at.is_not(None),
+            Article.trimmed_at.is_(None),
+        )
+    )).one()
+    nav_saved = saved_row.saved or 0
+    nav_unread_saved = saved_row.unread_saved or 0
     nav_labeled = (await db.execute(
         select(func.count(func.distinct(ArticleLabel.article_id)))
         .select_from(ArticleLabel)
@@ -193,6 +213,8 @@ async def htmx_sidebar(
         "nav_unread_starred": nav_unread_starred,
         "nav_archived": nav_archived,
         "nav_unread_archived": nav_unread_archived,
+        "nav_saved": nav_saved,
+        "nav_unread_saved": nav_unread_saved,
         "nav_labeled": nav_labeled,
         "nav_unread_labeled": nav_unread_labeled,
         "label_unread_counts": label_unread_counts,
@@ -210,6 +232,7 @@ async def htmx_mark_articles_read(
     before: str = Form(...),
     starred_only: str = Form(""),
     archived_only: str = Form(""),
+    saved_only: str = Form(""),
     labeled_only: str = Form(""),
     label_id: str = Form(""),
     user: User = Depends(get_current_user),
@@ -223,11 +246,15 @@ async def htmx_mark_articles_read(
         user, db, before=before_dt,
         starred_only=starred_only == "1",
         archived_only=archived_only == "1",
+        saved_only=saved_only == "1",
         labeled_only=labeled_only == "1",
         label_id=int(label_id) if label_id else None,
     )
     lid = int(label_id) if label_id else None
-    total = await _mark_read_total(user, db, starred_only == "1", archived_only == "1", labeled_only == "1", lid)
+    total = await _mark_read_total(
+        user, db, starred_only == "1", archived_only == "1", saved_only == "1",
+        labeled_only == "1", lid,
+    )
     resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
@@ -289,7 +316,7 @@ def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) ->
 
 async def _mark_read_total(
     user: User, db: AsyncSession,
-    starred_only: bool, archived_only: bool, labeled_only: bool,
+    starred_only: bool, archived_only: bool, saved_only: bool, labeled_only: bool,
     label_id: int | None,
 ) -> int:
     if starred_only:
@@ -301,6 +328,16 @@ async def _mark_read_total(
         return (await db.execute(
             select(func.count()).select_from(UserArticleState)
             .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
+        )).scalar() or 0
+    if saved_only:
+        return (await db.execute(
+            select(func.count()).select_from(UserArticleState)
+            .join(Article, Article.id == UserArticleState.article_id)
+            .where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.saved_at.is_not(None),
+                Article.trimmed_at.is_(None),
+            )
         )).scalar() or 0
     if label_id is not None:
         return (await db.execute(

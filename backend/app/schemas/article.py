@@ -30,6 +30,10 @@ class ArticleListItem(BaseModel):
     # extraction still in flight is not permanently empty. Computed when the list
     # renders, so a background extraction finishing afterwards leaves it stale.
     body_permanently_empty: bool = False
+    # A first extraction attempt is still in flight. Only a saved-by-URL article's
+    # row cares: it was inserted with a placeholder title and learns the real one
+    # when extraction finishes, so the row polls until then.
+    readable_active: bool = False
     published_at: datetime | None
     # Display-only string, formatted per the viewer's number/date format profile
     # (order/separators vary). Parse `published_at` (ISO) for machine use.
@@ -40,6 +44,7 @@ class ArticleListItem(BaseModel):
     is_read: bool
     is_starred: bool
     is_archived: bool
+    is_saved: bool = False
     ai_score: float | None = None
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
     # coalesce(published_at, fetched_at) used for keyset pagination cursor;
@@ -58,6 +63,9 @@ class ArticleResponse(BaseModel):
     author: str | None
     content: str | None
     content_source: str | None
+    # The page's own og:description, captured for feedless (saved) articles. Shown as
+    # a clearly-marked fallback when extraction produced nothing to read.
+    summary: str | None = None
     readable_content: str | None
     readable_status: str
     readable_error: str | None = None
@@ -72,6 +80,9 @@ class ArticleResponse(BaseModel):
     is_read: bool
     is_starred: bool
     is_archived: bool
+    # Saved by URL by this user. Gates the "Remove from Saved" actions — deliberately
+    # keyed on the article's own state, not on which view the reader came from.
+    is_saved: bool = False
     read_at: datetime | None
     share_token: str | None = None
     ai_summary: str | None = None

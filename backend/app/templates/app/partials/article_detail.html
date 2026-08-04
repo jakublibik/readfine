@@ -48,14 +48,15 @@
           {{ article.title or "↗" }}
         </a>
       {% else %}
-        <h1 class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
+        <h1 id="article-title-{{ article.id }}" class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
       {% endif %}
     </div>
 
     <!-- Metadata row + ··· menu -->
     <div class="article-detail-meta flex items-center gap-x-2 text-sm text-gray-500">
       <div class="flex flex-wrap items-center gap-x-2 gap-y-1 flex-1 min-w-0">
-        {% if article.feed_title %}<span class="detail-meta-feed truncate">{{ article.feed_title }}</span>{% endif %}
+        {% set source_label = article.feed_title or (article.url | hostname) %}
+        {% if source_label %}<span class="detail-meta-feed truncate">{{ source_label }}</span>{% endif %}
         {% if article.author %}<span class="detail-meta-author-sep shrink-0">·</span><span class="detail-meta-author shrink-0">{{ article.author }}</span>{% endif %}
         {% include "app/partials/article_meta_date.html" %}
         <span id="article-meta-readtime-{{ article.id }}" class="shrink-0">
@@ -165,6 +166,29 @@
               Chat
             </button>
             {% endif %}
+          </div>
+          {% endif %}
+          {# Last and separated, because it is the only irreversible action in this
+             menu: everything above is a toggle you can click straight back, while
+             removing a saved article with no feed drops it out of every view for
+             good (re-saving means pasting the URL again). Last is also a stable
+             position — the sections above it are conditional and come and go.
+
+             Gated on the article's own saved state, not on the current view: the
+             detail panel does not know which list you came from, and a deduped
+             article shows up in Saved *and* in its feed. #}
+          {% if article.is_saved %}
+          <div class="border-t border-gray-100 mt-1 pt-1">
+            <button data-unsave="{{ article.id }}" data-close-menu
+                    hx-post="/htmx/articles/{{ article.id }}/unsave"
+                    hx-swap="none"
+                    class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
+              <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
+                <path stroke-linecap="round" stroke-width="2" d="M4 4l16 16"/>
+              </svg>
+              <span>Remove from Saved</span>
+            </button>
           </div>
           {% endif %}
         </div>

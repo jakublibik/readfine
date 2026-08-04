@@ -78,6 +78,24 @@ def _parse_json_list(value: str | None) -> list:
 
 templates.env.filters["parse_json_list"] = _parse_json_list
 
+
+def _hostname(url: str | None) -> str:
+    """Bare host for a URL, used as the source label on articles with no feed.
+
+    A saved-by-URL article has no feed title, and "Unknown feed" would be actively
+    wrong — it never had one. The host is what the reader actually wants to see.
+    """
+    if not url:
+        return ""
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(url).netloc or "").removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+templates.env.filters["hostname"] = _hostname
+
 _ai_enabled: bool = False
 
 

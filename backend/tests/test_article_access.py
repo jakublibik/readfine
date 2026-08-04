@@ -49,3 +49,19 @@ class TestMarkArticlesReadBatch:
             await mark_articles_read_batch(user, [1, 2, 3], db)
         db.execute.assert_awaited_once()
         db.commit.assert_awaited_once()
+
+
+class TestAccessPredicateCoversSaved:
+    """A saved-by-URL article usually has no feed and is neither starred nor archived,
+    so without saved_at in the predicate every read/write route would 404 on it."""
+
+    def test_saved_at_is_part_of_the_predicate(self):
+        from app.services.article import article_access_predicate
+
+        sql = str(article_access_predicate().compile(
+            compile_kwargs={"literal_binds": True}
+        ))
+        assert "saved_at IS NOT NULL" in sql
+        # the existing anchors must survive alongside it
+        assert "is_starred" in sql
+        assert "is_archived" in sql

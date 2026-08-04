@@ -27,14 +27,21 @@ _SNIPPET_CHARS = 300  # profile snippet length kept on trim
 # ── retention predicates (correlated EXISTS on the current Article) ───────────
 
 def _fully_protected_exists():
-    """True when some user keeps this article FULL forever (starred or archived).
-    Never trimmed nor age-deleted."""
+    """True when some user keeps this article FULL forever (starred, archived or saved).
+    Never trimmed nor age-deleted.
+
+    Saved-by-URL articles are kept indefinitely on purpose, with no TTL and no cap:
+    pasting a URL by hand is the most explicit thing a reader can do, so Saved must not
+    be the one place where content quietly expires. Like starred/archived this is
+    any-user semantics, so one person saving an article pins the row for the instance.
+    Un-saving re-exposes it to purge, which is the intended way out."""
     return (
         select(UserArticleState.article_id)
         .where(
             UserArticleState.article_id == Article.id,
             (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
+            | (UserArticleState.is_archived == True)  # noqa: E712
+            | (UserArticleState.saved_at.is_not(None)),
         )
         .exists()
     )

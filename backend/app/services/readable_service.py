@@ -3,7 +3,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import NamedTuple, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -40,14 +40,22 @@ _EMPTY_CONTENT_MSG = "No content could be extracted from the page"
 
 # ── core extraction ───────────────────────────────────────────────────────────
 
-def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) -> tuple[Optional[str], Optional[str], Optional[int]]:
-    """Download article HTML. Returns (html, error_message, http_status_code)."""
+def _fetch_html(
+    url: str, auth_user: Optional[str], auth_pass: Optional[str]
+) -> tuple[Optional[str], Optional[str], Optional[int], Optional[str]]:
+    """Download article HTML.
+
+    Returns (html, error_message, http_status_code, final_url). *final_url* is where
+    the redirect chain actually ended — the caller pasted address may be a click
+    tracker or carry campaign parameters, and for a saved article that address is
+    what ends up on screen and in the dedup key.
+    """
     from app.utils.url_validator import log_outbound, validate_feed_url
     try:
         validate_feed_url(url)
     except ValueError as exc:
         logger.warning("readable URL blocked (SSRF): %s — %s", url, exc)
-        return None, str(exc), None
+        return None, str(exc), None, None
 
     try:
         auth = (auth_user, auth_pass) if auth_user and auth_pass else None
@@ -80,26 +88,26 @@ def _fetch_html(url: str, auth_user: Optional[str], auth_pass: Optional[str]) ->
                     validate_feed_url(redirect_url)
                 except ValueError as exc:
                     logger.warning("readable redirect blocked (SSRF): %s — %s", redirect_url, exc)
-                    return None, f"Redirect blocked: {exc}", None
+                    return None, f"Redirect blocked: {exc}", None, None
                 current_url = redirect_url
             else:
-                return None, f"Too many redirects (max {_MAX_REDIRECTS})", None
+                return None, f"Too many redirects (max {_MAX_REDIRECTS})", None, None
 
         resp.raise_for_status()
-        return resp.text, None, None
+        return resp.text, None, None, current_url
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
         msg = f"HTTP {status_code} {exc.response.reason_phrase}"
         logger.warning("readable fetch failed for %s: %s", url, msg)
-        return None, msg, status_code
+        return None, msg, status_code, None
     except httpx.TimeoutException:
         msg = f"Timeout after {_TIMEOUT}s"
         logger.warning("readable fetch timed out for %s", url)
-        return None, msg, None
+        return None, msg, None, None
     except Exception as exc:
         msg = str(exc)[:200]
         logger.warning("readable fetch failed for %s: %s", url, msg)
-        return None, msg, None
+        return None, msg, None, None
 
 
 def _strip_pre_extraction_noise(html: str) -> str:
@@ -302,14 +310,201 @@ def _find_published_date(html: str, url: str) -> Optional[datetime]:
     return dt
 
 
+_OG_TITLE_RE = re.compile(
+    r"""<meta[^>]+(?:property|name)\s*=\s*["']og:title["'][^>]*\bcontent\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+_HEAD_END_RE = re.compile(r"</head\s*>", re.IGNORECASE)
+# How far in to look for the closing tag. A fixed byte prefix used to stand in for the
+# head and silently lost the metadata of any page that opens with a large inline script
+# block: a YouTube watch page carries its <title>, og: tags and rel=canonical past
+# 680 KB, so a 200 KB window saw none of them — no title, and, worse, no description for
+# _content_contradicts_page to judge the extraction against.
+_HEAD_SCAN_BYTES = 1_000_000
+# Used only when no </head> turns up inside that cap, i.e. the markup is broken or the
+# response is not HTML at all. Scanning the body of a long article for a title is waste.
+_HEAD_FALLBACK_BYTES = 200_000
+
+
+def _head_slice(html: str) -> str:
+    """The document's ``<head>``, which is where every metadata regex below looks.
+
+    Bounded by the closing tag rather than by a byte count, because how far in the
+    metadata sits is a property of the page, not something a constant can predict.
+    The regexes themselves stay cheap even on a pathological head: ~1.5 ms for all
+    four over YouTube's 694 KB.
+    """
+    m = _HEAD_END_RE.search(html, 0, _HEAD_SCAN_BYTES)
+    return html[: m.end()] if m else html[:_HEAD_FALLBACK_BYTES]
+
+
+_OG_DESC_RE = re.compile(
+    r"""<meta[^>]+(?:property|name)\s*=\s*["']og:description["'][^>]*\bcontent\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+_OG_DESC_ALT_RE = re.compile(
+    r"""<meta[^>]+\bcontent\s*=\s*["']([^"']+)["'][^>]*(?:property|name)\s*=\s*["']og:description["']""",
+    re.IGNORECASE,
+)
+# Below this many distinct words the overlap score is too noisy to act on, so the
+# check is skipped entirely rather than guessed at.
+_OG_DESC_MIN_WORDS = 10
+# Measured across real articles from several sites: legitimate extractions scored
+# 0.55–1.00 (the lede is usually the article's own first paragraph, so nearly every
+# word of it reappears), while a consent wall served in place of the article scored
+# 0.00. A threshold here sits far from both.
+_OG_DESC_MIN_OVERLAP = 0.15
+
+_WRONG_CONTENT_MSG = (
+    "The site returned a consent or paywall page instead of the article"
+)
+
+
+_CANONICAL_RE = re.compile(
+    r"""<link[^>]+rel\s*=\s*["']canonical["'][^>]*\bhref\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+_OG_URL_RE = re.compile(
+    r"""<meta[^>]+(?:property|name)\s*=\s*["']og:url["'][^>]*\bcontent\s*=\s*["']([^"']+)["']""",
+    re.IGNORECASE,
+)
+
+
+def resolve_article_url(fetched_url: Optional[str], html: Optional[str]) -> Optional[str]:
+    """The address an article actually lives at, given where the fetch ended up.
+
+    Prefers the page's own ``rel=canonical`` / ``og:url`` over the fetched address,
+    which strips campaign parameters, session ids and AMP variants — but **only when
+    it is on the same host**. A syndicated article routinely names the original
+    publisher's domain as its canonical, and following that across hosts would let
+    one article's URL resolve onto a different article's row, which for dedup is far
+    worse than the cosmetic problem this fixes.
+    """
+    if not fetched_url:
+        return None
+    if not html:
+        return fetched_url
+    head = _head_slice(html)
+    m = _CANONICAL_RE.search(head) or _OG_URL_RE.search(head)
+    if not m:
+        return fetched_url
+    candidate = m.group(1).strip()
+    if not candidate.startswith(("http://", "https://")):
+        return fetched_url
+    try:
+        if urlsplit(candidate).netloc.lower() != urlsplit(fetched_url).netloc.lower():
+            return fetched_url
+    except ValueError:
+        return fetched_url
+    return candidate
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"\w{4,}", text.lower())}
+
+
+def _extract_og_description(html: str) -> Optional[str]:
+    import html as html_mod
+
+    head = _head_slice(html)
+    m = _OG_DESC_RE.search(head) or _OG_DESC_ALT_RE.search(head)
+    if not m:
+        return None
+    return re.sub(r"\s+", " ", html_mod.unescape(m.group(1))).strip()
+
+
+def _content_contradicts_page(content_html: str, og_description: Optional[str]) -> bool:
+    """True when the extracted text plainly is not the article the page describes.
+
+    Some sites answer a server-side fetch with HTTP 200 and a consent/paywall page
+    instead of the article. Nothing downstream can tell: the status is fine, the
+    length is respectable, and the extractor faithfully returns the only prose on
+    the page — which is the cookie notice. Stored as-is, that reads as an article
+    made of advertising copy.
+
+    The publisher's own og:description is the check: on a real article it is the
+    lede, so almost all of it reappears in the body. On a substitute page it shares
+    nothing. Returns False whenever there is not enough to judge on.
+    """
+    if not og_description:
+        return False
+    desc_words = _words(og_description)
+    if len(desc_words) < _OG_DESC_MIN_WORDS:
+        return False
+    body_words = _words(nh3.clean(content_html, tags=set()))
+    if not body_words:
+        return False
+    overlap = len(desc_words & body_words) / len(desc_words)
+    return overlap < _OG_DESC_MIN_OVERLAP
+
+
+def _extract_title(html: str) -> Optional[str]:
+    """Page title from og:title, falling back to <title>.
+
+    Deliberately regex over the head rather than a parse: the only caller is the
+    save-by-URL path, and building a readability Document (or a second BeautifulSoup
+    tree) just for a title would put a full lxml parse on every extraction if this
+    ever moved onto the shared path.
+    """
+    import html as html_mod
+
+    head = _head_slice(html)
+    for pattern in (_OG_TITLE_RE, _TITLE_RE):
+        m = pattern.search(head)
+        if not m:
+            continue
+        title = html_mod.unescape(m.group(1))
+        title = re.sub(r"\s+", " ", title).strip()
+        if title:
+            return title[:1000]
+    return None
+
+
+def title_from_url(url: str) -> str:
+    """Readable stand-in when the page carries no title at all.
+
+    Host + path beats showing the raw URL in a list, and beats an empty title —
+    Article.title is NOT NULL.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url[:1000]
+    host = (parts.netloc or "").removeprefix("www.")
+    path = (parts.path or "").rstrip("/")
+    label = f"{host}{path}" if host else url
+    return (label or url)[:1000]
+
+
 def apply_readable_result(
     article: Article,
     content: Optional[str],
     error: Optional[str],
     http_status: Optional[int],
     published_at: Optional[datetime] = None,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
 ) -> bool:
     """Apply extraction result to article fields. Returns True if HTTP 403."""
+    # The page's own og:description, kept for feedless articles only. It is what the
+    # reader falls back to when extraction produced nothing usable, and it is also
+    # the only thing a saved article can show as a list snippet — _make_snippet reads
+    # summary and content, never readable_content, so without this a saved article
+    # has no preview at all. Feed articles are left alone: nothing writes summary for
+    # them today, and starting to would change snippets and search across every feed.
+    if description and article.feed_id is None:
+        article.summary = description[:2000]
+    # A feedless article (saved by URL) has no other source of a title — nothing
+    # arrived over RSS — so the page's own title always wins, even on a failed
+    # extraction where it is the only thing left to identify the article by. Feed
+    # articles keep their feed-supplied title. Note this is NOT gated on "the title
+    # still looks like the placeholder": that would tie this function to whatever
+    # placeholder the insert happens to use today.
+    if title and article.feed_id is None:
+        article.title = title[:1000]
+
     # Whitespace-only content is treated as no content: storing it would mark the
     # article "success" yet render blank, hiding the (often fuller) feed content.
     if content and content.strip():
@@ -346,17 +541,51 @@ def apply_readable_result(
     return is_403
 
 
-def extract_readable(url: str, auth_user: Optional[str] = None,
-                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int], Optional[datetime]]:
-    """
-    Download URL and extract readable HTML.
-    Returns (sanitized HTML, error_message, http_status_code, published_at). On success,
-    the first element is set and published_at may carry a date scraped from the page.
-    """
-    html, fetch_error, http_status = _fetch_html(url, auth_user, auth_pass)
-    if not html:
-        return None, fetch_error, http_status, None
+class ReadableResult(NamedTuple):
+    """Everything one extraction attempt learned about a page.
 
+    A plain tuple ran out of room: callers need the body, why it failed, the page's
+    own title and description, and the address the fetch really ended at. Named
+    fields keep the failure paths — which return most of these with no content —
+    readable at the call site.
+    """
+    content: Optional[str] = None
+    error: Optional[str] = None
+    http_status: Optional[int] = None
+    published_at: Optional[datetime] = None
+    title: Optional[str] = None
+    resolved_url: Optional[str] = None
+    description: Optional[str] = None
+
+
+def extract_readable_with_title(
+    url: str, auth_user: Optional[str] = None, auth_pass: Optional[str] = None,
+    reject_wrong_content: bool = False,
+) -> ReadableResult:
+    """
+    Download URL and extract readable HTML, plus the page's own title, description and
+    the address the article really lives at.
+
+    The title is returned from the failed-extraction paths too, not just on success:
+    when a page downloads but yields no article body, its title is the only thing left
+    to identify it by in the Saved list.
+
+    *reject_wrong_content* turns on the consent/paywall-page check (see
+    ``_content_contradicts_page``). It is off by default and enabled only for articles
+    with no feed: a feed article that trips the heuristic would lose content it has
+    been showing fine, whereas a saved one has nothing to lose and an honest error
+    beats a body made of advertising copy.
+    """
+    html, fetch_error, http_status, final_url = _fetch_html(url, auth_user, auth_pass)
+    if not html:
+        # Nothing was downloaded, so there is no title or address to report either.
+        return ReadableResult(error=fetch_error, http_status=http_status)
+
+    title = _extract_title(html)
+    # Read off the untouched document: _strip_pre_extraction_noise below rewrites the
+    # markup, and both of these live in <head>.
+    resolved_url = resolve_article_url(final_url, html)
+    description = _extract_og_description(html)
     video_figures = _collect_video_figures(html)
     html = _strip_pre_extraction_noise(html)
     content = _extract_with_trafilatura(html, url)
@@ -364,7 +593,8 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
         content = _extract_with_readability(html)
     if not content:
         logger.warning("readable extraction yielded no content for %s", url)
-        return None, _EMPTY_CONTENT_MSG, None, None
+        return ReadableResult(error=_EMPTY_CONTENT_MSG, title=title,
+                              resolved_url=resolved_url, description=description)
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
@@ -374,8 +604,33 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
     if not _has_visible_content(final):
         # Extraction produced markup that sanitized down to nothing usable.
         logger.warning("readable extraction collapsed to empty content for %s", url)
-        return None, _EMPTY_CONTENT_MSG, None, None
-    return final, None, None, _find_published_date(html, url)
+        return ReadableResult(error=_EMPTY_CONTENT_MSG, title=title,
+                              resolved_url=resolved_url, description=description)
+    if reject_wrong_content and _content_contradicts_page(final, description):
+        # HTTP 200 with a consent/paywall page in place of the article. Discarding it
+        # surfaces the error and the "Open original" / "Retry" buttons instead of
+        # storing the site's cookie notice as the article body.
+        logger.info("readable extraction returned a substitute page for %s", url)
+        return ReadableResult(error=_WRONG_CONTENT_MSG, title=title,
+                              resolved_url=resolved_url, description=description)
+    return ReadableResult(
+        content=final, published_at=_find_published_date(html, url), title=title,
+        resolved_url=resolved_url, description=description,
+    )
+
+
+def extract_readable(url: str, auth_user: Optional[str] = None,
+                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int], Optional[datetime]]:
+    """
+    Download URL and extract readable HTML.
+    Returns (sanitized HTML, error_message, http_status_code, published_at). On success,
+    the first element is set and published_at may carry a date scraped from the page.
+
+    Feed articles already have a title, so this drops the one
+    ``extract_readable_with_title`` collects rather than making every caller unpack it.
+    """
+    r = extract_readable_with_title(url, auth_user, auth_pass)
+    return r.content, r.error, r.http_status, r.published_at
 
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
@@ -405,8 +660,9 @@ async def process_pending_readable(db: AsyncSession) -> int:
     if not articles:
         return 0
 
-    # Load feed auth info for articles that need it
-    feed_ids = list({a.feed_id for a in articles})
+    # Load feed auth info for articles that need it. Saved-by-URL articles have no
+    # feed, so drop the None before it reaches the IN clause.
+    feed_ids = list({a.feed_id for a in articles if a.feed_id is not None})
     feeds_result = await db.execute(
         select(Feed.id, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
         .where(Feed.id.in_(feed_ids))
@@ -444,11 +700,30 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
+        # Articles saved by URL have no feed. They must not touch the per-feed
+        # bookkeeping below — every one of them would land in the same `None` bucket,
+        # so unrelated hosts would pool their 403s/empties and could trip
+        # _disable_readable_for_403(None, db) for a feed that does not exist.
+        is_feedless = article.feed_id is None
+
         auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
+        title = None
+        resolved_url = None
+        description = None
         try:
-            content, error, http_status, published_at = await loop.run_in_executor(
-                None, extract_readable, article.url, auth_user, auth_pass
-            )
+            if is_feedless:
+                r = await loop.run_in_executor(
+                    None, extract_readable_with_title,
+                    article.url, auth_user, auth_pass, True
+                )
+                content, error, http_status, published_at = (
+                    r.content, r.error, r.http_status, r.published_at
+                )
+                title, resolved_url, description = r.title, r.resolved_url, r.description
+            else:
+                content, error, http_status, published_at = await loop.run_in_executor(
+                    None, extract_readable, article.url, auth_user, auth_pass
+                )
         except Exception as exc:
             content, error, http_status, published_at = None, str(exc)[:200], None, None
             logger.warning("readable extraction error for article %d: %s", article.id, exc)
@@ -459,9 +734,27 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        is_403 = apply_readable_result(article, content, error, http_status, published_at)
+        is_403 = apply_readable_result(
+            article, content, error, http_status, published_at,
+            title=title, description=description,
+        )
+        if is_feedless:
+            from app.services.saved_article_service import _adopt_resolved_url
+            _adopt_resolved_url(article, resolved_url)
         is_empty = content is None and error == _EMPTY_CONTENT_MSG
         from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
+        if is_feedless:
+            # Saved-by-URL: no scoring, and post-processing is per-saver. This is the
+            # fallback path for an import task that died or hit a transient error —
+            # without it those articles would come out fully extracted but silently
+            # never filtered.
+            if content or article.readable_status == "failed":
+                from app.services.saved_article_service import finalize_for_all_savers
+                await finalize_for_all_savers(article, db)
+            processed += 1
+            await db.commit()
+            continue
+
         if content:
             feed_403_streak.pop(article.feed_id, None)  # reset streaks on success
             feed_empty_streak.pop(article.feed_id, None)

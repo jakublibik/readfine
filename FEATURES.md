@@ -31,6 +31,7 @@ _A clean reader that adapts to your screen._
 - **Mark read on scroll:** Optionally mark articles read as they scroll past.
 - **Article states:** Mark articles read, star favourites, and archive what you want out of the way.
 - **Labels:** Your own colour-coded tags for sorting articles by hand.
+- **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it.
 
 ## Filtering & scoring
 

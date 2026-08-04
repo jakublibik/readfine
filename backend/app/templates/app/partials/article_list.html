@@ -1,5 +1,37 @@
+{#- Padding and control height deliberately mirror the sidebar header
+    (px-4 py-2.5 around a 24px control): both sit at the very top of their panel,
+    side by side, so a couple of pixels apart reads as a misalignment. Matched by
+    structure rather than a fixed height, so the two stay level if either changes. -#}
+{% if saved_view %}
+<div data-list-header
+     class="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10 dark:bg-blue-950/40 dark:border-blue-900">
+  <svg class="w-3.5 h-3.5 flex-shrink-0 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
+  </svg>
+  <form id="save-url-form" class="flex items-center gap-2 flex-1 min-w-0"
+        hx-post="/htmx/articles/save-url"
+        hx-target="#article-list"
+        hx-swap="innerHTML"
+        hx-indicator="#save-url-spinner"
+        hx-disabled-elt="find button, find input">
+    <input type="url" name="url" required
+           placeholder="Paste an article URL to save…"
+           class="flex-1 min-w-0 h-6 text-sm px-2 rounded border border-blue-200 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:border-blue-400 dark:bg-gray-800 dark:border-blue-900 dark:text-gray-200">
+    <button type="submit"
+            class="flex-shrink-0 h-6 px-3 text-sm leading-none rounded bg-blue-600 hover:bg-blue-700 text-white border-0 cursor-pointer disabled:opacity-50">
+      Save
+    </button>
+    <svg id="save-url-spinner" class="htmx-indicator animate-spin h-4 w-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+    </svg>
+  </form>
+</div>
+{% endif %}
+
 {% if search_query or filter_active %}
-<div class="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
+<div data-list-header
+     class="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
   <button data-action="open-search-again"
           class="text-blue-400 hover:text-blue-600 flex-shrink-0 bg-transparent border-0 cursor-pointer p-0.5"
           title="New search">
@@ -32,7 +64,11 @@
   {% endif %}
   <div aria-hidden="true" style="height:100vh"></div>
 {% else %}
-  {% if not search_query and not filter_active and has_feeds == false %}
+  {% if saved_view %}
+  <div class="flex items-center justify-center h-48 text-gray-400 text-sm px-8 text-center">
+    No saved articles yet. Paste a URL above to save one.
+  </div>
+  {% elif not search_query and not filter_active and has_feeds == false %}
   <div class="mt-10 mx-8">
     <div class="bg-green-50 border border-green-200 rounded-lg p-6 text-center space-y-3 dark:bg-green-950/40 dark:border-green-900">
       <p class="text-base font-semibold text-green-900 dark:text-green-200">Welcome to Readfine!</p>

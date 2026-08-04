@@ -14,6 +14,41 @@
       {{ article.readable_content | safe }}
     {% elif article.content %}
       {{ article.content | safe }}
+    {% elif article.summary and article.feed_id is none %}
+      {#- Extraction produced nothing to read, but the page told us about itself.
+          Shown for feedless (saved) articles only, which are the only ones that
+          carry a summary — a feed article falls back to its feed content instead.
+          Deliberately framed as the site's own description rather than dropped into
+          the body, so it never reads as the article. -#}
+      <p class="text-sm text-gray-500 mb-3 dark:text-gray-400">
+        The full text could not be retrieved. This is the description the site gives
+        for the article:
+      </p>
+      <blockquote class="border-l-2 border-gray-300 pl-4 text-gray-700 not-italic dark:border-gray-600 dark:text-gray-300">
+        {{ article.summary }}
+      </blockquote>
+      {% if article.url %}
+      <div class="flex flex-wrap items-center gap-2 mt-4 not-prose">
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" data-external-link
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 no-underline">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+          </svg>
+          Open original
+        </a>
+        <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
+                hx-target="#article-content-{{ article.id }}"
+                hx-swap="outerHTML"
+                hx-indicator="#readable-retry-spinner-{{ article.id }}"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 bg-transparent cursor-pointer">
+          <svg id="readable-retry-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+          Retry extraction
+        </button>
+      </div>
+      {% endif %}
     {% else %}
       <p class="text-gray-400 italic">No content available.</p>
       {% if article.url %}
@@ -114,6 +149,22 @@
           {% else %}<span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>{% endif %}
         </button>
       </div>
+      {# Last of the actions, matching its place at the bottom of the ··· menu: it is
+         the only irreversible one here. Kept ahead of the next-article arrow so a
+         destructive button never sits under the cursor you use to page through. #}
+      {% if article.is_saved %}
+      <button data-unsave="{{ article.id }}"
+              data-stop-propagation
+              hx-post="/htmx/articles/{{ article.id }}/unsave"
+              hx-swap="none"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Remove from Saved">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
+          <path stroke-linecap="round" stroke-width="2" d="M4 4l16 16"/>
+        </svg>
+      </button>
+      {% endif %}
       <button data-bottom-next
               class="hidden w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
               title="Next article">

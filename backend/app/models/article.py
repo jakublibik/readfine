@@ -62,6 +62,16 @@ class UserArticleState(Base):
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ever_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     starred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the user saved this article by pasting its URL. Carries the Saved view,
+    # access (see article_access_predicate) and the purge exemption on its own, so a
+    # saved article never has to borrow a star to stay alive.
+    saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Stamped the first time the post-extraction pass ran its filters for this
+    # article+user. A dedup save by another user can push a finished article back to
+    # pending and re-extract it, so "extraction reached a terminal state" can happen
+    # twice — without this, star/archive/mark-read would be re-applied after the user
+    # had undone them. See services.saved_article_service.finalize_saved_article.
+    filters_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dwell_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unstar_dwell_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     link_opened: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

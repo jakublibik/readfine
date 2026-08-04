@@ -348,6 +348,24 @@ document.body.addEventListener('showToast', function (e) {
   showToast(e.detail.msg, e.detail.type);
 });
 
+// An article was removed from Saved. It no longer exists in the current view, so
+// drop its row and clear the detail panel. No two-way state sync is needed here
+// (unlike star/archive): nothing survives to keep in sync.
+document.body.addEventListener('savedArticleRemoved', function (e) {
+  var id = e.detail && e.detail.id;
+  if (!id) return;
+  var row = document.querySelector('[data-article-id="' + id + '"]');
+  if (row) row.remove();
+  var detail = document.getElementById('article-detail');
+  var openDetail = detail && detail.querySelector('[id^="article-content-' + id + '"]');
+  if (openDetail) {
+    detail.innerHTML =
+      '<div class="flex items-center justify-center h-full text-gray-400">' +
+      '<div class="text-center"><p class="text-sm">Select an article to read</p></div></div>';
+  }
+  showToast('Removed from Saved', 'ok');
+});
+
 // A manual feed refresh finished — if that feed is the one currently displayed,
 // reload the article list so newly fetched items appear without re-clicking it.
 document.body.addEventListener('feedRefreshed', function (e) {
@@ -488,7 +506,7 @@ function _syncMobileQuicklink() {
 function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
   var url;
-  var view = window.location.search.match(/[?&]view=(starred|labeled)(?:&|$)/);
+  var view = window.location.search.match(/[?&]view=(starred|labeled|saved)(?:&|$)/);
   if (view) {
     url = '/htmx/articles?' + view[1] + '_only=true';
     try { localStorage.setItem('lastNavItem', url); } catch (e) {}
@@ -1572,17 +1590,22 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     // leave the "Loading…" shell spinning forever.
     _loadInlineContent(articleId);
 
-    // Scroll row into view, accounting for mobile top panel if visible
+    // Scroll the row into view, clearing anything pinned above it: the mobile top
+    // panel sits outside the list, and a sticky list header (the Saved URL box, the
+    // search-results strip) sits inside it and stays put while the list scrolls, so
+    // a row aligned to the list's top would slide underneath it.
     setTimeout(function () {
       var topPanel = document.getElementById('mobile-title-bar');
       var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
       var topOffset = barVisible ? topPanel.getBoundingClientRect().height : 0;
+      var listHeader = document.querySelector('#article-list [data-list-header]');
+      if (listHeader) topOffset += listHeader.getBoundingClientRect().height;
       if (topOffset > 0) {
         var list = document.getElementById('article-list');
         if (list) {
           var scrollTarget = list.scrollTop + row.getBoundingClientRect().top
             - list.getBoundingClientRect().top - topOffset;
-          list.scrollTo({ top: scrollTarget, behavior: 'smooth' });
+          list.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
         }
       } else {
         row.scrollIntoView({ behavior: 'smooth', block: 'start' });

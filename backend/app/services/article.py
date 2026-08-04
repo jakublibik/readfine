@@ -45,14 +45,16 @@ def article_access_predicate():
     """WHERE clause for "this user may act on this article".
 
     True when the user is subscribed to the article's feed, OR has starred/archived
-    it (access survives unsubscribe / feed deletion). Requires the query to have
-    added ``add_article_access_joins(user_id)`` first — the user scoping lives in
-    those joins' ON clauses, so this predicate only checks whether a row matched.
+    it (access survives unsubscribe / feed deletion), OR saved it by URL (a saved
+    article usually has no feed at all). Requires the query to have added
+    ``add_article_access_joins(user_id)`` first — the user scoping lives in those
+    joins' ON clauses, so this predicate only checks whether a row matched.
     """
     return (
         UserFeed.id.is_not(None)
         | UserArticleState.is_starred.is_(True)
         | UserArticleState.is_archived.is_(True)
+        | UserArticleState.saved_at.is_not(None)
     )
 
 
@@ -117,6 +119,7 @@ async def list_articles(
     read_status: str | None = None,
     starred_only: bool = False,
     archived_only: bool = False,
+    saved_only: bool = False,
     labeled_only: bool = False,
     q: str | None = None,
     sort_order: str = "newest",
@@ -126,14 +129,27 @@ async def list_articles(
     cursor_id: int | None = None,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state."""
-    # State/label views are anchored on user-owned state (star, archive, label)
+    # State/label views are anchored on user-owned state (star, archive, save, label)
     # that outlives the feed subscription: the feed may be unsubscribed or deleted
-    # (Article.feed_id NULL), so the UserFeed/Feed joins must be optional. The
-    # user-scoping — and thus tenant isolation — comes from those anchors
-    # (UserArticleState.user_id / ArticleLabel.user_id below), never from the feed
-    # join, so dropping the subscription requirement here cannot leak other users'
-    # articles. Feed-browsing views instead require an active subscription.
-    feed_optional = starred_only or archived_only or label_id is not None or labeled_only
+    # (Article.feed_id NULL), and a saved-by-URL article never had one, so the
+    # UserFeed/Feed joins must be optional. The user-scoping — and thus tenant
+    # isolation — comes from those anchors (UserArticleState.user_id /
+    # ArticleLabel.user_id below), never from the feed join, so dropping the
+    # subscription requirement here cannot leak other users' articles. Feed-browsing
+    # views instead require an active subscription.
+    #
+    # Full-text search joins that same club, but for a different reason and with a
+    # different safety net. It has no state anchor of its own — nothing like
+    # `is_starred == True` to scope it — so it must carry ``article_access_predicate``
+    # explicitly below. Without the optional join a saved-by-URL article could never
+    # be found by search at all (it has no feed, so the inner join drops it), which
+    # defeats the point of saving it; the same was quietly true of starred/archived
+    # articles left orphaned by an unsubscribe.
+    searching = bool(q and q.strip())
+    feed_optional = (
+        starred_only or archived_only or saved_only
+        or label_id is not None or labeled_only or searching
+    )
     stmt = select(
         Article,
         UserArticleState,
@@ -161,6 +177,12 @@ async def list_articles(
             .join(Feed, Feed.id == Article.feed_id)
             .outerjoin(UserArticleState, uas_join)
         )
+
+    if searching:
+        # The one branch above that has no anchor of its own. This is what keeps
+        # search user-scoped, so it must not be dropped or narrowed: the joins are
+        # outer here, and without it search would match every article in the table.
+        stmt = stmt.where(article_access_predicate())
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
     # profile — never shown in the UI.
@@ -241,6 +263,9 @@ async def list_articles(
     if archived_only:
         stmt = stmt.where(UserArticleState.is_archived == True)
 
+    if saved_only:
+        stmt = stmt.where(UserArticleState.saved_at.is_not(None))
+
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
         tsquery = func.websearch_to_tsquery('simple', q)
@@ -312,6 +337,9 @@ async def list_articles(
             summary=article.summary,
             snippet=_make_snippet(article.summary, article.content),
             body_permanently_empty=body_permanently_empty(article, extract_readable),
+            readable_active=(
+                article.readable_status == "pending" and not article.readable_retries
+            ),
             published_at=article.published_at,
             formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,
@@ -319,11 +347,78 @@ async def list_articles(
             is_read=state.is_read if state else False,
             is_starred=state.is_starred if state else False,
             is_archived=state.is_archived if state else False,
+            is_saved=bool(state and state.saved_at),
             ai_score=state.ai_score if state else None,
             labels=labels_by_article.get(article.id, []),
             sort_ts=article.published_at or article.fetched_at,
         ))
     return items
+
+
+async def get_article_list_item(
+    user: User, article_id: int, db: AsyncSession
+) -> ArticleListItem | None:
+    """One article in list-row form, for re-rendering a single row in place.
+
+    ``get_article`` returns an ArticleResponse, which lacks the fields a row needs
+    (snippet, formatted_date, body_permanently_empty), hence this sibling. Access
+    goes through the shared predicate, so a saved article with no feed resolves the
+    same way it does everywhere else.
+    """
+    stmt = (
+        select(
+            Article,
+            UserArticleState,
+            Feed.title.label("feed_title"),
+            UserFeed.custom_title.label("custom_title"),
+            UserFeed.extract_readable.label("extract_readable"),
+        )
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .where(Article.id == article_id, Article.trimmed_at.is_(None))
+    )
+    stmt = add_article_access_joins(stmt, user.id).where(article_access_predicate())
+    row = (await db.execute(stmt)).first()
+    if row is None:
+        return None
+
+    article, state, feed_title, custom_title, extract_readable = row
+    labels = [
+        {"id": lid, "name": lname, "color": lcolor}
+        for lid, lname, lcolor in (await db.execute(
+            select(Label.id, Label.name, Label.color)
+            .join(ArticleLabel, ArticleLabel.label_id == Label.id)
+            .where(
+                ArticleLabel.article_id == article.id,
+                ArticleLabel.user_id == user.id,
+            )
+            .order_by(Label.position, func.lower(Label.name))
+        )).all()
+    ]
+    return ArticleListItem(
+        id=article.id,
+        feed_id=article.feed_id,
+        feed_title=custom_title or feed_title,
+        url=article.url,
+        title=article.title,
+        author=article.author,
+        summary=article.summary,
+        snippet=_make_snippet(article.summary, article.content),
+        body_permanently_empty=body_permanently_empty(article, extract_readable),
+        readable_active=(
+            article.readable_status == "pending" and not article.readable_retries
+        ),
+        published_at=article.published_at,
+        formatted_date=_format_date(article.published_at or article.created_at),
+        estimated_read_min=article.estimated_read_min,
+        image_url=article.image_url,
+        is_read=state.is_read if state else False,
+        is_starred=state.is_starred if state else False,
+        is_archived=state.is_archived if state else False,
+        is_saved=bool(state and state.saved_at),
+        ai_score=state.ai_score if state else None,
+        labels=labels,
+        sort_ts=article.published_at or article.fetched_at,
+    )
 
 
 async def _fetch_labels(article_id: int, user_id: int, db: AsyncSession) -> list[dict]:
@@ -368,6 +463,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         author=article.author,
         content=article.content,
         content_source=article.content_source,
+        summary=article.summary,
         readable_content=article.readable_content,
         readable_status=article.readable_status,
         readable_error=article.readable_error,
@@ -379,6 +475,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         is_read=state.is_read if state else False,
         is_starred=state.is_starred if state else False,
         is_archived=state.is_archived if state else False,
+        is_saved=bool(state and state.saved_at),
         read_at=state.read_at if state else None,
         share_token=state.share_token if state else None,
         ai_summary=state.ai_summary if state else None,
@@ -408,24 +505,26 @@ async def mark_scope_read(
     label_id: int | None = None,
     starred_only: bool = False,
     archived_only: bool = False,
+    saved_only: bool = False,
     labeled_only: bool = False,
 ) -> None:
     """Bulk mark as read all articles in scope with fetched_at <= before.
 
-    Starred/archived scopes only UPDATE (state row is guaranteed to exist).
+    Starred/archived/saved scopes only UPDATE (state row is guaranteed to exist).
     All other scopes upsert to handle articles with and without existing state rows.
     """
     now = datetime.now(timezone.utc)
 
-    if starred_only or archived_only:
+    if starred_only or archived_only or saved_only:
         # Articles in these views already have a state row by definition – plain UPDATE suffices.
         # Drive the UPDATE from a subquery so we never materialize IDs into Python
         # (which previously blew past asyncpg's 32767-parameter limit on large feeds).
-        filter_cond = (
-            UserArticleState.is_starred == True
-            if starred_only
-            else UserArticleState.is_archived == True
-        )
+        if starred_only:
+            filter_cond = UserArticleState.is_starred == True
+        elif archived_only:
+            filter_cond = UserArticleState.is_archived == True
+        else:
+            filter_cond = UserArticleState.saved_at.is_not(None)
         scope_articles = (
             select(Article.id)
             .join(
@@ -593,6 +692,7 @@ def _state_response(article, state, feed_title, custom_title, labels) -> Article
         author=article.author,
         content=article.content,
         content_source=article.content_source,
+        summary=article.summary,
         readable_content=article.readable_content,
         readable_status=article.readable_status,
         readable_error=article.readable_error,
@@ -603,6 +703,7 @@ def _state_response(article, state, feed_title, custom_title, labels) -> Article
         is_read=state.is_read,
         is_starred=state.is_starred,
         is_archived=state.is_archived,
+        is_saved=state.saved_at is not None,
         read_at=state.read_at,
         labels=labels,
     )

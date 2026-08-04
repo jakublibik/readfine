@@ -443,7 +443,7 @@ def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = No
 # ── Action execution ──────────────────────────────────────────────────────────
 
 async def _execute_actions(
-    f: Filter, article: Article, user_id: int, user_feed: UserFeed, db: AsyncSession
+    f: Filter, article: Article, user_id: int, user_feed: UserFeed | None, db: AsyncSession
 ) -> bool:
     """Execute filter actions for an article. Returns True if any action changed DB state."""
     changed = False
@@ -581,6 +581,43 @@ async def _apply_user_filters_to_article(
     if got_label and (not uf.extract_readable or article.readable_status == "success"):
         from app.services.ai_scoring_service import enqueue_scoring_job
         await enqueue_scoring_job(article, uf.user_id, db)
+
+
+async def apply_filters_to_saved_article(
+    article: Article, user_id: int, db: AsyncSession
+) -> None:
+    """Run one user's (non-AI) filters against an article saved by URL.
+
+    The feed-driven entry point above cannot serve this case: it starts from the
+    feed's UserFeed rows and returns early when there are none, so an article with
+    ``feed_id IS NULL`` would silently never be filtered.
+
+    Scope semantics worth knowing, both a consequence of there being no feed:
+
+    * A filter with an empty ``scope_include`` ("All articles") matches, which is how
+      saved articles pick up general rules.
+    * Filters scoped to ``feed:<id>`` or ``folder:<id>`` never match, because
+      ``token_matches_article`` compares ``article.feed_id`` and dereferences
+      ``user_feed``. By the same token a ``scope_except`` of ``folder:0`` will not
+      exclude a saved article.
+
+    AI filters are skipped: saved articles are never scored, so ``ai_score`` is always
+    NULL and those conditions could not match anyway. Scoring is deliberately never
+    enqueued from here.
+    """
+    filters_result = await db.execute(
+        select(Filter)
+        .where(Filter.user_id == user_id, Filter.is_active == True)  # noqa: E712
+        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+        .order_by(*FILTER_ORDER)
+    )
+    for f in filters_result.scalars().all():
+        if is_ai_filter(f):
+            continue
+        if evaluate_filter(f, article, None):
+            await _execute_actions(f, article, user_id, None, db)
+            if f.stop_on_match:
+                break
 
 
 # ── AI filter batch processing ────────────────────────────────────────────────

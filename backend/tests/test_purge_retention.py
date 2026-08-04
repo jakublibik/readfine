@@ -74,11 +74,13 @@ async def _article(session, feed, *, age_days, content="<p>raw</p>", readable=No
 
 
 async def _state(session, user, article, *, dwell=0, opened=False, ever_starred=False,
-                 starred=False, archived=False, share=None, created_days=0) -> UserArticleState:
+                 starred=False, archived=False, share=None, created_days=0,
+                 saved=False) -> UserArticleState:
     st = UserArticleState(
         user_id=user.id, article_id=article.id, dwell_seconds=dwell, link_opened=opened,
         ever_starred=ever_starred, is_starred=starred, is_archived=archived, share_token=share,
         created_at=NOW - timedelta(days=created_days),
+        saved_at=NOW - timedelta(days=created_days) if saved else None,
     )
     session.add(st)
     await session.flush()
@@ -180,6 +182,25 @@ class TestTrim:
         assert await _trim_engaged(pg, feed_id=feed.id, orphan=False, cutoff=CUTOFF, now=NOW) == 0
         assert await _delete_unengaged(pg, feed.id, CUTOFF) == 0
         assert await _exists(pg, a.id)
+
+    async def test_saved_not_trimmed_or_deleted(self, pg):
+        """A saved-by-URL article is kept in full forever — no TTL, no cap. Saved must
+        not be the one place where content quietly expires after the most explicit
+        action a reader can take."""
+        user, feed = await _setup(pg)
+        a = await _article(pg, feed, age_days=100, readable="<p>" + ("w " * 500) + "</p>")
+        await _state(pg, user, a, dwell=120, saved=True)
+        assert await _trim_engaged(pg, feed_id=feed.id, orphan=False, cutoff=CUTOFF, now=NOW) == 0
+        assert await _delete_unengaged(pg, feed.id, CUTOFF) == 0
+        assert await _exists(pg, a.id)
+
+    async def test_unsaving_re_exposes_the_article_to_purge(self, pg):
+        user, feed = await _setup(pg)
+        a = await _article(pg, feed, age_days=100, readable="<p>" + ("w " * 500) + "</p>")
+        st = await _state(pg, user, a, dwell=0, saved=True)
+        st.saved_at = None
+        await pg.flush()
+        assert await _delete_unengaged(pg, feed.id, CUTOFF) == 1
 
     async def test_recent_engaged_not_trimmed(self, pg):
         user, feed = await _setup(pg)

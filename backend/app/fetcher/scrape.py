@@ -47,7 +47,7 @@ _STRIP_PARAMS = frozenset({
 })
 
 
-def _normalize_url(url: str | None) -> str | None:
+def normalize_url(url: str | None) -> str | None:
     if not url:
         return None
     try:
@@ -299,7 +299,7 @@ async def _save_scrape_articles(
 ) -> int:
     urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
-    norm_map = {url: _normalize_url(url) for url in urls}
+    norm_map = {url: normalize_url(url) for url in urls}
 
     existing_hashes: set[str] = set(
         (await db.execute(

@@ -18,6 +18,9 @@ def reset_rate_limiter():
 def make_article(**kwargs):
     defaults = {
         "id": 10,
+        # A feed article by default: only feedless (saved-by-URL) articles get the
+        # OOB title refresh, since they are the only ones whose title can change.
+        "feed_id": 5,
         "title": "Test Article",
         "url": "https://example.com/a",
         "content": "<p>feed body</p>",
@@ -120,3 +123,46 @@ class TestReadablePoll:
             resp = client.get("/htmx/articles/10/readable-poll")
         assert resp.status_code == 200
         assert 'id="ai-summary-10"' not in resp.text
+
+
+class TestSavedArticleTitleRefresh:
+    """A saved-by-URL article is inserted titled with its host + path and learns the
+    real one when extraction finishes — after the detail was rendered."""
+
+    def test_feedless_article_gets_an_oob_title(self, client, mock_db):
+        article = make_article(feed_id=None, readable_active=False,
+                               title="The Real Headline",
+                               readable_content="<p>body</p>", readable_status="success")
+        with (
+            patch("app.routers.web.app.articles.get_article", new=AsyncMock(return_value=article)),
+            patch("app.routers.web.app.articles._ai_availability", new=_no_ai()),
+        ):
+            resp = client.get("/htmx/articles/10/readable-poll")
+        assert resp.status_code == 200
+        assert 'id="article-title-10"' in resp.text
+        assert 'hx-swap-oob="true"' in resp.text
+        assert "The Real Headline" in resp.text
+
+    def test_feed_article_title_is_left_alone(self, client, mock_db):
+        """A feed article's title comes from the feed and never changes on extraction,
+        so swapping it would be pointless churn."""
+        article = make_article(feed_id=5, readable_active=False,
+                               readable_content="<p>body</p>", readable_status="success")
+        with (
+            patch("app.routers.web.app.articles.get_article", new=AsyncMock(return_value=article)),
+            patch("app.routers.web.app.articles._ai_availability", new=_no_ai()),
+        ):
+            resp = client.get("/htmx/articles/10/readable-poll")
+        assert 'id="article-title-' not in resp.text
+
+    def test_title_is_escaped(self, client, mock_db):
+        article = make_article(feed_id=None, readable_active=False,
+                               title='Tom & Jerry <script>',
+                               readable_content="<p>body</p>", readable_status="success")
+        with (
+            patch("app.routers.web.app.articles.get_article", new=AsyncMock(return_value=article)),
+            patch("app.routers.web.app.articles._ai_availability", new=_no_ai()),
+        ):
+            resp = client.get("/htmx/articles/10/readable-poll")
+        assert "&lt;script&gt;" in resp.text
+        assert "Tom &amp; Jerry" in resp.text

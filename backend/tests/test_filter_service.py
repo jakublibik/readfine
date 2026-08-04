@@ -815,3 +815,60 @@ class TestExecuteArchiveAction:
         db.add.assert_called_once()
         added = db.add.call_args[0][0]
         assert added.is_archived is True
+
+
+# ── Saved articles: scope with no feed and no UserFeed ────────────────────────
+
+class TestScopeWithoutAFeed:
+    """A saved-by-URL article has feed_id=None and no UserFeed row, so scope tokens
+    that resolve through either of those can never match."""
+
+    def _saved_article(self):
+        return make_article(feed_id=None)
+
+    def test_unscoped_filter_matches(self):
+        """Empty scope_include means 'All articles', which is how saved articles pick
+        up a user's general rules."""
+        f = make_filter([make_condition("title", "contains", "Test")], scope_include=None)
+        assert evaluate_filter(f, self._saved_article(), None) is True
+
+    def test_empty_list_scope_matches(self):
+        f = make_filter([make_condition("title", "contains", "Test")], scope_include="[]")
+        assert evaluate_filter(f, self._saved_article(), None) is True
+
+    def test_feed_scoped_filter_does_not_match(self):
+        f = make_filter([make_condition("title", "contains", "Test")],
+                        scope_include='["feed:10"]')
+        assert evaluate_filter(f, self._saved_article(), None) is False
+
+    def test_folder_scoped_filter_does_not_match(self):
+        f = make_filter([make_condition("title", "contains", "Test")],
+                        scope_include='["folder:3"]')
+        assert evaluate_filter(f, self._saved_article(), None) is False
+
+    def test_no_folder_sentinel_does_not_match_either(self):
+        f = make_filter([make_condition("title", "contains", "Test")],
+                        scope_include='["folder:0"]')
+        assert evaluate_filter(f, self._saved_article(), None) is False
+
+    def test_folder_except_cannot_exclude_a_saved_article(self):
+        """Corollary worth pinning down: folder:0 in scope_except resolves through
+        user_feed, so it excludes nothing here."""
+        f = make_filter([make_condition("title", "contains", "Test")],
+                        scope_include="[]", scope_except='["folder:0"]')
+        assert evaluate_filter(f, self._saved_article(), None) is True
+
+    async def test_actions_execute_without_a_user_feed(self):
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("star")]
+        state = SimpleNamespace(is_read=False, is_starred=False, is_archived=True,
+                                ever_starred=False, starred_at=None)
+        db = _state_fetch_db(state)
+
+        changed = await _execute_actions(
+            f, self._saved_article(), user_id=1, user_feed=None, db=db
+        )
+
+        assert changed is True
+        assert state.is_starred is True

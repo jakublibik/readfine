@@ -54,7 +54,7 @@ _STRIP_PARAMS = frozenset({
 })
 
 
-def _normalize_url(url: str | None) -> str | None:
+def normalize_url(url: str | None) -> str | None:
     if not url:
         return None
     try:
@@ -340,7 +340,7 @@ async def _save_articles(
             guid=guid[:2048],
             guid_hash=guid_hash,
             url=article_url,
-            url_normalized=_normalize_url(article_url),
+            url_normalized=normalize_url(article_url),
             title=(entry.get("title") or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,

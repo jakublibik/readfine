@@ -233,7 +233,7 @@ class TestExtractReadableCollapse:
         # Extractor yields markup that sanitizes/drops down to pure whitespace.
         with (
             patch("app.services.readable_service._fetch_html",
-                  return_value=("<html><body>x</body></html>", None, 200)),
+                  return_value=("<html><body>x</body></html>", None, 200, "https://example.com/a")),
             patch("app.services.readable_service._extract_with_trafilatura",
                   return_value="<div>   </div>"),
         ):
@@ -246,7 +246,7 @@ class TestExtractReadableCollapse:
     def test_real_content_passes_through(self):
         with (
             patch("app.services.readable_service._fetch_html",
-                  return_value=("<html><body>x</body></html>", None, 200)),
+                  return_value=("<html><body>x</body></html>", None, 200, "https://example.com/a")),
             patch("app.services.readable_service._extract_with_trafilatura",
                   return_value="<p>Genuine article body</p>"),
         ):
@@ -461,3 +461,263 @@ class TestDropEmptyBlocks:
         html = "<p>Hello <span></span>world</p>"
         result = _drop_empty_blocks(html)
         assert "Hello" in result and "world" in result
+
+
+# ── consent/paywall substitute pages ─────────────────────────────────────────
+
+class TestContentContradictsPage:
+    """Some sites answer a server-side fetch with HTTP 200 and a consent page in
+    place of the article. Status, length and extraction all look fine, so the only
+    thing that gives it away is that the text has nothing to do with the page's own
+    og:description (which on a real article is the lede)."""
+
+    from app.services.readable_service import _content_contradicts_page as _check
+
+    LEDE = ("Czech Hydrometeorological Institute declared a smog situation for the "
+            "whole Usti region and Prague because of high ground level ozone "
+            "concentrations, warning seniors and children about physical exertion")
+
+    def test_consent_wall_is_rejected(self):
+        from app.services.readable_service import _content_contradicts_page
+        consent = ("<p>If you consent to advertising cookies and other network "
+                   "identifiers for targeted advertising purposes, our partners will "
+                   "display personalised commercial messages based on profiling.</p>")
+        assert _content_contradicts_page(consent, self.LEDE) is True
+
+    def test_real_article_body_passes(self):
+        from app.services.readable_service import _content_contradicts_page
+        body = "<p>" + self.LEDE + ". The institute added further detail.</p>"
+        assert _content_contradicts_page(body, self.LEDE) is False
+
+    def test_partial_overlap_still_passes(self):
+        """The threshold sits far below the worst legitimate case measured (0.55),
+        so a lede that is only loosely echoed must not be flagged."""
+        from app.services.readable_service import _content_contradicts_page
+        body = ("<p>Czech Hydrometeorological Institute warned about ozone "
+                "concentrations and physical exertion outdoors today.</p>")
+        assert _content_contradicts_page(body, self.LEDE) is False
+
+    def test_short_description_skips_the_check(self):
+        """Under the word floor the score is noise, so the check must abstain rather
+        than guess — abstaining means behaving exactly as before."""
+        from app.services.readable_service import _content_contradicts_page
+        assert _content_contradicts_page("<p>totally unrelated text here</p>",
+                                         "Latest news") is False
+
+    def test_missing_description_skips_the_check(self):
+        from app.services.readable_service import _content_contradicts_page
+        assert _content_contradicts_page("<p>anything at all</p>", None) is False
+
+    def test_empty_body_is_not_flagged_here(self):
+        """Empty content is _EMPTY_CONTENT_MSG's job, handled before this runs."""
+        from app.services.readable_service import _content_contradicts_page
+        assert _content_contradicts_page("", self.LEDE) is False
+
+
+class TestRejectWrongContentIsOptIn:
+    def test_off_by_default(self):
+        """Feed articles must never lose a body they have been showing fine."""
+        from app.services.readable_service import extract_readable_with_title
+        consent = "<html><body><p>" + ("consent advertising cookies partners " * 20) + "</p></body></html>"
+        head = '<meta property="og:description" content="Institute declared smog situation because ground level ozone concentrations warned seniors children physical exertion outdoors">'
+        page = "<html><head>" + head + "</head><body>" + consent + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a")
+        assert r.content is not None
+        assert r.error is None
+
+    def test_on_when_requested(self):
+        from app.services.readable_service import extract_readable_with_title, _WRONG_CONTENT_MSG
+        consent = "<p>" + ("consent advertising cookies partners profiling " * 20) + "</p>"
+        head = '<meta property="og:description" content="Institute declared smog situation because ground level ozone concentrations warned seniors children physical exertion outdoors">'
+        page = "<html><head>" + head + "</head><body>" + consent + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title(
+                "https://x.invalid/a", None, None, True
+            )
+        assert r.content is None
+        assert r.error == _WRONG_CONTENT_MSG
+
+
+# ── resolving the address an article really lives at ─────────────────────────
+
+class TestResolveArticleUrl:
+    """What gets pasted is often a click tracker or carries campaign parameters, so
+    the address the fetch ended at (refined by the page's own canonical) is what
+    should be stored."""
+
+    CANON = '<link rel="canonical" href="https://www.idnes.cz/zpravy/story">'
+    OGURL = '<meta property="og:url" content="https://www.idnes.cz/zpravy/story">'
+
+    def test_prefers_same_host_canonical(self):
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url(
+            "https://www.idnes.cz/zpravy/story?utm_source=rss",
+            "<html><head>" + self.CANON + "</head></html>",
+        )
+        assert out == "https://www.idnes.cz/zpravy/story"
+
+    def test_falls_back_to_og_url(self):
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url(
+            "https://www.idnes.cz/zpravy/story?x=1",
+            "<html><head>" + self.OGURL + "</head></html>",
+        )
+        assert out == "https://www.idnes.cz/zpravy/story"
+
+    def test_cross_host_canonical_is_ignored(self):
+        """A syndicated article naming the original publisher as canonical must not
+        drag this article's URL onto another site — that would let dedup attach the
+        save to an entirely different article."""
+        from app.services.readable_service import resolve_article_url
+        page = '<html><head><link rel="canonical" href="https://origin.example/other"></head></html>'
+        out = resolve_article_url("https://syndicator.example/copy", page)
+        assert out == "https://syndicator.example/copy"
+
+    def test_relative_canonical_is_ignored(self):
+        from app.services.readable_service import resolve_article_url
+        page = '<html><head><link rel="canonical" href="/zpravy/story"></head></html>'
+        out = resolve_article_url("https://www.idnes.cz/a", page)
+        assert out == "https://www.idnes.cz/a"
+
+    def test_no_canonical_keeps_the_fetched_url(self):
+        from app.services.readable_service import resolve_article_url
+        assert resolve_article_url("https://ex.invalid/a", "<html></html>") == "https://ex.invalid/a"
+
+    def test_nothing_fetched(self):
+        from app.services.readable_service import resolve_article_url
+        assert resolve_article_url(None, "<html></html>") is None
+
+
+# ── how far in the metadata is looked for ────────────────────────────────────
+
+class TestHeadSlice:
+    """The metadata regexes are bounded by </head>, not by a byte count.
+
+    A fixed prefix used to stand in for the head, which lost the metadata of any page
+    that opens with a large inline script block. YouTube is the live example: title,
+    og: tags and rel=canonical all sit past 680 KB. Losing the description there also
+    disabled _content_contradicts_page, so a page of footer links was stored as the
+    article body.
+    """
+
+    # Comfortably past the old 200 KB window, comfortably inside the 1 MB cap.
+    PADDING = "<script>var x = '%s';</script>" % ("a" * 400_000)
+
+    def _page(self, meta: str) -> str:
+        return f"<html><head>{self.PADDING}{meta}</head><body>text</body></html>"
+
+    def test_title_past_the_old_window(self):
+        from app.services.readable_service import _extract_title
+        page = self._page('<meta property="og:title" content="Real title">')
+        assert _extract_title(page) == "Real title"
+
+    def test_description_past_the_old_window(self):
+        from app.services.readable_service import _extract_og_description
+        page = self._page('<meta property="og:description" content="The lede.">')
+        assert _extract_og_description(page) == "The lede."
+
+    def test_canonical_past_the_old_window(self):
+        from app.services.readable_service import resolve_article_url
+        page = self._page('<link rel="canonical" href="https://ex.invalid/story">')
+        assert resolve_article_url("https://ex.invalid/story?utm=1", page) == \
+            "https://ex.invalid/story"
+
+    def test_body_is_not_scanned(self):
+        """Whatever an article's own text contains, it is not the page's metadata."""
+        from app.services.readable_service import _extract_title
+        page = ('<html><head><title>Head title</title></head><body>'
+                '<meta property="og:title" content="Body title"></body></html>')
+        assert _extract_title(page) == "Head title"
+
+    def test_no_closing_tag_falls_back_to_a_prefix(self):
+        """Broken markup or a non-HTML response still yields what is in the prefix."""
+        from app.services.readable_service import _extract_title
+        assert _extract_title('<html><title>Only title</title>') == "Only title"
+
+    def test_head_beyond_the_cap_is_given_up_on(self):
+        from app.services.readable_service import _extract_title, _HEAD_SCAN_BYTES
+        page = ("<html><head><script>%s</script>"
+                '<meta property="og:title" content="Too far"></head></html>'
+                % ("a" * (_HEAD_SCAN_BYTES + 1000)))
+        assert _extract_title(page) is None
+
+
+class TestAdoptResolvedUrl:
+    def test_rewrites_a_saved_article(self):
+        from app.services.saved_article_service import _adopt_resolved_url
+        art = SimpleNamespace(feed_id=None, url="https://1gr.cz/log/score.aspx?id=x",
+                              url_normalized="https://1gr.cz/log/score.aspx?id=x")
+        _adopt_resolved_url(art, "https://www.idnes.cz/zpravy/story")
+        assert art.url == "https://www.idnes.cz/zpravy/story"
+        assert art.url_normalized == "https://www.idnes.cz/zpravy/story"
+
+    def test_leaves_a_feed_article_alone(self):
+        """A feed article's URL belongs to the feed; rewriting it would move the
+        ground under the fetcher's own dedup."""
+        from app.services.saved_article_service import _adopt_resolved_url
+        art = SimpleNamespace(feed_id=7, url="https://feed.example/a",
+                              url_normalized="https://feed.example/a")
+        _adopt_resolved_url(art, "https://elsewhere.example/b")
+        assert art.url == "https://feed.example/a"
+
+    def test_no_resolved_url_is_a_no_op(self):
+        from app.services.saved_article_service import _adopt_resolved_url
+        art = SimpleNamespace(feed_id=None, url="https://ex.invalid/a",
+                              url_normalized="https://ex.invalid/a")
+        _adopt_resolved_url(art, None)
+        assert art.url == "https://ex.invalid/a"
+
+    def test_campaign_params_are_normalised_away(self):
+        from app.services.saved_article_service import _adopt_resolved_url
+        art = SimpleNamespace(feed_id=None, url="https://ex.invalid/x", url_normalized="https://ex.invalid/x")
+        _adopt_resolved_url(art, "https://ex.invalid/a?utm_source=rss&id=7")
+        assert art.url_normalized == "https://ex.invalid/a?id=7"
+
+
+class TestDescriptionCapture:
+    """og:description is the fallback the reader sees when extraction produced
+    nothing to read, and the only thing a saved article can show as a list snippet
+    (_make_snippet reads summary and content, never readable_content)."""
+
+    DESC = "Institute declared a smog situation because of ground level ozone"
+
+    def _article(self, **kw):
+        from tests.test_saved_articles import make_article
+        return make_article(**kw)
+
+    def test_stored_on_a_feedless_article(self):
+        from app.services.readable_service import apply_readable_result
+        art = self._article(feed_id=None)
+        apply_readable_result(art, "<p>Body</p>", None, None, description=self.DESC)
+        assert art.summary == self.DESC
+
+    def test_not_stored_on_a_feed_article(self):
+        """Nothing writes summary for feed articles today; starting to would change
+        snippets and search results across every feed."""
+        from app.services.readable_service import apply_readable_result
+        art = self._article(feed_id=7)
+        art.summary = None
+        apply_readable_result(art, "<p>Body</p>", None, None, description=self.DESC)
+        assert art.summary is None
+
+    def test_stored_even_when_extraction_failed(self):
+        """This is the case it exists for — a consent page yields no body but the
+        head still describes the article."""
+        from app.services.readable_service import apply_readable_result, _WRONG_CONTENT_MSG
+        art = self._article(feed_id=None)
+        apply_readable_result(art, None, _WRONG_CONTENT_MSG, None, description=self.DESC)
+        assert art.summary == self.DESC
+        assert art.readable_content is None
+
+    def test_returned_from_extraction(self):
+        from app.services.readable_service import extract_readable_with_title
+        page = ('<html><head><meta property="og:description" content="' + self.DESC
+                + '"></head><body><p>Institute declared a smog situation because of '
+                  'ground level ozone across the region today.</p></body></html>')
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a")
+        assert r.description == self.DESC
