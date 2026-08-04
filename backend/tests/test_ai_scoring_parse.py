@@ -12,7 +12,7 @@ from app.services.ai_service import score_article
 async def _run(raw: str):
     with patch(
         "app.services.ai_service._complete",
-        new=AsyncMock(return_value=(raw, 7, 1)),
+        new=AsyncMock(return_value=(raw, 7, 1, False)),
     ):
         return await score_article("content", "profile", AsyncMock(), "anthropic", "model")
 

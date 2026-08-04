@@ -56,6 +56,7 @@ def make_state(**kwargs):
         "user_id": 1,
         "article_id": 10,
         "ai_summary": None,
+        "ai_summary_truncated": False,
         "ai_context": None,
     }
     defaults.update(kwargs)
@@ -106,7 +107,7 @@ class TestHtmxAiSummaryTrigger:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=("This is the summary.", None)),
+            new=AsyncMock(return_value=("This is the summary.", False, None)),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200
@@ -117,7 +118,7 @@ class TestHtmxAiSummaryTrigger:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=(None, "Rate limit exceeded")),
+            new=AsyncMock(return_value=(None, False, "Rate limit exceeded")),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200
@@ -280,7 +281,7 @@ class TestAiErrorXSSEscaping:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=(None, payload)),
+            new=AsyncMock(return_value=(None, False, payload)),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200

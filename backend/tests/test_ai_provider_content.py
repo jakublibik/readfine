@@ -2,14 +2,22 @@
 
 Blocked/empty/filtered provider responses must raise ProviderEmptyResponse
 (a controlled error callers already handle) rather than crashing on .strip().
+
+Also covers the stop-reason read that tells a complete summary from one the model
+cut off on its token cap, and the cap itself.
 """
 import pytest
 from types import SimpleNamespace
 
 from app.services.ai_service import (
     _extract_text,
+    _extract_truncated,
     _openai_max_tokens,
+    _summary_token_budget,
     _OPENAI_REASONING_BUDGET,
+    _SUMMARY_CHARS_PER_TOKEN,
+    _SUMMARY_MAX_TOKENS,
+    _SUMMARY_MIN_TOKENS,
     ProviderEmptyResponse,
 )
 
@@ -82,3 +90,76 @@ class TestOpenAIMaxTokens:
 
     def test_none_model_unchanged(self):
         assert _openai_max_tokens(None, 500) == 500
+
+
+class TestExtractTruncated:
+    """A summary that stopped on the token cap must be recognisable, and anything
+    unexpected must read as "not truncated" so a provider quirk cannot turn a good
+    completion into a flagged one."""
+
+    @pytest.mark.parametrize("stop_reason, expected", [
+        ("max_tokens", True),
+        ("end_turn", False),
+        (None, False),
+    ])
+    def test_anthropic(self, stop_reason, expected):
+        resp = SimpleNamespace(stop_reason=stop_reason)
+        assert _extract_truncated("anthropic", resp) is expected
+
+    @pytest.mark.parametrize("finish_reason, expected", [
+        ("length", True),
+        ("stop", False),
+        (None, False),
+    ])
+    def test_openai(self, finish_reason, expected):
+        resp = SimpleNamespace(choices=[SimpleNamespace(finish_reason=finish_reason)])
+        assert _extract_truncated("openai", resp) is expected
+
+    def test_openai_no_choices(self):
+        assert _extract_truncated("openai", SimpleNamespace(choices=[])) is False
+
+    @pytest.mark.parametrize("reason_name, expected", [
+        ("MAX_TOKENS", True),
+        ("STOP", False),
+    ])
+    def test_gemini_enum_reason(self, reason_name, expected):
+        # google-genai hands back an enum; only its .name is relied on.
+        resp = SimpleNamespace(candidates=[
+            SimpleNamespace(finish_reason=SimpleNamespace(name=reason_name))
+        ])
+        assert _extract_truncated("gemini", resp) is expected
+
+    def test_gemini_no_candidates(self):
+        assert _extract_truncated("gemini", SimpleNamespace(candidates=[])) is False
+
+    def test_missing_attributes_read_as_not_truncated(self):
+        for provider in ("anthropic", "openai", "gemini"):
+            assert _extract_truncated(provider, SimpleNamespace()) is False
+
+    def test_unknown_provider_reads_as_not_truncated(self):
+        assert _extract_truncated("nope", SimpleNamespace()) is False
+
+
+class TestSummaryTokenBudget:
+    """The summary prompt scales length with the article, so the output cap does
+    too — but never below a usable floor or above the cost ceiling."""
+
+    def test_short_article_gets_the_floor(self):
+        assert _summary_token_budget("x" * 100) == _SUMMARY_MIN_TOKENS
+
+    def test_long_article_capped_at_ceiling(self):
+        assert _summary_token_budget("x" * 10_000_000) == _SUMMARY_MAX_TOKENS
+
+    def test_scales_between_floor_and_ceiling(self):
+        chars = (_SUMMARY_MIN_TOKENS + _SUMMARY_MAX_TOKENS) // 2 * _SUMMARY_CHARS_PER_TOKEN
+        budget = _summary_token_budget("x" * chars)
+        assert _SUMMARY_MIN_TOKENS < budget < _SUMMARY_MAX_TOKENS
+        assert budget == chars // _SUMMARY_CHARS_PER_TOKEN
+
+    def test_longer_article_never_gets_a_smaller_budget(self):
+        lengths = [0, 5_000, 20_000, 50_000, 200_000]
+        budgets = [_summary_token_budget("x" * n) for n in lengths]
+        assert budgets == sorted(budgets)
+
+    def test_empty_content_still_gets_the_floor(self):
+        assert _summary_token_budget("") == _SUMMARY_MIN_TOKENS

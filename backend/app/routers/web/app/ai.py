@@ -47,8 +47,8 @@ def _ai_macros():
     return templates.env.get_template("app/partials/ai_blocks.html").module
 
 
-def _ai_summary_block(article_id: int, summary: str) -> str:
-    return str(_ai_macros().ai_summary(article_id, summary))
+def _ai_summary_block(article_id: int, summary: str, truncated: bool = False) -> str:
+    return str(_ai_macros().ai_summary(article_id, summary, truncated))
 
 
 def _ai_context_block(article_id: int, context: str) -> str:
@@ -132,13 +132,13 @@ async def htmx_ai_summary_trigger(
     article, settings, content_text = guard
 
     from app.services.ai_summary_service import run_summary_on_demand
-    summary, error = await run_summary_on_demand(article, user.id, db)
+    summary, truncated, error = await run_summary_on_demand(article, user.id, db)
     if summary is None:
         msg = html_module.escape(error) if error else "Summary unavailable."
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
-    return HTMLResponse(_ai_summary_block(article_id, summary))
+    return HTMLResponse(_ai_summary_block(article_id, summary, truncated))
 
 
 @router.get("/htmx/articles/{article_id}/ai-summary/poll", response_class=HTMLResponse)
@@ -177,7 +177,9 @@ async def htmx_ai_summary_poll(
         )
     )
     if state and state.ai_summary:
-        return HTMLResponse(_ai_summary_block(article_id, state.ai_summary))
+        return HTMLResponse(
+            _ai_summary_block(article_id, state.ai_summary, state.ai_summary_truncated)
+        )
 
     return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
 

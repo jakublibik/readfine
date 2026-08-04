@@ -402,7 +402,7 @@ class TestComplete:
         client = MagicMock()
         client.aio.models.generate_content = AsyncMock(
             return_value=make_gemini_response("done"))
-        text, in_tok, out_tok = await _complete(
+        text, in_tok, out_tok, truncated = await _complete(
             "prompt", client, "gemini", "gemini-2.0-flash", max_tokens=123)
         cfg = client.aio.models.generate_content.call_args.kwargs["config"]
         assert cfg.max_output_tokens == 123

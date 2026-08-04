@@ -186,7 +186,7 @@
   <div class="mb-5 space-y-3">
 
     {% if article.ai_summary %}
-    {{ ai_summary(article.id, article.ai_summary) }}
+    {{ ai_summary(article.id, article.ai_summary, article.ai_summary_truncated) }}
     {% elif summary_pending %}
     {{ ai_spinner("ai-summary-" ~ article.id, "/htmx/articles/" ~ article.id ~ "/ai-summary/poll", "Generating summary…") }}
     {% else %}

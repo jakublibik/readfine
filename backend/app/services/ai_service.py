@@ -43,6 +43,32 @@ def _extract_text(provider: str, resp) -> str:
     return text.strip()
 
 
+def _extract_truncated(provider: str, resp) -> bool:
+    """True when the provider stopped generating because it hit the token cap.
+
+    Best-effort by design: a missing or unrecognised stop reason reads as "not
+    truncated", so a provider changing the shape of this field can never turn an
+    otherwise good completion into a failure.
+    """
+    try:
+        if provider == "anthropic":
+            return getattr(resp, "stop_reason", None) == "max_tokens"
+        if provider == "openai":
+            choices = getattr(resp, "choices", None) or []
+            return bool(choices) and getattr(choices[0], "finish_reason", None) == "length"
+        if provider == "gemini":
+            candidates = getattr(resp, "candidates", None) or []
+            if not candidates:
+                return False
+            reason = getattr(candidates[0], "finish_reason", None)
+            # google-genai returns an enum; its .name is stable across the enum
+            # and plain-string representations the SDK has used over versions.
+            return getattr(reason, "name", None) == "MAX_TOKENS"
+    except Exception:  # noqa: BLE001 — never let a stop-reason quirk fail a completion
+        return False
+    return False
+
+
 # Docs URLs shown next to the model input field
 PROVIDER_DOCS_URLS: dict[str, str] = {
     "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models",
@@ -335,7 +361,7 @@ async def score_article(
         f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
-    raw, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=10)
+    raw, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=10)
     # Extract the first decimal number — tolerates models that wrap the score in
     # prose ("0.8 - relevant", "Score: 0.7"). A truly unparseable response raises,
     # so the caller's retry/failure path handles it instead of silently scoring 0.5.
@@ -348,17 +374,40 @@ async def score_article(
 
 _DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
 _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+# The summary prompt tells the model to scale length with the article, so the
+# output cap scales with it too — a cap sized for a news brief cuts a long feature
+# off mid-sentence. Roughly one output token per 16 input characters, bounded at
+# both ends: the floor keeps short articles from getting a uselessly tight cap,
+# the ceiling stops a custom prompt asking for an essay from running up the bill.
+_SUMMARY_MIN_TOKENS = 400
+_SUMMARY_MAX_TOKENS = 1500
+_SUMMARY_CHARS_PER_TOKEN = 16
+
+
+def _summary_token_budget(content: str) -> int:
+    """Output-token cap for summarizing *content*."""
+    return max(
+        _SUMMARY_MIN_TOKENS,
+        min(_SUMMARY_MAX_TOKENS, len(content) // _SUMMARY_CHARS_PER_TOKEN),
+    )
+
+
 async def summarize_article(
     content: str,
     client,
     provider: str,
     model: str,
     custom_prompt: str | None = None,
-) -> tuple[str, int, int]:
-    """Generate a concise article summary. Returns (text, input_tokens, output_tokens)."""
+) -> tuple[str, int, int, bool]:
+    """Generate a concise article summary.
+
+    Returns (text, input_tokens, output_tokens, truncated).
+    """
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=500)
+    return await _complete(
+        prompt, client, provider, model, max_tokens=_summary_token_budget(content)
+    )
 
 
 async def get_article_context(
@@ -374,7 +423,8 @@ async def get_article_context(
     if focus:
         instruction += f"\n\nFocus on: {focus}"
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=500)
+    text, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=500)
+    return text, in_tok, out_tok
 
 
 async def chat_with_article(
@@ -483,7 +533,7 @@ async def catch_me_up(
     user_prompt = f"Articles from the past {period}:\n\n{article_list}"
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    text, input_tokens, output_tokens = await _complete(
+    text, input_tokens, output_tokens, _ = await _complete(
         full_prompt, client, provider, model, max_tokens=8000
     )
     return text, input_tokens, output_tokens
@@ -493,7 +543,7 @@ async def generate_css_selector(url: str, html: str, client, provider: str, mode
     """Generate a CSS selector for article links from a page."""
     from app.utils.scrape_ai import generate_selector_prompt
     prompt = generate_selector_prompt(url, html)
-    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=200)
+    text, _, _, _ = await _complete(prompt, client, provider, model, max_tokens=200)
     return text.strip().strip('`"\'').split('\n')[0].strip()
 
 
@@ -508,7 +558,7 @@ async def generate_css_selector_from_sample(
     """Generate CSS selector from pre-extracted HTML sample with optional refinement history."""
     from app.utils.scrape_ai import build_selector_prompt
     prompt = build_selector_prompt(url, sample, history)
-    text, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=200)
+    text, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=200)
     selector = text.strip().strip('`"\'').split('\n')[0].strip()
     return selector, in_tok, out_tok
 
@@ -699,7 +749,7 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         {"g1": g1_rows, "g2": g2_rows, "g3": g3_rows, "p1": p1_rows, "n1": n1_rows},
         feeds_str,
     )
-    result_text, input_tokens, output_tokens = await _complete(prompt, client, provider, model, max_tokens=500)
+    result_text, input_tokens, output_tokens, _ = await _complete(prompt, client, provider, model, max_tokens=500)
     return result_text, input_tokens, output_tokens
 
 
@@ -724,22 +774,37 @@ def _openai_max_tokens(model: str, max_tokens: int) -> int:
 
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500
-) -> tuple[str, int, int]:
-    """Send a prompt and return (text, input_tokens, output_tokens)."""
+) -> tuple[str, int, int, bool]:
+    """Send a prompt and return (text, input_tokens, output_tokens, truncated).
+
+    *truncated* is True when the model stopped on *max_tokens* rather than
+    finishing, so callers can mark a cut-off result instead of storing it as a
+    complete one. Callers that cannot act on it discard the flag.
+    """
     if provider == "anthropic":
         resp = await client.messages.create(
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return _extract_text("anthropic", resp), resp.usage.input_tokens, resp.usage.output_tokens
+        return (
+            _extract_text("anthropic", resp),
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+            _extract_truncated("anthropic", resp),
+        )
     elif provider == "openai":
         resp = await client.chat.completions.create(
             model=model,
             max_completion_tokens=_openai_max_tokens(model, max_tokens),
             messages=[{"role": "user", "content": prompt}],
         )
-        return _extract_text("openai", resp), resp.usage.prompt_tokens, resp.usage.completion_tokens
+        return (
+            _extract_text("openai", resp),
+            resp.usage.prompt_tokens,
+            resp.usage.completion_tokens,
+            _extract_truncated("openai", resp),
+        )
     elif provider == "gemini":
         from google.genai import types
         resp = await client.aio.models.generate_content(
@@ -752,5 +817,6 @@ async def _complete(
             _extract_text("gemini", resp),
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0,
+            _extract_truncated("gemini", resp),
         )
     raise ValueError(f"Unknown provider: {provider}")

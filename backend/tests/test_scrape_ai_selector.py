@@ -112,7 +112,7 @@ class TestGenerateCssSelectorFromSample:
         client.messages.create = AsyncMock(return_value=make_anthropic_response("a"))
         history = [{"selector": "div", "feedback": "too broad"}]
 
-        with patch("app.services.ai_service._complete", new=AsyncMock(return_value=("a", 5, 3))) as mock_complete:
+        with patch("app.services.ai_service._complete", new=AsyncMock(return_value=("a", 5, 3, False))) as mock_complete:
             await generate_css_selector_from_sample(
                 url="https://example.com",
                 sample=_SAMPLE_HTML,

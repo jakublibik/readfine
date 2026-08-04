@@ -69,6 +69,10 @@ class UserArticleState(Base):
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
     ai_summary: Mapped[str | None] = mapped_column(Text)
+    # The model stopped on its output-token cap, so ai_summary ends mid-thought.
+    # Kept beside the text rather than marked inside it: the summary is also served
+    # over the API, and a regenerated summary just flips this back to False.
+    ai_summary_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_context: Mapped[str | None] = mapped_column(Text)
     ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

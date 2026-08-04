@@ -31,6 +31,7 @@ def make_article(**kwargs):
         "is_starred": True,
         "is_archived": False,
         "ai_summary": None,
+        "ai_summary_truncated": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

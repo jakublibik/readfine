@@ -1,4 +1,5 @@
 """Tests for AI pipeline: enqueue logic, pipeline orchestration, and on-demand processing."""
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +30,7 @@ def make_settings(**kwargs):
         "ai_fast_model": "claude-haiku-4-5",
         "ai_quality_provider": "anthropic",
         "ai_quality_model": "claude-sonnet-4-6",
+        "ai_content_limit": 20_000,
         "ai_summary_prompt": None,
         "last_ai_error": None,
         "last_ai_error_at": None,
@@ -73,6 +75,7 @@ def make_state(**kwargs):
         "ai_score": None,
         "ai_filters_applied": False,
         "ai_summary": None,
+        "ai_summary_truncated": False,
         "is_starred": False,
     }
     defaults.update(kwargs)
@@ -519,7 +522,7 @@ class TestRunSummaryOnDemand:
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
-            summary, error = await run_summary_on_demand(
+            summary, truncated, error = await run_summary_on_demand(
                 make_article(content=long_content), user_id=1, db=db
             )
 
@@ -536,7 +539,7 @@ class TestRunSummaryOnDemand:
             False,  # _ai_enabled_globally in enqueue_summary_job
             None,   # job SELECT returns None
         ])
-        summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
         assert summary is None
         assert error is not None  # specific message, not None
 
@@ -551,7 +554,7 @@ class TestRunSummaryOnDemand:
             job,    # job SELECT
             state,  # state SELECT
         ])
-        summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+        summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
         assert summary == "Existing summary text"
         assert error is None
 
@@ -576,7 +579,7 @@ class TestRunSummaryOnDemand:
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
-            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert job.status == "success"
         assert job.retry_count == 0
@@ -603,7 +606,7 @@ class TestRunSummaryOnDemand:
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
-            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert job.retry_count == 0
         assert summary == "New summary"
@@ -626,7 +629,7 @@ class TestRunSummaryOnDemand:
             j.error_message = "Rate limit exceeded: too many requests"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_fail):
-            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert summary is None
         assert error == "Rate limit exceeded: too many requests"
@@ -647,7 +650,7 @@ class TestRunSummaryOnDemand:
             j.status = "skipped"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_skip):
-            summary, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
+            summary, truncated, error = await run_summary_on_demand(make_article(), user_id=1, db=db)
 
         assert summary is None
         assert error is not None
@@ -1193,3 +1196,57 @@ class TestProcessPendingSummaries:
 
         assert result == 2
         assert sorted(executed) == [1, 2]
+
+
+# ── _execute_summary_job: truncation flag ─────────────────────────────────────
+
+class TestSummaryTruncationFlag:
+    """A summary cut off by the model's token cap is still worth keeping, but it
+    must be stored as truncated so the reader is not shown a half sentence that
+    looks complete."""
+
+    @staticmethod
+    def _db_with_state(state):
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=state)
+        return db
+
+    @staticmethod
+    def _patched(summarize_result):
+        return patch.multiple(
+            "app.services.ai_service",
+            get_ai_client=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6")),
+            summarize_article=AsyncMock(return_value=summarize_result),
+        )
+
+    async def _run(self, state, summarize_result):
+        from app.services.ai_summary_service import _execute_summary_job
+        job = make_job(operation="summary")
+        # Comfortably over _MIN_CONTENT_CHARS, so the job reaches the provider call.
+        article = make_article(content="Some content " * 200)
+        with self._patched(summarize_result):
+            await _execute_summary_job(
+                job, article, make_settings(), self._db_with_state(state),
+                datetime.now(timezone.utc),
+            )
+        return job
+
+    async def test_truncated_summary_is_stored_and_flagged(self):
+        state = make_state()
+        job = await self._run(state, ("Cut off mid-sen", 500, 400, True))
+        assert job.status == "success"          # kept, not failed
+        assert state.ai_summary == "Cut off mid-sen"
+        assert state.ai_summary_truncated is True
+
+    async def test_complete_summary_is_not_flagged(self):
+        state = make_state()
+        await self._run(state, ("A whole summary.", 500, 120, False))
+        assert state.ai_summary_truncated is False
+
+    async def test_regenerating_clears_a_stale_flag(self):
+        """A previously truncated summary that regenerates in full must lose the
+        badge — the flag is written on every success, not only when true."""
+        state = make_state(ai_summary="Old cut off", ai_summary_truncated=True)
+        await self._run(state, ("Now complete.", 500, 130, False))
+        assert state.ai_summary == "Now complete."
+        assert state.ai_summary_truncated is False

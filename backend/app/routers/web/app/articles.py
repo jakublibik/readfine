@@ -641,7 +641,9 @@ async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
         return ""
     macros = templates.env.get_template("app/partials/ai_blocks.html").module
     if article.ai_summary:
-        return str(macros.ai_summary(article.id, article.ai_summary, oob=True))
+        return str(macros.ai_summary(
+            article.id, article.ai_summary, article.ai_summary_truncated, oob=True
+        ))
     pending = await db.scalar(
         select(ArticleAiJob.id).where(
             ArticleAiJob.article_id == article.id,

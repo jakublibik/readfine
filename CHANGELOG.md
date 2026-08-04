@@ -9,8 +9,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Changed
+
+- AI summaries of long articles are no longer cut short. The summary prompt asks the model to match the summary's length to the article, but the room it had to write in was fixed, so a long feature ran out of space and stopped mid-sentence while a short news item was never anywhere near the limit. That room now scales with the article, from the previous allowance for short pieces up to roughly three times that for the longest ones. Nothing to configure, and the ceiling keeps a custom summary prompt from turning into an essay.
+
 ### Fixed
 
+- A summary that did run out of room now says so, instead of passing itself off as complete. Readfine stored whatever the model had written by the time it hit the limit and showed it like any other summary, so a summary ending mid-sentence looked like the model's own choice of words. Such a summary is still kept, but the "AI summary" heading above it now reads "AI summary · truncated". Regenerating one that comes back complete clears the note.
 - An article no longer jumps around while its full text is being extracted. Opening an article whose extraction had not run yet starts one in the background, and the reader checked on it every two seconds by redrawing the entire article, which re-laid out the text, reloaded the images and flashed the action bar on every check. Most obvious on a phone, where the page visibly hopped every couple of seconds. The check now touches only the small "Extracting full content…" line, and the article itself is rebuilt once, when the text is ready.
 - A summary that starts on its own now says so. Starring an article with auto-summary on, or opening a starred article whose extraction finishes and produces one, generated the summary in the background with nothing on screen to show for it, so the only way to find out was to open the article again. The "Generating summary…" spinner now appears in both cases, and a summary that arrives while you are reading is shown straight away. Unstarring while it spins removes it instead of leaving it turning forever.
 - Share → "Original article" copied a link to Readfine instead of the article's own address. The share menu reads the source URL off the article in the reading pane, but a wrapper element added around it later was picked up first, and it carries no URL, so the code fell back to the page you were on. Sharing to Readfine was affected too, in a smaller way: the shared link itself was right, but the title handed to the system share sheet was empty.

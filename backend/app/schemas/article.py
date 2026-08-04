@@ -75,6 +75,7 @@ class ArticleResponse(BaseModel):
     read_at: datetime | None
     share_token: str | None = None
     ai_summary: str | None = None
+    ai_summary_truncated: bool = False
     ai_context: str | None = None
     labels: list[dict] = []
 

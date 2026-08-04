@@ -10,9 +10,9 @@
 <svg class="animate-spin h-4 w-4 text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/></svg>
 {%- endmacro -%}
 
-{%- macro ai_summary(article_id, summary, oob=false) -%}
+{%- macro ai_summary(article_id, summary, truncated=false, oob=false) -%}
 <div id="ai-summary-{{ article_id }}"{% if oob %} hx-swap-oob="true"{% endif %} class="border-l-2 border-blue-400 dark:border-blue-500 pl-4 text-gray-700 dark:text-gray-300">
-<div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary</div>
+<div class="text-xs font-semibold text-blue-500 dark:text-blue-400 mb-1">AI summary{% if truncated %} <span class="font-normal text-gray-400 dark:text-gray-500" title="The model hit its length limit, so the summary may end mid-thought.">· truncated</span>{% endif %}</div>
 <div class="prose dark:prose-invert max-w-none ai-text">{{ summary | markdown }}</div>
 </div>
 {%- endmacro -%}
