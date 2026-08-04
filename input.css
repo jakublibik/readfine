@@ -27,6 +27,11 @@
 /* Article feed/readable content: media never overflows the reading panel */
 .article-body img { max-width: 100%; height: auto; }
 
+/* Last-resort wrap for anything with no break opportunity (long URLs, leftover
+   &nbsp; runs from CMS editors, older articles stored before nbsp softening).
+   `pre` keeps scrolling, white-space: pre wins over overflow-wrap. */
+.article-body { overflow-wrap: anywhere; }
+
 /* Layout tables (no header cells — e.g. Reddit RSS image+meta wrappers):
    unwrap to normal block flow so the image sits above the text instead of
    being forced side-by-side and overflowing. */

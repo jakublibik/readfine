@@ -159,7 +159,8 @@ def _excerpt_to_content_html(excerpt: str | None) -> str | None:
     """
     if not excerpt:
         return None
-    return f"<p>{html.escape(excerpt)}</p>"
+    from app.utils.parsing import soften_nbsp_runs
+    return soften_nbsp_runs(f"<p>{html.escape(excerpt)}</p>")
 
 
 _CONTAINER_TAGS = {"article", "li", "div", "section"}

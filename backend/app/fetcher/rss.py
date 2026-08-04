@@ -326,9 +326,9 @@ async def _save_articles(
         guid = _normalize_guid(entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
-            content = nh3.clean(content)
+            from app.utils.parsing import rewrite_relative_urls, soften_nbsp_runs
+            content = soften_nbsp_runs(nh3.clean(content))
             if article_url:
-                from app.utils.parsing import rewrite_relative_urls
                 content = rewrite_relative_urls(content, article_url)
 
         word_count, estimated_read_min = _reading_stats(content)

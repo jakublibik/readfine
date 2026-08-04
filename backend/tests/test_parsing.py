@@ -1,7 +1,9 @@
 """Unit tests for app.utils.parsing helpers."""
+import re
+
 import pytest
 
-from app.utils.parsing import rewrite_relative_urls
+from app.utils.parsing import NBSP_RUN_LIMIT, rewrite_relative_urls, soften_nbsp_runs
 
 
 BASE = "https://example.com/2024/article-slug"
@@ -60,3 +62,73 @@ class TestRewriteRelativeUrls:
         html = '<img src="photo.jpg">'
         result = rewrite_relative_urls(html, "https://example.com/section/")
         assert result == '<img src="https://example.com/section/photo.jpg">'
+
+
+NBSP = " "
+
+
+def _runs(html: str) -> list[str]:
+    """Text runs that a browser cannot break, longest first."""
+    text = re.sub(r"<[^>]*>", " ", html).replace("&nbsp;", NBSP)
+    parts = [p for p in re.split(r"[ \t\n]+", text) if p]
+    return sorted(parts, key=len, reverse=True)
+
+
+class TestSoftenNbspRuns:
+    def test_long_run_is_split(self):
+        html = f"<p>On Wednesday,{NBSP}Anthropic{NBSP}and{NBSP}AMD{NBSP}announced a deal.</p>"
+        result = soften_nbsp_runs(html)
+        assert len(_runs(result)[0]) <= NBSP_RUN_LIMIT
+
+    def test_run_spanning_inline_tags_is_split(self):
+        html = (f"<p>On Wednesday,{NBSP}<strong>Anthropic</strong>{NBSP}and{NBSP}"
+                f"<strong>AMD</strong>{NBSP}announced a deal.</p>")
+        result = soften_nbsp_runs(html)
+        assert result.count(NBSP) < html.count(NBSP)
+
+    def test_entity_form_is_handled(self):
+        html = "<p>Hello&nbsp;world&nbsp;this&nbsp;is&nbsp;a&nbsp;long&nbsp;unbreakable&nbsp;phrase.</p>"
+        result = soften_nbsp_runs(html)
+        assert len(_runs(result)[0]) <= NBSP_RUN_LIMIT
+
+    def test_very_long_run_splits_recursively(self):
+        words = NBSP.join(f"word{i}" for i in range(20))
+        result = soften_nbsp_runs(f"<p>{words}</p>")
+        assert len(_runs(result)[0]) <= NBSP_RUN_LIMIT
+
+    def test_short_run_untouched(self):
+        html = f"<p>Trasa je 10{NBSP}km dlouha.</p>"
+        assert soften_nbsp_runs(html) == html
+
+    def test_units_and_prepositions_kept(self):
+        html = (f"<p>Namerili{NBSP}jsme{NBSP}presne{NBSP}10{NBSP}km{NBSP}a{NBSP}"
+                f"pak{NBSP}dalsich{NBSP}50{NBSP}%{NBSP}navic.</p>")
+        result = soften_nbsp_runs(html)
+        assert f"10{NBSP}km" in result
+        assert f"50{NBSP}%" in result
+        assert f"a{NBSP}pak" in result
+        assert len(_runs(result)[0]) <= NBSP_RUN_LIMIT
+
+    def test_run_stops_at_block_boundary(self):
+        html = f"<p>alpha beta{NBSP}gamma</p><p>delta{NBSP}epsilon zeta</p>"
+        assert soften_nbsp_runs(html) == html
+
+    def test_run_stops_at_br(self):
+        html = f"<p>alpha beta{NBSP}gamma<br>delta{NBSP}epsilon zeta</p>"
+        assert soften_nbsp_runs(html) == html
+
+    def test_attributes_untouched(self):
+        html = f'<p><a href="https://example.com/a{NBSP}very{NBSP}long{NBSP}path{NBSP}here">x</a></p>'
+        assert soften_nbsp_runs(html) == html
+
+    def test_no_nbsp_returns_input(self):
+        html = "<p>Plain sentence with ordinary spaces.</p>"
+        assert soften_nbsp_runs(html) is html
+
+    def test_empty_input(self):
+        assert soften_nbsp_runs("") == ""
+
+    def test_idempotent(self):
+        html = f"<p>On Wednesday,{NBSP}Anthropic{NBSP}and{NBSP}AMD{NBSP}announced a deal.</p>"
+        once = soften_nbsp_runs(html)
+        assert soften_nbsp_runs(once) == once

@@ -368,8 +368,9 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    from app.utils.parsing import rewrite_relative_urls
-    final = rewrite_relative_urls(_drop_empty_blocks(_dedupe_images(_sanitize(content))), url)
+    from app.utils.parsing import rewrite_relative_urls, soften_nbsp_runs
+    final = rewrite_relative_urls(
+        soften_nbsp_runs(_drop_empty_blocks(_dedupe_images(_sanitize(content)))), url)
     if not _has_visible_content(final):
         # Extraction produced markup that sanitized down to nothing usable.
         logger.warning("readable extraction collapsed to empty content for %s", url)
