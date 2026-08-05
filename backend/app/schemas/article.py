@@ -34,6 +34,14 @@ class ArticleListItem(BaseModel):
     # row cares: it was inserted with a placeholder title and learns the real one
     # when extraction finishes, so the row polls until then.
     readable_active: bool = False
+    # The article carries no text of its own: no extracted body, no feed content and
+    # not even the page's own description. Deliberately about what there is to show
+    # rather than about extraction having failed, because a saved-by-URL row only
+    # needs marking while it is still nothing but the pasted address. One that failed
+    # extraction but came back with a real title and a description reads like any
+    # other row, and a warning on it would be noise; the reason and the retry live in
+    # the article itself either way.
+    nothing_to_show: bool = False
     published_at: datetime | None
     # Display-only string, formatted per the viewer's number/date format profile
     # (order/separators vary). Parse `published_at` (ISO) for machine use.

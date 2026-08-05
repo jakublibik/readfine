@@ -1,0 +1,10 @@
+{#- The small red bar that marks something as broken in a list: a feed that stopped
+    fetching in the sidebar, a saved article whose text could not be retrieved in the
+    article list.
+
+    One definition for both, so the two cannot drift apart. Inline styles rather than
+    utility classes because the bar is a hairline whose exact width has no Tailwind
+    step, and the callers sit in two different templates. -#}
+{%- macro error_bar(tooltip) -%}
+<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ tooltip }}"></span>
+{%- endmacro -%}

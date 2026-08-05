@@ -5,10 +5,11 @@
      refresh endpoint returns it out-of-band (oob=true) because it sits outside the
      swapped #feed-badge target, so a fetch that cleared the error would otherwise
      leave the bar stale until a full sidebar reload. -#}
+{%- from "app/partials/error_bar.html" import error_bar -%}
 {%- macro feed_error(feed_id, status, last_error, oob=false) -%}
 <span id="feed-error-{{ feed_id }}"{% if oob %} hx-swap-oob="true"{% endif %}>
 {%- if status in ('error', 'disabled') -%}
-<span class="shrink-0" style="width:.18rem;height:.85rem;border-radius:2px;background:#f87171;flex-shrink:0;display:inline-block;margin-right:.35rem" title="{{ last_error or 'Feed error' }}"></span>
+{{ error_bar(last_error or 'Feed error') }}
 {%- endif -%}
 </span>
 {%- endmacro -%}

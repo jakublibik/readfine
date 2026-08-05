@@ -1,5 +1,16 @@
 <div id="article-content-{{ article.id }}">
-  {% if article.readable_status in ['failed', 'skipped'] and article.readable_error %}
+  {#- An attempt failed on something that may pass later (a timeout, a 5xx, a page
+      that gave nothing), so the article sits at 'pending' with a backoff running and
+      more attempts to come. Not the same as 'failed', and the difference matters: the
+      messages below are a verdict, and this state has not reached one. Deliberately
+      says only that much — what went wrong is worth reading once it is final, where
+      it comes with the actual error. -#}
+  {% set awaiting_retry = article.readable_status == 'pending' and not article.readable_active %}
+  {% if awaiting_retry %}
+  <p class="text-xs text-amber-500 italic mb-4">
+    Full text not retrieved yet. Another attempt is scheduled.
+  </p>
+  {% elif article.readable_status in ['failed', 'skipped'] and article.readable_error %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
       Full content could not be retrieved (403 Access denied). The site is likely blocking requests from this server (geo-block or datacenter IP block).
@@ -21,8 +32,8 @@
           Deliberately framed as the site's own description rather than dropped into
           the body, so it never reads as the article. -#}
       <p class="text-sm text-gray-500 mb-3 dark:text-gray-400">
-        The full text could not be retrieved. This is the description the site gives
-        for the article:
+        {% if not awaiting_retry %}The full text could not be retrieved. {% endif %}This
+        is the description the site gives for the article:
       </p>
       <blockquote class="border-l-2 border-gray-300 pl-4 text-gray-700 not-italic dark:border-gray-600 dark:text-gray-300">
         {{ article.summary }}
@@ -60,7 +71,11 @@
           </svg>
           Open original
         </a>
-        {% if article.readable_status == 'failed' %}
+        {#- Also offered while a retry is pending: this branch has nothing to read and
+            no other action, and waiting out a backoff of up to two hours for an
+            attempt you can make now is not a choice worth enforcing. The sibling
+            branch above (a description to show) has always offered it here. -#}
+        {% if article.readable_status == 'failed' or awaiting_retry %}
         <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
                 hx-target="#article-content-{{ article.id }}"
                 hx-swap="outerHTML"

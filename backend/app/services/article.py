@@ -340,6 +340,9 @@ async def list_articles(
             readable_active=(
                 article.readable_status == "pending" and not article.readable_retries
             ),
+            nothing_to_show=not (
+                article.readable_content or article.content or article.summary
+            ),
             published_at=article.published_at,
             formatted_date=_format_date(article.published_at or article.created_at),
             estimated_read_min=article.estimated_read_min,
@@ -406,6 +409,9 @@ async def get_article_list_item(
         body_permanently_empty=body_permanently_empty(article, extract_readable),
         readable_active=(
             article.readable_status == "pending" and not article.readable_retries
+        ),
+        nothing_to_show=not (
+            article.readable_content or article.content or article.summary
         ),
         published_at=article.published_at,
         formatted_date=_format_date(article.published_at or article.created_at),

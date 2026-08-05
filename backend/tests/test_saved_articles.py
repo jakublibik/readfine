@@ -490,3 +490,121 @@ class TestDedupPicksDeterministically:
 
         article, _ = await self._save(pg, user, url)
         assert article.id == usable.id
+
+
+# ── what the list row says while a save is being fetched ─────────────────────
+
+class TestRowStatusMarker:
+    """A saved-by-URL row is inserted under the pasted address and only picks up the
+    real title when extraction finishes, so it has to say more is coming — and, when
+    the page hands over nothing at all, that the address it is showing is all there
+    will ever be.
+
+    Rendered rather than asserted on the flag alone: the logic that matters is the
+    scoping (feedless articles only), and that lives in the template."""
+
+    def _row(self, **kwargs):
+        from app.templating import templates
+        defaults = {
+            "id": 1, "feed_id": None, "feed_title": None,
+            "url": "https://example.com/story", "title": "example.com/story",
+            "snippet": None, "published_at": None, "formatted_date": "1 Jan",
+            "is_read": False, "is_starred": False, "is_archived": False,
+            "body_permanently_empty": False, "readable_active": False,
+            "nothing_to_show": False, "ai_score": None, "labels": [],
+        }
+        defaults.update(kwargs)
+        return templates.env.get_template("app/partials/article_row.html").render(
+            article=SimpleNamespace(**defaults), request=None,
+        )
+
+    def test_extraction_in_flight_shows_a_spinner(self):
+        assert "animate-spin" in self._row(readable_active=True)
+
+    def test_a_row_left_with_only_its_address_shows_the_error_bar(self):
+        html = self._row(nothing_to_show=True)
+        assert "The full text could not be retrieved" in html
+        assert "animate-spin" not in html
+
+    def test_a_failed_fetch_that_still_yielded_a_title_is_left_clean(self):
+        """A site answering with a consent page still hands over its title and
+        description, so that row reads like any other and a bar on it is noise."""
+        html = self._row(title="The Real Headline", snippet="The site's own blurb.",
+                         nothing_to_show=False)
+        assert "could not be retrieved" not in html
+
+    def test_a_finished_row_is_left_clean(self):
+        html = self._row(title="The Real Headline")
+        assert "animate-spin" not in html
+        assert "could not be retrieved" not in html
+
+    def test_a_feed_article_is_never_marked(self):
+        """A feed article that fails extraction still shows its feed content, so a
+        marker there would flag a row with nothing wrong with it."""
+        html = self._row(feed_id=5, feed_title="A feed", nothing_to_show=True)
+        assert "could not be retrieved" not in html
+        assert "animate-spin" not in self._row(feed_id=5, feed_title="A feed",
+                                               readable_active=True)
+
+    def test_both_densities_carry_the_marker(self):
+        for density in ("compact", "comfortable", "summary"):
+            from app.templating import templates
+            html = templates.env.get_template("app/partials/article_row.html").render(
+                article=SimpleNamespace(
+                    id=1, feed_id=None, feed_title=None, url="https://example.com/s",
+                    title="example.com/s", snippet=None, published_at=None,
+                    formatted_date="1 Jan", is_read=False, is_starred=False,
+                    is_archived=False, body_permanently_empty=False,
+                    readable_active=True, nothing_to_show=False, ai_score=None,
+                    labels=[],
+                ),
+                density=density, request=None,
+            )
+            assert "animate-spin" in html, density
+
+
+# ── what the article says between attempts ───────────────────────────────────
+
+class TestAwaitingRetryNotice:
+    """An extraction that fails on something transient leaves the article at
+    'pending' with a backoff of up to two hours running. That is not a verdict, and
+    the reader used to present it as one (or, with nothing to show, say nothing at
+    all and offer no way to act)."""
+
+    def _content(self, **kwargs):
+        from app.templating import templates
+        defaults = {
+            "id": 1, "feed_id": None, "url": "https://example.com/story",
+            "readable_status": "pending", "readable_error": "Timeout after 15s",
+            "readable_active": False, "readable_content": None, "content": None,
+            "summary": None,
+        }
+        defaults.update(kwargs)
+        return templates.env.get_template("app/partials/article_content.html").render(
+            article=SimpleNamespace(**defaults), request=None,
+        )
+
+    def test_waiting_says_another_attempt_is_coming(self):
+        html = self._content()
+        assert "Another attempt is scheduled" in html
+
+    def test_waiting_offers_a_manual_retry(self):
+        """The only action in this branch: the alternative is waiting out the backoff
+        for an attempt the reader could make now."""
+        assert "extract-readable" in self._content()
+
+    def test_waiting_does_not_pass_itself_off_as_final(self):
+        html = self._content(summary="The site's own blurb about the article.")
+        assert "Another attempt is scheduled" in html
+        assert "could not be retrieved" not in html
+
+    def test_a_final_failure_still_gives_the_reason(self):
+        html = self._content(readable_status="failed",
+                             readable_error="HTTP 403 Forbidden")
+        assert "Another attempt is scheduled" not in html
+        assert "403" in html
+
+    def test_a_first_attempt_in_flight_is_not_a_retry(self):
+        """'pending' with the first attempt still running is the spinner's state, not
+        this one."""
+        assert "Another attempt is scheduled" not in self._content(readable_active=True)
