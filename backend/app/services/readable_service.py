@@ -351,10 +351,14 @@ _OG_DESC_ALT_RE = re.compile(
 # Below this many distinct words the overlap score is too noisy to act on, so the
 # check is skipped entirely rather than guessed at.
 _OG_DESC_MIN_WORDS = 10
-# Measured across real articles from several sites: legitimate extractions scored
-# 0.55–1.00 (the lede is usually the article's own first paragraph, so nearly every
-# word of it reappears), while a consent wall served in place of the article scored
-# 0.00. A threshold here sits far from both.
+# Measured over ~40 live articles (news, blogs, docs, science) in both English and
+# Czech: legitimate extractions scored 0.24–1.00 and substitute pages 0.00–0.03, so a
+# threshold here sits between the two. Most legitimate pages are far above it, because
+# the lede is usually the article's own first paragraph and nearly every word of it
+# reappears; what pulls the low end down is a paywall teaser, where only the opening
+# survives and the description reaches past it (Washington Post 0.30, Novinky 0.24).
+# The gap is real but narrower than it looks, so treat a raise as needing fresh
+# measurement rather than reasoning.
 _OG_DESC_MIN_OVERLAP = 0.15
 
 _WRONG_CONTENT_MSG = (
@@ -372,7 +376,24 @@ _OG_URL_RE = re.compile(
 )
 
 
-def resolve_article_url(fetched_url: Optional[str], html: Optional[str]) -> Optional[str]:
+def _same_host(a: Optional[str], b: Optional[str]) -> bool:
+    """Host equality, ignoring a leading ``www.``.
+
+    Deliberately not registrable-domain equality: the redirect this guards against —
+    news.google.com to consent.google.com — shares its registrable domain with the
+    address it replaced, so folding subdomains together would wave it straight
+    through.
+    """
+    try:
+        return (urlsplit(a or "").netloc.lower().removeprefix("www.")
+                == urlsplit(b or "").netloc.lower().removeprefix("www."))
+    except ValueError:
+        return False
+
+
+def resolve_article_url(
+    fetched_url: Optional[str], html: Optional[str], requested_url: Optional[str] = None
+) -> Optional[str]:
     """The address an article actually lives at, given where the fetch ended up.
 
     Prefers the page's own ``rel=canonical`` / ``og:url`` over the fetched address,
@@ -381,23 +402,47 @@ def resolve_article_url(fetched_url: Optional[str], html: Optional[str]) -> Opti
     publisher's domain as its canonical, and following that across hosts would let
     one article's URL resolve onto a different article's row, which for dedup is far
     worse than the cosmetic problem this fixes.
+
+    *requested_url* is the address that was asked for, before redirects. When the
+    chain ends on a **different host** and the page there does not name an address of
+    its own, the fetch did not arrive at an article: it arrived at an interstitial.
+    Pasting a Google News link lands on consent.google.com, which carries neither
+    canonical nor og:url, and adopting that address makes it the saved article's
+    permanent home — "Open original" and Retry then both walk back into the consent
+    page. Keeping the requested address instead costs at worst an unstripped tracker,
+    which is where the article started anyway.
+
+    A legitimate cross-host redirect is unaffected, because the page it lands on says
+    who it is: doi.org to nature.com, youtu.be to a watch URL and m.wikipedia to the
+    desktop host all carry both tags. Omit *requested_url* (the default) to skip the
+    check entirely — the redirect chain is then unknown, and no verdict is possible.
     """
     if not fetched_url:
         return None
+    declared = _declared_url(fetched_url, html)
+    if declared:
+        return declared
+    if requested_url and not _same_host(fetched_url, requested_url):
+        return requested_url
+    return fetched_url
+
+
+def _declared_url(fetched_url: str, html: Optional[str]) -> Optional[str]:
+    """The absolute, same-host address the page claims for itself, if it claims one."""
     if not html:
-        return fetched_url
+        return None
     head = _head_slice(html)
     m = _CANONICAL_RE.search(head) or _OG_URL_RE.search(head)
     if not m:
-        return fetched_url
+        return None
     candidate = m.group(1).strip()
     if not candidate.startswith(("http://", "https://")):
-        return fetched_url
+        return None
     try:
         if urlsplit(candidate).netloc.lower() != urlsplit(fetched_url).netloc.lower():
-            return fetched_url
+            return None
     except ValueError:
-        return fetched_url
+        return None
     return candidate
 
 
@@ -427,6 +472,19 @@ def _content_contradicts_page(content_html: str, og_description: Optional[str]) 
     The publisher's own og:description is the check: on a real article it is the
     lede, so almost all of it reappears in the body. On a substitute page it shares
     nothing. Returns False whenever there is not enough to judge on.
+
+    **Known blind spot**: a page with no usable description is never judged, and that
+    is roughly a quarter of the live sample this was measured on (Wikipedia, Nature,
+    Hacker News and Substack all ship without one). A substitute page served there
+    passes — a Cloudflare "Client Challenge" and a Google consent page both do. Two
+    replacements were measured and rejected rather than left unbuilt. Scoring the body
+    against the page's ``<title>`` inverts on exactly these pages: the title describes
+    the interstitial and the body *is* the interstitial, so consent pages scored 1.00,
+    the top of the legitimate range. Scoring it against the words in the pasted URL's
+    slug does separate them in English (0.00 against a 0.33 floor) but collapses in
+    Czech, where inflection alone dropped a genuine article to 0.18, below the 0.20 of
+    a page that was in fact substituted, and roughly a third of English articles carry
+    an opaque id instead of a slug. Neither is worth the false rejections.
     """
     if not og_description:
         return False
@@ -584,7 +642,7 @@ def extract_readable_with_title(
     title = _extract_title(html)
     # Read off the untouched document: _strip_pre_extraction_noise below rewrites the
     # markup, and both of these live in <head>.
-    resolved_url = resolve_article_url(final_url, html)
+    resolved_url = resolve_article_url(final_url, html, url)
     description = _extract_og_description(html)
     video_figures = _collect_video_figures(html)
     html = _strip_pre_extraction_noise(html)

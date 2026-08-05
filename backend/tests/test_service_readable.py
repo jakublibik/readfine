@@ -590,6 +590,53 @@ class TestResolveArticleUrl:
         from app.services.readable_service import resolve_article_url
         assert resolve_article_url(None, "<html></html>") is None
 
+    def test_cross_host_redirect_to_a_page_naming_no_address_is_refused(self):
+        """A redirect that ends on another host at a page carrying neither canonical
+        nor og:url arrived at an interstitial, not at the article. Pasting a Google
+        News link lands on consent.google.com exactly like this, and adopting that
+        address would make the consent page the saved article's permanent home."""
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url(
+            "https://consent.google.com/ml?continue=x",
+            "<html><head><title>Before you continue</title></head></html>",
+            "https://news.google.com/rss/articles/CBMiaAFB",
+        )
+        assert out == "https://news.google.com/rss/articles/CBMiaAFB"
+
+    def test_cross_host_redirect_is_adopted_when_the_page_names_itself(self):
+        """The legitimate case: doi.org, youtu.be and m.wikipedia all redirect across
+        hosts onto a page that carries both tags."""
+        from app.services.readable_service import resolve_article_url
+        page = ('<html><head><link rel="canonical" '
+                'href="https://www.nature.com/articles/nature14539"></head></html>')
+        out = resolve_article_url(
+            "https://www.nature.com/articles/nature14539", page,
+            "https://doi.org/10.1038/nature14539",
+        )
+        assert out == "https://www.nature.com/articles/nature14539"
+
+    def test_www_is_not_a_host_change(self):
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url("https://www.ex.invalid/a", "<html></html>",
+                                  "https://ex.invalid/a")
+        assert out == "https://www.ex.invalid/a"
+
+    def test_a_shared_registrable_domain_is_still_a_host_change(self):
+        """consent.google.com and news.google.com share a registrable domain, so
+        folding subdomains together would wave the interstitial straight through."""
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url("https://consent.example.com/x", "<html></html>",
+                                  "https://news.example.com/story")
+        assert out == "https://news.example.com/story"
+
+    def test_same_host_redirect_without_canonical_keeps_the_fetched_url(self):
+        """The check is about crossing hosts. Within one host the fetched address is
+        still the better one: it is where the redirects actually settled."""
+        from app.services.readable_service import resolve_article_url
+        out = resolve_article_url("https://ex.invalid/story", "<html></html>",
+                                  "https://ex.invalid/story?utm_source=rss")
+        assert out == "https://ex.invalid/story"
+
 
 # ── how far in the metadata is looked for ────────────────────────────────────
 
