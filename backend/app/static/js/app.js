@@ -21,20 +21,47 @@ document.addEventListener('htmx:afterRequest', function (e) {
 });
 
 // ── Mobile side-nav: scroll the active tab into view on load ──────────────
+// The strip is a horizontal scroll container and browsers restore its offset
+// when you navigate (e.g. Admin → Settings), which lands *after* the first
+// pass here and leaves the active tab off-screen. So run several passes, each
+// a no-op once the tab is visible, and stop as soon as the user scrolls the
+// strip by hand.
 (function () {
+  var userScrolled = false;
+
   function scrollActiveNavIntoView() {
+    if (userScrolled) return;
     var active = document.querySelector('[data-mobile-nav] [data-mobile-nav-active]');
     if (!active) return;
     var bar = active.closest('[data-mobile-nav]');
     if (!bar || bar.offsetParent === null) return; // hidden (desktop): skip
+    // offsetLeft is relative to the nearest positioned ancestor, not to the
+    // strip, so measure against the strip itself.
+    var left = active.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+    if (left >= 0 && left + active.offsetWidth <= bar.clientWidth) return; // already visible
     // Horizontally center the active tab without scrolling the page vertically.
-    bar.scrollLeft = active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2;
+    bar.scrollLeft += left - (bar.clientWidth - active.offsetWidth) / 2;
   }
+
+  function markUserScroll(e) {
+    if (e.target.closest && e.target.closest('[data-mobile-nav]')) userScrolled = true;
+  }
+  var listenOpts = { capture: true, passive: true };
+  document.addEventListener('pointerdown', markUserScroll, listenOpts);
+  document.addEventListener('touchstart', markUserScroll, listenOpts);
+  document.addEventListener('wheel', markUserScroll, listenOpts);
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scrollActiveNavIntoView);
   } else {
     scrollActiveNavIntoView();
   }
+  requestAnimationFrame(scrollActiveNavIntoView);
+  window.addEventListener('load', function () {
+    scrollActiveNavIntoView();
+    setTimeout(scrollActiveNavIntoView, 150);
+  });
+  window.addEventListener('pageshow', scrollActiveNavIntoView);
 })();
 
 // ── Sidebar: remove touch-active class after feed refresh ─────────────────
