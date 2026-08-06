@@ -1,6 +1,8 @@
 import re
 from urllib.parse import urljoin
 
+import nh3
+
 
 def rewrite_relative_urls(html: str, base_url: str) -> str:
     """Rewrite relative src/href attributes in sanitized HTML to absolute URLs."""
@@ -127,6 +129,16 @@ def soften_nbsp_runs(html: str, limit: int = NBSP_RUN_LIMIT) -> str:
             token = token[:start] + " " + token[end:]
         tokens[idx] = token
     return "".join(tokens)
+
+
+def count_words(html: str | None) -> int:
+    """Words in an HTML body, tags stripped. Shared by every place that measures how
+    much text a body holds, so reading time, the full-content detector and the
+    subscribe heuristic all count the same way."""
+    if not html:
+        return 0
+    plain = nh3.clean(html, tags=set())
+    return len(re.findall(r"\w+", plain))
 
 
 def safe_int(value, default=None) -> int | None:

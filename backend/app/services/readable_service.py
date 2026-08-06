@@ -18,6 +18,7 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.http_client import READFINE_UA
+from app.utils.parsing import count_words
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,17 @@ _TIMEOUT = 15  # seconds per HTTP request
 _BATCH_SIZE = 20  # articles processed per scheduler run
 _MAX_REDIRECTS = 5  # maximum followed redirects per request
 
-# Auto-disable threshold: if this fraction of sampled articles have word_count > 500,
-# the feed is considered full-content and readable extraction is disabled.
+# Auto-disable threshold: if this fraction of sampled articles carry more than
+# _FULL_CONTENT_MIN_WORDS words in the feed itself, the feed is considered full-content
+# and readable extraction is disabled.
 _FULL_CONTENT_THRESHOLD = 0.8
 _FULL_CONTENT_SAMPLE = 10  # how many recent articles to sample
+_FULL_CONTENT_MIN_WORDS = 500
+# How much of each body is read to answer "more than _FULL_CONTENT_MIN_WORDS words?".
+# 500 words of prose is some 3 kB, so 20 kB leaves room for markup several times the
+# text it wraps; a body that needs more than this to reach 500 words does not exist
+# outside a generated page.
+_FULL_CONTENT_SAMPLE_CHARS = 20_000
 
 # Error message used when extraction yields no usable content (page produced nothing,
 # or the result collapsed to whitespace after sanitization, e.g. Reddit comment pages).
@@ -569,8 +577,7 @@ def apply_readable_result(
         article.readable_content = content
         article.readable_status = "success"
         article.readable_error = None
-        plain = nh3.clean(content, tags=set())
-        words = len(re.findall(r"\w+", plain))
+        words = count_words(content)
         article.word_count = words
         article.estimated_read_min = max(1, round(words / 200))
         # Backfill the publication date from the article page only when the feed
@@ -860,28 +867,22 @@ async def process_pending_readable(db: AsyncSession) -> int:
 
 async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> bool:
     """
-    Check if a feed consistently delivers full content (word_count > 500).
+    Check if a feed consistently delivers full content by itself.
     If so, disable extract_readable on all UserFeed rows for this feed.
     Returns True if disabled.
+
+    The counts are recomputed from Article.content, the body as it arrived in the feed,
+    and deliberately not read from Article.word_count: a successful extraction
+    overwrites that column with the word count of the *extracted page* (see
+    apply_readable_result), so a feed whose extraction works well would read as a
+    full-content feed and turn its own extraction off. Trimmed articles are left out
+    because retention has already dropped or replaced their body.
+
+    Runs on every fetch that brings new articles, so it asks who would be affected
+    before it measures anything. On a feed nobody extracts, which includes every feed
+    this check has already disabled, the answer changes nothing, and those are exactly
+    the feeds with the largest bodies to read.
     """
-    result = await db.execute(
-        select(Article.word_count)
-        .where(
-            Article.feed_id == feed_id,
-            Article.word_count.isnot(None),
-        )
-        .order_by(Article.id.desc())
-        .limit(_FULL_CONTENT_SAMPLE)
-    )
-    counts = [row[0] for row in result]
-    if len(counts) < _FULL_CONTENT_SAMPLE:
-        return False  # not enough data yet
-
-    full_content = sum(1 for c in counts if c > 500)
-    if full_content / len(counts) < _FULL_CONTENT_THRESHOLD:
-        return False
-
-    # Disable for all subscribers
     user_feeds_result = await db.execute(
         select(UserFeed).where(
             UserFeed.feed_id == feed_id,
@@ -890,6 +891,28 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
     )
     user_feeds = user_feeds_result.scalars().all()
     if not user_feeds:
+        return False
+
+    result = await db.execute(
+        # Only the head of each body travels: the question is whether it clears 500
+        # words, and _FULL_CONTENT_SAMPLE_CHARS is far more room than that needs, so
+        # the sample costs the same on a feed of 500-word posts as on one of essays.
+        select(func.substr(Article.content, 1, _FULL_CONTENT_SAMPLE_CHARS))
+        .where(
+            Article.feed_id == feed_id,
+            Article.content.isnot(None),
+            Article.content != "",  # sanitizer emptied it: no body to measure
+            Article.trimmed_at.is_(None),
+        )
+        .order_by(Article.id.desc())
+        .limit(_FULL_CONTENT_SAMPLE)
+    )
+    counts = [count_words(row[0]) for row in result]
+    if len(counts) < _FULL_CONTENT_SAMPLE:
+        return False  # not enough data yet
+
+    full_content = sum(1 for c in counts if c > _FULL_CONTENT_MIN_WORDS)
+    if full_content / len(counts) < _FULL_CONTENT_THRESHOLD:
         return False
 
     for uf in user_feeds:

@@ -17,6 +17,7 @@ from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
+from app.utils.parsing import count_words
 from app.utils.url_validator import async_validate_feed_url
 
 logger = logging.getLogger(__name__)
@@ -212,14 +213,23 @@ async def subscribe(
         # New feed: check entries we just fetched
         extract_readable = not is_full_content_feed(parsed)
     else:
-        # Existing feed: derive from recent articles already in DB
+        # Existing feed: derive from recent articles already in DB. Counted from
+        # Article.content (what the feed itself delivered), never from
+        # Article.word_count, which a successful readable extraction overwrites with
+        # the extracted page's count — an existing subscriber's working extraction
+        # would otherwise talk the next subscriber out of extraction entirely.
         sample_result = await db.execute(
-            select(Article.word_count)
-            .where(Article.feed_id == feed.id, Article.word_count.isnot(None))
+            select(Article.content)
+            .where(
+                Article.feed_id == feed.id,
+                Article.content.isnot(None),
+                Article.content != "",
+                Article.trimmed_at.is_(None),
+            )
             .order_by(Article.id.desc())
             .limit(5)
         )
-        word_counts = [r[0] for r in sample_result]
+        word_counts = [count_words(r[0]) for r in sample_result]
         if word_counts and sum(1 for c in word_counts if c > 500) / len(word_counts) >= 0.8:
             extract_readable = False
         else:

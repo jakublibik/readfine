@@ -10,6 +10,8 @@ from app.services.readable_service import (
     _maybe_disable_readable_for_empty,
     _CONSECUTIVE_EMPTY_THRESHOLD,
     _EMPTY_CONTENT_MSG,
+    _FULL_CONTENT_SAMPLE,
+    maybe_disable_readable_for_feed,
 )
 
 
@@ -64,6 +66,93 @@ class TestMaybeDisableReadableForEmpty:
         ) as disable:
             await _maybe_disable_readable_for_empty(5, db)
         disable.assert_not_awaited()
+
+
+class TestMaybeDisableReadableForFullContent:
+    """The other auto-disable: a feed that already delivers whole articles itself.
+
+    The measurement has to come from the feed body (Article.content). Reading
+    Article.word_count instead made a working extraction disable itself, because a
+    successful extraction overwrites that column with the extracted page's count."""
+
+    @staticmethod
+    def _body(words: int) -> str:
+        return "<p>" + " ".join(["slovo"] * words) + "</p>"
+
+    @staticmethod
+    def _db_with_bodies(bodies, uf=None):
+        """DB answering the queries in order: subscribers, (content,) rows, pending."""
+        db = AsyncMock()
+        uf_result = MagicMock()
+        uf_result.scalars.return_value.all.return_value = list(uf or [])
+        rows = [(b,) for b in bodies]
+        pending_result = MagicMock()
+        pending_result.scalars.return_value.all.return_value = []
+        db.execute = AsyncMock(side_effect=[uf_result, rows, pending_result])
+        db.commit = AsyncMock()
+        return db
+
+    async def test_feed_nobody_extracts_reads_no_bodies(self):
+        # The check runs on every fetch with new articles. With extraction already off
+        # there is nothing to decide, and it must not pay for the article bodies —
+        # which are at their largest on exactly these feeds.
+        db = self._db_with_bodies([self._body(600)] * _FULL_CONTENT_SAMPLE, uf=[])
+
+        assert await maybe_disable_readable_for_feed(5, db) is False
+        assert db.execute.await_count == 1  # subscribers only, no sample
+
+    async def test_truncated_feed_with_working_extraction_stays_enabled(self):
+        # The regression: every article extracted fine (word_count would be in the
+        # thousands), but the feed itself ships a 30-word teaser. Extraction must stay on.
+        uf = MagicMock(extract_readable=True, readable_auto_disabled=False)
+        db = self._db_with_bodies([self._body(30)] * _FULL_CONTENT_SAMPLE, uf=[uf])
+
+        assert await maybe_disable_readable_for_feed(5, db) is False
+        assert uf.extract_readable is True
+        assert uf.readable_auto_disabled is False
+
+    async def test_full_content_feed_is_disabled(self):
+        uf1 = MagicMock(extract_readable=True, readable_auto_disabled=False)
+        uf2 = MagicMock(extract_readable=True, readable_auto_disabled=False)
+        db = self._db_with_bodies([self._body(600)] * _FULL_CONTENT_SAMPLE, uf=[uf1, uf2])
+
+        assert await maybe_disable_readable_for_feed(5, db) is True
+        for uf in (uf1, uf2):
+            assert uf.extract_readable is False
+            assert uf.readable_auto_disabled is True
+            assert uf.readable_auto_disabled_reason == "full_content"
+
+    async def test_mixed_feed_below_threshold_stays_enabled(self):
+        # 7 of 10 long is under the 0.8 threshold.
+        bodies = [self._body(600)] * 7 + [self._body(40)] * 3
+        uf = MagicMock(extract_readable=True)
+        db = self._db_with_bodies(bodies, uf=[uf])
+
+        assert await maybe_disable_readable_for_feed(5, db) is False
+        assert uf.extract_readable is True
+
+    async def test_not_enough_articles_yet(self):
+        bodies = [self._body(600)] * (_FULL_CONTENT_SAMPLE - 1)
+        uf = MagicMock(extract_readable=True)
+        db = self._db_with_bodies(bodies, uf=[uf])
+
+        assert await maybe_disable_readable_for_feed(5, db) is False
+        assert uf.extract_readable is True
+
+    async def test_pending_articles_are_skipped_when_disabling(self):
+        uf = MagicMock(extract_readable=True)
+        art = MagicMock(readable_status="pending")
+        db = AsyncMock()
+        rows = [(self._body(600),)] * _FULL_CONTENT_SAMPLE
+        uf_result = MagicMock()
+        uf_result.scalars.return_value.all.return_value = [uf]
+        pending_result = MagicMock()
+        pending_result.scalars.return_value.all.return_value = [art]
+        db.execute = AsyncMock(side_effect=[uf_result, rows, pending_result])
+        db.commit = AsyncMock()
+
+        assert await maybe_disable_readable_for_feed(5, db) is True
+        assert art.readable_status == "skipped"
 
 
 class TestDisableReadableForFeed:

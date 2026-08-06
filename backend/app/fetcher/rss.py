@@ -2,7 +2,6 @@
 import asyncio
 import hashlib
 import logging
-import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -23,6 +22,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import decrypt
 from app.utils.http_client import READFINE_UA
+from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_conditional,
@@ -326,7 +326,6 @@ async def _save_articles(
         guid = _normalize_guid(entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
-            from app.utils.parsing import rewrite_relative_urls, soften_nbsp_runs
             content = soften_nbsp_runs(nh3.clean(content))
             if article_url:
                 content = rewrite_relative_urls(content, article_url)
@@ -538,8 +537,7 @@ def is_full_content_feed(parsed: feedparser.FeedParserDict, sample: int = 5, thr
 def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
     if not content:
         return None, None
-    plain = nh3.clean(content, tags=set())
-    words = len(re.findall(r"\w+", plain))
+    words = count_words(content)
     return words, max(1, round(words / 200))
 
 
