@@ -586,6 +586,74 @@ document.body.addEventListener('savedArticleRemoved', function (e) {
   showToast('Removed from Saved', 'ok');
 });
 
+// Height of everything pinned above the article list: the mobile top panel (outside
+// the list) and a sticky list header (the Saved URL box, the search-results strip),
+// which stays put while the list scrolls. A row aligned to the list's own top would
+// slide underneath it.
+function listStickyOffset() {
+  var topPanel = document.getElementById('mobile-title-bar');
+  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
+  var offset = barVisible ? topPanel.getBoundingClientRect().height : 0;
+  var listHeader = document.querySelector('#article-list [data-list-header]');
+  if (listHeader) offset += listHeader.getBoundingClientRect().height;
+  return offset;
+}
+
+// An article was added to Saved. The list is ordered by publication date, so the row
+// rarely lands on top — a video from a feed you follow carries the date it was
+// published and can sit far down. Bring it into view and flash it, so saving doesn't
+// look like nothing happened.
+//
+// The event arrives before the list is swapped in (the save form sits inside
+// #article-list, so the swap removes the very element an after-settle trigger would
+// fire on), hence the two steps: remember the id, act once the new list has settled.
+var _pendingSavedRowId = null;
+
+document.body.addEventListener('savedArticleAdded', function (e) {
+  _pendingSavedRowId = (e.detail && e.detail.id) || null;
+});
+
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (!_pendingSavedRowId) return;
+  if (!e.detail.target || e.detail.target.id !== 'article-list') return;
+  var id = _pendingSavedRowId;
+  _pendingSavedRowId = null;
+  var list = e.detail.target;
+  var row = list && list.querySelector('[data-article-id="' + id + '"]');
+  if (!row) {
+    // Older than everything on the first page, so there is no row to point at. Stay
+    // quiet if the server already sent a toast ("Already saved…"): two of them land
+    // on the same spot and the reader gets neither.
+    if (!document.querySelector('[id^="app-toast-"]')) {
+      showToast('Saved, further down the list', 'info');
+    }
+    return;
+  }
+  var offset = listStickyOffset();
+  var rowRect = row.getBoundingClientRect();
+  var listRect = list.getBoundingClientRect();
+  // Move as little as possible: a visible row makes the list stay put, one below the
+  // fold comes up to just above the bottom edge (so the articles you were looking at
+  // keep their place), and one above the fold aligns under the sticky header.
+  var target = null;
+  if (rowRect.top < listRect.top + offset) {
+    target = list.scrollTop + rowRect.top - listRect.top - offset;
+  } else if (rowRect.bottom > listRect.bottom) {
+    target = list.scrollTop + rowRect.bottom - listRect.bottom + 12;
+  }
+  if (target !== null) {
+    // Instant, and with mark-as-read held off: the row can be hundreds of articles
+    // down, and gliding there would run every article in between past the top edge,
+    // which the read-on-scroll observer counts as read. The flash is what points the
+    // row out, so nothing is lost by jumping straight to it.
+    window._suppressMarkRead = true;
+    list.scrollTo({ top: Math.max(0, target), behavior: 'instant' });
+    setTimeout(function () { window._suppressMarkRead = false; }, 300);
+  }
+  row.classList.add('row-just-saved');
+  setTimeout(function () { row.classList.remove('row-just-saved'); }, 2000);
+});
+
 // A manual feed refresh finished — if that feed is the one currently displayed,
 // reload the article list so newly fetched items appear without re-clicking it.
 document.body.addEventListener('feedRefreshed', function (e) {
@@ -863,6 +931,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       if (entry.isIntersecting) {
         seen.add(id);
       } else if (!isRead && entry.boundingClientRect.top < 0) {
+        // A jump the app made on the reader's behalf (pointing at a freshly saved
+        // row) is not reading: whatever it flew past stays unread.
+        if (window._suppressMarkRead) return;
         seen.delete(id);
         el.dataset.isRead = 'true';
         el.classList.add('opacity-75');
@@ -1815,11 +1886,7 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     // search-results strip) sits inside it and stays put while the list scrolls, so
     // a row aligned to the list's top would slide underneath it.
     setTimeout(function () {
-      var topPanel = document.getElementById('mobile-title-bar');
-      var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-      var topOffset = barVisible ? topPanel.getBoundingClientRect().height : 0;
-      var listHeader = document.querySelector('#article-list [data-list-header]');
-      if (listHeader) topOffset += listHeader.getBoundingClientRect().height;
+      var topOffset = listStickyOffset();
       if (topOffset > 0) {
         var list = document.getElementById('article-list');
         if (list) {

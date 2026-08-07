@@ -125,3 +125,17 @@
   aspect-ratio: auto;
   background: #000;
 }
+
+/* A row that was just added to Saved. The list is ordered by publication date, so the
+   row can land anywhere in it; the fade says which one of them is the article you
+   pasted. It ends on its own, leaving the row's normal (and hover) background. */
+@keyframes row-just-saved {
+  from { background-color: rgba(59, 130, 246, 0.22); }
+  to   { background-color: rgba(59, 130, 246, 0); }
+}
+@keyframes row-just-saved-dark {
+  from { background-color: rgba(96, 165, 250, 0.28); }
+  to   { background-color: rgba(96, 165, 250, 0); }
+}
+.row-just-saved { animation: row-just-saved 2s ease-out; }
+.dark .row-just-saved { animation-name: row-just-saved-dark; }

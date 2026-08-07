@@ -1129,14 +1129,16 @@ async def htmx_save_url(
     from app.services.saved_article_service import save_article_by_url
 
     toast: dict | None = None
+    saved_id: int | None = None
     try:
-        _article, already_known = await save_article_by_url(url.strip(), user, db)
+        article, already_known = await save_article_by_url(url.strip(), user, db)
     except ValueError as exc:
         # Validation-time rejections only — bad scheme, no host, unresolvable, or a
         # private/loopback address. Anything that can only fail once the fetch runs
         # (404, timeout, paywall) is saved and surfaces in the detail panel instead.
         toast = {"msg": str(exc), "type": "error"}
     else:
+        saved_id = article.id
         if already_known:
             toast = {"msg": "Already saved — added to Saved.", "type": "info"}
 
@@ -1162,8 +1164,22 @@ async def htmx_save_url(
         user=user,
         db=db,
     )
+    events: dict = {}
     if toast:
-        response.headers["HX-Trigger"] = json.dumps({"showToast": toast})
+        events["showToast"] = toast
+    if saved_id is not None:
+        # The list is ordered by publication date, not by when you saved, so an older
+        # article (typically a video from a feed you follow, carrying the date it was
+        # published) lands somewhere down the list instead of on top. Tell the client
+        # which row to point at.
+        #
+        # Plain HX-Trigger, which fires before the swap: this form lives inside
+        # #article-list and the swap removes it, and an event dispatched on a detached
+        # element never reaches document.body, so HX-Trigger-After-Settle would go
+        # nowhere. The handler waits for the settle itself.
+        events["savedArticleAdded"] = {"id": saved_id}
+    if events:
+        response.headers["HX-Trigger"] = json.dumps(events)
     return response
 
 
