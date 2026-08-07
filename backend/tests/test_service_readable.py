@@ -638,6 +638,116 @@ class TestResolveArticleUrl:
         assert out == "https://ex.invalid/story"
 
 
+# ── interstitials that carry the address they interrupted ─────────────────────
+
+class TestSendsUsBack:
+    """iDNES answers a server-side fetch with /nastaveni-souhlasu?url=<the article>.
+    That round trip is the wall's signature, and unlike resolve_article_url's check it
+    holds within one host, which is where iDNES stays."""
+
+    ARTICLE = "https://www.idnes.cz/zpravy/zahranicni/story.A260806_154839_x_y"
+    BARE = "<html><head><title>iDNES.cz</title></head></html>"
+
+    def test_consent_wall_carrying_the_article(self):
+        from app.services.readable_service import sends_us_back
+        wall = "https://www.idnes.cz/nastaveni-souhlasu?url=" + self.ARTICLE
+        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+
+    def test_wall_carrying_only_the_path(self):
+        from app.services.readable_service import sends_us_back
+        wall = "https://www.idnes.cz/nastaveni-souhlasu?url=/zpravy/zahranicni/story.A260806_154839_x_y"
+        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+
+    def test_cross_host_consent_page(self):
+        """Host-agnostic on purpose: the same signature reads a Google News consent
+        page, which resolve_article_url catches only because it changes host."""
+        from app.services.readable_service import sends_us_back
+        wall = "https://consent.google.com/ml?continue=" + self.ARTICLE
+        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+
+    def test_no_redirect_is_never_judged(self):
+        from app.services.readable_service import sends_us_back
+        assert sends_us_back(self.ARTICLE, self.ARTICLE, self.BARE) is False
+
+    def test_redirect_without_a_query_is_not_a_round_trip(self):
+        from app.services.readable_service import sends_us_back
+        assert sends_us_back("https://www.idnes.cz/jinam", self.ARTICLE, self.BARE) is False
+
+    def test_unrelated_query_parameter(self):
+        from app.services.readable_service import sends_us_back
+        assert sends_us_back("https://www.idnes.cz/x?utm_source=rss",
+                             self.ARTICLE, self.BARE) is False
+
+    def test_a_bare_slash_value_does_not_count(self):
+        """Otherwise every ?ref=/ in the wild would read as a round trip."""
+        from app.services.readable_service import sends_us_back
+        assert sends_us_back("https://www.idnes.cz/x?ref=/", "https://www.idnes.cz/",
+                             self.BARE) is False
+
+    def test_page_naming_itself_is_waved_through(self):
+        """A viewer legitimately built around ?url= says which address it is. This is
+        the escape hatch that keeps a real article out of the check."""
+        from app.services.readable_service import sends_us_back
+        page = ('<html><head><link rel="canonical" '
+                'href="https://site.invalid/viewer/doc-42"></head></html>')
+        assert sends_us_back("https://site.invalid/viewer?url=" + self.ARTICLE,
+                             self.ARTICLE, page) is False
+
+
+class TestInterstitialIsRejectedOnBothPaths:
+    WALL = ("https://www.idnes.cz/nastaveni-souhlasu?url="
+            "https://www.idnes.cz/zpravy/story")
+    PAGE = ('<html><head><title>iDNES.cz – s námi víte víc</title>'
+            '<meta property="og:description" content="Nejnovější zprávy z vašeho kraje.">'
+            '</head><body><h3>iDNES a reklama</h3><p>'
+            + ("souhlas s využitím cookies pro účely cílené reklamy " * 20)
+            + "</p></body></html>")
+
+    def _extract(self, reject_wrong_content):
+        from app.services.readable_service import extract_readable_with_title
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(self.PAGE, None, None, self.WALL)):
+            return extract_readable_with_title(
+                "https://www.idnes.cz/zpravy/story", None, None, reject_wrong_content
+            )
+
+    def test_saved_article_path(self):
+        from app.services.readable_service import _WRONG_CONTENT_MSG
+        r = self._extract(True)
+        assert r.content is None
+        assert r.error == _WRONG_CONTENT_MSG
+
+    def test_feed_article_path_too(self):
+        """Unlike the og:description check, this one reads the redirect chain, so a feed
+        article cannot lose a body over its wording and a feed whose pages answer with a
+        consent wall does not store that wall for every article."""
+        from app.services.readable_service import _WRONG_CONTENT_MSG
+        r = self._extract(False)
+        assert r.content is None
+        assert r.error == _WRONG_CONTENT_MSG
+
+    def test_the_walls_own_title_and_blurb_are_not_reported(self):
+        """A saved article takes its title and snippet from the page, so reporting the
+        wall's would file the interstitial under its own name."""
+        r = self._extract(True)
+        assert r.title is None
+        assert r.description is None
+
+    def test_requested_address_is_kept(self):
+        """Adopting the wall's address would send Open original and Retry back into it."""
+        r = self._extract(True)
+        assert r.resolved_url == "https://www.idnes.cz/zpravy/story"
+
+    def test_failure_is_terminal(self):
+        """A consent wall answers the same every time, so scheduled retries would only
+        ask a site that refuses us three times instead of once."""
+        from app.services.readable_service import apply_readable_result, _WRONG_CONTENT_MSG
+        article = _make_article()
+        apply_readable_result(article, None, _WRONG_CONTENT_MSG, None)
+        assert article.readable_status == "failed"
+        assert article.readable_next_retry_at is None
+
+
 # ── how far in the metadata is looked for ────────────────────────────────────
 
 class TestHeadSlice:

@@ -4,7 +4,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import nh3
@@ -435,6 +435,50 @@ def resolve_article_url(
     return fetched_url
 
 
+def sends_us_back(
+    fetched_url: Optional[str], requested_url: Optional[str], html: Optional[str]
+) -> bool:
+    """True when the fetch landed on a page whose job is to send us back.
+
+    A consent or login wall carries the address it interrupted, so it can return the
+    visitor there once they submit: iDNES answers a server-side fetch with
+    ``/nastaveni-souhlasu?url=<the article>``, Google News with a consent page holding
+    ``continue=<the article>``. That round trip is the interstitial's own signature and
+    it needs no wordlist, no language and no per-site rule to read.
+
+    It also catches what ``resolve_article_url`` cannot: that check only doubts a
+    redirect leaving the host, and iDNES never leaves idnes.cz, so the consent page was
+    adopted as the article's own address and "Open original" led back into it.
+
+    Three things are required, each of them there to keep a real article out of this:
+
+    * the chain moved somewhere else, so nothing that served the requested address is
+      ever judged;
+    * a query value holds the whole requested address or its whole path, not merely a
+      substring of one, so a stray ``?ref=/`` cannot trip it;
+    * the page does not claim to be the article. A document viewer legitimately built
+      around ``?url=`` says so with rel=canonical or og:url, and is waved through, the
+      same escape hatch cross-host redirects already get.
+    """
+    if not fetched_url or not requested_url or fetched_url == requested_url:
+        return False
+    query = urlsplit(fetched_url).query
+    if not query:
+        return False
+    wanted = {requested_url, urlsplit(requested_url).path}
+    wanted.discard("")
+    wanted.discard("/")
+    carried = any(
+        value in wanted or urlsplit(value).path in wanted
+        for _, value in parse_qsl(query, keep_blank_values=False)
+    )
+    if not carried:
+        return False
+    # The page naming the requested article as its own address is the article.
+    declared = _declared_url(fetched_url, html)
+    return not (declared and declared != fetched_url)
+
+
 def _declared_url(fetched_url: str, html: Optional[str]) -> Optional[str]:
     """The absolute, same-host address the page claims for itself, if it claims one."""
     if not html:
@@ -589,7 +633,10 @@ def apply_readable_result(
     article.readable_error = error
     is_4xx = http_status is not None and 400 <= http_status < 500
     is_403 = http_status == 403
-    if is_4xx:
+    # A consent wall answers the same way every time, so scheduled retries would only
+    # ask a site that refuses us three times instead of once. Terminal like a 4xx; the
+    # Retry button on a saved article still works, and that one is a person's decision.
+    if is_4xx or error == _WRONG_CONTENT_MSG:
         article.readable_status = "failed"
         article.readable_failed_at = datetime.now(timezone.utc)
         article.readable_next_retry_at = None
@@ -640,11 +687,27 @@ def extract_readable_with_title(
     with no feed: a feed article that trips the heuristic would lose content it has
     been showing fine, whereas a saved one has nothing to lose and an honest error
     beats a body made of advertising copy.
+
+    The round-trip check below is not behind that flag. It reads the redirect chain
+    rather than the prose, so a feed article cannot lose a body over a wording it
+    happens to share with a cookie notice, and a feed whose pages answer a server-side
+    fetch with a consent wall would otherwise store that wall for every article.
     """
     html, fetch_error, http_status, final_url = _fetch_html(url, auth_user, auth_pass)
     if not html:
         # Nothing was downloaded, so there is no title or address to report either.
         return ReadableResult(error=fetch_error, http_status=http_status)
+
+    if sends_us_back(final_url, url, html):
+        # An interstitial holding the address it interrupted. Report it as the wrong
+        # page rather than extracting it, and keep the requested address: adopting the
+        # wall's own URL would make "Open original" and Retry walk back into it.
+        # The wall's title and description are not withheld by oversight: they describe
+        # the wall ("iDNES.cz – s námi víte víc", the site's generic blurb), and a saved
+        # article takes both from the page, so reporting them would file the interstitial
+        # under its own name. With neither, the row keeps the address it was saved from.
+        logger.info("readable: fetch of %s was answered by %s", url, final_url)
+        return ReadableResult(error=_WRONG_CONTENT_MSG, resolved_url=url)
 
     title = _extract_title(html)
     # Read off the untouched document: _strip_pre_extraction_noise below rewrites the
