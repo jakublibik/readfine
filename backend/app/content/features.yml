@@ -87,6 +87,10 @@ categories:
           Paste a link to keep an article that is not in any of your feeds. It goes
           through the same readable extraction, lands in Saved, and is kept until you
           remove it.
+      - title: Share by link
+        desc: >-
+          Hand a single article to someone with no Readfine account. The link reads
+          without signing in and stays live until you revoke it.
 
   - name: Filtering & scoring
     summary: Trim the stream down to what matters.
