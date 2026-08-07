@@ -1,4 +1,5 @@
 """Readable extraction pipeline: trafilatura → readability-lxml fallback."""
+import json
 import logging
 import re
 import time
@@ -152,13 +153,43 @@ def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
     return result
 
 
+def _video_figure(provider: str, vid: str) -> str:
+    """A video as stored in article content: thumbnail, link, and the ids to rebuild it.
+
+    ``data-video-provider`` / ``data-video-id`` are what a player can be built from
+    later without re-parsing the link. They survive sanitization (see ``_sanitize``),
+    which means a feed can put them in its own markup too, so anything acting on them
+    must validate the id rather than trust it — the same rule that applies to every
+    other attribute arriving from a feed.
+    """
+    if provider == "youtube":
+        href, thumb, caption = (
+            f"https://www.youtube.com/watch?v={vid}",
+            f"https://img.youtube.com/vi/{vid}/hqdefault.jpg",
+            "Watch on YouTube",
+        )
+    else:
+        href, thumb, caption = (
+            f"https://vimeo.com/{vid}",
+            f"https://vumbnail.com/{vid}.jpg",
+            "Watch on Vimeo",
+        )
+    return (
+        f'<figure data-video-provider="{provider}" data-video-id="{vid}">'
+        f'<a href="{href}">'
+        f'<img src="{thumb}" alt="Video thumbnail">'
+        f'</a>'
+        f'<figcaption>&#9654; {caption}</figcaption>'
+        f'</figure>'
+    )
+
+
 def _collect_video_figures(html: str) -> list[str]:
     """
     Find YouTube/Vimeo iframes in raw HTML and return replacement <figure> strings.
     Trafilatura drops iframes, so we collect replacements before extraction
     and append them to the final content.
     """
-    import re
     figures = []
 
     for m in re.finditer(r'<iframe\b[^>]*>.*?</iframe>', html, flags=re.DOTALL | re.IGNORECASE):
@@ -168,30 +199,14 @@ def _collect_video_figures(html: str) -> list[str]:
             continue
         src = src_m.group(1)
 
-        yt = re.search(r'youtube\.com/embed/([A-Za-z0-9_-]+)', src)
+        yt = re.search(r'youtube(?:-nocookie)?\.com/embed/([A-Za-z0-9_-]+)', src)
         if yt:
-            vid = yt.group(1)
-            figures.append(
-                f'<figure>'
-                f'<a href="https://www.youtube.com/watch?v={vid}">'
-                f'<img src="https://img.youtube.com/vi/{vid}/hqdefault.jpg" alt="Video thumbnail">'
-                f'</a>'
-                f'<figcaption>&#9654; Watch on YouTube</figcaption>'
-                f'</figure>'
-            )
+            figures.append(_video_figure("youtube", yt.group(1)))
             continue
 
         vi = re.search(r'player\.vimeo\.com/video/(\d+)', src)
         if vi:
-            vid = vi.group(1)
-            figures.append(
-                f'<figure>'
-                f'<a href="https://vimeo.com/{vid}">'
-                f'<img src="https://vumbnail.com/{vid}.jpg" alt="Video thumbnail">'
-                f'</a>'
-                f'<figcaption>&#9654; Watch on Vimeo</figcaption>'
-                f'</figure>'
-            )
+            figures.append(_video_figure("vimeo", vi.group(1)))
 
     return figures
 
@@ -217,6 +232,10 @@ def _sanitize(html: str) -> str:
     }
     allowed_attrs = {
         "a": {"href", "title"},
+        # Kept so a stored video survives as something a player can be built from
+        # (see _video_figure). Both are inert ids, not URLs, and whatever reads them
+        # has to validate them anyway, since a feed's own markup passes through here.
+        "figure": {"data-video-provider", "data-video-id"},
         "img": {"src", "alt", "title", "width", "height"},
         "td": {"colspan", "rowspan"},
         "th": {"colspan", "rowspan", "scope"},
@@ -512,6 +531,115 @@ def _extract_og_description(html: str) -> Optional[str]:
     return re.sub(r"\s+", " ", html_mod.unescape(m.group(1))).strip()
 
 
+# ── video pages ───────────────────────────────────────────────────────────────
+
+# YouTube ids are 11 characters today, Vimeo's are digits. Both are bounded rather
+# than pinned to a length, because the id ends up in a URL we build and the point of
+# the pattern is that nothing else can get in there.
+_YT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,20}$")
+_VIMEO_ID_RE = re.compile(r"^\d{5,15}$")
+_YOUTUBE_HOSTS = {"youtube.com", "youtube-nocookie.com", "m.youtube.com", "music.youtube.com"}
+_YOUTUBE_ID_PATHS = ("/shorts/", "/embed/", "/live/", "/v/")
+
+
+def _video_target(url: Optional[str]) -> Optional[tuple[str, str]]:
+    """``(provider, video_id)`` when *url* is a page whose whole content is one video.
+
+    Only pages that *are* a video qualify. A channel, a playlist or a search result is
+    an ordinary page that happens to live on the same host, and running the video
+    branch on one would replace a perfectly good listing with a single thumbnail.
+    """
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    path = parts.path
+
+    if host in _YOUTUBE_HOSTS:
+        vid = None
+        if path == "/watch":
+            vid = dict(parse_qsl(parts.query)).get("v")
+        else:
+            for prefix in _YOUTUBE_ID_PATHS:
+                if path.startswith(prefix):
+                    vid = path[len(prefix):].split("/", 1)[0]
+                    break
+        if vid and _YT_ID_RE.match(vid):
+            return "youtube", vid
+        return None
+
+    if host == "youtu.be":
+        vid = path.lstrip("/").split("/", 1)[0]
+        return ("youtube", vid) if _YT_ID_RE.match(vid) else None
+
+    if host == "vimeo.com":
+        vid = path.lstrip("/").split("/", 1)[0]
+        return ("vimeo", vid) if _VIMEO_ID_RE.match(vid) else None
+
+    if host == "player.vimeo.com" and path.startswith("/video/"):
+        vid = path[len("/video/"):].split("/", 1)[0]
+        return ("vimeo", vid) if _VIMEO_ID_RE.match(vid) else None
+
+    return None
+
+
+# The description YouTube renders under the player, as it sits in the JSON the page
+# ships for its own client. The alternation matches a JSON string body without
+# backtracking: any character that is neither a quote nor a backslash, or an escape
+# and whatever it escapes.
+_YT_SHORT_DESC_RE = re.compile(r'"shortDescription":"((?:[^"\\]|\\.)*)"')
+
+
+def _youtube_full_description(html: str) -> Optional[str]:
+    """The video's whole description, or None when the page does not yield it.
+
+    ``og:description`` is cut to about 160 characters with an ellipsis, which for a
+    video is most of what there was to read. The full text is only in the payload the
+    page hands its own JavaScript, so this reads it from there.
+
+    That payload is YouTube's internal shape and carries no promise, so every failure
+    path here is silent: the caller falls back to ``og:description`` and the article
+    reads the way it would have without this.
+    """
+    m = _YT_SHORT_DESC_RE.search(html)
+    if not m:
+        return None
+    try:
+        text = json.loads(f'"{m.group(1)}"')
+    except ValueError:
+        return None
+    text = text.strip()
+    return text or None
+
+
+def _description_paragraphs(text: Optional[str]) -> str:
+    """A video description as paragraphs, with everything in it treated as text.
+
+    URLs are left as they are rather than turned into links. A video description is
+    mostly sponsor and affiliate links, and none of them is the article; timestamps
+    are the one part worth making clickable, and that needs a player to seek, not an
+    anchor that leaves for YouTube.
+    """
+    import html as html_mod
+
+    if not text:
+        return ""
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+    return "".join(
+        "<p>" + "<br>".join(html_mod.escape(line) for line in block.split("\n")) + "</p>"
+        for block in blocks
+    )
+
+
+def _video_page_content(provider: str, vid: str, html: str, og_description: Optional[str]) -> str:
+    """The stored body for a video page: the video itself, then its description."""
+    full = _youtube_full_description(html) if provider == "youtube" else None
+    return _video_figure(provider, vid) + _description_paragraphs(full or og_description)
+
+
 def _content_contradicts_page(content_html: str, og_description: Optional[str]) -> bool:
     """True when the extracted text plainly is not the article the page describes.
 
@@ -714,6 +842,23 @@ def extract_readable_with_title(
     # markup, and both of these live in <head>.
     resolved_url = resolve_article_url(final_url, html, url)
     description = _extract_og_description(html)
+
+    video = _video_target(final_url) or _video_target(url)
+    if video:
+        # A watch page holds no prose to extract. Its description is drawn by the
+        # page's own JavaScript, so the extractor finds nothing but the site footer
+        # ("About, Press, Copyright, Contact us"), which is both worthless as an
+        # article and — having nothing in common with the description — read as a
+        # substitute page by _content_contradicts_page below, so saving a video link
+        # failed with a consent-wall error on a page that had answered perfectly.
+        # The video and its description are what the page is, so that is what is
+        # stored, and neither the extractor nor that check gets a say.
+        return ReadableResult(
+            content=_video_page_content(*video, html, description),
+            published_at=_find_published_date(html, url), title=title,
+            resolved_url=resolved_url, description=description,
+        )
+
     video_figures = _collect_video_figures(html)
     html = _strip_pre_extraction_noise(html)
     content = _extract_with_trafilatura(html, url)

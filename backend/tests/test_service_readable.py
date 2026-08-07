@@ -9,6 +9,7 @@ from app.services.ai_jobs import MAX_RETRIES
 from app.services.readable_service import (
     apply_readable_result,
     extract_readable,
+    extract_readable_with_title,
     _dedupe_images,
     _find_published_date,
     _extract_with_trafilatura,
@@ -17,6 +18,9 @@ from app.services.readable_service import (
     _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
+    _description_paragraphs,
+    _video_target,
+    _youtube_full_description,
     _EMPTY_CONTENT_MSG,
 )
 
@@ -224,6 +228,146 @@ class TestHasVisibleContent:
 
     def test_iframe_only_is_visible(self):
         assert _has_visible_content('<p><iframe src="https://y/embed/z"></iframe></p>') is True
+
+
+# ── video pages ───────────────────────────────────────────────────────────────
+
+class TestVideoTarget:
+    @pytest.mark.parametrize("url,expected", [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", ("youtube", "dQw4w9WgXcQ")),
+        ("https://youtube.com/watch?v=dQw4w9WgXcQ&t=30s", ("youtube", "dQw4w9WgXcQ")),
+        ("https://m.youtube.com/watch?v=dQw4w9WgXcQ", ("youtube", "dQw4w9WgXcQ")),
+        ("https://youtu.be/dQw4w9WgXcQ", ("youtube", "dQw4w9WgXcQ")),
+        ("https://youtu.be/dQw4w9WgXcQ?t=30", ("youtube", "dQw4w9WgXcQ")),
+        ("https://www.youtube.com/shorts/abc123XYZ_-", ("youtube", "abc123XYZ_-")),
+        ("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ", ("youtube", "dQw4w9WgXcQ")),
+        ("https://vimeo.com/76979871", ("vimeo", "76979871")),
+        ("https://player.vimeo.com/video/76979871", ("vimeo", "76979871")),
+    ])
+    def test_recognises_video_pages(self, url, expected):
+        assert _video_target(url) == expected
+
+    @pytest.mark.parametrize("url", [
+        # Pages on the same hosts that are not a single video: replacing one of these
+        # with a thumbnail would throw away the page the user actually asked for.
+        "https://www.youtube.com/@LinusTechTips",
+        "https://www.youtube.com/playlist?list=PL1234567890",
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UC123",
+        "https://vimeo.com/channels/staffpicks",
+        # Right shape, wrong host.
+        "https://example.com/watch?v=dQw4w9WgXcQ",
+        # An id that could not be one, so nothing is built from it.
+        "https://www.youtube.com/watch?v=../../evil",
+        "https://youtu.be/",
+        None,
+    ])
+    def test_ignores_everything_else(self, url):
+        assert _video_target(url) is None
+
+
+class TestYoutubeFullDescription:
+    def test_reads_the_untruncated_description(self):
+        html = '{"videoDetails":{"shortDescription":"First line.\\nSecond line.","lengthSeconds":"212"}}'
+        assert _youtube_full_description(html) == "First line.\nSecond line."
+
+    def test_unescapes_json_escapes(self):
+        html = r'{"shortDescription":"Quote \" and backslash \\ and é"}'
+        assert _youtube_full_description(html) == 'Quote " and backslash \\ and é'
+
+    def test_absent_payload_returns_none(self):
+        assert _youtube_full_description("<html><body>no payload</body></html>") is None
+
+    def test_broken_payload_returns_none(self):
+        # Malformed escape: the fallback to og:description must be silent, never a raise.
+        assert _youtube_full_description(r'{"shortDescription":"bad \q escape"}') is None
+
+    def test_empty_description_returns_none(self):
+        assert _youtube_full_description('{"shortDescription":"   "}') is None
+
+
+class TestDescriptionParagraphs:
+    def test_blank_lines_split_paragraphs(self):
+        assert _description_paragraphs("One.\n\nTwo.") == "<p>One.</p><p>Two.</p>"
+
+    def test_single_newlines_become_breaks(self):
+        assert _description_paragraphs("One.\nTwo.") == "<p>One.<br>Two.</p>"
+
+    def test_markup_in_the_description_is_text(self):
+        out = _description_paragraphs('<script>alert(1)</script>')
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_urls_are_left_as_text(self):
+        assert _description_paragraphs("See https://example.com/x") == "<p>See https://example.com/x</p>"
+
+    def test_no_description_is_no_markup(self):
+        assert _description_paragraphs(None) == ""
+        assert _description_paragraphs("   ") == ""
+
+
+class TestExtractReadableVideoPage:
+    _PAGE = (
+        '<html><head>'
+        '<meta property="og:description" content="Short blurb, cut off at about 160 chars ...">'
+        '<title>Great video</title></head><body>'
+        '<div>About Press Copyright Contact us Creators Advertise Developers</div>'
+        '<script>var x = {"shortDescription":"The whole description.\\n\\nWith a second paragraph."};</script>'
+        '</body></html>'
+    )
+
+    def _extract(self, url="https://youtu.be/dQw4w9WgXcQ", final_url=None):
+        with (
+            patch("app.services.readable_service._fetch_html",
+                  return_value=(self._PAGE, None, 200, final_url or url)),
+            patch("app.services.readable_service._find_published_date", return_value=None),
+        ):
+            return extract_readable_with_title(url, reject_wrong_content=True)
+
+    def test_stores_the_video_and_its_description(self):
+        r = self._extract()
+        assert r.error is None
+        assert 'data-video-id="dQw4w9WgXcQ"' in r.content
+        assert "The whole description." in r.content
+        assert "With a second paragraph." in r.content
+
+    def test_does_not_store_the_site_footer(self):
+        # The only prose on a watch page is the footer nav, and it used to become the
+        # article body on feed articles and a consent-wall error on saved ones.
+        assert "Press Copyright" not in self._extract().content
+
+    def test_extractor_is_not_consulted_at_all(self):
+        with patch("app.services.readable_service._extract_with_trafilatura") as tf:
+            self._extract()
+        tf.assert_not_called()
+
+    def test_falls_back_to_og_description(self):
+        page = self._PAGE.replace('{"shortDescription":"The whole description.\\n\\nWith a second paragraph."}', "{}")
+        with (
+            patch("app.services.readable_service._fetch_html",
+                  return_value=(page, None, 200, "https://youtu.be/dQw4w9WgXcQ")),
+            patch("app.services.readable_service._find_published_date", return_value=None),
+        ):
+            r = extract_readable_with_title("https://youtu.be/dQw4w9WgXcQ", reject_wrong_content=True)
+        assert r.error is None
+        assert "Short blurb, cut off" in r.content
+
+    def test_redirect_to_a_watch_page_still_counts(self):
+        # youtu.be resolves to youtube.com/watch; the verdict must survive the hop
+        # whichever end of the chain carries the video id.
+        r = self._extract(url="https://example.com/tracker/123",
+                          final_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        assert 'data-video-id="dQw4w9WgXcQ"' in r.content
+
+    def test_ordinary_page_is_unaffected(self):
+        with (
+            patch("app.services.readable_service._fetch_html",
+                  return_value=("<html><body>x</body></html>", None, 200, "https://example.com/a")),
+            patch("app.services.readable_service._extract_with_trafilatura",
+                  return_value="<p>Genuine article body</p>"),
+        ):
+            r = extract_readable_with_title("https://example.com/a")
+        assert "Genuine article body" in r.content
+        assert "data-video-id" not in r.content
 
 
 # ── extract_readable — collapse to empty after sanitization ───────────────────
