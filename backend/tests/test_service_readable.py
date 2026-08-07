@@ -22,6 +22,7 @@ from app.services.readable_service import (
     _description_paragraphs,
     _video_target,
     _youtube_full_description,
+    video_body_from_feed,
     _EMPTY_CONTENT_MSG,
 )
 
@@ -352,6 +353,42 @@ class TestTimestampLinks:
         out = _description_paragraphs("1:23 <b>bold</b>", self._V)
         assert "<b>" not in out
         assert "&lt;b&gt;" in out
+
+
+class TestVideoBodyFromFeed:
+    _DESC = "0:00 Intro\n\nSecond paragraph & a <tag>."
+
+    def test_youtube_item_becomes_video_plus_description(self):
+        body = video_body_from_feed(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ", description_text=self._DESC)
+        assert 'data-video-id="dQw4w9WgXcQ"' in body
+        assert "Second paragraph &amp; a &lt;tag&gt;." in body
+        assert 'data-seek="0"' in body
+
+    def test_feed_html_is_ignored_when_text_is_given(self):
+        body = video_body_from_feed(
+            "https://youtu.be/dQw4w9WgXcQ", description_text="Just this",
+            feed_html="<p>not this</p>")
+        assert "Just this" in body
+        assert "not this" not in body
+
+    def test_other_feeds_keep_their_own_markup(self):
+        # A feed that merely links a video writes real HTML in its items; escaping it
+        # would put its tags on the screen, so the video goes above it untouched.
+        body = video_body_from_feed(
+            "https://youtu.be/dQw4w9WgXcQ", feed_html='<p>Post <a href="/x">link</a></p>')
+        assert body.startswith("<figure")
+        assert '<a href="/x">link</a>' in body
+
+    def test_ordinary_article_is_not_a_video(self):
+        assert video_body_from_feed("https://example.com/post", feed_html="<p>x</p>") is None
+
+    def test_no_url_is_not_a_video(self):
+        assert video_body_from_feed(None) is None
+
+    def test_video_with_no_description_is_still_a_video(self):
+        body = video_body_from_feed("https://youtu.be/dQw4w9WgXcQ", description_text="")
+        assert 'data-video-id="dQw4w9WgXcQ"' in body
 
 
 class TestExtractReadableVideoPage:

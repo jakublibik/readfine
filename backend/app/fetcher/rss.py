@@ -20,6 +20,7 @@ from sqlalchemy.orm import aliased
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
+from app.services.readable_service import video_body_from_feed
 from app.utils.crypto import decrypt
 from app.utils.http_client import READFINE_UA
 from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
@@ -334,6 +335,18 @@ async def _save_articles(
         pub = entry.get("published_parsed") or entry.get("updated_parsed")
         published_at = _clamp_published_at(_struct_to_dt(pub) if pub else None, fetched_at)
 
+        # An item that is a video is built here rather than by fetching the watch page
+        # later: the id is in the link and the description is in the item, so the
+        # article can carry the video from the moment it arrives instead of showing
+        # text until somebody opens it. YouTube's own feed writes plain text in
+        # media:description, which is why it is passed as text; any other feed that
+        # happens to link a video keeps its own markup and gets the video above it.
+        readable_body = video_body_from_feed(
+            article_url,
+            description_text=entry.get("summary") if entry.get("yt_videoid") else None,
+            feed_html=content,
+        )
+
         article = Article(
             feed_id=feed.id,
             guid=guid[:2048],
@@ -344,7 +357,14 @@ async def _save_articles(
             author=_extract_author(entry),
             content=content,
             content_source=content_source,
-            readable_status="skipped",
+            readable_content=readable_body,
+            # "success" because the article's full body is present, which is what the
+            # status means to everything downstream. It also keeps extraction away:
+            # every trigger (opening, starring, a filter that labels) moves an article
+            # on only from "skipped", so the watch page is never fetched for a body we
+            # already have. Feed content stays in place for list snippets, which read
+            # content and never readable_content.
+            readable_status="success" if readable_body else "skipped",
             published_at=published_at,
             word_count=word_count,
             estimated_read_min=estimated_read_min,

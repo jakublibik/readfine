@@ -686,6 +686,36 @@ def _video_page_content(provider: str, vid: str, html: str, og_description: Opti
             + _description_paragraphs(full or og_description, (provider, vid)))
 
 
+def video_body_from_feed(
+    url: Optional[str], description_text: Optional[str] = None, feed_html: Optional[str] = None
+) -> Optional[str]:
+    """The body for a feed item that is a video, or None when it is not one.
+
+    A YouTube feed hands over everything this needs — the video id sits in the item's
+    link and the whole description in the item itself — so the article can be built
+    where it arrives, with no request to the watch page at all. That page is 1.4 MB,
+    and fetching it would produce this same body from a description the feed had
+    already given us.
+
+    *description_text* is the item's own text, escaped and split into paragraphs the
+    way a saved video's description is, timestamps and all. Pass it only when the text
+    really is text: a feed that merely links to a video writes ordinary HTML in its
+    items, and escaping that would put its markup on the screen. For those,
+    *feed_html* is kept as it is and the video is placed above it.
+
+    Note the caller must not run the result through a sanitizer: this is our own
+    markup, and the ids the player is built from would not survive nh3's default
+    attribute list.
+    """
+    video = _video_target(url)
+    if not video:
+        return None
+    provider, vid = video
+    if description_text is not None:
+        return _video_figure(provider, vid) + _description_paragraphs(description_text, video)
+    return _video_figure(provider, vid) + (feed_html or "")
+
+
 def _content_contradicts_page(content_html: str, og_description: Optional[str]) -> bool:
     """True when the extracted text plainly is not the article the page describes.
 
