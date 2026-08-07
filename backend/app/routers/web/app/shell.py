@@ -78,39 +78,31 @@ async def htmx_sidebar(
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
+    # Every counter here joins Article for trimmed_at IS NULL, the same filter
+    # list_articles applies, so a badge can never stand above a list that opens onto
+    # fewer rows. Retention cannot trim an article while it is starred, archived or
+    # saved (purge_service._fully_protected_exists), but the reverse reaches it: a
+    # stub trimmed overnight can still be starred from a list rendered before the
+    # trim, and the resulting drift never heals on its own.
     uas_row = (await db.execute(
         select(
             func.count().filter(UserArticleState.is_starred == True).label("starred"),
             func.count().filter((UserArticleState.is_starred == True) & (UserArticleState.is_read == False)).label("unread_starred"),
             func.count().filter(UserArticleState.is_archived == True).label("archived"),
             func.count().filter((UserArticleState.is_archived == True) & (UserArticleState.is_read == False)).label("unread_archived"),
+            func.count().filter(UserArticleState.saved_at.is_not(None)).label("saved"),
+            func.count().filter((UserArticleState.saved_at.is_not(None)) & (UserArticleState.is_read == False)).label("unread_saved"),
         )
-        .where(UserArticleState.user_id == user.id)
+        .select_from(UserArticleState)
+        .join(Article, Article.id == UserArticleState.article_id)
+        .where(UserArticleState.user_id == user.id, Article.trimmed_at.is_(None))
     )).one()
     nav_starred = uas_row.starred or 0
     nav_unread_starred = uas_row.unread_starred or 0
     nav_archived = uas_row.archived or 0
     nav_unread_archived = uas_row.unread_archived or 0
-    # Counted separately from the aggregate above because it joins Article to apply
-    # trimmed_at IS NULL. The starred/archived counters skip that filter and can
-    # therefore exceed the rows the list renders — a pre-existing drift not worth
-    # widening to Saved, where a deduped-then-trimmed article would be counted but
-    # never shown.
-    saved_row = (await db.execute(
-        select(
-            func.count().label("saved"),
-            func.count().filter(UserArticleState.is_read == False).label("unread_saved"),
-        )
-        .select_from(UserArticleState)
-        .join(Article, Article.id == UserArticleState.article_id)
-        .where(
-            UserArticleState.user_id == user.id,
-            UserArticleState.saved_at.is_not(None),
-            Article.trimmed_at.is_(None),
-        )
-    )).one()
-    nav_saved = saved_row.saved or 0
-    nav_unread_saved = saved_row.unread_saved or 0
+    nav_saved = uas_row.saved or 0
+    nav_unread_saved = uas_row.unread_saved or 0
     nav_labeled = (await db.execute(
         select(func.count(func.distinct(ArticleLabel.article_id)))
         .select_from(ArticleLabel)
