@@ -184,6 +184,144 @@ function openProseLinksInNewTab(root) {
 document.addEventListener('DOMContentLoaded', function () { openProseLinksInNewTab(); });
 document.body.addEventListener('htmx:afterSettle', function () { openProseLinksInNewTab(); });
 
+// ── Videos in article content: play them here instead of leaving for the site
+//
+// Stored content carries only a thumbnail and a link (see readable_service._video_figure),
+// and it stays that way until the reader clicks: nothing is requested from YouTube or
+// Vimeo while an article is merely open, which is also why no consent banner is owed
+// for scrolling past one. The click is what loads the player, and the player is built
+// here from the ids on the figure, never from markup a feed supplied. The id is
+// checked against the shape it must have, because it goes into a URL and the figure
+// may well have arrived in a feed's own HTML.
+var VIDEO_PROVIDERS = {
+  youtube: {
+    id: /^[A-Za-z0-9_-]{6,20}$/,
+    label: 'YouTube',
+    // youtube-nocookie: no cookies until playback actually starts.
+    src: function (id) { return 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1&rel=0'; },
+    // Stored content points at hqdefault, the one size YouTube has for every video,
+    // including uploads from before widescreen. It is 480x360 with letterbox bars in
+    // the image, so cropping to 16:9 leaves 480x270 to fill a reading column half as
+    // wide again, which shows. maxresdefault is 1280x720 and needs no cropping, but
+    // it 404s on those same old videos, so it is tried here and reverted on error
+    // rather than being what we store.
+    hiRes: function (src) { return src.replace('/hqdefault.jpg', '/maxresdefault.jpg'); },
+  },
+  vimeo: {
+    id: /^\d{5,15}$/,
+    label: 'Vimeo',
+    src: function (id) { return 'https://player.vimeo.com/video/' + id + '?autoplay=1'; },
+  },
+};
+
+function _videoProvider(fig) {
+  var spec = VIDEO_PROVIDERS[fig.getAttribute('data-video-provider')];
+  return spec && spec.id.test(fig.getAttribute('data-video-id') || '') ? spec : null;
+}
+
+// Label every figure the handler below can act on. The caption states what the thing
+// is and what playing it costs; it is deliberately not phrased as an instruction,
+// since the badge on the thumbnail is what asks to be clicked and a caption reading
+// "Play video" competes with it for the same click. The invitation lives on the
+// thumbnail, in the badge and in its tooltip.
+//
+// Done in script rather than in the stored markup so articles saved before this
+// existed are described the same way.
+function markVideoFacades(root) {
+  (root || document).querySelectorAll('.prose figure[data-video-id]').forEach(function (fig) {
+    var spec = _videoProvider(fig);
+    // data-video-playing: a figure whose player is already running must not be
+    // described as a facade again by a swap somewhere else on the page.
+    if (!spec || fig.hasAttribute('data-video-ready') || fig.hasAttribute('data-video-playing')) return;
+    fig.setAttribute('data-video-ready', '');
+    var link = fig.querySelector('a[href]');
+    if (link) link.setAttribute('title', 'Play here (loads the player from ' + spec.label + ')');
+    var img = spec.hiRes && fig.querySelector('img[src]');
+    if (img) {
+      var stored = img.getAttribute('src');
+      var sharper = spec.hiRes(stored);
+      if (sharper !== stored) {
+        // once: the revert restores a URL that is known to exist, so a second error
+        // is not something to answer, and answering it would loop.
+        img.addEventListener('error', function () { img.src = stored; }, { once: true });
+        img.src = sharper;
+      }
+    }
+    var caption = fig.querySelector('figcaption');
+    if (caption) caption.textContent = spec.label + ' video, loaded only when you play it';
+  });
+}
+document.addEventListener('DOMContentLoaded', function () { markVideoFacades(); });
+document.body.addEventListener('htmx:afterSettle', function () { markVideoFacades(); });
+
+// Capture, and stopped there: the thumbnail is wrapped in an anchor to the video
+// site, openProseLinksInNewTab has since marked it target="_blank", and the
+// link-opened tracker counts any such click inside an article as the reader leaving
+// for the source. That signal feeds retention and scoring, and pressing play here is
+// not leaving. Bubbling would reach the tracker before this handler, so the click has
+// to be taken on the way down.
+document.addEventListener('click', function (e) {
+  if (!e.target || !e.target.closest) return;
+  var fig = e.target.closest('.prose figure[data-video-ready]');
+  if (!fig) return;
+  var spec = _videoProvider(fig);
+  // Without a provider we never reach here, but if we did, the anchor to the site is
+  // the right thing to leave alone.
+  if (!spec) return;
+  e.preventDefault();
+  e.stopPropagation();
+  var frame = document.createElement('iframe');
+  frame.src = spec.src(fig.getAttribute('data-video-id'));
+  frame.className = 'video-embed';
+  frame.title = spec.label + ' video player';
+  frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+  frame.setAttribute('allowfullscreen', '');
+  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+
+  // The player goes over the thumbnail, not in its place: the picture holds the box
+  // while the frame loads, so there is no moment with the page background showing
+  // between two dark things (see input.css). Nothing below the video moves either,
+  // since the thumbnail keeps taking exactly the room it took, and the caption keeps
+  // its line. What the caption says changes, though: the way out to the site is the
+  // useful thing to offer once the video is already playing here.
+  var link = fig.querySelector('a[href]');
+  var href = link ? link.getAttribute('href') : null;
+  if (link) {
+    // One box around both, so the player takes the thumbnail's box exactly instead of
+    // computing a near-identical one of its own (see input.css).
+    var box = document.createElement('div');
+    box.className = 'video-box';
+    link.replaceWith(box);
+    box.appendChild(link);
+    box.appendChild(frame);
+    // Hide the thumbnail once the frame has painted: it is there to cover the load and
+    // nothing more. Hidden on the element itself rather than by a selector, so the
+    // caption's link out to the site is not caught by the same rule. If the event
+    // never comes, the picture stays behind the player, which is where it started.
+    frame.addEventListener('load', function () { link.style.visibility = 'hidden'; }, { once: true });
+  } else {
+    fig.replaceChildren(frame);
+  }
+
+  var caption = fig.querySelector('figcaption');
+  if (caption && href) {
+    var out = document.createElement('a');
+    out.href = href;
+    out.target = '_blank';
+    out.rel = 'noopener noreferrer';
+    out.textContent = 'Watch on ' + spec.label;
+    caption.replaceChildren(out);
+  } else if (caption) {
+    caption.textContent = spec.label;
+  }
+
+  // Off with the facade marks: the badge belongs to a thumbnail, and leaving the
+  // figure clickable would have this very handler swallow the click on the link the
+  // caption now holds.
+  fig.removeAttribute('data-video-ready');
+  fig.setAttribute('data-video-playing', '');
+}, true);
+
 // Hide duplicate headings emitted by feed/readable content when they repeat the article title.
 function normalizeArticleHeading(text) {
   var normalized = (text || '').replace(/\s+/g, ' ').trim().toLowerCase();

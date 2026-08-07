@@ -51,6 +51,11 @@ categories:
           Feeds that carry only headlines and links leave nothing to read. Such
           articles offer the original page as a button, and can open it in a new
           tab on click if you turn that on.
+      - title: Videos play in the reader
+        desc: >-
+          A YouTube or Vimeo link is saved as the video, with its full description
+          under it. Playing it starts the player in place, and nothing is requested
+          from the video site until you press play.
       - title: Adaptive layout
         desc: >-
           Choose a 2- or 3-panel view per screen size, with breakpoints you set
