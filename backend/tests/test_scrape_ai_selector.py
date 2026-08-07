@@ -48,7 +48,8 @@ def ai_client(mock_db, monkeypatch):
 
 def make_anthropic_response(text: str):
     resp = MagicMock()
-    resp.content = [MagicMock(text=text)]
+    # type is required on every real content block, and extraction keys off it.
+    resp.content = [MagicMock(type="text", text=text)]
     resp.usage.input_tokens = 10
     resp.usage.output_tokens = 5
     return resp

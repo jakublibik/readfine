@@ -37,6 +37,7 @@ def make_settings(**overrides) -> SimpleNamespace:
         ai_quality_model="claude-sonnet-5",
         last_ai_error=None,
         last_ai_error_at=None,
+        last_ai_error_article_id=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)

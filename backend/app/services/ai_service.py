@@ -24,12 +24,17 @@ def _extract_text(provider: str, resp) -> str:
     ProviderEmptyResponse when content is missing/empty."""
     text: str | None = None
     if provider == "anthropic":
-        blocks = getattr(resp, "content", None) or []
-        if blocks:
-            # Assumes the first block is the text block. Holds for plain
-            # completions; would need to scan for the text block if an
-            # extended-thinking model is ever used (block[0] = thinking).
-            text = getattr(blocks[0], "text", None)
+        # First text block, not blocks[0]: on models where thinking runs without
+        # being asked for (Opus 5, Sonnet 5, Fable 5) the response opens with a
+        # thinking block, which carries no .text. Note this does not by itself
+        # make those models usable here: thinking also draws on max_tokens, so
+        # the budget may be gone before any text block exists.
+        text = next(
+            (getattr(b, "text", None)
+             for b in (getattr(resp, "content", None) or [])
+             if getattr(b, "type", None) == "text"),
+            None,
+        )
     elif provider == "openai":
         choices = getattr(resp, "choices", None) or []
         if choices:
@@ -39,8 +44,41 @@ def _extract_text(provider: str, resp) -> str:
     else:
         raise ValueError(f"Unknown provider: {provider}")
     if not text or not text.strip():
-        raise ProviderEmptyResponse(f"{provider} returned no usable content")
+        detail = _empty_response_detail(provider, resp)
+        raise ProviderEmptyResponse(
+            f"{provider} returned no usable content" + (f" ({detail})" if detail else "")
+        )
     return text.strip()
+
+
+def _empty_response_detail(provider: str, resp) -> str:
+    """Why the response carried no text, for the error message and the banner.
+
+    "no usable content" alone cannot tell a refusal from a hit token cap from a
+    genuinely empty reply, which are three different things to do something about.
+    Best-effort like _extract_truncated: a provider changing the shape of a field
+    must not replace the real error with an AttributeError from the diagnostics.
+    """
+    try:
+        if provider == "anthropic":
+            blocks = getattr(resp, "content", None) or []
+            types = ",".join(str(getattr(b, "type", "?")) for b in blocks)
+            return f"stop_reason={getattr(resp, 'stop_reason', None)}, blocks=[{types}]"
+        if provider == "openai":
+            choices = getattr(resp, "choices", None) or []
+            reason = getattr(choices[0], "finish_reason", None) if choices else None
+            return f"finish_reason={reason}"
+        if provider == "gemini":
+            candidates = getattr(resp, "candidates", None) or []
+            reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+            # A prompt refused up front has no candidate at all; the reason for
+            # that lives on prompt_feedback instead.
+            blocked = getattr(getattr(resp, "prompt_feedback", None), "block_reason", None)
+            detail = f"finish_reason={getattr(reason, 'name', reason)}"
+            return f"{detail}, block_reason={getattr(blocked, 'name', blocked)}" if blocked else detail
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real failure
+        return ""
+    return ""
 
 
 def _extract_truncated(provider: str, resp) -> bool:

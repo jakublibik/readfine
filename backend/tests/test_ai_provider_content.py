@@ -22,9 +22,13 @@ from app.services.ai_service import (
 )
 
 
-def _anthropic(text):
-    block = SimpleNamespace(text=text)
-    return SimpleNamespace(content=[block] if text is not None else [])
+def _anthropic(text, *, leading_thinking=False):
+    """An Anthropic response. Real content blocks always carry ``type``, and the
+    extraction keys off it, so the stub has to as well."""
+    blocks = [] if text is None else [SimpleNamespace(type="text", text=text)]
+    if leading_thinking:
+        blocks.insert(0, SimpleNamespace(type="thinking", thinking="deliberating"))
+    return SimpleNamespace(content=blocks)
 
 
 def _openai(content):
@@ -38,6 +42,12 @@ def _gemini(text):
 class TestExtractTextSuccess:
     def test_anthropic(self):
         assert _extract_text("anthropic", _anthropic("  hello  ")) == "hello"
+
+    def test_anthropic_skips_a_leading_thinking_block(self):
+        """Models that think by default open with a thinking block; the text one
+        behind it is the answer, and reading blocks[0] would miss it."""
+        resp = _anthropic("the answer", leading_thinking=True)
+        assert _extract_text("anthropic", resp) == "the answer"
 
     def test_openai(self):
         assert _extract_text("openai", _openai("hi there")) == "hi there"
@@ -69,6 +79,61 @@ class TestExtractTextEmpty:
     def test_gemini_empty_raises(self, text):
         with pytest.raises(ProviderEmptyResponse):
             _extract_text("gemini", _gemini(text))
+
+
+class TestEmptyResponseDetail:
+    """The message is what lands in the user's error banner, so it has to name the
+    reason: a refusal, a hit token cap and a genuinely empty reply need different
+    responses from whoever reads it."""
+
+    def test_anthropic_names_stop_reason_and_block_types(self):
+        resp = SimpleNamespace(
+            stop_reason="max_tokens",
+            content=[SimpleNamespace(type="thinking", thinking="")],
+        )
+        with pytest.raises(ProviderEmptyResponse) as exc:
+            _extract_text("anthropic", resp)
+        assert "stop_reason=max_tokens" in str(exc.value)
+        assert "blocks=[thinking]" in str(exc.value)
+
+    def test_anthropic_refusal_is_distinguishable(self):
+        resp = SimpleNamespace(stop_reason="refusal", content=[])
+        with pytest.raises(ProviderEmptyResponse) as exc:
+            _extract_text("anthropic", resp)
+        assert "stop_reason=refusal" in str(exc.value)
+        assert "blocks=[]" in str(exc.value)
+
+    def test_openai_names_finish_reason(self):
+        resp = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="content_filter",
+            message=SimpleNamespace(content=None),
+        )])
+        with pytest.raises(ProviderEmptyResponse) as exc:
+            _extract_text("openai", resp)
+        assert "finish_reason=content_filter" in str(exc.value)
+
+    def test_gemini_names_block_reason_when_the_prompt_was_refused(self):
+        resp = SimpleNamespace(
+            text=None,
+            candidates=[],
+            prompt_feedback=SimpleNamespace(block_reason=SimpleNamespace(name="SAFETY")),
+        )
+        with pytest.raises(ProviderEmptyResponse) as exc:
+            _extract_text("gemini", resp)
+        assert "block_reason=SAFETY" in str(exc.value)
+
+    def test_broken_diagnostics_still_raise_the_real_error(self):
+        """A provider reshaping a field must not turn the controlled error into an
+        AttributeError from the diagnostics path."""
+        class Hostile:
+            content = []
+            @property
+            def stop_reason(self):
+                raise RuntimeError("shape changed")
+
+        with pytest.raises(ProviderEmptyResponse) as exc:
+            _extract_text("anthropic", Hostile())
+        assert "returned no usable content" in str(exc.value)
 
 
 def test_unknown_provider_raises_value_error():

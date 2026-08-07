@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_ai_enabled
 from app.config import settings as app_settings_config
 from app.database import get_db
+from app.models.article import Article
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_service import (
@@ -46,8 +47,16 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     # Same call the scheduler job makes, so the status line cannot promise a
     # run the job would skip.
     auto_status, auto_detail = await preference_auto_status(s, db)
+    # Title for the error panel's article link. Stays None once retention purge
+    # clears the FK, which is why the panel treats the link as optional.
+    error_article_title = None
+    if s.last_ai_error and s.last_ai_error_article_id:
+        error_article_title = await db.scalar(
+            select(Article.title).where(Article.id == s.last_ai_error_article_id)
+        )
     return {
         "s": s,
+        "error_article_title": error_article_title,
         "keys": keys,
         "cost_stats": cost_stats,
         "active_days": 30,
@@ -86,7 +95,7 @@ async def settings_ai_dismiss_error(
     await db.execute(
         update(UserSettings)
         .where(UserSettings.user_id == user.id)
-        .values(last_ai_error=None, last_ai_error_at=None)
+        .values(last_ai_error=None, last_ai_error_at=None, last_ai_error_article_id=None)
     )
     await db.commit()
     # Empty body removes the panel (hx-swap=outerHTML); HX-Trigger clears any

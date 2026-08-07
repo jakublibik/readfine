@@ -191,6 +191,9 @@ def _apply_failure(settings: UserSettings, message: str, now: datetime) -> None:
     settings.ai_preference_last_error_at = now
     settings.last_ai_error = f"Interest profile: {message}"[:500]
     settings.last_ai_error_at = now
+    # No single article behind a profile failure, so drop any link left by an
+    # earlier per-article error so the panel cannot point at an unrelated one.
+    settings.last_ai_error_article_id = None
 
 
 async def run_auto_generation(user_id: int, db: AsyncSession) -> str:

@@ -34,6 +34,7 @@ def make_settings(**kwargs):
         "ai_summary_prompt": None,
         "last_ai_error": None,
         "last_ai_error_at": None,
+        "last_ai_error_article_id": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -1250,3 +1251,48 @@ class TestSummaryTruncationFlag:
         await self._run(state, ("Now complete.", 500, 130, False))
         assert state.ai_summary == "Now complete."
         assert state.ai_summary_truncated is False
+
+
+class TestLastAiErrorArticleLink:
+    """The settings error panel links to the article a failed job was working on,
+    so the three writers of that field have to stay in agreement: the failure path
+    sets it, a later success clears it, and a profile failure (no article) clears it
+    rather than leaving a link to an unrelated article."""
+
+    def test_failure_records_the_article(self):
+        from app.services.ai_jobs import apply_job_failure
+        s = make_settings()
+        job = make_job(article_id=42)
+        apply_job_failure(
+            job, RuntimeError("anthropic returned no usable content"),
+            datetime.now(timezone.utc), operation="summary", settings=s,
+        )
+        assert s.last_ai_error == "Summary error: anthropic returned no usable content"
+        assert s.last_ai_error_article_id == 42
+
+    def test_success_clears_the_link_with_the_message(self):
+        from app.services.ai_jobs import clear_last_ai_error
+        s = make_settings(
+            last_ai_error="Summary error: boom",
+            last_ai_error_at=datetime.now(timezone.utc),
+            last_ai_error_article_id=42,
+        )
+        clear_last_ai_error(s)
+        assert s.last_ai_error is None
+        assert s.last_ai_error_at is None
+        assert s.last_ai_error_article_id is None
+
+    def test_profile_failure_drops_a_stale_article_link(self):
+        from app.services.ai_profile_service import _apply_failure
+        s = make_settings(
+            last_ai_error="Summary error: boom",
+            last_ai_error_at=datetime.now(timezone.utc),
+            last_ai_error_article_id=42,
+            ai_preference_fail_count=0,
+            ai_preference_auto_days=14,
+            ai_preference_last_error=None,
+            ai_preference_last_error_at=None,
+        )
+        _apply_failure(s, "no API key", datetime.now(timezone.utc))
+        assert s.last_ai_error.startswith("Interest profile:")
+        assert s.last_ai_error_article_id is None

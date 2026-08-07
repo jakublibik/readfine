@@ -93,3 +93,11 @@ def apply_job_failure(
     if settings is not None:
         settings.last_ai_error = f"{operation.capitalize()} error: {msg}"
         settings.last_ai_error_at = now
+        settings.last_ai_error_article_id = job.article_id
+
+
+def clear_last_ai_error(settings: "UserSettings") -> None:
+    """Drop the error banner after a job succeeds, article link included."""
+    settings.last_ai_error = None
+    settings.last_ai_error_at = None
+    settings.last_ai_error_article_id = None
