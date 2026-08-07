@@ -53,29 +53,37 @@
   overflow-x: auto;
 }
 
-/* Video facade: the stored thumbnail carries a play badge once the script that can
-   swap in a player is running, so a page without it keeps a plain link out to the
-   site instead of promising something that will not happen. Scoped to .prose rather
-   than .article-body, which the reader has but a shared article page does not. */
-/* The thumbnail stands in exactly the box the player will take, so pressing play
-   swaps the contents and moves nothing. YouTube's hqdefault is 480x360, a 4:3 frame
-   with the letterbox bars baked into the image, so it is cropped to the video's own
-   shape instead of being shown as it arrives. */
-.prose figure[data-video-ready] a {
+/* Video facade. Scoped to .prose rather than .article-body, which the reader has but
+   a shared article page does not.
+
+   The thumbnail stands in exactly the box the player will take, so pressing play swaps
+   the contents and moves nothing. YouTube's hqdefault is 480x360, a 4:3 frame with the
+   letterbox bars baked into the image, so it is cropped to the video's own shape
+   instead of being shown as it arrives.
+
+   That box is keyed on the figure being a video at all, not on the facade marks: those
+   come off the moment play is pressed, and the shape went with them, so the thumbnail
+   sprang back to its own 4:3 and the player, which fills the box, framed a 16:9 video
+   inside it with black bars. Only videos missing a maxresdefault showed it, that one
+   being 16:9 to begin with. */
+.prose figure[data-video-id] > a,
+.prose .video-box > a {
   position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
   overflow: hidden;
 }
-.prose figure[data-video-ready] a img {
+.prose figure[data-video-id] > a img,
+.prose .video-box > a img {
   display: block;
   width: 100%;
   height: 100%;
   margin: 0;
   object-fit: cover;
 }
-.prose figure[data-video-ready] a::after {
+/* The badge, and only while there is a thumbnail to press. */
+.prose figure[data-video-ready] > a::after {
   content: "";
   position: absolute;
   top: 50%;
@@ -87,7 +95,7 @@
   background: rgba(17, 24, 39, 0.72) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M8 5v14l11-7z'/%3E%3C/svg%3E") no-repeat center / 45%;
   pointer-events: none;
 }
-.prose figure[data-video-ready] a:hover::after { background-color: rgba(220, 38, 38, 0.9); }
+.prose figure[data-video-ready] > a:hover::after { background-color: rgba(220, 38, 38, 0.9); }
 
 /* The player itself, once the thumbnail has been clicked: the same box, so the only
    thing the click changes is what is inside it. */
