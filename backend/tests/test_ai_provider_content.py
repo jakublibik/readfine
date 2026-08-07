@@ -31,8 +31,12 @@ def _anthropic(text, *, leading_thinking=False):
     return SimpleNamespace(content=blocks)
 
 
-def _openai(content):
-    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+def _openai(content, finish_reason="stop"):
+    """finish_reason is required on a real Choice, so the stub always carries one."""
+    return SimpleNamespace(choices=[SimpleNamespace(
+        finish_reason=finish_reason,
+        message=SimpleNamespace(content=content),
+    )])
 
 
 def _gemini(text):

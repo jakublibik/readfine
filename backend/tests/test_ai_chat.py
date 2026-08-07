@@ -56,6 +56,7 @@ def make_anthropic_response(text: str):
     resp = MagicMock()
     # type is required on every real content block, and extraction keys off it.
     resp.content = [MagicMock(type="text", text=text)]
+    resp.stop_reason = "end_turn"
     resp.usage.input_tokens = 10
     resp.usage.output_tokens = 5
     return resp
@@ -63,15 +64,23 @@ def make_anthropic_response(text: str):
 
 def make_openai_response(text: str):
     resp = MagicMock()
-    resp.choices = [MagicMock(message=MagicMock(content=text))]
+    # finish_reason is required on a real Choice and the truncation check reads it.
+    # Left off, MagicMock invents one and every truncation assertion goes vacuous.
+    resp.choices = [MagicMock(finish_reason="stop", message=MagicMock(content=text))]
     resp.usage.prompt_tokens = 10
     resp.usage.completion_tokens = 5
     return resp
 
 
 def make_gemini_response(text: str):
+    # Imported here rather than at module scope for the same reason ai_service
+    # does it: the google-genai import costs ~2s and only gemini tests need it.
+    from google.genai import types
     resp = MagicMock()
     resp.text = text
+    # A real response always carries candidates, and the finish reason on them is
+    # an enum whose .name the truncation check compares, not a plain string.
+    resp.candidates = [MagicMock(finish_reason=types.FinishReason.STOP)]
     resp.usage_metadata.prompt_token_count = 10
     resp.usage_metadata.candidates_token_count = 5
     return resp
@@ -409,3 +418,5 @@ class TestComplete:
         assert cfg.max_output_tokens == 123
         assert text == "done"
         assert (in_tok, out_tok) == (10, 5)
+        # Meaningful only because the stub carries a real FinishReason enum.
+        assert truncated is False

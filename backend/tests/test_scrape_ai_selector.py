@@ -50,6 +50,7 @@ def make_anthropic_response(text: str):
     resp = MagicMock()
     # type is required on every real content block, and extraction keys off it.
     resp.content = [MagicMock(type="text", text=text)]
+    resp.stop_reason = "end_turn"
     resp.usage.input_tokens = 10
     resp.usage.output_tokens = 5
     return resp
