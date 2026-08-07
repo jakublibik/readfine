@@ -15,6 +15,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Private feeds are now marked in the feed lists. Settings → Feeds and the admin feeds table put a small lock next to the title of a feed that is kept to your account rather than shared with other subscribers on the instance, which until now you could only find out by opening the feed. Public feeds stay unmarked, since that is what almost every feed is. The badge on the feed edit page went gray at the same time: amber means "something needs attention" everywhere else in the app, and a private feed is not that.
 - AI summaries of long articles are no longer cut short. The summary prompt asks the model to match the summary's length to the article, but the room it had to write in was fixed, so a long feature ran out of space and stopped mid-sentence while a short news item was never anywhere near the limit. That room now scales with the article, from the previous allowance for short pieces up to roughly three times that for the longest ones. Nothing to configure, and the ceiling keeps a custom summary prompt from turning into an essay.
 
 ### Fixed
