@@ -198,7 +198,10 @@ var VIDEO_PROVIDERS = {
     id: /^[A-Za-z0-9_-]{6,20}$/,
     label: 'YouTube',
     // youtube-nocookie: no cookies until playback actually starts.
-    src: function (id) { return 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1&rel=0'; },
+    src: function (id, start) {
+      return 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1&rel=0' +
+        (start ? '&start=' + start : '');
+    },
     // Stored content points at hqdefault, the one size YouTube has for every video,
     // including uploads from before widescreen. It is 480x360 with letterbox bars in
     // the image, so cropping to 16:9 leaves 480x270 to fill a reading column half as
@@ -210,7 +213,9 @@ var VIDEO_PROVIDERS = {
   vimeo: {
     id: /^\d{5,15}$/,
     label: 'Vimeo',
-    src: function (id) { return 'https://player.vimeo.com/video/' + id + '?autoplay=1'; },
+    src: function (id, start) {
+      return 'https://player.vimeo.com/video/' + id + '?autoplay=1' + (start ? '#t=' + start + 's' : '');
+    },
   },
 };
 
@@ -254,24 +259,18 @@ function markVideoFacades(root) {
 document.addEventListener('DOMContentLoaded', function () { markVideoFacades(); });
 document.body.addEventListener('htmx:afterSettle', function () { markVideoFacades(); });
 
-// Capture, and stopped there: the thumbnail is wrapped in an anchor to the video
-// site, openProseLinksInNewTab has since marked it target="_blank", and the
-// link-opened tracker counts any such click inside an article as the reader leaving
-// for the source. That signal feeds retention and scoring, and pressing play here is
-// not leaving. Bubbling would reach the tracker before this handler, so the click has
-// to be taken on the way down.
-document.addEventListener('click', function (e) {
-  if (!e.target || !e.target.closest) return;
-  var fig = e.target.closest('.prose figure[data-video-ready]');
-  if (!fig) return;
-  var spec = _videoProvider(fig);
-  // Without a provider we never reach here, but if we did, the anchor to the site is
-  // the right thing to leave alone.
-  if (!spec) return;
-  e.preventDefault();
-  e.stopPropagation();
+// Start the player in *fig*, at *start* seconds when given. A player already running
+// is re-pointed rather than rebuilt: reloading the frame is a second of black, but it
+// needs no player API, which would mean loading a script from the video site and
+// widening script-src for the sake of a smoother seek.
+function playVideo(fig, spec, start) {
+  var running = fig.querySelector('iframe.video-embed');
+  if (running) {
+    running.src = spec.src(fig.getAttribute('data-video-id'), start);
+    return;
+  }
   var frame = document.createElement('iframe');
-  frame.src = spec.src(fig.getAttribute('data-video-id'));
+  frame.src = spec.src(fig.getAttribute('data-video-id'), start);
   frame.className = 'video-embed';
   frame.title = spec.label + ' video player';
   frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
@@ -316,10 +315,66 @@ document.addEventListener('click', function (e) {
   }
 
   // Off with the facade marks: the badge belongs to a thumbnail, and leaving the
-  // figure clickable would have this very handler swallow the click on the link the
+  // figure clickable would have the play handler swallow the click on the link the
   // caption now holds.
   fig.removeAttribute('data-video-ready');
   fig.setAttribute('data-video-playing', '');
+}
+
+// Capture, and stopped there: the thumbnail is wrapped in an anchor to the video
+// site, openProseLinksInNewTab has since marked it target="_blank", and the
+// link-opened tracker counts any such click inside an article as the reader leaving
+// for the source. That signal feeds retention and scoring, and pressing play here is
+// not leaving. Bubbling would reach the tracker before this handler, so the click has
+// to be taken on the way down.
+document.addEventListener('click', function (e) {
+  if (!e.target || !e.target.closest) return;
+  var fig = e.target.closest('.prose figure[data-video-ready]');
+  if (!fig) return;
+  var spec = _videoProvider(fig);
+  // Without a provider we never reach here, but if we did, the anchor to the site is
+  // the right thing to leave alone.
+  if (!spec) return;
+  e.preventDefault();
+  e.stopPropagation();
+  playVideo(fig, spec);
+}, true);
+
+// The video a chapter mark belongs to: the last one above it. A description sits
+// under its own video, and an article holding several videos each with their own
+// description would otherwise send every mark to the first player on the page.
+function _videoForSeek(el) {
+  var scope = el.closest('.prose');
+  if (!scope) return null;
+  var found = null;
+  scope.querySelectorAll('figure[data-video-id]').forEach(function (fig) {
+    if (fig.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = fig;
+  });
+  return found;
+}
+
+// Chapter marks in a description seek the player here instead of opening the video
+// site at that point, which is what their href does for anyone this script never
+// reaches. Same capture treatment as above, and for the same reason: the mark is an
+// anchor out to the site, so a bubbling click would be filed as the reader leaving.
+document.addEventListener('click', function (e) {
+  if (!e.target || !e.target.closest) return;
+  var mark = e.target.closest('.prose a[data-seek]');
+  if (!mark) return;
+  var seconds = parseInt(mark.getAttribute('data-seek'), 10);
+  // Stored marks are written by _link_timestamps, but the same attribute in a feed's
+  // own markup would arrive here too, so the value is read as a number or not at all.
+  if (!isFinite(seconds) || seconds < 0) return;
+  var fig = _videoForSeek(mark);
+  if (!fig) return;
+  var spec = _videoProvider(fig);
+  if (!spec) return;
+  e.preventDefault();
+  e.stopPropagation();
+  playVideo(fig, spec, seconds);
+  // A long description puts the player off the top of the screen; block: 'nearest'
+  // leaves it alone when it is already visible.
+  fig.scrollIntoView({ block: 'nearest' });
 }, true);
 
 // Hide duplicate headings emitted by feed/readable content when they repeat the article title.

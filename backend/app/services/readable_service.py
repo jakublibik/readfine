@@ -615,21 +615,66 @@ def _youtube_full_description(html: str) -> Optional[str]:
     return text or None
 
 
-def _description_paragraphs(text: Optional[str]) -> str:
-    """A video description as paragraphs, with everything in it treated as text.
+# A chapter mark in a description: m:ss, mm:ss or h:mm:ss. The seconds field is what
+# keeps this from firing on everything with a colon in it — a 16:9, a 3:2 or a 1:1 has
+# no two-digit seconds to offer. What it does still catch is a clock time (10:30) and
+# the occasional verse number, which become a link that seeks the video instead of
+# meaning what they said. That is the accepted cost: in a video's own description a
+# number of this shape is a point in the video far more often than it is anything else,
+# and a seek is undone by seeking back.
+_TIMESTAMP_RE = re.compile(r"(?<![\d:])(?:(\d{1,2}):)?([0-5]?\d):([0-5]\d)(?![\d:])")
 
-    URLs are left as they are rather than turned into links. A video description is
-    mostly sponsor and affiliate links, and none of them is the article; timestamps
-    are the one part worth making clickable, and that needs a player to seek, not an
-    anchor that leaves for YouTube.
+
+def _timestamp_seconds(m: re.Match) -> int:
+    return int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+
+
+def _timestamp_href(provider: str, vid: str, seconds: int) -> str:
+    """Where a timestamp points for anyone the player never reaches."""
+    if provider == "youtube":
+        return f"https://www.youtube.com/watch?v={vid}&t={seconds}s"
+    return f"https://vimeo.com/{vid}#t={seconds}s"
+
+
+def _link_timestamps(line: str, video: Optional[tuple[str, str]]) -> str:
+    """Escape a line of description, turning chapter marks into seek links.
+
+    ``data-seek`` is what the reader acts on: it seeks the player already on the page
+    rather than opening the video somewhere else. The ``href`` is the same point on the
+    site, so the mark still works where that script does not run.
+
+    Nothing else in the text is linked. A description is mostly sponsor and affiliate
+    URLs, and none of them is the article.
     """
     import html as html_mod
 
+    if not video:
+        return html_mod.escape(line)
+    provider, vid = video
+    out, pos = [], 0
+    for m in _TIMESTAMP_RE.finditer(line):
+        seconds = _timestamp_seconds(m)
+        out.append(html_mod.escape(line[pos:m.start()]))
+        out.append(
+            f'<a href="{html_mod.escape(_timestamp_href(provider, vid, seconds))}" '
+            f'data-seek="{seconds}">{html_mod.escape(m.group(0))}</a>'
+        )
+        pos = m.end()
+    out.append(html_mod.escape(line[pos:]))
+    return "".join(out)
+
+
+def _description_paragraphs(text: Optional[str], video: Optional[tuple[str, str]] = None) -> str:
+    """A video description as paragraphs, with everything in it treated as text.
+
+    Pass *video* to make chapter marks clickable; without it the whole description is
+    escaped and nothing in it links anywhere.
+    """
     if not text:
         return ""
     blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
     return "".join(
-        "<p>" + "<br>".join(html_mod.escape(line) for line in block.split("\n")) + "</p>"
+        "<p>" + "<br>".join(_link_timestamps(line, video) for line in block.split("\n")) + "</p>"
         for block in blocks
     )
 
@@ -637,7 +682,8 @@ def _description_paragraphs(text: Optional[str]) -> str:
 def _video_page_content(provider: str, vid: str, html: str, og_description: Optional[str]) -> str:
     """The stored body for a video page: the video itself, then its description."""
     full = _youtube_full_description(html) if provider == "youtube" else None
-    return _video_figure(provider, vid) + _description_paragraphs(full or og_description)
+    return (_video_figure(provider, vid)
+            + _description_paragraphs(full or og_description, (provider, vid)))
 
 
 def _content_contradicts_page(content_html: str, og_description: Optional[str]) -> bool:

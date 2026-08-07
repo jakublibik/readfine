@@ -1,4 +1,5 @@
 """Unit tests for readable_service pure functions (no DB, no HTTP)."""
+import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch, MagicMock
@@ -303,6 +304,54 @@ class TestDescriptionParagraphs:
     def test_no_description_is_no_markup(self):
         assert _description_paragraphs(None) == ""
         assert _description_paragraphs("   ") == ""
+
+    def test_timestamps_are_not_linked_without_a_video(self):
+        assert _description_paragraphs("0:00 Intro") == "<p>0:00 Intro</p>"
+
+
+class TestTimestampLinks:
+    _V = ("youtube", "dQw4w9WgXcQ")
+
+    def _links(self, line):
+        return re.findall(r'data-seek="(\d+)">([^<]+)</a>', _description_paragraphs(line, self._V))
+
+    def test_chapter_mark_becomes_a_seek(self):
+        assert self._links("1:23 The setup") == [("83", "1:23")]
+
+    def test_hours_are_counted(self):
+        assert self._links("1:02:03 Long bit") == [("3723", "1:02:03")]
+
+    def test_zero_mark_is_linked_too(self):
+        # 0:00 opens the chapter list of nearly every description; a falsy second count
+        # must still produce a link.
+        assert self._links("0:00 Intro") == [("0", "0:00")]
+
+    def test_several_marks_on_one_line(self):
+        assert self._links("see 0:30 and 2:00") == [("30", "0:30"), ("120", "2:00")]
+
+    @pytest.mark.parametrize("text", [
+        "shot in 16:9 not 4:3",     # aspect ratios: no two-digit seconds field
+        "a 1:1 call",
+        "part 1:2 of the series",
+        "at 1:2:3 nothing",         # not zero-padded, so not a timestamp
+    ])
+    def test_leaves_other_colon_numbers_alone(self, text):
+        assert self._links(text) == []
+
+    def test_href_points_at_the_same_moment_on_the_site(self):
+        # The href is what a reader without the script gets, so it has to carry the
+        # timestamp as well.
+        out = _description_paragraphs("1:23 The setup", self._V)
+        assert 'href="https://www.youtube.com/watch?v=dQw4w9WgXcQ&amp;t=83s"' in out
+
+    def test_vimeo_marks_point_at_vimeo(self):
+        out = _description_paragraphs("1:23 The setup", ("vimeo", "76979871"))
+        assert 'href="https://vimeo.com/76979871#t=83s"' in out
+
+    def test_text_around_a_mark_is_still_escaped(self):
+        out = _description_paragraphs("1:23 <b>bold</b>", self._V)
+        assert "<b>" not in out
+        assert "&lt;b&gt;" in out
 
 
 class TestExtractReadableVideoPage:
