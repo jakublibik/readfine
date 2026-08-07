@@ -26,9 +26,9 @@ def _extract_text(provider: str, resp) -> str:
     if provider == "anthropic":
         # First text block, not blocks[0]: on models where thinking runs without
         # being asked for (Opus 5, Sonnet 5, Fable 5) the response opens with a
-        # thinking block, which carries no .text. Note this does not by itself
-        # make those models usable here: thinking also draws on max_tokens, so
-        # the budget may be gone before any text block exists.
+        # thinking block, which carries no .text. Requests ask for thinking to be
+        # off (_anthropic_create), but Fable 5 refuses to turn it off at all, so a
+        # leading thinking block still turns up and the answer sits behind it.
         text = next(
             (getattr(b, "text", None)
              for b in (getattr(resp, "content", None) or [])
@@ -322,6 +322,14 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
 
 # ── verification ──────────────────────────────────────────────────────────────
 
+# Room for a greeting, not for an essay. Deliberately more than a greeting needs:
+# a model that cannot be told to skip reasoning (Fable 5) spends some of this
+# before it writes anything, and failing the check there would report the whole
+# slot as broken when only the tightest budget, scoring, actually is. Unused
+# tokens are not billed, so the headroom is free.
+_VERIFY_MAX_TOKENS = 200
+
+
 def _friendly_ai_error(exc: Exception) -> str:
     raw = str(exc)
     low = raw.lower()
@@ -361,25 +369,27 @@ async def verify_ai_slot(
 
     try:
         if provider == "anthropic":
-            resp = await client.messages.create(
+            resp = await _anthropic_create(
+                client,
                 model=model,
-                max_tokens=5,
+                max_tokens=_VERIFY_MAX_TOKENS,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            _ = resp.content
         elif provider == "openai":
             resp = await client.chat.completions.create(
                 model=model,
-                max_completion_tokens=_openai_max_tokens(model, 5),
+                max_completion_tokens=_openai_max_tokens(model, _VERIFY_MAX_TOKENS),
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            _ = resp.choices
         elif provider == "gemini":
             resp = await client.aio.models.generate_content(
                 model=model,
                 contents="Hi",
             )
-            _ = resp.text
+        # Read the answer, don't just touch the envelope: a model that accepts the
+        # request and then writes nothing (all of its budget spent reasoning) used
+        # to pass this check, so the slot reported OK while every real call failed.
+        _extract_text(provider, resp)
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
         return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
@@ -490,7 +500,7 @@ async def chat_with_article(
         )
         if system_prompt:
             kwargs["system"] = system_prompt
-        resp = await client.messages.create(**kwargs)
+        resp = await _anthropic_create(client, **kwargs)
         return (
             _extract_text("anthropic", resp),
             resp.usage.input_tokens,
@@ -810,6 +820,44 @@ def _openai_max_tokens(model: str, max_tokens: int) -> int:
     return max_tokens
 
 
+# Anthropic's newer models (Opus 5, Sonnet 5, Fable 5) think even when the request
+# says nothing about thinking, and those tokens come out of the same max_tokens as
+# the answer. Every budget here is sized for the answer alone — scoring asks for a
+# single decimal in 10 tokens — so the model would spend the budget thinking and
+# return a response with no text block at all. The same problem on OpenAI is solved
+# with headroom above, because there is no way to turn reasoning off; Anthropic can
+# be asked directly, which keeps the budgets meaning what they say.
+_ANTHROPIC_THINKING_OFF = {"type": "disabled"}
+
+
+def _rejects_thinking_param(exc: Exception) -> bool:
+    """True when a 400 is about the thinking parameter rather than the request.
+
+    Deliberately narrow: only a 400 that names the parameter counts, so a bad key,
+    a wrong model name or a rate limit still surfaces as itself instead of being
+    silently retried.
+    """
+    return getattr(exc, "status_code", None) == 400 and "thinking" in str(exc).lower()
+
+
+async def _anthropic_create(client, **kwargs):
+    """messages.create with thinking off, retried as-is by models that refuse that.
+
+    Fable 5 always thinks and answers an explicit "disabled" with a 400, and models
+    older than the parameter reject it too. For those the retry is exactly the
+    request we would have sent before this existed, so the only cost is one wasted
+    round trip on a model where the budgets were never the problem.
+    """
+    try:
+        return await client.messages.create(thinking=_ANTHROPIC_THINKING_OFF, **kwargs)
+    except Exception as exc:
+        if not _rejects_thinking_param(exc):
+            raise
+        logger.info("Model %s rejected thinking=disabled; retrying without it",
+                    kwargs.get("model"))
+        return await client.messages.create(**kwargs)
+
+
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500
 ) -> tuple[str, int, int, bool]:
@@ -820,7 +868,8 @@ async def _complete(
     complete one. Callers that cannot act on it discard the flag.
     """
     if provider == "anthropic":
-        resp = await client.messages.create(
+        resp = await _anthropic_create(
+            client,
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],

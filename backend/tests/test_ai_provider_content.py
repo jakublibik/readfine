@@ -4,22 +4,37 @@ Blocked/empty/filtered provider responses must raise ProviderEmptyResponse
 (a controlled error callers already handle) rather than crashing on .strip().
 
 Also covers the stop-reason read that tells a complete summary from one the model
-cut off on its token cap, and the cap itself.
+cut off on its token cap, the cap itself, and the request-side counterpart: asking
+Anthropic to leave thinking out of that cap.
 """
 import pytest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+from app.services import ai_service
 from app.services.ai_service import (
+    _anthropic_create,
     _extract_text,
     _extract_truncated,
     _openai_max_tokens,
+    _rejects_thinking_param,
     _summary_token_budget,
+    _ANTHROPIC_THINKING_OFF,
     _OPENAI_REASONING_BUDGET,
     _SUMMARY_CHARS_PER_TOKEN,
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_MIN_TOKENS,
     ProviderEmptyResponse,
 )
+
+
+class _ApiError(Exception):
+    """Stands in for an SDK error: the HTTP status is both an attribute and part
+    of the message, which is the shape _friendly_ai_error reads."""
+
+    def __init__(self, status_code, message):
+        super().__init__(f"Error code: {status_code} - {message}")
+        self.status_code = status_code
 
 
 def _anthropic(text, *, leading_thinking=False):
@@ -207,6 +222,135 @@ class TestExtractTruncated:
 
     def test_unknown_provider_reads_as_not_truncated(self):
         assert _extract_truncated("nope", SimpleNamespace()) is False
+
+
+class TestRejectsThinkingParam:
+    """Only a 400 about the parameter itself may trigger the retry — anything else
+    has to keep surfacing as the error it is."""
+
+    def test_400_naming_thinking(self):
+        exc = _ApiError(400, "thinking.type: Input should be 'adaptive'")
+        assert _rejects_thinking_param(exc) is True
+
+    def test_400_naming_thinking_in_any_case(self):
+        assert _rejects_thinking_param(_ApiError(400, "Thinking cannot be disabled")) is True
+
+    def test_400_about_something_else(self):
+        assert _rejects_thinking_param(_ApiError(400, "max_tokens must be >= 1")) is False
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
+    def test_other_statuses_never_retry(self, status):
+        """A bad key or a wrong model name mentioning thinking must not be swallowed."""
+        assert _rejects_thinking_param(_ApiError(status, "thinking")) is False
+
+    def test_error_without_a_status_code(self):
+        assert _rejects_thinking_param(RuntimeError("thinking")) is False
+
+
+class TestAnthropicCreate:
+    """Newer Anthropic models think unasked and spend max_tokens doing it, so every
+    request says thinking is off. Models that refuse to turn it off must still work."""
+
+    @pytest.mark.asyncio
+    async def test_asks_for_thinking_off(self):
+        client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value="ok")))
+        result = await _anthropic_create(client, model="claude-sonnet-5", max_tokens=10)
+        assert result == "ok"
+        kwargs = client.messages.create.call_args.kwargs
+        assert kwargs["thinking"] == _ANTHROPIC_THINKING_OFF
+        assert kwargs["max_tokens"] == 10
+        assert kwargs["model"] == "claude-sonnet-5"
+
+    @pytest.mark.asyncio
+    async def test_model_that_refuses_gets_the_plain_request(self):
+        create = AsyncMock(side_effect=[
+            _ApiError(400, "thinking: 'disabled' is not supported by this model"),
+            "ok",
+        ])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        result = await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
+        assert result == "ok"
+        assert create.call_count == 2
+        assert "thinking" not in create.call_args.kwargs
+        # The retry is the request we would have sent before any of this existed.
+        assert create.call_args.kwargs == {"model": "claude-fable-5", "max_tokens": 10}
+
+    @pytest.mark.asyncio
+    async def test_unrelated_400_is_not_retried(self):
+        create = AsyncMock(side_effect=_ApiError(400, "credit balance is too low"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(_ApiError):
+            await _anthropic_create(client, model="claude-sonnet-5", max_tokens=10)
+        assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_auth_error_is_not_retried(self):
+        create = AsyncMock(side_effect=_ApiError(401, "invalid x-api-key"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(_ApiError):
+            await _anthropic_create(client, model="claude-sonnet-5", max_tokens=10)
+        assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_refusing_model_that_fails_again_raises_the_second_error(self):
+        create = AsyncMock(side_effect=[
+            _ApiError(400, "thinking cannot be disabled"),
+            _ApiError(429, "rate limit"),
+        ])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(_ApiError) as exc:
+            await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
+        assert exc.value.status_code == 429
+
+
+class TestVerifyAiSlot:
+    """The connection test has to fail on exactly what a real call would fail on.
+    A model that accepts the request and writes nothing back used to pass it, so
+    Settings → AI said the slot was fine while every summary and score errored."""
+
+    @staticmethod
+    def _verify(monkeypatch, create):
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+
+        async def fake_get_ai_client(user_id, slot, db):
+            return client, "anthropic", "claude-sonnet-5"
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
+        return ai_service.verify_ai_slot(1, "fast", db=None)
+
+    @pytest.mark.asyncio
+    async def test_a_real_answer_passes(self, monkeypatch):
+        resp = _anthropic("Hello!")
+        result = await self._verify(monkeypatch, AsyncMock(return_value=resp))
+        assert result == {"ok": True, "model": "claude-sonnet-5", "error": None}
+
+    @pytest.mark.asyncio
+    async def test_thinking_only_response_fails_with_the_reason(self, monkeypatch):
+        """What a thinking-by-default model returns when the budget went to thinking."""
+        resp = SimpleNamespace(
+            stop_reason="max_tokens",
+            content=[SimpleNamespace(type="thinking", thinking="")],
+        )
+        result = await self._verify(monkeypatch, AsyncMock(return_value=resp))
+        assert result["ok"] is False
+        assert "stop_reason=max_tokens" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_api_errors_still_come_back_friendly(self, monkeypatch):
+        create = AsyncMock(side_effect=_ApiError(401, "invalid x-api-key"))
+        result = await self._verify(monkeypatch, create)
+        assert result == {"ok": False, "model": "claude-sonnet-5",
+                          "error": "Invalid API key."}
+
+    @pytest.mark.asyncio
+    async def test_no_client_configured(self, monkeypatch):
+        async def fake_get_ai_client(user_id, slot, db):
+            return None, None, None
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
+        result = await ai_service.verify_ai_slot(1, "fast", db=None)
+        assert result["ok"] is False
+        assert result["model"] is None
 
 
 class TestSummaryTokenBudget:
