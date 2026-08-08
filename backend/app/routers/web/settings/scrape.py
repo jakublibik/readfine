@@ -18,7 +18,13 @@ from app.templating import templates
 from app.utils.parsing import safe_int
 from app.utils.scrape_ai import build_selector_prompt, extract_article_sample, generate_selector_prompt
 
-from .common import _ai_selector_available, _ensure_scheme, _get_feeds_context, _snap_interval
+from .common import (
+    _ai_selector_available,
+    _ensure_scheme,
+    _get_feeds_context,
+    _scrape_target_url,
+    _snap_interval,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -72,10 +78,10 @@ async def settings_scrape_setup(
 async def settings_scrape_preview(
     request: Request,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    url = form.get("url", "").strip()
-    url = _ensure_scheme(url)
+    url = await _scrape_target_url(form, user, db)
     selector = (form.get("selector") or form.get("article_links_selector") or "").strip()
 
     if not url or not selector:
@@ -110,8 +116,7 @@ async def settings_scrape_ai_selector(
     from app.models.article import AiUsageLog
 
     form = await request.form()
-    url = (form.get("url") or "").strip()
-    url = _ensure_scheme(url)
+    url = await _scrape_target_url(form, user, db)
     html_sample = (form.get("html_sample") or "").strip()
     history_raw = (form.get("conversation_history") or "[]").strip()
 
@@ -206,8 +211,7 @@ async def settings_scrape_show_prompt(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    url = (form.get("url") or "").strip()
-    url = _ensure_scheme(url)
+    url = await _scrape_target_url(form, user, db)
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")

@@ -11,16 +11,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.article import Article
-from app.models.feed import Folder
+from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.services.feed import list_user_feeds
 from app.utils.datetime_format import format_until
+from app.utils.parsing import safe_int
 
 
 def _ensure_scheme(url: str) -> str:
     """Prefix https:// when a user-entered URL omits the scheme."""
     return f"https://{url}" if url and "://" not in url else url
+
+
+async def _scrape_target_url(form, user: User, db: AsyncSession) -> str:
+    """The page the scrape helpers (preview, AI selector, prompt) should fetch.
+
+    An existing feed is addressed by ``feed_id`` and its URL is read from the
+    database, so the edit forms never have to carry the stored address in a hidden
+    field: it can hold an API token or HTTP credentials. The setup flow has no feed
+    row yet and still passes the URL the user just typed.
+
+    Returns "" when the id is unknown or the user has no claim to that feed, which
+    the callers report the same way as a missing URL.
+    """
+    feed_id = safe_int(form.get("feed_id"))
+    if feed_id is not None:
+        stmt = select(Feed.feed_url).where(Feed.id == feed_id)
+        if user.role != "admin":
+            stmt = stmt.join(UserFeed, UserFeed.feed_id == Feed.id).where(
+                UserFeed.user_id == user.id
+            )
+        return await db.scalar(stmt) or ""
+    return _ensure_scheme((form.get("url") or "").strip())
 
 
 def _snap_interval(raw: int) -> int:

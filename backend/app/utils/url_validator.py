@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import NamedTuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -229,6 +229,54 @@ def redact_url(url: str) -> str:
     if parsed.query:
         cleaned += "?<redacted>"
     return cleaned
+
+
+# Query parameters whose value is a secret rather than a routing detail. Used by
+# redact_url_for_display only; logging drops the query wholesale and needs no list.
+_SECRET_QUERY_KEYS = frozenset({
+    "access_token", "api_key", "api_secret", "apikey", "auth", "auth_token",
+    "authtoken", "hash", "key", "pass", "passwd", "password", "pw", "secret",
+    "session", "sig", "signature", "token", "user_key", "userkey",
+})
+
+
+def redact_url_for_display(url: str) -> str:
+    """Hide the secrets in a URL while keeping it recognizable on screen.
+
+    Credentials in the netloc (``user:pass@host``) always go. The query string is
+    kept except for the values of parameters that name a secret, because the feed
+    lists are read to tell feeds apart and ``?channel_id=UC…`` is often the only
+    thing that distinguishes two rows on the same host. Logging uses ``redact_url``
+    instead, which drops the whole query, no list of names to keep current.
+
+    Returns the input unchanged when there was nothing to hide, which is also how
+    callers decide whether the URL is still safe to link to.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "<unparseable-url>"
+    if not parsed.scheme and not parsed.netloc:
+        return url
+
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+
+    # Split by hand rather than through parse_qsl: everything that stays must come
+    # back out byte for byte, or an unchanged URL would look changed and lose its link.
+    query = parsed.query
+    if query:
+        parts = []
+        for part in query.split("&"):
+            key = part.split("=", 1)[0]
+            if unquote(key).lower() in _SECRET_QUERY_KEYS:
+                parts.append(f"{key}=<redacted>")
+            else:
+                parts.append(part)
+        query = "&".join(parts)
+
+    if netloc == parsed.netloc and query == parsed.query:
+        return url
+    return urlunparse(parsed._replace(netloc=netloc, query=query))
 
 
 # Rate-limit headers worth recording, in the order they are logged. Each entry is

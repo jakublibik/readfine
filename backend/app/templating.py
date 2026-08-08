@@ -96,6 +96,15 @@ def _hostname(url: str | None) -> str:
 
 templates.env.filters["hostname"] = _hostname
 
+
+def _redact_url_display(url: str | None) -> str:
+    """Feed URL with its secrets hidden, for the admin views that list feeds."""
+    from app.utils.url_validator import redact_url_for_display
+    return redact_url_for_display(url) if url else ""
+
+
+templates.env.filters["redact_url_display"] = _redact_url_display
+
 _ai_enabled: bool = False
 
 

@@ -7,8 +7,18 @@
       <span class="font-medium text-gray-900 truncate" title="{{ f.title }}">{{ f.title }}</span>
       {% if f.is_private %}{{ private_lock() }}{% endif %}
     </div>
+    {# A feed URL can carry an API token in the query or HTTP credentials in the host
+       part, and this list is the one place an admin sees every user's feeds. Redacted
+       URLs are no longer working addresses, so they drop the link rather than offer a
+       dead one; the href would leak the secret through copy-link anyway. #}
+    {% set shown_url = f.feed_url | redact_url_display %}
+    {% if shown_url == f.feed_url %}
     <a href="{{ f.feed_url }}" target="_blank" rel="noopener noreferrer"
        class="text-xs text-gray-400 hover:text-blue-500 truncate block">{{ f.feed_url }}</a>
+    {% else %}
+    <span class="text-xs text-gray-400 truncate block"
+          title="Parts of this URL are hidden because they are credentials.">{{ shown_url }}</span>
+    {% endif %}
     {% if f.status == 'error' and f.last_error %}
     <div class="text-xs text-red-500 truncate mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
     {% elif f.status == 'active' and f.block_count >= block_badge_threshold %}

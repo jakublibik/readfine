@@ -181,7 +181,9 @@
     {% endif %}
 
     <!-- hidden state for AI generation -->
-    <input type="hidden" name="url" value="{{ uf.feed.feed_url }}">
+    {# The scrape helpers resolve the feed's URL from this id server-side, so the
+       stored address (which may carry a token or credentials) stays out of the page. #}
+    <input type="hidden" name="feed_id" value="{{ uf.feed.id }}">
     <input type="hidden" name="html_sample" id="html-sample" value="">
     <input type="hidden" name="conversation_history" id="conversation-history" value="[]">
 

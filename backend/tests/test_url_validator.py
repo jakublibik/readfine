@@ -18,6 +18,7 @@ from app.utils.url_validator import (
     parse_retry_after,
     rate_limited_until,
     redact_url,
+    redact_url_for_display,
     spacing_from_headers,
     validate_feed_url,
 )
@@ -216,6 +217,54 @@ class TestRedactUrl:
         assert "secret" not in out
         assert "token=abc" not in out
         assert out == "https://example.com/feed?<redacted>"
+
+
+class TestRedactUrlForDisplay:
+    def test_strips_userinfo_credentials(self):
+        out = redact_url_for_display("https://user:p4ss@example.com/feed.xml")
+        assert out == "https://example.com/feed.xml"
+
+    def test_strips_userinfo_without_password(self):
+        assert redact_url_for_display("https://user@example.com/feed") == (
+            "https://example.com/feed"
+        )
+
+    def test_redacts_secret_query_value(self):
+        assert redact_url_for_display("https://example.com/feed?api_key=secret123") == (
+            "https://example.com/feed?api_key=<redacted>"
+        )
+
+    def test_keeps_harmless_query_params(self):
+        # The admin feed list is read to tell rows apart; channel_id is what
+        # distinguishes two YouTube feeds on the same host and path.
+        url = "https://youtube.com/feeds/videos.xml?channel_id=UC123"
+        assert redact_url_for_display(url) == url
+
+    def test_redacts_only_the_secret_param(self):
+        out = redact_url_for_display("https://example.com/f?channel_id=UC1&token=abc")
+        assert out == "https://example.com/f?channel_id=UC1&token=<redacted>"
+
+    def test_secret_key_matched_case_insensitively(self):
+        out = redact_url_for_display("https://example.com/f?API_KEY=abc")
+        assert "abc" not in out
+
+    def test_plain_url_returned_unchanged(self):
+        # Callers compare against the input to decide whether it is still linkable,
+        # so an untouched URL has to come back byte for byte.
+        url = "https://example.com:8080/a/b?q=hello%20world&page=2"
+        assert redact_url_for_display(url) is url
+
+    def test_uppercase_host_survives_untouched(self):
+        url = "https://Example.COM/feed"
+        assert redact_url_for_display(url) is url
+
+    def test_non_url_returned_as_is(self):
+        assert redact_url_for_display("not a url") == "not a url"
+
+    def test_empty_secret_value_still_redacted(self):
+        assert redact_url_for_display("https://example.com/f?token=") == (
+            "https://example.com/f?token=<redacted>"
+        )
 
 
 _NOW = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
