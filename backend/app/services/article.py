@@ -355,37 +355,50 @@ async def list_articles(
         for aid, lid, lname, lcolor in labels_rows:
             labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
 
-    items = []
-    for article, state, feed_title, custom_title, extract_readable in rows:
-        items.append(ArticleListItem(
-            id=article.id,
-            feed_id=article.feed_id,
-            feed_title=custom_title or feed_title,
-            url=article.url,
-            title=article.title,
-            author=article.author,
-            summary=article.summary,
-            snippet=_make_snippet(article.summary, article.content),
-            body_permanently_empty=body_permanently_empty(article, extract_readable),
-            readable_active=(
-                article.readable_status == "pending" and not article.readable_retries
-            ),
-            nothing_to_show=not (
-                article.readable_content or article.content or article.summary
-            ),
-            published_at=article.published_at,
-            formatted_date=_format_date(article.published_at or article.created_at),
-            estimated_read_min=article.estimated_read_min,
-            image_url=article.image_url,
-            is_read=state.is_read if state else False,
-            is_starred=state.is_starred if state else False,
-            is_archived=state.is_archived if state else False,
-            is_saved=bool(state and state.saved_at),
-            ai_score=state.ai_score if state else None,
-            labels=labels_by_article.get(article.id, []),
-            sort_ts=article.published_at or article.fetched_at,
-        ))
-    return items
+    return [
+        _to_list_item(
+            article, state, feed_title, custom_title, extract_readable,
+            labels_by_article.get(article.id, []),
+        )
+        for article, state, feed_title, custom_title, extract_readable in rows
+    ]
+
+
+def _to_list_item(
+    article, state, feed_title, custom_title, extract_readable, labels: list[dict]
+) -> ArticleListItem:
+    """Build one list row from the columns every list query selects.
+
+    Shared by the list and by ``get_article_list_item``, which re-renders a single
+    row in place: a field added to ArticleListItem has to be filled in here, and
+    only here, or the two would answer differently for the same article.
+    """
+    return ArticleListItem(
+        id=article.id,
+        feed_id=article.feed_id,
+        feed_title=custom_title or feed_title,
+        url=article.url,
+        title=article.title,
+        author=article.author,
+        summary=article.summary,
+        snippet=_make_snippet(article.summary, article.content),
+        body_permanently_empty=body_permanently_empty(article, extract_readable),
+        readable_active=article.readable_active,
+        nothing_to_show=not (
+            article.readable_content or article.content or article.summary
+        ),
+        published_at=article.published_at,
+        formatted_date=_format_date(article.published_at or article.created_at),
+        estimated_read_min=article.estimated_read_min,
+        image_url=article.image_url,
+        is_read=state.is_read if state else False,
+        is_starred=state.is_starred if state else False,
+        is_archived=state.is_archived if state else False,
+        is_saved=bool(state and state.saved_at),
+        ai_score=state.ai_score if state else None,
+        labels=labels,
+        sort_ts=article.published_at or article.fetched_at,
+    )
 
 
 async def get_article_list_item(
@@ -415,45 +428,9 @@ async def get_article_list_item(
         return None
 
     article, state, feed_title, custom_title, extract_readable = row
-    labels = [
-        {"id": lid, "name": lname, "color": lcolor}
-        for lid, lname, lcolor in (await db.execute(
-            select(Label.id, Label.name, Label.color)
-            .join(ArticleLabel, ArticleLabel.label_id == Label.id)
-            .where(
-                ArticleLabel.article_id == article.id,
-                ArticleLabel.user_id == user.id,
-            )
-            .order_by(Label.position, func.lower(Label.name))
-        )).all()
-    ]
-    return ArticleListItem(
-        id=article.id,
-        feed_id=article.feed_id,
-        feed_title=custom_title or feed_title,
-        url=article.url,
-        title=article.title,
-        author=article.author,
-        summary=article.summary,
-        snippet=_make_snippet(article.summary, article.content),
-        body_permanently_empty=body_permanently_empty(article, extract_readable),
-        readable_active=(
-            article.readable_status == "pending" and not article.readable_retries
-        ),
-        nothing_to_show=not (
-            article.readable_content or article.content or article.summary
-        ),
-        published_at=article.published_at,
-        formatted_date=_format_date(article.published_at or article.created_at),
-        estimated_read_min=article.estimated_read_min,
-        image_url=article.image_url,
-        is_read=state.is_read if state else False,
-        is_starred=state.is_starred if state else False,
-        is_archived=state.is_archived if state else False,
-        is_saved=bool(state and state.saved_at),
-        ai_score=state.ai_score if state else None,
-        labels=labels,
-        sort_ts=article.published_at or article.fetched_at,
+    return _to_list_item(
+        article, state, feed_title, custom_title, extract_readable,
+        await _fetch_labels(article.id, user.id, db),
     )
 
 
@@ -503,7 +480,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         readable_content=article.readable_content,
         readable_status=article.readable_status,
         readable_error=article.readable_error,
-        readable_active=(article.readable_status == "pending" and not article.readable_retries),
+        readable_active=article.readable_active,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,

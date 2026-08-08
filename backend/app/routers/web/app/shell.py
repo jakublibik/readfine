@@ -311,41 +311,54 @@ async def _mark_read_total(
     starred_only: bool, archived_only: bool, saved_only: bool, labeled_only: bool,
     label_id: int | None,
 ) -> int:
-    if starred_only:
+    """How many articles the ✓ on a sidebar row covers, for the badge next to it.
+
+    Every branch filters ``Article.trimmed_at IS NULL``, the same as the counters in
+    htmx_sidebar and the same as list_articles: a retention stub is hidden in the
+    list and in the badge, so counting it here would leave the two numbers on one
+    row disagreeing.
+    """
+    async def _states(*conditions) -> int:
         return (await db.execute(
-            select(func.count()).select_from(UserArticleState)
-            .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)
-        )).scalar() or 0
-    if archived_only:
-        return (await db.execute(
-            select(func.count()).select_from(UserArticleState)
-            .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
-        )).scalar() or 0
-    if saved_only:
-        return (await db.execute(
-            select(func.count()).select_from(UserArticleState)
+            select(func.count())
+            .select_from(UserArticleState)
             .join(Article, Article.id == UserArticleState.article_id)
             .where(
                 UserArticleState.user_id == user.id,
-                UserArticleState.saved_at.is_not(None),
                 Article.trimmed_at.is_(None),
+                *conditions,
             )
         )).scalar() or 0
+
+    if starred_only:
+        return await _states(UserArticleState.is_starred == True)
+    if archived_only:
+        return await _states(UserArticleState.is_archived == True)
+    if saved_only:
+        return await _states(UserArticleState.saved_at.is_not(None))
     if label_id is not None:
         return (await db.execute(
             select(func.count(ArticleLabel.article_id))
-            .where(ArticleLabel.user_id == user.id, ArticleLabel.label_id == label_id)
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(
+                ArticleLabel.user_id == user.id,
+                ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
+            )
         )).scalar() or 0
     if labeled_only:
         return (await db.execute(
-            select(func.count()).select_from(
-                select(ArticleLabel.article_id).where(ArticleLabel.user_id == user.id).distinct().subquery()
-            )
+            select(func.count(func.distinct(ArticleLabel.article_id)))
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
         )).scalar() or 0
     # All articles
     return (await db.execute(
         select(func.count(Article.id))
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(Article.trimmed_at.is_(None))
     )).scalar() or 0
 
 

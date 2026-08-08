@@ -13,10 +13,10 @@ from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
-from app.models.feed import UserFeed
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally, normalize_content
+from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
 
 router = APIRouter(tags=["web-app"])
@@ -24,20 +24,8 @@ router = APIRouter(tags=["web-app"])
 
 async def _get_article_access(user: User, article_id: int, db: AsyncSession):
     """Return Article ORM object if user has access, else None."""
-    stmt = (
-        select(Article)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True)
-            | (UserArticleState.saved_at.is_not(None)),
-        )
+    stmt = add_article_access_joins(select(Article), user.id).where(
+        Article.id == article_id, article_access_predicate()
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 

@@ -50,6 +50,21 @@ class Article(Base):
     user_states: Mapped[list["UserArticleState"]] = relationship(back_populates="article", cascade="all, delete-orphan")
     article_labels: Mapped[list["ArticleLabel"]] = relationship(back_populates="article", cascade="all, delete-orphan")
 
+    @property
+    def readable_active(self) -> bool:
+        """A first extraction attempt is in flight, with no failure behind it yet.
+
+        'pending' alone is not enough: a transient failure leaves the article there
+        too, with a backoff running and readable_retries counting the attempts spent.
+        The reader sees a spinner for the first case and "another attempt is
+        scheduled" for the second, so the two must not be conflated.
+
+        Copied onto ArticleResponse / ArticleListItem when they are built, which is
+        what the templates read; that copy is a snapshot, and an extraction finishing
+        afterwards leaves it stale until the next render.
+        """
+        return self.readable_status == "pending" and not self.readable_retries
+
 
 class UserArticleState(Base):
     __tablename__ = "user_article_states"

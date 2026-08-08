@@ -23,6 +23,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
+    add_article_access_joins, article_access_predicate,
     filter_accessible_article_ids, get_article, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
@@ -1000,21 +1001,9 @@ async def htmx_toggle_share(
 ):
     """Toggle share token for an article. Generates on first call, revokes on second."""
     # Load article access + state
-    stmt = (
-        select(Article, UserArticleState)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True)
-            | (UserArticleState.saved_at.is_not(None)),
-        )
-    )
+    stmt = add_article_access_joins(
+        select(Article, UserArticleState), user.id
+    ).where(Article.id == article_id, article_access_predicate())
     row = (await db.execute(stmt)).first()
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
@@ -1052,22 +1041,11 @@ async def htmx_extract_readable(
     from app.services.readable_service import extract_readable_with_title
     from app.utils.crypto import feed_auth
 
-    stmt = (
+    stmt = add_article_access_joins(
         select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True)
-            | (UserArticleState.saved_at.is_not(None)),
-        )
-    )
+        .outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(Article.id == article_id, article_access_predicate())
     row = (await db.execute(stmt)).first()
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
