@@ -731,6 +731,59 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
 
+async def _extract_for_batch(article: Article, auth, loop) -> ReadableResult:
+    """One extraction for the batch worker, off the event loop, never raising.
+
+    Both kinds of article come back as a ReadableResult so the loop has one shape to
+    work with. A saved-by-URL article asks for the fuller extraction: it has no feed
+    title to fall back on, so it needs the page's own title and description, the
+    address the fetch really ended at, and the consent/paywall check that a feed
+    article deliberately does not get (see extract_readable_with_title).
+
+    A crash becomes a failed result rather than an exception, because one unlucky
+    page must not take the rest of the batch with it.
+    """
+    auth_user, auth_pass = auth or (None, None)
+    try:
+        if article.feed_id is None:
+            return await loop.run_in_executor(
+                None, extract_readable_with_title, article.url, auth_user, auth_pass, True
+            )
+        content, error, http_status, published_at = await loop.run_in_executor(
+            None, extract_readable, article.url, auth_user, auth_pass
+        )
+        return ReadableResult(
+            content=content, error=error, http_status=http_status, published_at=published_at
+        )
+    except Exception as exc:
+        logger.warning("readable extraction error for article %d: %s", article.id, exc)
+        return ReadableResult(error=str(exc)[:200])
+
+
+async def _store_saved_extraction(
+    article: Article, result: ReadableResult, db: AsyncSession
+) -> None:
+    """Write a saved-by-URL extraction and run its post-processing. Commits.
+
+    The batch worker's fallback for an article whose import task died or hit a
+    transient error: without it such an article would come out fully extracted and
+    then silently never filtered. Post-processing is per-saver and there is no
+    scoring, which is what keeps it apart from the feed path.
+    """
+    from app.services.saved_article_service import (
+        adopt_resolved_url, finalize_for_all_savers,
+    )
+
+    apply_readable_result(
+        article, result.content, result.error, result.http_status, result.published_at,
+        title=result.title, description=result.description,
+    )
+    adopt_resolved_url(article, result.resolved_url)
+    if result.content or article.readable_status == "failed":
+        await finalize_for_all_savers(article, db)
+    await db.commit()
+
+
 async def process_pending_readable(db: AsyncSession) -> int:
     """
     Process a batch of articles with readable_status='pending'.
@@ -788,33 +841,9 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        # Articles saved by URL have no feed. They must not touch the per-feed
-        # bookkeeping below — every one of them would land in the same `None` bucket,
-        # so unrelated hosts would pool their 403s/empties and could trip
-        # _disable_readable_for_403(None, db) for a feed that does not exist.
-        is_feedless = article.feed_id is None
-
-        auth_user, auth_pass = auth_by_feed.get(article.feed_id) or (None, None)
-        title = None
-        resolved_url = None
-        description = None
-        try:
-            if is_feedless:
-                r = await loop.run_in_executor(
-                    None, extract_readable_with_title,
-                    article.url, auth_user, auth_pass, True
-                )
-                content, error, http_status, published_at = (
-                    r.content, r.error, r.http_status, r.published_at
-                )
-                title, resolved_url, description = r.title, r.resolved_url, r.description
-            else:
-                content, error, http_status, published_at = await loop.run_in_executor(
-                    None, extract_readable, article.url, auth_user, auth_pass
-                )
-        except Exception as exc:
-            content, error, http_status, published_at = None, str(exc)[:200], None, None
-            logger.warning("readable extraction error for article %d: %s", article.id, exc)
+        result = await _extract_for_batch(
+            article, auth_by_feed.get(article.feed_id), loop
+        )
 
         # Re-check status — on-demand extraction may have already processed this article
         await db.refresh(article)
@@ -822,27 +851,21 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        is_403 = apply_readable_result(
-            article, content, error, http_status, published_at,
-            title=title, description=description,
-        )
-        if is_feedless:
-            from app.services.saved_article_service import adopt_resolved_url
-            adopt_resolved_url(article, resolved_url)
-        is_empty = content is None and error == _EMPTY_CONTENT_MSG
-        from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
-        if is_feedless:
-            # Saved-by-URL: no scoring, and post-processing is per-saver. This is the
-            # fallback path for an import task that died or hit a transient error —
-            # without it those articles would come out fully extracted but silently
-            # never filtered.
-            if content or article.readable_status == "failed":
-                from app.services.saved_article_service import finalize_for_all_savers
-                await finalize_for_all_savers(article, db)
+        # Articles saved by URL have no feed, and nothing below this point can serve
+        # them: every one would land in the same `None` bucket of the per-feed
+        # bookkeeping, so unrelated hosts would pool their 403s and empties and could
+        # trip _disable_readable_for_403(None, db) for a feed that does not exist.
+        if article.feed_id is None:
+            await _store_saved_extraction(article, result, db)
             processed += 1
-            await db.commit()
             continue
 
+        content = result.content
+        is_403 = apply_readable_result(
+            article, content, result.error, result.http_status, result.published_at,
+        )
+        is_empty = content is None and result.error == _EMPTY_CONTENT_MSG
+        from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if content:
             feed_403_streak.pop(article.feed_id, None)  # reset streaks on success
             feed_empty_streak.pop(article.feed_id, None)
