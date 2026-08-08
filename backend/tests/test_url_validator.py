@@ -561,6 +561,100 @@ class TestFinalUrl:
         assert page.final_url == "https://example.com/c"
 
 
+class TestAuthStaysOnItsOrigin:
+    """Credentials are sent to the host they were given for, and to no other.
+
+    Set on the httpx client they would ride the whole redirect chain, so a feed host
+    answering one 302 could hand its neighbour the subscriber's Basic auth header.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _authorization_headers(self, start, *hops, auth=("bob", "hunter2")):
+        """Fetch *start* through *hops*, returning each hop's Authorization header."""
+        remaining = list(hops)
+        seen: list[str | None] = []
+
+        def handler(request):
+            seen.append(request.headers.get("authorization"))
+            if not remaining:
+                return httpx.Response(200, text="<rss/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                fetch_url_page(start, auth=auth)
+        return seen
+
+    def test_sent_on_the_first_request(self):
+        assert self._authorization_headers("https://example.com/feed")[0] is not None
+
+    def test_sent_across_a_same_origin_redirect(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (301, "https://example.com/feed/")
+        )
+        assert seen[0] is not None and seen[1] == seen[0]
+
+    def test_default_port_spelled_out_is_still_the_same_origin(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (301, "https://example.com:443/feed/")
+        )
+        assert seen[1] == seen[0]
+
+    def test_withheld_after_a_hop_to_another_host(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "https://evil.example/feed")
+        )
+        assert seen[0] is not None
+        assert seen[1] is None
+
+    def test_kept_across_an_http_to_https_upgrade_on_the_same_host(self):
+        # The shape every feed stored under an http:// address takes on each fetch.
+        # The host is upgrading its own address, not handing us to someone else.
+        seen = self._authorization_headers(
+            "http://example.com/feed", (301, "https://example.com/feed")
+        )
+        assert seen[1] == seen[0] is not None
+
+    def test_upgrade_exception_does_not_extend_to_another_host(self):
+        seen = self._authorization_headers(
+            "http://example.com/feed", (301, "https://evil.example/feed")
+        )
+        assert seen[1] is None
+
+    def test_withheld_after_an_https_to_http_downgrade(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "http://example.com/feed")
+        )
+        assert seen[1] is None
+
+    def test_withheld_after_a_port_change(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "https://example.com:8443/feed")
+        )
+        assert seen[1] is None
+
+    def test_not_regained_by_returning_to_the_original_host(self):
+        # The header has already been offered to evil.example by the time the chain
+        # comes back, but there is no reason to keep punishing the real host for it:
+        # the hop is on the origin the credentials were given for, so it gets them.
+        seen = self._authorization_headers(
+            "https://example.com/feed",
+            (302, "https://evil.example/hop"),
+            (302, "https://example.com/feed2"),
+        )
+        assert [h is None for h in seen] == [False, True, False]
+
+    def test_userinfo_in_the_url_still_authenticates_without_explicit_auth(self):
+        # _pin_connection keeps userinfo in the connect URL and httpx builds the
+        # header from it. Passing auth=None per request must not disable that.
+        seen = self._authorization_headers(
+            "https://bob:hunter2@example.com/feed", auth=None
+        )
+        assert seen[0] is not None
+
+
 class TestPinConnection:
     """_pin_connection: rewrite to the validated IP while preserving Host / SNI."""
 

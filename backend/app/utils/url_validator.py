@@ -472,12 +472,48 @@ def _permanent_redirect_target(original: str, candidate: str) -> str | None:
     return candidate
 
 
+# Ports that need not be spelled out for an origin to be the same one. Used by
+# _origin, which compares hops of a redirect chain.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) triple that decides who a request is talking to.
+
+    Redirect hops are compared through this rather than by string, so a chain that
+    only adds a path, or spells out the default port, still counts as staying put.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    return scheme, (parsed.hostname or "").lower(), parsed.port or _DEFAULT_PORTS.get(scheme)
+
+
+def _keeps_credentials(origin: tuple[str, str, int | None], url: str) -> bool:
+    """True when *url* is still the party the credentials for *origin* were meant for.
+
+    Same origin qualifies, and so does a plain http → https hop on the same host:
+    that is the host upgrading its own address, not handing us to someone else, and
+    it is the shape a feed stored under an ``http://`` address takes on every fetch.
+    httpx makes the same exception in its own redirect handling.
+    """
+    other = _origin(url)
+    if other == origin:
+        return True
+    scheme, host, port = origin
+    return (
+        scheme == "http" and port == _DEFAULT_PORTS["http"]
+        and other[0] == "https" and other[2] == _DEFAULT_PORTS["https"]
+        and other[1] == host
+    )
+
+
 def _get_once_retrying_protocol_error(
     client: httpx.Client,
     logical_url: str,
     connect_url: str,
     host_overlay: dict,
     extensions: dict,
+    auth=None,
 ) -> httpx.Response:
     """GET *connect_url*, retrying once if the connection dies mid-request.
 
@@ -494,11 +530,18 @@ def _get_once_retrying_protocol_error(
 
     The pinned IP from :func:`_pin_connection` is deliberately reused: re-resolving
     for the retry would reopen the DNS-rebinding window the pinning exists to close.
+
+    *auth* is passed per request instead of being set on the client, so the caller can
+    withhold it on a hop that left the origin it was meant for (see
+    :func:`_resolve_response`). ``None`` means "no explicit credentials", which still
+    lets httpx build them from userinfo in the URL, as it does today.
     """
     for attempt in range(2):
         started = time.monotonic()
         try:
-            response = client.get(connect_url, headers=host_overlay, extensions=extensions)
+            response = client.get(
+                connect_url, headers=host_overlay, extensions=extensions, auth=auth
+            )
         except httpx.RemoteProtocolError as exc:
             log_outbound(logical_url, None, started, error=type(exc).__name__)
             if attempt:
@@ -540,7 +583,14 @@ def _resolve_response(
     the resource moved for good; whatever a later temporary hop does cannot unsay
     it. Insisting on an all-permanent chain would throw away the most common and
     most valuable case, an http → https hop followed by something temporary.
+
+    ``auth`` is scoped to the origin of *url*. Set on the client it would ride along
+    to wherever a ``Location`` header points, so one 302 from a feed host would hand
+    that host's neighbour the subscriber's Basic auth header. The credentials were
+    given for one host, so they are sent per request and only while the hop is still
+    on it (see :func:`_keeps_credentials`).
     """
+    origin = _origin(url)
     current_url = url
     # Last URL reached through 301/308 hops only; frozen at the first hop that is
     # not permanent, so a temporary redirect never contributes a stored address.
@@ -551,7 +601,7 @@ def _resolve_response(
     # with a header-less 403 / near-zero rate budget (observed on Reddit via Fastly),
     # while serving HTTP/2 clients normally.
     with httpx.Client(
-        timeout=timeout, follow_redirects=False, auth=auth, headers=headers, http2=True
+        timeout=timeout, follow_redirects=False, headers=headers, http2=True
     ) as client:
         for hop in range(max_redirects + 1):
             # Validate + pin every hop to its resolved IP; connecting to the IP
@@ -567,7 +617,8 @@ def _resolve_response(
                     raise ValueError(f"Redirect blocked: {exc}") from exc
                 raise
             response = _get_once_retrying_protocol_error(
-                client, current_url, connect_url, host_overlay, extensions
+                client, current_url, connect_url, host_overlay, extensions,
+                auth=auth if _keeps_credentials(origin, current_url) else None,
             )
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.

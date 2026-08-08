@@ -60,6 +60,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - Full-text extraction now connects to the address it checked. Every outside address is verified before Readfine requests it, so it cannot lead to the machine itself or to something on the local network, but the extraction path then passed the host name on to the HTTP client, which looked it up a second time. A name server under someone else's control can answer those two lookups differently, handing a public address to the check and a private one to the connection a moment later. The feed fetcher has connected to the verified address itself for a while, and extraction now uses that same path, on the first request and on every redirect it follows. Nothing changes in what you see; this only closes an opening that grew more exposed with saving an article by link, which fetches whatever address it is given, on request and as often as asked.
 
+- A feed's login details are no longer offered to whatever a redirect points at. When a feed authenticates with a username and password, those were attached to the HTTP client rather than to the individual request, so they went out again at every step of a redirect chain, including a step that left the site. A feed host answering with a single redirect elsewhere could collect them that way. They are now sent only while the address being fetched is still on the site they were entered for, and a redirect that leads off it is followed without them. A host moving its own address from http to https keeps them, since that is the same host and the safer of the two.
+
 ## [0.14.0] - 2026-07-30
 
 ### Added
