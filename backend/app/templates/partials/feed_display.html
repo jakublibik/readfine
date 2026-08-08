@@ -3,8 +3,9 @@
 
 {# Marks a private feed next to its title. Public is the default and stays unmarked,
    so the icon only ever means "this one is not shared". Gray, not amber: private is a
-   property of the feed, not a problem with it. #}
-{% macro private_lock() %}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
+   property of the feed, not a problem with it. The default tooltip speaks to the feed's
+   owner; the admin list shows other people's feeds, so it passes its own wording. #}
+{% macro private_lock(title="Private feed, kept to your account only and not shared with other subscribers.") %}<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
      class="w-3.5 h-3.5 flex-shrink-0 text-gray-400" role="img" aria-label="Private feed"
-     ><title>Private feed, kept to your account only and not shared with other subscribers.</title
+     ><title>{{ title }}</title
      ><path fill-rule="evenodd" d="M10 1a4.5 4.5 0 00-4.5 4.5V9H5a2 2 0 00-2 2v6a2 2 0 002 2h10a2 2 0 002-2v-6a2 2 0 00-2-2h-.5V5.5A4.5 4.5 0 0010 1zm3 8V5.5a3 3 0 10-6 0V9h6z" clip-rule="evenodd"/></svg>{% endmacro %}

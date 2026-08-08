@@ -5,7 +5,7 @@
   <td class="px-3 py-2 w-full min-w-[16rem] max-w-0">
     <div class="flex items-center gap-1.5 min-w-0">
       <span class="font-medium text-gray-900 truncate" title="{{ f.title }}">{{ f.title }}</span>
-      {% if f.is_private %}{{ private_lock() }}{% endif %}
+      {% if f.is_private %}{{ private_lock("Private feed, kept to its subscriber's account and not shared with other users.") }}{% endif %}
     </div>
     {# A feed URL can carry an API token in the query or HTTP credentials in the host
        part, and this list is the one place an admin sees every user's feeds. Redacted
