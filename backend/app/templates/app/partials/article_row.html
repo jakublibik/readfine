@@ -1,4 +1,5 @@
 {% from "app/partials/error_bar.html" import error_bar %}
+{% from "app/partials/row_poll.html" import row_poll %}
 
 {#- Where a saved-by-URL article's row says what is happening to it.
 
@@ -60,19 +61,8 @@
      hx-target="#article-detail"
      hx-swap="innerHTML">
 
-  {#- A saved-by-URL article is inserted with a placeholder title (its host + path)
-      and only learns its real one when extraction finishes, which happens after
-      this row was rendered. Poll until then, and swap the whole row once.
-
-      Scoped to articles with no feed on purpose: a feed article already has its
-      title from the feed, so its row would poll for a change that never comes. -#}
   {% if article.readable_active and not article.feed_id %}
-  <div id="row-poll-{{ article.id }}"
-       hx-get="/htmx/articles/{{ article.id }}/row-poll?density={{ d }}&amp;label_display={{ ld }}"
-       hx-trigger="every 2s"
-       hx-swap="outerHTML"
-       data-stop-propagation
-       class="hidden"></div>
+  {{ row_poll(article.id, d, ld) }}
   {% endif %}
 
   {% if d == "compact" %}

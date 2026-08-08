@@ -579,6 +579,9 @@ document.body.addEventListener('savedArticleRemoved', function (e) {
   var detail = document.getElementById('article-detail');
   var openDetail = detail && detail.querySelector('[id^="article-content-' + id + '"]');
   if (openDetail) {
+    // The empty state main.html renders, minus its icon: there is no round trip
+    // here to render the real one, and this is the only place that needs it
+    // client-side. Keep the wording in step with that template.
     detail.innerHTML =
       '<div class="flex items-center justify-center h-full text-gray-400">' +
       '<div class="text-center"><p class="text-sm">Select an article to read</p></div></div>';

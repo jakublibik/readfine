@@ -1,4 +1,5 @@
 {% from "app/partials/ai_blocks.html" import ai_summary, ai_context, ai_spinner, ai_indicator %}
+{% from "app/partials/article_title.html" import article_title %}
 {% from "app/partials/chat.html" import chat_area %}
 <!-- Mobile back bar (small bucket fullscreen mode only) -->
 <div id="article-detail-root" data-article-id="{{ article.id }}">
@@ -48,7 +49,7 @@
           {{ article.title or "↗" }}
         </a>
       {% else %}
-        <h1 id="article-title-{{ article.id }}" class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
+        {{ article_title(article) }}
       {% endif %}
     </div>
 

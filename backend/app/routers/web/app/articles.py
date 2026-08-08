@@ -5,7 +5,6 @@ import json
 import logging
 import secrets
 from datetime import datetime
-from html import escape
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -661,12 +660,10 @@ async def htmx_row_poll(
         # Gone (unsaved, purged, or access revoked) — drop the poller.
         return HTMLResponse("")
     if item.readable_active:
-        qs = urlencode({"density": density or "", "label_display": label_display or ""})
+        # The same element the row rendered, so the loop carries on unchanged.
+        macros = templates.env.get_template("app/partials/row_poll.html").module
         return HTMLResponse(
-            f'<div id="row-poll-{article_id}"'
-            f' hx-get="/htmx/articles/{article_id}/row-poll?{qs}"'
-            f' hx-trigger="every 2s" hx-swap="outerHTML"'
-            f' data-stop-propagation class="hidden"></div>'
+            str(macros.row_poll(article_id, density or "", label_display or ""))
         )
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
@@ -737,11 +734,8 @@ def _content_with_readtime_oob(request: Request, article, extra_oob: str = "") -
     # Only feedless articles can change title, so nothing else is touched.
     title_oob = ""
     if article.feed_id is None:
-        title_oob = (
-            f'<h1 id="article-title-{article.id}" hx-swap-oob="true"'
-            f' class="text-2xl font-bold text-gray-900 leading-snug">'
-            f'{escape(article.title or "—")}</h1>'
-        )
+        macros = templates.env.get_template("app/partials/article_title.html").module
+        title_oob = str(macros.article_title(article, oob=True))
     return HTMLResponse(content_html + oob + date_oob + title_oob + extra_oob)
 
 
