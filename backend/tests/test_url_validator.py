@@ -1,4 +1,5 @@
 """Unit tests for SSRF-protection URL validator."""
+import gzip
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -10,6 +11,7 @@ from tests.conftest import mock_httpx_client as _mock_httpx_client
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    ResponseTooLarge,
     _pin_connection,
     fetch_url_conditional,
     fetch_url_page,
@@ -852,3 +854,159 @@ class TestProtocolErrorRetry:
         # Same validated IP both times, and DNS was consulted only once.
         assert hosts == [("93.184.216.34", "example.com")] * 2
         assert resolve.call_count == 1
+
+
+class TestResponseSizeCap:
+    """A body past the cap is abandoned rather than held in memory.
+
+    Bodies are handed to the mock transport as generators, not as bytes: that is what
+    makes httpx stream them, so these tests can tell how much was actually pulled off
+    the wire before the fetch gave up.
+    """
+
+    _CAP = 1000
+
+    def _capped(self):
+        from app.config import settings
+        return patch.object(settings, "max_fetch_bytes", self._CAP)
+
+    def test_declared_length_over_cap_is_refused_before_the_body(self):
+        pulled = []
+
+        def body():
+            pulled.append(1)
+            yield b"x" * (self._CAP * 2)
+
+        def handler(request):
+            return httpx.Response(
+                200, headers={"content-length": str(self._CAP * 2)}, content=body()
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/big")
+        assert pulled == []  # Content-Length alone was enough to say no
+
+    def test_undeclared_body_is_cut_off_at_the_cap(self):
+        # No Content-Length, i.e. a chunked response: the header check has nothing to
+        # go on and the running total is the only thing standing between us and the
+        # whole file.
+        chunks_sent = []
+
+        def body():
+            for i in range(100):
+                chunks_sent.append(i)
+                yield b"x" * 200
+
+        def handler(request):
+            return httpx.Response(200, content=body())
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/big")
+        # Stopped as soon as the total passed the cap, not after draining the source.
+        assert len(chunks_sent) == 6
+        assert len(chunks_sent) * 200 <= self._CAP + 200
+
+    def test_compressed_bomb_is_measured_after_decompression(self):
+        # 100 kB of zeros gzips to a couple of hundred bytes, so both the declared
+        # length and the bytes on the wire stay well under the cap. What costs memory
+        # is what comes out of the decompressor, and that is what is counted.
+        payload = gzip.compress(b"\0" * 100_000)
+        assert len(payload) < self._CAP
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={
+                    "content-encoding": "gzip",
+                    "content-length": str(len(payload)),
+                },
+                content=iter([payload]),
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/bomb")
+
+    def test_body_under_the_cap_arrives_whole(self):
+        def handler(request):
+            return httpx.Response(200, content=iter([b"a" * 400, b"b" * 400]))
+
+        with _mock_httpx_client(handler), self._capped():
+            body = fetch_url_with_ssrf_check("https://example.com/ok")
+        assert body == "a" * 400 + "b" * 400
+
+    def test_redirect_body_is_not_downloaded(self):
+        # Only the Location header is wanted from a redirect, so a host answering 302
+        # with a payload attached must not cost us that payload.
+        pulled = []
+
+        def body():
+            pulled.append(1)
+            yield b"x" * (self._CAP * 10)
+
+        def handler(request):
+            if request.url.path == "/start":
+                return httpx.Response(
+                    302, headers={"Location": "https://example.com/end"}, content=body()
+                )
+            return httpx.Response(200, content=iter([b"arrived"]))
+
+        with _mock_httpx_client(handler), self._capped():
+            with patch("socket.getaddrinfo",
+                       return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                result = fetch_url_page("https://example.com/start")
+        assert result.text == "arrived"
+        assert pulled == []
+
+    def test_connection_dying_mid_body_is_retried(self):
+        # The body is read inside the retry, so a connection that survives the headers
+        # and dies part-way through the payload is the same recoverable failure as one
+        # that dies before answering — and the half-read body is dropped with it.
+        attempts = []
+
+        def failing_body():
+            yield b"half a "
+            raise httpx.RemoteProtocolError("peer closed", request=None)
+
+        def handler(request):
+            attempts.append(request.url)
+            if len(attempts) == 1:
+                return httpx.Response(200, content=failing_body())
+            return httpx.Response(200, content=iter([b"whole body"]))
+
+        with _mock_httpx_client(handler), self._capped():
+            with patch("socket.getaddrinfo",
+                       return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                body = fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert body == "whole body"
+        assert len(attempts) == 2
+
+    def test_message_names_the_limit_in_a_unit_that_reads(self):
+        # A cap tuned below a megabyte used to report itself as "0 MB", integer
+        # division having eaten it.
+        from app.utils.url_validator import _too_large
+
+        for cap, expected in ((10 * 1024 * 1024, "10 MB"), (512 * 1024, "512 kB")):
+            with pytest.raises(ResponseTooLarge, match=expected):
+                _too_large("https://example.com/x", cap, "in a test")
+
+    def test_rebuilt_response_keeps_charset_and_headers(self):
+        # The response handed back is assembled around the body we read, so everything
+        # callers take off it has to survive that: the charset that decodes .text, and
+        # the validators the feed fetcher stores.
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "text/html; charset=iso-8859-2",
+                    "etag": '"v9"',
+                },
+                content=iter(["příliš".encode("iso-8859-2")]),
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            result = fetch_url_conditional("https://example.com/feed.xml")
+        assert result.text == "příliš"
+        assert result.etag == '"v9"'

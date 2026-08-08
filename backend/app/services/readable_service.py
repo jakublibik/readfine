@@ -46,6 +46,10 @@ _FULL_CONTENT_SAMPLE_CHARS = 20_000
 # or the result collapsed to whitespace after sanitization, e.g. Reddit comment pages).
 _EMPTY_CONTENT_MSG = "No content could be extracted from the page"
 
+# The page went past the download cap. Said without the cap's own size, which is a
+# server setting the reader cannot act on; the byte count goes to the log instead.
+_TOO_LARGE_MSG = "The page is too large to download"
+
 
 # ── core extraction ───────────────────────────────────────────────────────────
 
@@ -67,7 +71,7 @@ def _fetch_html(
     used to be reachable only while subscribing to a feed, but save-by-URL fetches
     any address on request and repeatedly, which is what a race needs.
     """
-    from app.utils.url_validator import fetch_url_page
+    from app.utils.url_validator import ResponseTooLarge, fetch_url_page
     # Non-NULL rather than truthy, matching app.utils.crypto.feed_auth: a feed whose
     # credentials came out of its URL may legitimately carry an empty password.
     auth = (auth_user, auth_pass) if auth_user is not None and auth_pass is not None else None
@@ -85,6 +89,11 @@ def _fetch_html(
         # says which). Not an HTTP failure, so there is no status to report.
         logger.warning("readable URL blocked (SSRF): %s — %s", url, exc)
         return None, str(exc), None, None
+    except ResponseTooLarge as exc:
+        # Not an HTTP failure and not a bad address: the host answered, the answer
+        # was just bigger than we are willing to hold.
+        logger.warning("readable fetch abandoned for %s: %s", url, exc)
+        return None, _TOO_LARGE_MSG, None, None
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
         msg = f"HTTP {status_code} {exc.response.reason_phrase}"
@@ -821,7 +830,9 @@ def apply_readable_result(
     # A consent wall answers the same way every time, so scheduled retries would only
     # ask a site that refuses us three times instead of once. Terminal like a 4xx; the
     # Retry button on a saved article still works, and that one is a person's decision.
-    if is_4xx or error == _WRONG_CONTENT_MSG:
+    # An oversized page is terminal for the same reason, and more sharply: each retry
+    # would download the cap again before giving up in exactly the same place.
+    if is_4xx or error in (_WRONG_CONTENT_MSG, _TOO_LARGE_MSG):
         article.readable_status = "failed"
         article.readable_failed_at = datetime.now(timezone.utc)
         article.readable_next_retry_at = None

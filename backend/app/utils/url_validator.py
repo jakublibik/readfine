@@ -36,6 +36,16 @@ RETRYABLE_HTTP_STATUSES = TRANSIENT_HTTP_STATUSES | {403}
 _BLOCK_HTTP_STATUSES = frozenset({403, 429})
 
 
+class ResponseTooLarge(Exception):
+    """A response body went past the size cap and was abandoned mid-download.
+
+    Deliberately not a ``ValueError``: that class means "this address is refused"
+    everywhere in this module (bad scheme, private range, blocked redirect), and
+    callers turn it into a message about the address. This one is about what the
+    host sent back, and the address itself may be perfectly fine.
+    """
+
+
 def is_bot_block(status_code: int | None, headers) -> bool:
     """True when a failure looks like the host refusing automation, not a broken feed.
 
@@ -538,6 +548,86 @@ def _keeps_credentials(origin: tuple[str, str, int | None], url: str) -> bool:
     )
 
 
+def _max_fetch_bytes() -> int:
+    from app.config import settings
+
+    return settings.max_fetch_bytes
+
+
+def _read_capped(response: httpx.Response, url: str, max_bytes: int) -> bytes:
+    """Read a streamed body, giving up as soon as it goes past *max_bytes*.
+
+    The declared ``Content-Length`` is checked first, which costs nothing and turns
+    away an honest oversized response before a single byte of it is transferred. It
+    cannot be the whole check, though: it is absent on chunked responses and it
+    describes the *compressed* size, so a few hundred kB of gzip can still unpack
+    into gigabytes. The running total below is therefore the real cap — it counts
+    the bytes :meth:`iter_bytes` yields, which are the decompressed ones, i.e. the
+    memory this actually costs us.
+    """
+    declared = response.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes:
+        _too_large(url, max_bytes, f"declared {declared} bytes")
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes():
+        total += len(chunk)
+        if total > max_bytes:
+            _too_large(url, max_bytes, "still going past the cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _too_large(url: str, max_bytes: int, detail: str) -> None:
+    """Log which page was abandoned and why, then raise. Never returns.
+
+    The message that travels with the exception says only that a limit was passed:
+    it ends up in a feed's error row and on a saved article, where the reader can do
+    nothing about a server setting. The size and the host go to the log, for whoever
+    can.
+    """
+    logger.warning("response over the %d byte cap (%s): %s", max_bytes, detail, url)
+    # Whole MB for the default and anything like it, kB below that: a cap a
+    # self-hoster tuned down to half a megabyte must not report itself as "0 MB".
+    limit = (
+        f"{max_bytes / (1024 * 1024):g} MB" if max_bytes >= 1024 * 1024
+        else f"{max_bytes // 1024} kB"
+    )
+    raise ResponseTooLarge(f"Response exceeds the {limit} size limit")
+
+
+# Response headers that describe the body *as it travelled*, not as we hand it on:
+# how it was compressed and how many bytes that took. The body has been decompressed
+# on the way in, so a response rebuilt around it must not keep them — httpx would try
+# to gunzip already-plain bytes and fail. It recomputes Content-Length itself.
+_TRANSFER_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def _with_body(response: httpx.Response, body: bytes) -> httpx.Response:
+    """Rebuild *response* around an already-downloaded *body*.
+
+    A streamed response cannot be read once its client is closed, and the body has
+    to be read under the size cap rather than by httpx in one go, so what the caller
+    gets back is assembled here instead of being the object the transport returned.
+    Everything callers read off it is carried over: the status, the request (which
+    ``raise_for_status`` needs), the extensions holding the HTTP version and the
+    server's own reason phrase, and every header except the ones in
+    :data:`_TRANSFER_HEADERS` — including the charset that decodes ``.text``.
+    """
+    headers = [
+        (key, value)
+        for key, value in response.headers.multi_items()
+        if key.lower() not in _TRANSFER_HEADERS
+    ]
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        content=body,
+        request=response.request,
+        extensions=response.extensions,
+    )
+
+
 def _get_once_retrying_protocol_error(
     client: httpx.Client,
     logical_url: str,
@@ -566,13 +656,32 @@ def _get_once_retrying_protocol_error(
     withhold it on a hop that left the origin it was meant for (see
     :func:`_resolve_response`). ``None`` means "no explicit credentials", which still
     lets httpx build them from userinfo in the URL, as it does today.
+
+    The body is streamed and read under a size cap rather than being handed over
+    whole by httpx, so a host answering with something enormous costs us the cap and
+    not our memory. Reading it inside the retry, rather than after it, is what makes
+    the retry cover a connection that dies part-way through the body — the same
+    failure the retry exists for, just later in the exchange. The partial body is
+    dropped with the attempt.
     """
+    max_bytes = _max_fetch_bytes()
     for attempt in range(2):
         started = time.monotonic()
         try:
-            response = client.get(
-                connect_url, headers=host_overlay, extensions=extensions, auth=auth
+            request = client.build_request(
+                "GET", connect_url, headers=host_overlay, extensions=extensions
             )
+            response = client.send(request, auth=auth, stream=True)
+            try:
+                # A redirect is read for its Location header alone, so its body is
+                # never downloaded: a host that answers 302 with a huge payload
+                # should cost us the header and nothing more.
+                body = (
+                    b"" if response.has_redirect_location
+                    else _read_capped(response, logical_url, max_bytes)
+                )
+            finally:
+                response.close()
         except httpx.RemoteProtocolError as exc:
             log_outbound(logical_url, None, started, error=type(exc).__name__)
             if attempt:
@@ -582,7 +691,7 @@ def _get_once_retrying_protocol_error(
             raise
         else:
             log_outbound(logical_url, response, started)
-            return response
+            return _with_body(response, body)
     raise AssertionError("unreachable")  # pragma: no cover
 
 

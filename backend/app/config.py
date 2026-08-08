@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     # host's throttling. Enable via LOG_OUTBOUND_REQUESTS=true and restart the app.
     log_outbound_requests: bool = False
 
+    # Hard cap on the body of any page we download (feed, scraped page, article).
+    # Measured after decompression, so a small response that expands into gigabytes
+    # is stopped too. 10 MB clears the largest real feeds and article pages by a wide
+    # margin; raise it only if a genuine source turns out not to fit.
+    max_fetch_bytes: int = 10 * 1024 * 1024
+
     # Phase offset (minutes, 0–14) for the 15-min feed-fetch schedule. Shifts the
     # four fetch ticks off the default :00/:15/:30/:45 so a second instance sharing
     # the host (e.g. staging next to production) doesn't fetch at the same wall-clock

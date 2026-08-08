@@ -977,6 +977,15 @@ class TestInterstitialIsRejectedOnBothPaths:
         assert article.readable_status == "failed"
         assert article.readable_next_retry_at is None
 
+    def test_oversized_page_is_terminal_too(self):
+        """A page over the download cap is over it next time as well, and each retry
+        would spend the whole cap before giving up in the same place."""
+        from app.services.readable_service import apply_readable_result, _TOO_LARGE_MSG
+        article = _make_article()
+        apply_readable_result(article, None, _TOO_LARGE_MSG, None)
+        assert article.readable_status == "failed"
+        assert article.readable_next_retry_at is None
+
 
 # ── how far in the metadata is looked for ────────────────────────────────────
 

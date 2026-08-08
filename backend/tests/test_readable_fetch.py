@@ -13,7 +13,7 @@ fetch out, so they fail if the pinning or the error mapping is bypassed.
 import httpx
 from unittest.mock import patch
 
-from app.services.readable_service import _fetch_html, _MAX_REDIRECTS
+from app.services.readable_service import _fetch_html, _MAX_REDIRECTS, _TOO_LARGE_MSG
 from tests.conftest import mock_httpx_client
 
 _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
@@ -124,6 +124,21 @@ class TestErrorMapping:
             html, error, status, _final = _fetch_html("https://example.com/a", None, None)
         assert html is None and status is None
         assert error.startswith("Timeout after")
+
+    def test_oversized_page_is_reported_without_the_cap_s_own_size(self):
+        # The reader cannot do anything about a server setting, so the message names
+        # the problem and leaves the byte count to the log.
+        from app.config import settings
+
+        def handler(request):
+            return httpx.Response(200, content=iter([b"x" * 5000]))
+
+        with mock_httpx_client(handler), \
+             patch("socket.getaddrinfo", return_value=_PUBLIC_IP), \
+             patch.object(settings, "max_fetch_bytes", 1000):
+            html, error, status, _final = _fetch_html("https://example.com/a", None, None)
+        assert html is None and status is None
+        assert error == _TOO_LARGE_MSG
 
     def test_redirect_loop_gives_up_with_the_readable_limit(self):
         def handler(request):
