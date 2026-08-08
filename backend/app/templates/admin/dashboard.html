@@ -114,11 +114,9 @@
 {% endif %}
 
 {% if stats.readable_revived_recent or stats.readable_revival_pending %}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Readable extraction revival
-  {% if stats.readable_revival_pending %}<span class="font-normal text-gray-400">({{ stats.readable_revival_pending|num }} feed{{ "s" if stats.readable_revival_pending != 1 }} awaiting a probe)</span>{% endif %}
-</h2>
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Feeds revived for readable extraction <span class="font-normal text-gray-400">(last 30 days)</span></h2>
 {% if stats.readable_revived_recent %}
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden {{ 'mb-3' if stats.readable_revival_pending else 'mb-8' }}">
   <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
@@ -143,7 +141,10 @@
   </div>
 </div>
 {% else %}
-<p class="text-sm text-gray-400 mb-8">No feeds revived in the last 30 days.</p>
+<p class="text-sm text-gray-400 {{ 'mb-3' if stats.readable_revival_pending else 'mb-8' }}">No feeds revived in the last 30 days.</p>
+{% endif %}
+{% if stats.readable_revival_pending %}
+<p class="text-sm text-gray-400 mb-8">Separately, {{ stats.readable_revival_pending|num }} feed{{ "s" if stats.readable_revival_pending != 1 }} still {{ "have" if stats.readable_revival_pending != 1 else "has" }} extraction disabled and {{ "are" if stats.readable_revival_pending != 1 else "is" }} waiting for the next probe.</p>
 {% endif %}
 {% endif %}
 
