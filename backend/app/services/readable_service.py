@@ -387,7 +387,7 @@ def resolve_article_url(
     return fetched_url
 
 
-def sends_us_back(
+def redirected_back_to_us(
     fetched_url: Optional[str], requested_url: Optional[str], html: Optional[str]
 ) -> bool:
     """True when the fetch landed on a page whose job is to send us back.
@@ -648,7 +648,7 @@ def extract_readable_with_title(
         # Nothing was downloaded, so there is no title or address to report either.
         return ReadableResult(error=fetch_error, http_status=http_status)
 
-    if sends_us_back(final_url, url, html):
+    if redirected_back_to_us(final_url, url, html):
         # An interstitial holding the address it interrupted. Report it as the wrong
         # page rather than extracting it, and keep the requested address: adopting the
         # wall's own URL would make "Open original" and Retry walk back into it.
@@ -827,8 +827,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
             title=title, description=description,
         )
         if is_feedless:
-            from app.services.saved_article_service import _adopt_resolved_url
-            _adopt_resolved_url(article, resolved_url)
+            from app.services.saved_article_service import adopt_resolved_url
+            adopt_resolved_url(article, resolved_url)
         is_empty = content is None and error == _EMPTY_CONTENT_MSG
         from app.services.ai_pipeline_service import run_pipeline_for_article_all_users
         if is_feedless:

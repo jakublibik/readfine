@@ -1074,8 +1074,8 @@ async def htmx_extract_readable(
         article, result.content, result.error, result.http_status, result.published_at,
         title=result.title, description=result.description,
     )
-    from app.services.saved_article_service import _adopt_resolved_url
-    _adopt_resolved_url(article, result.resolved_url)
+    from app.services.saved_article_service import adopt_resolved_url
+    adopt_resolved_url(article, result.resolved_url)
     await db.commit()
 
     # Render from the full ArticleResponse (not the raw ORM row) so per-user fields

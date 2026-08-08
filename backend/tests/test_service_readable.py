@@ -707,7 +707,7 @@ class TestResolveArticleUrl:
 
 # ── interstitials that carry the address they interrupted ─────────────────────
 
-class TestSendsUsBack:
+class TestRedirectedBackToUs:
     """iDNES answers a server-side fetch with /nastaveni-souhlasu?url=<the article>.
     That round trip is the wall's signature, and unlike resolve_article_url's check it
     holds within one host, which is where iDNES stays."""
@@ -716,48 +716,48 @@ class TestSendsUsBack:
     BARE = "<html><head><title>iDNES.cz</title></head></html>"
 
     def test_consent_wall_carrying_the_article(self):
-        from app.services.readable_service import sends_us_back
+        from app.services.readable_service import redirected_back_to_us
         wall = "https://www.idnes.cz/nastaveni-souhlasu?url=" + self.ARTICLE
-        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+        assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_wall_carrying_only_the_path(self):
-        from app.services.readable_service import sends_us_back
+        from app.services.readable_service import redirected_back_to_us
         wall = "https://www.idnes.cz/nastaveni-souhlasu?url=/zpravy/zahranicni/story.A260806_154839_x_y"
-        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+        assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_cross_host_consent_page(self):
         """Host-agnostic on purpose: the same signature reads a Google News consent
         page, which resolve_article_url catches only because it changes host."""
-        from app.services.readable_service import sends_us_back
+        from app.services.readable_service import redirected_back_to_us
         wall = "https://consent.google.com/ml?continue=" + self.ARTICLE
-        assert sends_us_back(wall, self.ARTICLE, self.BARE) is True
+        assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_no_redirect_is_never_judged(self):
-        from app.services.readable_service import sends_us_back
-        assert sends_us_back(self.ARTICLE, self.ARTICLE, self.BARE) is False
+        from app.services.readable_service import redirected_back_to_us
+        assert redirected_back_to_us(self.ARTICLE, self.ARTICLE, self.BARE) is False
 
     def test_redirect_without_a_query_is_not_a_round_trip(self):
-        from app.services.readable_service import sends_us_back
-        assert sends_us_back("https://www.idnes.cz/jinam", self.ARTICLE, self.BARE) is False
+        from app.services.readable_service import redirected_back_to_us
+        assert redirected_back_to_us("https://www.idnes.cz/jinam", self.ARTICLE, self.BARE) is False
 
     def test_unrelated_query_parameter(self):
-        from app.services.readable_service import sends_us_back
-        assert sends_us_back("https://www.idnes.cz/x?utm_source=rss",
+        from app.services.readable_service import redirected_back_to_us
+        assert redirected_back_to_us("https://www.idnes.cz/x?utm_source=rss",
                              self.ARTICLE, self.BARE) is False
 
     def test_a_bare_slash_value_does_not_count(self):
         """Otherwise every ?ref=/ in the wild would read as a round trip."""
-        from app.services.readable_service import sends_us_back
-        assert sends_us_back("https://www.idnes.cz/x?ref=/", "https://www.idnes.cz/",
+        from app.services.readable_service import redirected_back_to_us
+        assert redirected_back_to_us("https://www.idnes.cz/x?ref=/", "https://www.idnes.cz/",
                              self.BARE) is False
 
     def test_page_naming_itself_is_waved_through(self):
         """A viewer legitimately built around ?url= says which address it is. This is
         the escape hatch that keeps a real article out of the check."""
-        from app.services.readable_service import sends_us_back
+        from app.services.readable_service import redirected_back_to_us
         page = ('<html><head><link rel="canonical" '
                 'href="https://site.invalid/viewer/doc-42"></head></html>')
-        assert sends_us_back("https://site.invalid/viewer?url=" + self.ARTICLE,
+        assert redirected_back_to_us("https://site.invalid/viewer?url=" + self.ARTICLE,
                              self.ARTICLE, page) is False
 
 
@@ -880,33 +880,33 @@ class TestHeadSlice:
 
 class TestAdoptResolvedUrl:
     def test_rewrites_a_saved_article(self):
-        from app.services.saved_article_service import _adopt_resolved_url
+        from app.services.saved_article_service import adopt_resolved_url
         art = SimpleNamespace(feed_id=None, url="https://1gr.cz/log/score.aspx?id=x",
                               url_normalized="https://1gr.cz/log/score.aspx?id=x")
-        _adopt_resolved_url(art, "https://www.idnes.cz/zpravy/story")
+        adopt_resolved_url(art, "https://www.idnes.cz/zpravy/story")
         assert art.url == "https://www.idnes.cz/zpravy/story"
         assert art.url_normalized == "https://www.idnes.cz/zpravy/story"
 
     def test_leaves_a_feed_article_alone(self):
         """A feed article's URL belongs to the feed; rewriting it would move the
         ground under the fetcher's own dedup."""
-        from app.services.saved_article_service import _adopt_resolved_url
+        from app.services.saved_article_service import adopt_resolved_url
         art = SimpleNamespace(feed_id=7, url="https://feed.example/a",
                               url_normalized="https://feed.example/a")
-        _adopt_resolved_url(art, "https://elsewhere.example/b")
+        adopt_resolved_url(art, "https://elsewhere.example/b")
         assert art.url == "https://feed.example/a"
 
     def test_no_resolved_url_is_a_no_op(self):
-        from app.services.saved_article_service import _adopt_resolved_url
+        from app.services.saved_article_service import adopt_resolved_url
         art = SimpleNamespace(feed_id=None, url="https://ex.invalid/a",
                               url_normalized="https://ex.invalid/a")
-        _adopt_resolved_url(art, None)
+        adopt_resolved_url(art, None)
         assert art.url == "https://ex.invalid/a"
 
     def test_campaign_params_are_normalised_away(self):
-        from app.services.saved_article_service import _adopt_resolved_url
+        from app.services.saved_article_service import adopt_resolved_url
         art = SimpleNamespace(feed_id=None, url="https://ex.invalid/x", url_normalized="https://ex.invalid/x")
-        _adopt_resolved_url(art, "https://ex.invalid/a?utm_source=rss&id=7")
+        adopt_resolved_url(art, "https://ex.invalid/a?utm_source=rss&id=7")
         assert art.url_normalized == "https://ex.invalid/a?id=7"
 
 

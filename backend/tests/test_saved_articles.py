@@ -13,7 +13,7 @@ from app.services.readable_service import (
 )
 from app.services.saved_article_service import (
     _USABLE_CONTENT_CHARS,
-    _adopt_resolved_url,
+    adopt_resolved_url,
     _has_usable_content,
     finalize_saved_article,
     save_article_by_url,
@@ -324,18 +324,18 @@ class TestAdoptResolvedUrl:
         """resolve_article_url can return a canonical link read off the page, which
         is the host's own text and may carry userinfo."""
         article = make_article(url="https://example.com/tracker")
-        _adopt_resolved_url(article, "https://u:p@example.com/real")
+        adopt_resolved_url(article, "https://u:p@example.com/real")
         assert article.url == "https://example.com/real"
         assert article.url_normalized == "https://example.com/real"
 
     def test_a_credentialed_form_of_the_stored_url_is_not_a_rewrite(self):
         article = make_article(url="https://example.com/story")
-        _adopt_resolved_url(article, "https://u:p@example.com/story")
+        adopt_resolved_url(article, "https://u:p@example.com/story")
         assert article.url == "https://example.com/story"
 
     def test_feed_articles_are_left_alone(self):
         article = make_article(feed_id=7, url="https://example.com/story")
-        _adopt_resolved_url(article, "https://example.com/elsewhere")
+        adopt_resolved_url(article, "https://example.com/elsewhere")
         assert article.url == "https://example.com/story"
 
 

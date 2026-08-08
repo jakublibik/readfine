@@ -8,7 +8,6 @@ import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -22,6 +21,7 @@ from app.services.readable_service import (
     extract_readable_with_title,
     title_from_url,
 )
+from app.utils.parsing import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,6 @@ async def save_article_by_url(
     later Retry from the article panel therefore fetches unauthenticated and reports
     the 401 it gets, which is the honest outcome of not storing the secret.
     """
-    from app.fetcher.rss import normalize_url
     from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
     url, auth_user, auth_pass = split_url_credentials(url)
@@ -193,7 +192,7 @@ async def unsave_article(article_id: int, user_id: int, db: AsyncSession) -> Non
         await db.commit()
 
 
-def _adopt_resolved_url(article: Article, resolved_url: Optional[str]) -> None:
+def adopt_resolved_url(article: Article, resolved_url: str | None) -> None:
     """Point a saved article at the address its content actually came from.
 
     What gets pasted is often a click tracker or carries campaign parameters — the
@@ -209,7 +208,6 @@ def _adopt_resolved_url(article: Article, resolved_url: Optional[str]) -> None:
     read off the page, which is the host's text and may carry userinfo — this is the
     one door left through which it could reach a stored column.
     """
-    from app.fetcher.rss import normalize_url
     from app.utils.url_validator import split_url_credentials
 
     if article.feed_id is not None or not resolved_url:
@@ -225,8 +223,8 @@ async def _import_saved_bg(
     article_id: int,
     user_id: int,
     url: str,
-    auth_user: Optional[str] = None,
-    auth_pass: Optional[str] = None,
+    auth_user: str | None = None,
+    auth_pass: str | None = None,
 ) -> None:
     """Background extraction for a freshly saved URL.
 
@@ -263,7 +261,7 @@ async def _import_saved_bg(
                 article, result.content, result.error, result.http_status,
                 result.published_at, title=result.title, description=result.description,
             )
-            _adopt_resolved_url(article, result.resolved_url)
+            adopt_resolved_url(article, result.resolved_url)
             await db.commit()
             await finalize_saved_article(article, user_id, db)
             await db.commit()

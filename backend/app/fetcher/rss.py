@@ -22,8 +22,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
-# normalize_url is re-exported: saved_article_service and the tests import it from here.
-from app.utils.parsing import (  # noqa: F401
+from app.utils.parsing import (
     count_words,
     normalize_url,
     rewrite_relative_urls,
