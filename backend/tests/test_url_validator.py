@@ -1,12 +1,12 @@
 """Unit tests for SSRF-protection URL validator."""
 import logging
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 from unittest.mock import patch
 
+from tests.conftest import mock_httpx_client as _mock_httpx_client
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
@@ -23,6 +23,9 @@ from app.utils.url_validator import (
 )
 
 _NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+# Stands in for the third element of a _resolve_response result (where the redirect
+# chain ended) in tests that mock the fetch out and only care about the response.
+_URL = "https://example.com/feed.xml"
 
 
 class TestSpacingFromHeaders:
@@ -71,21 +74,6 @@ class TestSpacingFromHeaders:
     def test_expired_reset_returns_none(self):
         past = int(_NOW.timestamp()) - 10
         assert spacing_from_headers(self._h(ratelimit_remaining=5, ratelimit_reset=past), _NOW) is None
-
-
-@contextmanager
-def _mock_httpx_client(handler):
-    """Patch the httpx.Client used by _resolve_response to use a MockTransport, so
-    tests exercise the REAL redirect/304/error handling instead of mocking it out."""
-    transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
-
-    def factory(*args, **kwargs):
-        kwargs.pop("transport", None)
-        return real_client(*args, transport=transport, **kwargs)
-
-    with patch("app.utils.url_validator.httpx.Client", factory):
-        yield
 
 
 class TestIsBotBlock:
@@ -273,7 +261,7 @@ class TestFetchUrlConditional:
 
     def test_validators_sent_as_conditional_headers(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(304), None)) as mock_resolve:
+                   return_value=(httpx.Response(304), None, _URL)) as mock_resolve:
             fetch_url_conditional(
                 "https://example.com/feed.xml",
                 etag='"abc"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
@@ -284,7 +272,7 @@ class TestFetchUrlConditional:
 
     def test_no_conditional_headers_without_validators(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(200), None)) as mock_resolve:
+                   return_value=(httpx.Response(200), None, _URL)) as mock_resolve:
             fetch_url_conditional("https://example.com/feed.xml", headers={"User-Agent": "x"})
         headers = mock_resolve.call_args[0][3]
         assert "If-None-Match" not in headers
@@ -293,7 +281,7 @@ class TestFetchUrlConditional:
 
     def test_304_passthrough(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(304), None)):
+                   return_value=(httpx.Response(304), None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
         assert result.status_code == 304
         assert result.text == ""
@@ -303,7 +291,7 @@ class TestFetchUrlConditional:
             200, text="<rss/>",
             headers={"ETag": '"new"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
         )
-        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert result.text == "<rss/>"
@@ -312,7 +300,7 @@ class TestFetchUrlConditional:
 
     def test_long_validators_truncated_to_255(self):
         resp = httpx.Response(200, headers={"ETag": "x" * 400})
-        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert len(result.etag) == 255
 
@@ -474,6 +462,54 @@ class TestPermanentRedirectTarget:
                 result = fetch_url_conditional("https://example.com/feed", etag='"abc"')
         assert result.status_code == 304
         assert result.permanent_url == "https://example.com/moved"
+
+
+class TestFinalUrl:
+    """fetch_url_page reports where the chain ended, separately from what may be stored.
+
+    A temporary redirect must not be adopted as the feed's address, but it does decide
+    which page the body came from — readable extraction reads relative links and the
+    "did this send us back?" check off that address.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _fetch(self, start, *hops):
+        remaining = list(hops)
+
+        def handler(request):
+            if not remaining:
+                return httpx.Response(200, text="<html/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                return fetch_url_page(start)
+
+    def test_temporary_redirect_sets_final_url_but_not_permanent_url(self):
+        page = self._fetch(
+            "https://example.com/a", (302, "https://example.com/consent?back=/a")
+        )
+        assert page.final_url == "https://example.com/consent?back=/a"
+        assert page.permanent_url is None
+
+    def test_without_redirects_final_url_is_the_requested_one(self):
+        page = self._fetch("https://example.com/a")
+        assert page.final_url == "https://example.com/a"
+
+    def test_final_url_is_the_last_hop_not_the_permanent_prefix(self):
+        page = self._fetch(
+            "https://example.com/a",
+            (301, "https://example.com/moved"),
+            (302, "https://cdn.example/moved"),
+        )
+        assert page.final_url == "https://cdn.example/moved"
+        assert page.permanent_url == "https://example.com/moved"
+
+    def test_relative_location_is_resolved(self):
+        page = self._fetch("https://example.com/a/b", (302, "/c"))
+        assert page.final_url == "https://example.com/c"
 
 
 class TestPinConnection:

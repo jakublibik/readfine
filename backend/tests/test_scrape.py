@@ -55,7 +55,7 @@ def _make_session() -> AsyncMock:
 
 def _page(text: str, permanent_url: str | None = None) -> PageResponse:
     """A fetched page, optionally one that permanently redirected."""
-    return PageResponse(text, permanent_url)
+    return PageResponse(text, permanent_url, permanent_url or "https://example.com/feed")
 
 
 _HTML_WITH_ARTICLES = """

@@ -220,7 +220,11 @@ class TestScrapeAdoption:
         return await _feed(session, feed_type="scrape", **kwargs)
 
     async def _scrape(self, session, feed, *, html=None, permanent_url=None):
-        page = PageResponse(self._HTML if html is None else html, permanent_url)
+        page = PageResponse(
+            self._HTML if html is None else html,
+            permanent_url,
+            permanent_url or feed.feed_url,
+        )
         with (
             patch("app.fetcher.scrape.async_validate_feed_url", new_callable=AsyncMock),
             patch("app.fetcher.scrape.fetch_url_page", return_value=page),

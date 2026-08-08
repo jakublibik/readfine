@@ -470,15 +470,22 @@ def _resolve_response(
     timeout: int = 30,
     headers: dict | None = None,
     max_redirects: int = _MAX_REDIRECTS,
-) -> tuple[httpx.Response, str | None]:
+) -> tuple[httpx.Response, str | None, str]:
     """Fetch a URL following redirects, validating every hop against SSRF.
 
-    Returns ``(response, permanent_url)``: the final response after
-    ``raise_for_status()``, plus the address the caller may store in place of *url*
+    Returns ``(response, permanent_url, final_url)``: the final response after
+    ``raise_for_status()``, the address the caller may store in place of *url*
     (``None`` when there is nothing safe to adopt — see
-    :func:`_permanent_redirect_target`). A 304 Not Modified is returned without
+    :func:`_permanent_redirect_target`), and the address the chain actually ended at,
+    whatever kind of redirect led there. A 304 Not Modified is returned without
     raising (httpx classifies 304 as a redirect status yet it has no ``Location``,
     so it is treated as a terminal response here, for conditional requests).
+
+    ``final_url`` is not a weaker ``permanent_url``. They answer different questions:
+    what may be *stored* in place of the URL we asked for, versus which page we are
+    *looking at* — and a temporary redirect changes the second without touching the
+    first. Readable extraction needs the second one, to resolve the article's real
+    address and to notice a page that redirected us back where we came from.
 
     ``permanent_url`` tracks the *longest leading run* of 301/308 hops rather than
     requiring the whole chain to be permanent. A host answering ``301`` has stated
@@ -498,11 +505,19 @@ def _resolve_response(
     with httpx.Client(
         timeout=timeout, follow_redirects=False, auth=auth, headers=headers, http2=True
     ) as client:
-        for _ in range(max_redirects + 1):
+        for hop in range(max_redirects + 1):
             # Validate + pin every hop to its resolved IP; connecting to the IP
             # (with the original Host header and HTTPS SNI) removes the re-resolve
             # that would otherwise reopen the DNS-rebinding window.
-            connect_url, host_overlay, extensions = _pin_connection(current_url)
+            try:
+                connect_url, host_overlay, extensions = _pin_connection(current_url)
+            except ValueError as exc:
+                # Whose fault the blocked address is worth saying: the URL the caller
+                # handed us is something the user can fix, a Location header pointing
+                # at a private range is the host's doing.
+                if hop:
+                    raise ValueError(f"Redirect blocked: {exc}") from exc
+                raise
             response = _get_once_retrying_protocol_error(
                 client, current_url, connect_url, host_overlay, extensions
             )
@@ -511,7 +526,11 @@ def _resolve_response(
             if not response.has_redirect_location:
                 if response.status_code != 304:
                     response.raise_for_status()
-                return response, _permanent_redirect_target(url, last_permanent_url)
+                return (
+                    response,
+                    _permanent_redirect_target(url, last_permanent_url),
+                    current_url,
+                )
             redirect_url = response.headers.get("location", "")
             if redirect_url and not redirect_url.startswith(("http://", "https://")):
                 redirect_url = urljoin(current_url, redirect_url)
@@ -527,13 +546,16 @@ def _resolve_response(
 
 
 class PageResponse(NamedTuple):
-    """Body of a fetched page, plus the address it permanently moved to (if any).
+    """Body of a fetched page, plus the two addresses that describe where it came from.
 
     ``permanent_url`` is set only when the caller may safely store it in place of
-    the URL it asked for; ``None`` means keep the original.
+    the URL it asked for; ``None`` means keep the original. ``final_url`` is where
+    the redirect chain ended regardless of what kind of redirects it followed, so it
+    is always set — for a page fetched without redirects it is the requested URL.
     """
     text: str
     permanent_url: str | None
+    final_url: str
 
 
 def fetch_url_page(
@@ -547,10 +569,13 @@ def fetch_url_page(
 
     Use this over :func:`fetch_url_with_ssrf_check` wherever the fetched URL is
     *stored* (feed rows), so a moved feed stops walking its redirect chain on
-    every poll.
+    every poll, or wherever the page has to be read in the context of the address
+    it was really served from (readable extraction).
     """
-    response, permanent_url = _resolve_response(url, auth, timeout, headers, max_redirects)
-    return PageResponse(response.text, permanent_url)
+    response, permanent_url, final_url = _resolve_response(
+        url, auth, timeout, headers, max_redirects
+    )
+    return PageResponse(response.text, permanent_url, final_url)
 
 
 def fetch_url_with_ssrf_check(
@@ -607,7 +632,7 @@ def fetch_url_conditional(
         request_headers["If-None-Match"] = etag
     if last_modified:
         request_headers["If-Modified-Since"] = last_modified
-    response, permanent_url = _resolve_response(
+    response, permanent_url, _final_url = _resolve_response(
         url, auth, timeout, request_headers, max_redirects
     )
     new_etag = response.headers.get("etag")

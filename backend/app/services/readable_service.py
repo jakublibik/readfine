@@ -2,7 +2,6 @@
 import json
 import logging
 import re
-import time
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional
 from urllib.parse import parse_qsl, urlsplit
@@ -58,52 +57,31 @@ def _fetch_html(
     the redirect chain actually ended — the caller pasted address may be a click
     tracker or carry campaign parameters, and for a saved article that address is
     what ends up on screen and in the dedup key.
+
+    The download itself is handed to :func:`fetch_url_page`, the same SSRF-safe path
+    the feed fetcher uses, rather than being repeated here. Validating an address and
+    then letting the client resolve it again leaves a window in which DNS can answer
+    differently the second time (rebinding to 169.254.169.254 and friends); the shared
+    path closes it by connecting to the IP it validated, on every hop. That window
+    used to be reachable only while subscribing to a feed, but save-by-URL fetches
+    any address on request and repeatedly, which is what a race needs.
     """
-    from app.utils.url_validator import log_outbound, validate_feed_url
+    from app.utils.url_validator import fetch_url_page
+    auth = (auth_user, auth_pass) if auth_user and auth_pass else None
     try:
-        validate_feed_url(url)
+        page = fetch_url_page(
+            url,
+            auth=auth,
+            timeout=_TIMEOUT,
+            headers={"User-Agent": READFINE_UA},
+            max_redirects=_MAX_REDIRECTS,
+        )
+        return page.text, None, None, page.final_url
     except ValueError as exc:
+        # A blocked address, ours or one a Location header pointed at (the message
+        # says which). Not an HTTP failure, so there is no status to report.
         logger.warning("readable URL blocked (SSRF): %s — %s", url, exc)
         return None, str(exc), None, None
-
-    try:
-        auth = (auth_user, auth_pass) if auth_user and auth_pass else None
-        headers = {"User-Agent": READFINE_UA}
-        current_url = url
-        # http2=True: some CDNs 403 / hard-throttle HTTP/1.1 as a bot signal but serve
-        # HTTP/2 normally (see url_validator._resolve_response).
-        with httpx.Client(
-            timeout=_TIMEOUT, follow_redirects=False, auth=auth, headers=headers, http2=True
-        ) as client:
-            for _ in range(_MAX_REDIRECTS + 1):
-                started = time.monotonic()
-                try:
-                    resp = client.get(current_url)
-                except Exception as exc:
-                    log_outbound(current_url, None, started, error=type(exc).__name__)
-                    raise
-                # Extraction has its own client (no host throttling), so it must be
-                # visible in the outbound log too — otherwise its share of a host's
-                # rate-limit budget is invisible.
-                log_outbound(current_url, resp, started)
-                if not resp.is_redirect:
-                    break
-                redirect_url = resp.headers.get("location", "")
-                # Resolve relative redirects against the current URL
-                if redirect_url and not redirect_url.startswith(("http://", "https://")):
-                    from urllib.parse import urljoin
-                    redirect_url = urljoin(current_url, redirect_url)
-                try:
-                    validate_feed_url(redirect_url)
-                except ValueError as exc:
-                    logger.warning("readable redirect blocked (SSRF): %s — %s", redirect_url, exc)
-                    return None, f"Redirect blocked: {exc}", None, None
-                current_url = redirect_url
-            else:
-                return None, f"Too many redirects (max {_MAX_REDIRECTS})", None, None
-
-        resp.raise_for_status()
-        return resp.text, None, None, current_url
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
         msg = f"HTTP {status_code} {exc.response.reason_phrase}"
