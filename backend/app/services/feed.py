@@ -16,12 +16,18 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
-from app.utils.parsing import count_words
 from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
 logger = logging.getLogger(__name__)
+
+# Recent articles sampled to decide whether a feed already delivers whole articles,
+# when subscribing to one that is already in the database. Smaller than the fetcher's
+# own sample (readable_service._FULL_CONTENT_SAMPLE): the answer is needed while the
+# user waits, and getting it wrong costs them one checkbox in Settings → Feeds.
+_SUBSCRIBE_SAMPLE = 5
 
 
 class FeedSubscriptionError(ValueError):
@@ -281,27 +287,12 @@ async def subscribe(
         # New feed: check entries we just fetched
         extract_readable = not is_full_content_feed(parsed)
     else:
-        # Existing feed: derive from recent articles already in DB. Counted from
-        # Article.content (what the feed itself delivered), never from
-        # Article.word_count, which a successful readable extraction overwrites with
-        # the extracted page's count — an existing subscriber's working extraction
-        # would otherwise talk the next subscriber out of extraction entirely.
-        sample_result = await db.execute(
-            select(Article.content)
-            .where(
-                Article.feed_id == feed.id,
-                Article.content.isnot(None),
-                Article.content != "",
-                Article.trimmed_at.is_(None),
-            )
-            .order_by(Article.id.desc())
-            .limit(5)
-        )
-        word_counts = [count_words(r[0]) for r in sample_result]
-        if word_counts and sum(1 for c in word_counts if c > 500) / len(word_counts) >= 0.8:
-            extract_readable = False
-        else:
-            extract_readable = True
+        # Existing feed: ask the same measurement the fetcher's auto-disable uses, so
+        # the two cannot disagree about the same feed. A smaller sample, because this
+        # answer is needed now and the decision is undone by one checkbox, where
+        # auto-disable turns extraction off for every subscriber at once.
+        sample = await sample_feed_content(feed.id, db, limit=_SUBSCRIBE_SAMPLE)
+        extract_readable = not sample.is_full_content
 
     user_feed = UserFeed(
         user_id=user.id,

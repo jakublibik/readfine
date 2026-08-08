@@ -888,23 +888,71 @@ async def process_pending_readable(db: AsyncSession) -> int:
 
 # ── auto-detection of full-content feeds ─────────────────────────────────────
 
+class FullContentSample(NamedTuple):
+    """How many of a feed's recent bodies are whole articles rather than teasers."""
+    full: int
+    total: int
+
+    @property
+    def is_full_content(self) -> bool:
+        """True when the feed delivers whole articles often enough to call it that."""
+        return bool(self.total) and self.full / self.total >= _FULL_CONTENT_THRESHOLD
+
+
+async def sample_feed_content(
+    feed_id: int, db: AsyncSession, limit: int = _FULL_CONTENT_SAMPLE
+) -> FullContentSample:
+    """Measure how much text *feed_id* delivers by itself, over its *limit* newest rows.
+
+    Asked from two places, and it has to answer both the same way or a feed would be
+    told it delivers full content while it is being subscribed to and the opposite on
+    the next fetch: ``maybe_disable_readable_for_feed`` below, and ``services.feed``
+    when a second user subscribes to a feed already in the database. They differ only
+    in how large a sample they can wait for, hence *limit*, and in what they do with a
+    short one, hence the raw counts in the return value.
+
+    Counted from Article.content, the body as it arrived in the feed, and deliberately
+    not read from Article.word_count: a successful extraction overwrites that column
+    with the word count of the *extracted page* (see apply_readable_result), so a feed
+    whose extraction works well would read as a full-content feed and turn its own
+    extraction off. Trimmed articles are left out because retention has already
+    dropped or replaced their body.
+    """
+    result = await db.execute(
+        # Only the head of each body travels: the question is whether it clears
+        # _FULL_CONTENT_MIN_WORDS, and _FULL_CONTENT_SAMPLE_CHARS is far more room
+        # than that needs, so the sample costs the same on a feed of 500-word posts
+        # as on one of essays.
+        select(func.substr(Article.content, 1, _FULL_CONTENT_SAMPLE_CHARS))
+        .where(
+            Article.feed_id == feed_id,
+            Article.content.isnot(None),
+            Article.content != "",  # sanitizer emptied it: no body to measure
+            Article.trimmed_at.is_(None),
+        )
+        .order_by(Article.id.desc())
+        .limit(limit)
+    )
+    counts = [count_words(row[0]) for row in result]
+    return FullContentSample(
+        full=sum(1 for c in counts if c > _FULL_CONTENT_MIN_WORDS),
+        total=len(counts),
+    )
+
+
 async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> bool:
     """
     Check if a feed consistently delivers full content by itself.
     If so, disable extract_readable on all UserFeed rows for this feed.
     Returns True if disabled.
 
-    The counts are recomputed from Article.content, the body as it arrived in the feed,
-    and deliberately not read from Article.word_count: a successful extraction
-    overwrites that column with the word count of the *extracted page* (see
-    apply_readable_result), so a feed whose extraction works well would read as a
-    full-content feed and turn its own extraction off. Trimmed articles are left out
-    because retention has already dropped or replaced their body.
-
     Runs on every fetch that brings new articles, so it asks who would be affected
     before it measures anything. On a feed nobody extracts, which includes every feed
     this check has already disabled, the answer changes nothing, and those are exactly
     the feeds with the largest bodies to read.
+
+    Unlike the same measurement at subscribe time, this one insists on a full sample:
+    turning extraction off for everyone is not a decision to make on three articles.
     """
     user_feeds_result = await db.execute(
         select(UserFeed).where(
@@ -916,26 +964,10 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
     if not user_feeds:
         return False
 
-    result = await db.execute(
-        # Only the head of each body travels: the question is whether it clears 500
-        # words, and _FULL_CONTENT_SAMPLE_CHARS is far more room than that needs, so
-        # the sample costs the same on a feed of 500-word posts as on one of essays.
-        select(func.substr(Article.content, 1, _FULL_CONTENT_SAMPLE_CHARS))
-        .where(
-            Article.feed_id == feed_id,
-            Article.content.isnot(None),
-            Article.content != "",  # sanitizer emptied it: no body to measure
-            Article.trimmed_at.is_(None),
-        )
-        .order_by(Article.id.desc())
-        .limit(_FULL_CONTENT_SAMPLE)
-    )
-    counts = [count_words(row[0]) for row in result]
-    if len(counts) < _FULL_CONTENT_SAMPLE:
+    sample = await sample_feed_content(feed_id, db)
+    if sample.total < _FULL_CONTENT_SAMPLE:
         return False  # not enough data yet
-
-    full_content = sum(1 for c in counts if c > _FULL_CONTENT_MIN_WORDS)
-    if full_content / len(counts) < _FULL_CONTENT_THRESHOLD:
+    if not sample.is_full_content:
         return False
 
     for uf in user_feeds:
@@ -959,7 +991,7 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 
     logger.info(
         "readable: auto-disabled extraction for feed %d (%d/%d articles have full content)",
-        feed_id, full_content, len(counts),
+        feed_id, sample.full, sample.total,
     )
     return True
 
