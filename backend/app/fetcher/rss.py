@@ -20,7 +20,6 @@ from sqlalchemy.orm import aliased
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
-from app.services.readable_service import video_body_from_feed
 from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
 # normalize_url is re-exported: saved_article_service and the tests import it from here.
@@ -37,6 +36,7 @@ from app.utils.url_validator import (
     redact_url,
     validate_feed_url,
 )
+from app.utils.video import video_body_from_feed
 from app.fetcher import host_throttle
 from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
