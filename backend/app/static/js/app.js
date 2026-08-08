@@ -1040,6 +1040,35 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
 
+// ── The row whose article is open in the detail pane ──────────────────────────
+// Read off the detail rather than set where the click happens. Every way an article
+// reaches the pane ends in a swap into #article-detail — a row click, the
+// ?open_article_id deep link, the Next button — so one place covers all of them, and
+// a row the server re-rendered (the row-poll on a saved article, an out-of-band swap,
+// infinite scroll) gets its mark back at the next settle instead of losing it.
+//
+// Which layouts show it is left to CSS: the class is kept up to date everywhere and
+// only the 3-panel layout draws it, so switching layout cannot strand a stale mark.
+(function () {
+  var ACTIVE = 'article-active';
+
+  function syncActiveRow() {
+    var list = document.getElementById('article-list');
+    if (!list) return;
+    var open = document.querySelector('#article-detail [data-article-id]');
+    var row = open
+      ? list.querySelector('.article-row[data-article-id="' + open.dataset.articleId + '"]')
+      : null;
+    list.querySelectorAll('.' + ACTIVE).forEach(function (el) {
+      if (el !== row) el.classList.remove(ACTIVE);
+    });
+    if (row) row.classList.add(ACTIVE);
+  }
+
+  document.body.addEventListener('htmx:afterSettle', syncActiveRow);
+  document.addEventListener('DOMContentLoaded', syncActiveRow);
+})();
+
 // OPML import form: intercept submit to send CSRF header with multipart upload
 document.addEventListener('DOMContentLoaded', function () {
   var form = document.getElementById('opml-import-form');

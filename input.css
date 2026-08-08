@@ -146,6 +146,40 @@
   .dark .article-row:hover { background-color: #2a2a2a; }
 }
 
+/* The row whose article is open in the detail pane. Only in the 3-panel layout: the
+   2-panel one expands the article under its row, which says which one it is far
+   better than any marking could, and .inline-expanded already dresses that row.
+
+   The blue follows the sidebar, which fills its active nav item with #eff6ff, but a
+   step lighter: these are the two colours laid over white at 75%, which is how the
+   marking looked on a read row before the line below stopped dimming it. A nav item
+   is a small pill, a row is the width of the panel, and at full strength the fill
+   read as heavy. The dark theme drops the blue fill for a neutral step, as the
+   sidebar does.
+
+   The bar on the left is what the sidebar does not need: a nav item also turns its
+   text blue, while a row's title colour and weight are already spoken for by read
+   and unread, so the row needs an edge that holds at a glance across its width. It
+   is an inset shadow rather than a border so the text does not shift when a row
+   becomes the active one.
+
+   Wins over :hover by specificity, on purpose: pointing at the open row should not
+   make it look like any other. The same specificity lifts the dimming a read row
+   carries (opacity-75): going down a list of starred articles, all of them read, the
+   one on screen was the faded one. Note that opacity dims the element's own
+   background too, so undimming the text is what made the marking's colours worth
+   restating here. Weight is left alone, since bold is how the list says unread and
+   cannot mean two things at once. */
+html[data-layout="3"] .article-row.article-active {
+  background-color: #f3f8ff;
+  box-shadow: inset 2px 0 0 0 #93b4f7;
+  opacity: 1;
+}
+html.dark[data-layout="3"] .article-row.article-active {
+  background-color: #2d2d2d;
+  box-shadow: inset 2px 0 0 0 #60a5fa;
+}
+
 /* A row that was just added to Saved. The list is ordered by publication date, so the
    row can land anywhere in it; the fade says which one of them is the article you
    pasted. It ends on its own, leaving the row's normal (and hover) background. */
