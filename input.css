@@ -126,6 +126,26 @@
   background: #000;
 }
 
+/* The row under the pointer. Guarded on the pointing device rather than on the
+   viewport: a tap leaves :hover stuck on the row it landed on until you tap
+   somewhere else, so a touchscreen must not have this at any width, while a mouse
+   in a narrow window should keep it. #article-list is bg-white, which the dark
+   theme maps to #1e1e1e, so each theme steps one shade off its own panel.
+
+   A step darker than the gray-50 the app hovers menu items and buttons with. A menu
+   item is a small target where that shade reads fine; a row spans the panel, and
+   next to the dark theme's step (#1e1e1e to #2a2a2a, far larger in relative terms)
+   gray-50 barely registered.
+
+   Kept here rather than as a hover: utility on the row: the row's states (this,
+   the saved flash below, and whether it is the article on screen) then read as one
+   set, and the dark theme's blanket utility overrides cannot make two of them the
+   same colour, which is how hover came to be white on white. */
+@media (hover: hover) and (pointer: fine) {
+  .article-row:hover { background-color: #f3f4f6; }
+  .dark .article-row:hover { background-color: #2a2a2a; }
+}
+
 /* A row that was just added to Saved. The list is ordered by publication date, so the
    row can land anywhere in it; the fade says which one of them is the article you
    pasted. It ends on its own, leaving the row's normal (and hover) background. */

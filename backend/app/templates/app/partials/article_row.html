@@ -49,7 +49,7 @@
 
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
+     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
