@@ -41,26 +41,27 @@
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Pending readable extraction</h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Article</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Next retry</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Next retry</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_pending_recent %}
       <tr>
-        <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ article.feed.title if article.feed else "—" }}</td>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">
-          {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+        <td class="px-4 py-2 align-top">
+          <div class="text-gray-700 truncate" title="{{ article.title }}">
+            {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+          </div>
+          <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        <td class="px-4 py-2 text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 text-red-500 truncate max-w-xs">{{ article.readable_error or "—" }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
+        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
           {% if article.readable_next_retry_at %}
             <time datetime="{{ article.readable_next_retry_at.isoformat() }}">{{ article.readable_next_retry_at | utctime('short') }}</time>
           {% else %}—{% endif %}
@@ -77,26 +78,27 @@
 {% if stats.readable_failed_recent %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_failed_recent %}
       <tr>
-        <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ article.feed.title if article.feed else "—" }}</td>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">
-          {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+        <td class="px-4 py-2 align-top">
+          <div class="text-gray-700 truncate" title="{{ article.title }}">
+            {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+          </div>
+          <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        <td class="px-4 py-2 text-red-500 truncate max-w-xs">{{ article.readable_error or "—" }}</td>
-        <td class="px-4 py-2 text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
+        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
           {% if article.readable_failed_at %}
             <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at | utctime('short') }}</time>
           {% else %}—{% endif %}
