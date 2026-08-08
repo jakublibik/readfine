@@ -41,21 +41,51 @@ def add_article_access_joins(stmt, user_id: int):
     )
 
 
-def article_access_predicate():
-    """WHERE clause for "this user may act on this article".
+def permanently_kept_predicate():
+    """Row-level clause for "this UserArticleState keeps its article for good".
 
-    True when the user is subscribed to the article's feed, OR has starred/archived
-    it (access survives unsubscribe / feed deletion), OR saved it by URL (a saved
-    article usually has no feed at all). Requires the query to have added
-    ``add_article_access_joins(user_id)`` first — the user scoping lives in those
-    joins' ON clauses, so this predicate only checks whether a row matched.
+    Starred, archived or saved by URL: the three ways a reader says an article is
+    not disposable. One definition, because the same question is asked from four
+    places that must not drift apart — access (below), retention
+    (``purge_service._fully_protected_exists``), and the two points in
+    ``services.feed`` where an article survives its feed being deleted.
+
+    Safe to negate: every operand is NOT NULL or an ``IS NOT NULL`` test, so
+    ``~permanently_kept_predicate()`` has no three-valued surprises.
     """
     return (
-        UserFeed.id.is_not(None)
-        | UserArticleState.is_starred.is_(True)
+        UserArticleState.is_starred.is_(True)
         | UserArticleState.is_archived.is_(True)
         | UserArticleState.saved_at.is_not(None)
     )
+
+
+def permanently_kept_exists():
+    """Correlated EXISTS: *some* user keeps the current Article for good.
+
+    Any-user semantics, so one reader starring or saving an article pins the row
+    for the whole instance. Correlates on ``Article.id``, so the enclosing query
+    must select from (or update/delete) ``articles``.
+    """
+    return (
+        select(UserArticleState.article_id)
+        .where(UserArticleState.article_id == Article.id, permanently_kept_predicate())
+        .correlate(Article)
+        .exists()
+    )
+
+
+def article_access_predicate():
+    """WHERE clause for "this user may act on this article".
+
+    True when the user is subscribed to the article's feed, OR keeps the article
+    for good — starred/archived (access survives unsubscribe / feed deletion) or
+    saved by URL (such an article usually has no feed at all). Requires the query
+    to have added ``add_article_access_joins(user_id)`` first — the user scoping
+    lives in those joins' ON clauses, so this predicate only checks whether a row
+    matched.
+    """
+    return UserFeed.id.is_not(None) | permanently_kept_predicate()
 
 
 _SNIPPET_LEN = 200

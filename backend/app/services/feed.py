@@ -15,6 +15,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
+from app.services.article import permanently_kept_exists, permanently_kept_predicate
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
 from app.utils.parsing import count_words
@@ -531,12 +532,18 @@ async def _initial_fetch_scrape(feed_id: int) -> None:
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeCleanupResult:
     """Remove a user's subscription with full lifecycle cleanup.
 
-    1. Deletes UserArticleState rows for non-starred, non-archived articles.
+    1. Deletes UserArticleState rows for articles the user does not keep for good.
     2. Deletes the UserFeed row.
     3. Decrements subscriber_count on the Feed.
-    4. If subscriber_count reaches 0: deletes orphan articles (not starred/archived
-       by anyone) and the Feed itself if no articles remain.
+    4. If subscriber_count reaches 0: deletes orphan articles (kept for good by
+       nobody) and the Feed itself if no articles remain.
     5. Strips the feed from the user's filter/catchup/briefing scopes.
+
+    "Kept for good" is ``permanently_kept_predicate`` — starred, archived or saved
+    by URL. Saving belongs there for the same reason starring does, and an article
+    can be saved by a user who never subscribed to the feed it came in through
+    (a paste that deduped onto it), so both the row-level delete and the
+    article-level one have to ask the shared question rather than their own.
 
     Returns the scope-cleanup report (filters deactivated / briefings disabled).
     """
@@ -549,14 +556,13 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
 
     feed_id = user_feed.feed_id
 
-    # 1. Delete non-starred, non-archived UserArticleState rows for this user + feed
+    # 1. Drop this user's state for the feed's articles, except what they keep for good
     article_ids_subq = select(Article.id).where(Article.feed_id == feed_id).scalar_subquery()
     await db.execute(
         delete(UserArticleState).where(
             UserArticleState.user_id == user.id,
             UserArticleState.article_id.in_(article_ids_subq),
-            UserArticleState.is_starred == False,
-            UserArticleState.is_archived == False,
+            ~permanently_kept_predicate(),
         )
     )
 
@@ -575,26 +581,18 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
     if feed:
         # 4. If no subscribers left: orphan surviving articles, delete the rest, delete the feed
         if feed.subscriber_count == 0:
-            starred_or_archived_subq = (
-                select(UserArticleState.article_id)
-                .where(
-                    UserArticleState.article_id == Article.id,
-                    (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
-                )
-                .correlate(Article)
-                .exists()
-            )
-            # Surviving articles (starred/archived by someone): detach from feed (feed_id = NULL)
+            kept_by_someone = permanently_kept_exists()
+            # Surviving articles (kept for good by someone): detach from feed (feed_id = NULL)
             await db.execute(
                 update(Article)
-                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .where(Article.feed_id == feed_id, kept_by_someone)
                 .values(feed_id=None)
             )
-            # Delete the remaining articles (not starred/archived by anyone)
+            # Delete the remaining articles (kept for good by nobody)
             await db.execute(
                 delete(Article).where(
                     Article.feed_id == feed_id,
-                    ~starred_or_archived_subq,
+                    ~kept_by_someone,
                 )
             )
             # Always delete the feed — no subscribers remain
@@ -620,15 +618,9 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     )
     user_feeds = user_feeds_result.scalars().all()
 
-    starred_or_archived_subq = (
-        select(UserArticleState.article_id)
-        .where(
-            UserArticleState.article_id == Article.id,
-            (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
-        )
-        .correlate(Article)
-        .exists()
-    )
+    # Same rule as unsubscribe: an article another user keeps for good must outlive
+    # this account's feeds, and saving counts as keeping.
+    kept_by_someone = permanently_kept_exists()
 
     for uf in user_feeds:
         feed_id = uf.feed_id
@@ -638,8 +630,7 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
             delete(UserArticleState).where(
                 UserArticleState.user_id == user_id,
                 UserArticleState.article_id.in_(article_ids_subq),
-                UserArticleState.is_starred == False,
-                UserArticleState.is_archived == False,
+                ~permanently_kept_predicate(),
             )
         )
         await db.delete(uf)
@@ -652,11 +643,11 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
         if feed and feed.subscriber_count == 0:
             await db.execute(
                 update(Article)
-                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .where(Article.feed_id == feed_id, kept_by_someone)
                 .values(feed_id=None)
             )
             await db.execute(
-                delete(Article).where(Article.feed_id == feed_id, ~starred_or_archived_subq)
+                delete(Article).where(Article.feed_id == feed_id, ~kept_by_someone)
             )
             await db.delete(feed)
 

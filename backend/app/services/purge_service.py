@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.settings import AppSettings
+from app.services.article import permanently_kept_exists
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +35,11 @@ def _fully_protected_exists():
     pasting a URL by hand is the most explicit thing a reader can do, so Saved must not
     be the one place where content quietly expires. Like starred/archived this is
     any-user semantics, so one person saving an article pins the row for the instance.
-    Un-saving re-exposes it to purge, which is the intended way out."""
-    return (
-        select(UserArticleState.article_id)
-        .where(
-            UserArticleState.article_id == Article.id,
-            (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True)  # noqa: E712
-            | (UserArticleState.saved_at.is_not(None)),
-        )
-        .exists()
-    )
+    Un-saving re-exposes it to purge, which is the intended way out.
+
+    The predicate itself is shared with feed deletion, which has to keep exactly the
+    same articles alive; see ``services.article.permanently_kept_exists``."""
+    return permanently_kept_exists()
 
 
 def _engaged_exists():

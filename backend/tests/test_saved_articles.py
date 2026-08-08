@@ -757,3 +757,91 @@ class TestIsSavedThroughStateUpdate:
         user, article = await self._article(pg, saved=True)
         await self._patch(pg, user, article, is_read=True)
         assert (await self._state(pg, user, article)).saved_at is not None
+
+
+class TestSavedArticleSurvivesFeedDeletion:
+    """A saved article can belong to a feed: pasting a URL that is already in the
+    database attaches to that row instead of duplicating it. The reader who saved it
+    need not subscribe to that feed, so unsubscribing the last subscriber must not
+    take the article with it — the same protection starring has always given."""
+
+    async def _feed_with_article(self, pg, subscriber):
+        u = uuid.uuid4().hex
+        feed = Feed(feed_url=f"https://ex.invalid/{u}.xml", title="f", subscriber_count=1)
+        pg.add(feed)
+        await pg.flush()
+        uf = UserFeed(user_id=subscriber.id, feed_id=feed.id)
+        pg.add(uf)
+        article = ArticleModel(
+            feed_id=feed.id, guid=u, guid_hash=u, title="T",
+            url=f"https://ex.invalid/{u}/story", url_normalized=f"https://ex.invalid/{u}/story",
+            content="<p>b</p>", readable_status="success",
+            published_at=datetime.now(timezone.utc), fetched_at=datetime.now(timezone.utc),
+        )
+        pg.add(article)
+        await pg.flush()
+        return feed, uf, article
+
+    async def _user(self, pg, tag):
+        user = User(email=f"{tag}_{uuid.uuid4().hex[:12]}@test.invalid",
+                    password_hash="x", display_name="t")
+        pg.add(user)
+        await pg.flush()
+        return user
+
+    async def _unsubscribe(self, pg, user, uf):
+        from app.services.feed import unsubscribe
+        with patch.object(pg, "commit", AsyncMock()):
+            await unsubscribe(user, uf.id, pg)
+        await pg.flush()
+
+    async def test_article_saved_by_another_user_survives(self, pg):
+        subscriber = await self._user(pg, "sub")
+        saver = await self._user(pg, "saver")
+        _feed, uf, article = await self._feed_with_article(pg, subscriber)
+        pg.add(UASModel(user_id=saver.id, article_id=article.id,
+                        saved_at=datetime.now(timezone.utc)))
+        await pg.flush()
+        article_id = article.id
+
+        await self._unsubscribe(pg, subscriber, uf)
+
+        survivor = await pg.scalar(
+            select(ArticleModel).where(ArticleModel.id == article_id)
+        )
+        assert survivor is not None, "a saved article was deleted with its feed"
+        assert survivor.feed_id is None, "survivor must be detached from the deleted feed"
+
+    async def test_unsubscriber_keeps_their_own_saved_state(self, pg):
+        """Saving is per-user state on the article, so the row that carries it must
+        outlive the subscription the article arrived through."""
+        user = await self._user(pg, "both")
+        _feed, uf, article = await self._feed_with_article(pg, user)
+        pg.add(UASModel(user_id=user.id, article_id=article.id,
+                        saved_at=datetime.now(timezone.utc)))
+        await pg.flush()
+        article_id = article.id
+
+        await self._unsubscribe(pg, user, uf)
+
+        state = await pg.scalar(
+            select(UASModel).where(
+                UASModel.user_id == user.id, UASModel.article_id == article_id
+            )
+        )
+        assert state is not None and state.saved_at is not None
+
+    async def test_unsaved_article_is_still_deleted(self, pg):
+        """The protection is saved_at, not "has any state row" — an ordinary read
+        article still goes when its last subscriber leaves."""
+        user = await self._user(pg, "plain")
+        _feed, uf, article = await self._feed_with_article(pg, user)
+        pg.add(UASModel(user_id=user.id, article_id=article.id, is_read=True))
+        await pg.flush()
+        article_id = article.id
+
+        await self._unsubscribe(pg, user, uf)
+
+        assert await pg.scalar(
+            select(ArticleModel).where(ArticleModel.id == article_id)
+        ) is None
