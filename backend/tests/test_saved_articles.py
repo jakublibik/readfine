@@ -1,4 +1,5 @@
 """Unit tests for save-by-URL: title extraction, dedup rules, finalize guards."""
+import hashlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +13,7 @@ from app.services.readable_service import (
 )
 from app.services.saved_article_service import (
     _USABLE_CONTENT_CHARS,
+    _adopt_resolved_url,
     _has_usable_content,
     finalize_saved_article,
     save_article_by_url,
@@ -262,6 +264,79 @@ class TestSaveArticleByUrl:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "pending"
         task.assert_called_once()
+
+
+# ── save_article_by_url — credentials in the pasted address ───────────────────
+
+class TestSaveUrlCredentials:
+    """https://user:pass@host/article must not leave the password in the database.
+
+    An Article row is global — shared with everyone else who saves the same URL — so
+    the credentials are used for this one extraction and then dropped.
+    """
+    URL = "https://reader:s3cret@example.com/story"
+    CLEAN = "https://example.com/story"
+
+    async def _save(self, existing=None):
+        db = make_db([existing])
+        importer = MagicMock(return_value=MagicMock())
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("app.services.saved_article_service._import_saved_bg", importer), \
+             patch("asyncio.create_task", MagicMock()):
+            article, known = await save_article_by_url(
+                self.URL, SimpleNamespace(id=1), db
+            )
+        return article, known, importer
+
+    async def test_no_column_keeps_the_credentials(self):
+        article, _, _ = await self._save()
+        assert article.url == self.CLEAN
+        assert article.guid == self.CLEAN
+        assert article.url_normalized == self.CLEAN
+        assert article.guid_hash == hashlib.sha256(self.CLEAN.encode()).hexdigest()
+        assert "s3cret" not in article.title
+        assert article.title == "example.com/story"
+
+    async def test_extraction_still_gets_them(self):
+        """Pasting an authenticated address has to keep working: the credentials
+        travel as an explicit auth pair, in memory, for the length of the import."""
+        _, _, importer = await self._save()
+        assert importer.call_args.args[2:] == (self.CLEAN, "reader", "s3cret")
+
+    async def test_a_copy_on_another_host_is_not_sent_them(self):
+        """The match is made on the normalized URL, so the row found can be a copy
+        stored under a different address. Credentials given for one host are not
+        handed to another."""
+        existing = make_article(id=42, feed_id=None, url="https://mirror.example.net/story",
+                                readable_status="failed")
+        _, known, importer = await self._save(existing)
+        assert known is True
+        assert importer.call_args.args[2:] == ("https://mirror.example.net/story", None, None)
+
+    async def test_the_same_address_is_sent_them(self):
+        existing = make_article(id=42, feed_id=None, url=self.CLEAN, readable_status="failed")
+        _, _, importer = await self._save(existing)
+        assert importer.call_args.args[2:] == (self.CLEAN, "reader", "s3cret")
+
+
+class TestAdoptResolvedUrl:
+    def test_strips_credentials_off_a_canonical_link(self):
+        """resolve_article_url can return a canonical link read off the page, which
+        is the host's own text and may carry userinfo."""
+        article = make_article(url="https://example.com/tracker")
+        _adopt_resolved_url(article, "https://u:p@example.com/real")
+        assert article.url == "https://example.com/real"
+        assert article.url_normalized == "https://example.com/real"
+
+    def test_a_credentialed_form_of_the_stored_url_is_not_a_rewrite(self):
+        article = make_article(url="https://example.com/story")
+        _adopt_resolved_url(article, "https://u:p@example.com/story")
+        assert article.url == "https://example.com/story"
+
+    def test_feed_articles_are_left_alone(self):
+        article = make_article(feed_id=7, url="https://example.com/story")
+        _adopt_resolved_url(article, "https://example.com/elsewhere")
+        assert article.url == "https://example.com/story"
 
 
 # ── finalize_saved_article — the two guards ───────────────────────────────────

@@ -72,9 +72,18 @@ async def save_article_by_url(
     unresolvable, or resolving to a private/loopback address. Everything that can only
     fail later (404, timeout, paywall) is saved and surfaces as a visible extraction
     error with a retry button.
+
+    Credentials pasted into the address (``https://user:pass@host/article``) are split
+    off before anything is stored or logged. They are used for the one extraction this
+    save triggers and then forgotten: an Article row is global and shared with everyone
+    else who saved the same URL, so it is not a place to keep one user's password. A
+    later Retry from the article panel therefore fetches unauthenticated and reports
+    the 401 it gets, which is the honest outcome of not storing the secret.
     """
     from app.fetcher.rss import normalize_url
-    from app.utils.url_validator import async_validate_feed_url
+    from app.utils.url_validator import async_validate_feed_url, split_url_credentials
+
+    url, auth_user, auth_pass = split_url_credentials(url)
 
     await async_validate_feed_url(url)  # ValueError → caller turns it into a toast
 
@@ -132,7 +141,16 @@ async def save_article_by_url(
             existing.readable_failed_at = None
             existing.readable_next_retry_at = _buffer_until()
             await db.commit()
-            asyncio.create_task(_import_saved_bg(existing.id, user.id, existing.url))
+            # Credentials only if this row is the address they were pasted with. A
+            # match is found by normalized URL, so the stored address can be a copy
+            # from another feed on another host, and that host has no business
+            # receiving them.
+            same_address = existing.url == url
+            asyncio.create_task(_import_saved_bg(
+                existing.id, user.id, existing.url,
+                auth_user if same_address else None,
+                auth_pass if same_address else None,
+            ))
         else:
             await db.commit()
         return existing, True
@@ -153,7 +171,7 @@ async def save_article_by_url(
     await _upsert_saved_state(article.id, user.id, db)
     await db.commit()
 
-    asyncio.create_task(_import_saved_bg(article.id, user.id, url))
+    asyncio.create_task(_import_saved_bg(article.id, user.id, url, auth_user, auth_pass))
     return article, False
 
 
@@ -186,25 +204,44 @@ def _adopt_resolved_url(article: Article, resolved_url: Optional[str]) -> None:
     The rewrite is deliberately not merged with an article that may already hold the
     resolved address: the row is on screen and being polled, so swapping its identity
     mid-flight costs more than the duplicate it would save.
+
+    Credentials are stripped here too. The resolved address can be a canonical link
+    read off the page, which is the host's text and may carry userinfo — this is the
+    one door left through which it could reach a stored column.
     """
     from app.fetcher.rss import normalize_url
+    from app.utils.url_validator import split_url_credentials
 
     if article.feed_id is not None or not resolved_url:
         return
+    resolved_url = split_url_credentials(resolved_url)[0]
     if resolved_url == article.url:
         return
     article.url = resolved_url[:2048]
     article.url_normalized = normalize_url(resolved_url)
 
 
-async def _import_saved_bg(article_id: int, user_id: int, url: str) -> None:
-    """Background extraction for a freshly saved URL."""
+async def _import_saved_bg(
+    article_id: int,
+    user_id: int,
+    url: str,
+    auth_user: Optional[str] = None,
+    auth_pass: Optional[str] = None,
+) -> None:
+    """Background extraction for a freshly saved URL.
+
+    *auth_user* / *auth_pass* are the credentials the URL was pasted with, held only
+    for the length of this task. Passing them explicitly rather than leaving them in
+    the address is what keeps them out of the fetcher's log lines and puts them behind
+    the same origin check as feed credentials, so a redirect off the host does not
+    take them along.
+    """
     from app.database import async_session_factory
 
     loop = asyncio.get_running_loop()
     try:
         result = await loop.run_in_executor(
-            None, extract_readable_with_title, url, None, None, True
+            None, extract_readable_with_title, url, auth_user, auth_pass, True
         )
     except Exception as exc:
         result = ReadableResult(error=str(exc)[:200])
