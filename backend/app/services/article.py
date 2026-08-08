@@ -749,8 +749,9 @@ async def update_article_state(
     payload: ArticleStateUpdate,
     db: AsyncSession,
 ) -> ArticleResponse | None:
-    """Set is_read / is_starred / is_archived from a payload. Creates UserArticleState
-    if needed. One round-trip: load, apply, commit, respond from loaded data."""
+    """Set is_read / is_starred / is_archived / is_saved from a payload. Creates
+    UserArticleState if needed. One round-trip: load, apply, commit, respond from
+    loaded data."""
     loaded = await _load_article_for_write(user, article_id, db)
     if loaded is None:
         return None
@@ -770,6 +771,16 @@ async def update_article_state(
 
     if payload.is_archived is not None:
         state.is_archived = payload.is_archived
+
+    if payload.is_saved is not None:
+        # saved_at is a timestamp rather than a flag (retention reads it, and it is
+        # what exempts the article from a purge), so the payload's boolean is turned
+        # into one here. Nothing is fetched either way: this pins an article the user
+        # can already reach, whereas save_article_by_url is what imports an address
+        # and extracts it. Re-saving a feedless article dropped from Saved therefore
+        # goes through that path and not this one, since unsaving it took away the
+        # access this write needs.
+        state.saved_at = datetime.now(timezone.utc) if payload.is_saved else None
 
     await db.commit()
     await db.refresh(state)

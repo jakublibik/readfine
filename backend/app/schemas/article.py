@@ -1,11 +1,27 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ArticleStateUpdate(BaseModel):
     is_read: bool | None = None
     is_starred: bool | None = None
     is_archived: bool | None = None
+    # Setting this False on an article with no feed takes away the only access to it,
+    # so the article that comes back in the response is the last look a client gets:
+    # the next GET answers 404. That is what the Saved view does too.
+    is_saved: bool | None = None
+
+
+class SaveUrlRequest(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def url_not_empty(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("URL cannot be empty")
+        return v
 
 
 class ArticleStateResponse(BaseModel):

@@ -92,7 +92,8 @@ categories:
         desc: >-
           Paste a link to keep an article that is not in any of your feeds. It goes
           through the same readable extraction, lands in Saved, and is kept until you
-          remove it.
+          remove it. Also in the API, so a phone shortcut or a bookmarklet can save
+          a link without opening the app.
       - title: Share by link
         desc: >-
           Hand a single article to someone with no Readfine account. The link reads

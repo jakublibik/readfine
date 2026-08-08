@@ -32,7 +32,7 @@ _A clean reader that adapts to your screen._
 - **Mark read on scroll:** Optionally mark articles read as they scroll past.
 - **Article states:** Mark articles read, star favourites, and archive what you want out of the way.
 - **Labels:** Your own colour-coded tags for sorting articles by hand.
-- **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it.
+- **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it. Also in the API, so a phone shortcut or a bookmarklet can save a link without opening the app.
 - **Share by link:** Hand a single article to someone with no Readfine account. The link reads without signing in and stays live until you revoke it.
 
 ## Filtering & scoring

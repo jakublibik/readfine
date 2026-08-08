@@ -466,6 +466,7 @@ class TestSavedFiltersNeverScore:
 import uuid
 
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -683,3 +684,76 @@ class TestAwaitingRetryNotice:
         """'pending' with the first attempt still running is the spinner's state, not
         this one."""
         assert "Another attempt is scheduled" not in self._content(readable_active=True)
+
+
+# ── is_saved through the state-update path (API) ──────────────────────────────
+
+class TestIsSavedThroughStateUpdate:
+    """PATCH /api/v1/articles/{id} carries is_saved, the counterpart of save-url.
+
+    Worth an integration test rather than a mocked one: the payload's boolean has to
+    land in saved_at, which is a timestamp, and clearing it is what makes a feedless
+    article purgeable and inaccessible again.
+    """
+
+    async def _article(self, pg, *, saved: bool):
+        u = uuid.uuid4().hex
+        user = User(email=f"sv_{u[:12]}@test.invalid", password_hash="x", display_name="t")
+        pg.add(user)
+        await pg.flush()
+        article = ArticleModel(
+            feed_id=None, guid=u, guid_hash=u, title="ex.invalid/story",
+            url=f"https://ex.invalid/{u}", url_normalized=f"https://ex.invalid/{u}",
+            readable_status="success", readable_content="<p>b</p>",
+            fetched_at=datetime.now(timezone.utc),
+        )
+        pg.add(article)
+        await pg.flush()
+        pg.add(UASModel(
+            user_id=user.id, article_id=article.id,
+            saved_at=datetime.now(timezone.utc) if saved else None,
+        ))
+        await pg.flush()
+        return user, article
+
+    async def _patch(self, pg, user, article, **fields):
+        from app.schemas.article import ArticleStateUpdate
+        from app.services.article import update_article_state
+
+        # commit() is left real: update_article_state refreshes the state row right
+        # after it, and a stubbed commit would have that refresh read the unwritten
+        # row back from the database and undo what the test just set. The fixture's
+        # outer transaction is rolled back either way.
+        return await update_article_state(
+            user, article.id, ArticleStateUpdate(**fields), pg
+        )
+
+    async def _state(self, pg, user, article):
+        return await pg.scalar(
+            select(UASModel).where(
+                UASModel.user_id == user.id, UASModel.article_id == article.id
+            )
+        )
+
+    async def test_unsaving_clears_saved_at(self, pg):
+        user, article = await self._article(pg, saved=True)
+        response = await self._patch(pg, user, article, is_saved=False)
+        assert response.is_saved is False
+        assert (await self._state(pg, user, article)).saved_at is None
+
+    async def test_saving_stamps_saved_at(self, pg):
+        """A starred article the user pins to Saved: reachable already, so this is
+        the flag on its own, with no fetch behind it."""
+        user, article = await self._article(pg, saved=False)
+        state = await self._state(pg, user, article)
+        state.is_starred = True  # keeps the article reachable while saved_at is NULL
+        await pg.flush()
+
+        response = await self._patch(pg, user, article, is_saved=True)
+        assert response.is_saved is True
+        assert (await self._state(pg, user, article)).saved_at is not None
+
+    async def test_a_payload_without_is_saved_leaves_it_alone(self, pg):
+        user, article = await self._article(pg, saved=True)
+        await self._patch(pg, user, article, is_read=True)
+        assert (await self._state(pg, user, article)).saved_at is not None
