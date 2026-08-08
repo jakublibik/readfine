@@ -279,6 +279,37 @@ def redact_url_for_display(url: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc, query=query))
 
 
+def split_url_credentials(url: str) -> tuple[str, str | None, str | None]:
+    """Separate ``user:pass@`` out of a URL into values fit for the auth columns.
+
+    Returns ``(url, username, password)``, the URL coming back as the same object
+    when it carried no credentials, so a caller can tell at a glance whether anything
+    moved (the convention :func:`redact_url_for_display` uses too).
+
+    Both parts are percent-decoded, because that is what goes on the wire: httpx
+    decodes userinfo before it builds the ``Authorization`` header, so keeping the raw
+    form would change how ``https://user%40mail:pw@host/feed`` authenticates.
+
+    A username with no password comes back paired with ``""`` rather than ``None``.
+    httpx sends Basic auth with an empty password for that URL, and the pair has to
+    survive the move intact or the feed starts answering 401. A bare ``@`` with
+    nothing on either side is not a credential and only costs the ``@`` itself.
+    """
+    try:
+        parsed = urlparse(url)
+        netloc = parsed.netloc
+    except Exception:
+        return url, None, None
+    if "@" not in netloc:
+        return url, None, None
+
+    clean = urlunparse(parsed._replace(netloc=netloc.rsplit("@", 1)[-1]))
+    username, password = parsed.username, parsed.password
+    if not username and not password:
+        return clean, None, None
+    return clean, unquote(username or ""), unquote(password or "")
+
+
 # Rate-limit headers worth recording, in the order they are logged. Each entry is
 # (label, candidate header names) — hosts disagree on the prefix (Reddit sends the
 # x- variants, RFC 9239 drops it), so both spellings are tried.

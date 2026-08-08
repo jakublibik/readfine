@@ -18,7 +18,7 @@ from app.models.user import User
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import encrypt
 from app.utils.parsing import count_words
-from app.utils.url_validator import async_validate_feed_url
+from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,43 @@ def get_cached_permanent_url(url: str) -> str | None:
     return entry[1] if entry else None
 
 
+async def _raise_if_already_subscribed_private(
+    db: AsyncSession,
+    user: User,
+    url: str,
+    fetch_auth_user: str | None,
+    selector: str | None = None,
+) -> None:
+    """Refuse a second subscription to a feed the user already has credentials for.
+
+    A feed carrying credentials gets a row of its own, which is what keeps one
+    subscriber's password off everyone else's fetches. That also puts it out of reach
+    of the shared-row lookup, the one that would otherwise notice the user is already
+    subscribed, so without this the same address added twice would quietly become two
+    feeds: two rows in the sidebar and two fetches an hour for one feed.
+
+    Scoped to rows this user already subscribes to, so two people using the same
+    credentialed address still get a row each rather than silently sharing one.
+    """
+    if fetch_auth_user is None:
+        return
+    stmt = (
+        select(UserFeed.id)
+        .join(Feed, Feed.id == UserFeed.feed_id)
+        .where(
+            UserFeed.user_id == user.id,
+            Feed.feed_url == url,
+            Feed.is_private == True,  # noqa: E712
+            Feed.fetch_auth_user == fetch_auth_user,
+        )
+        .limit(1)
+    )
+    if selector is not None:
+        stmt = stmt.where(Feed.type_config["article_links_selector"].astext == selector)
+    if await db.scalar(stmt) is not None:
+        raise AlreadySubscribed()
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -117,7 +154,21 @@ async def subscribe(
 
     Public feeds (no auth) are shared: if the feed already exists in DB, the
     existing row is reused. Private feeds always get a dedicated row.
+
+    Credentials written into the address (``https://user:pass@host/feed``) are moved
+    into the auth columns before anything else happens, so the password is encrypted
+    like any other, never reaches ``feeds.feed_url`` (and from there the backups, the
+    admin screens, the feed's own display name and an OPML export), and the row is
+    recognised as private rather than shared with everyone else on the instance.
     """
+    url, url_auth_user, url_auth_pass = split_url_credentials(url)
+    if url_auth_user is not None and not fetch_auth_user and not fetch_auth_pass:
+        # Only when the form left both fields empty: pairing a typed username with a
+        # password out of the address would authenticate as neither.
+        fetch_auth_user, fetch_auth_pass = url_auth_user, url_auth_pass
+    if fetch_auth_user and len(fetch_auth_user) > 255:
+        raise ValueError("Username is too long (max 255 characters)")
+
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
@@ -145,6 +196,14 @@ async def subscribe(
 
     feed: Feed | None = None
     parsed = None
+    # Both halves or nothing, the rule app.utils.crypto.feed_auth reads them back
+    # under. A username on its own is not credentials, and pairing it with None would
+    # hand httpx something it cannot build a header from.
+    auth = (
+        (fetch_auth_user, fetch_auth_pass)
+        if fetch_auth_user is not None and fetch_auth_pass is not None
+        else None
+    )
 
     async def _existing_public_feed(feed_url: str) -> Feed | None:
         """The shared public feed row at *feed_url*, if any (raises if subscribed)."""
@@ -165,6 +224,7 @@ async def subscribe(
                 raise AlreadySubscribed()
         return found
 
+    await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
     feed = await _existing_public_feed(url)
 
     if feed is None:
@@ -174,13 +234,14 @@ async def subscribe(
         parsed = None if is_private else get_cached_feed_preview(url)
         permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed, permanent_url = await fetch_and_parse_url(url)
+            parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
 
         # Create the row on the address the host actually serves. Storing the URL the
         # user typed would make every later poll walk the same redirect chain, and on
         # an OPML re-import it would create a second row for a feed we already have.
         if permanent_url and permanent_url != url:
             url = permanent_url
+            await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
             feed = await _existing_public_feed(url)
 
     if feed is None:
@@ -195,7 +256,13 @@ async def subscribe(
             feed_url=url,
             is_private=is_private,
             fetch_auth_user=fetch_auth_user if is_private else None,
-            fetch_auth_pass_encrypted=encrypt(fetch_auth_pass) if fetch_auth_pass else None,
+            # Non-NULL rather than truthy: an address of the form
+            # https://user@host/feed authenticates with an empty password, and the
+            # pair only survives the move if both columns are written. See
+            # app.utils.crypto.feed_auth, which reads them back under the same rule.
+            fetch_auth_pass_encrypted=(
+                encrypt(fetch_auth_pass) if is_private and fetch_auth_pass is not None else None
+            ),
             title=title[:255],
             site_url=site_url[:2048] if site_url else None,
             subscriber_count=0,
@@ -326,7 +393,18 @@ async def subscribe_scrape(
     With validate_selector=False the live page fetch + selector check is skipped
     (used by OPML import to restore a previously-working scrape feed even when the
     page is momentarily unreachable); the background initial fetch still runs.
+
+    A page behind HTTP credentials is scraped by writing them into its address, the
+    only way they can be given for a scrape feed. They are moved into the auth columns
+    here, as they are for RSS: left in the address they would be copied by ``urljoin``
+    into the address of every article the page links to.
     """
+    url, auth_user, auth_pass = split_url_credentials(url)
+    is_private = auth_user is not None
+    auth = (auth_user, auth_pass) if is_private else None
+    if auth_user and len(auth_user) > 255:
+        raise ValueError("Username is too long (max 255 characters)")
+
     await async_validate_feed_url(url)
 
     if folder_id is not None:
@@ -357,7 +435,7 @@ async def subscribe_scrape(
     if validate_selector:
         from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
-            html = await fetch_page_html(url)
+            html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)
@@ -367,16 +445,18 @@ async def subscribe_scrape(
                 "Use the Preview button to test your selector before saving."
             )
 
-    # Share public scrape feeds with matching URL + selector
-    existing = await db.execute(
+    await _raise_if_already_subscribed_private(db, user, url, auth_user, selector=selector)
+
+    # Share public scrape feeds with matching URL + selector. A feed with credentials
+    # is never shared, so it skips the lookup and always gets a row of its own.
+    feed = None if is_private else (await db.execute(
         select(Feed).where(
             Feed.feed_url == url,
             Feed.feed_type == "scrape",
             Feed.is_private == False,
             Feed.type_config["article_links_selector"].astext == selector,
         )
-    )
-    feed = existing.scalar_one_or_none()
+    )).scalar_one_or_none()
     is_new_feed = feed is None
 
     if feed:
@@ -389,7 +469,10 @@ async def subscribe_scrape(
         feed = Feed(
             feed_url=url[:2048],
             feed_type="scrape",
-            is_private=False,
+            is_private=is_private,
+            fetch_auth_user=auth_user,
+            # See subscribe(): non-NULL, not truthy, so an empty password survives.
+            fetch_auth_pass_encrypted=encrypt(auth_pass) if auth_pass is not None else None,
             title=title[:255],
             site_url=url[:2048],
             type_config={"article_links_selector": selector},

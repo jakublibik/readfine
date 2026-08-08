@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
+from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
 from app.utils.parsing import count_words
 
@@ -67,7 +68,9 @@ def _fetch_html(
     any address on request and repeatedly, which is what a race needs.
     """
     from app.utils.url_validator import fetch_url_page
-    auth = (auth_user, auth_pass) if auth_user and auth_pass else None
+    # Non-NULL rather than truthy, matching app.utils.crypto.feed_auth: a feed whose
+    # credentials came out of its URL may legitimately carry an empty password.
+    auth = (auth_user, auth_pass) if auth_user is not None and auth_pass is not None else None
     try:
         page = fetch_url_page(
             url,
@@ -994,18 +997,10 @@ async def process_pending_readable(db: AsyncSession) -> int:
         select(Feed.id, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
         .where(Feed.id.in_(feed_ids))
     )
-    feed_auth: dict[int, tuple[Optional[str], Optional[str]]] = {}
-    for feed_id, auth_user, auth_pass_enc in feeds_result:
-        decrypted_pass: Optional[str] = None
-        if auth_pass_enc:
-            try:
-                from app.utils.crypto import decrypt
-                decrypted_pass = decrypt(auth_pass_enc)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to decrypt fetch_auth_pass for feed %d: %s", feed_id, exc
-                )
-        feed_auth[feed_id] = (auth_user, decrypted_pass)
+    auth_by_feed: dict[int, tuple[str, str] | None] = {
+        feed_id: feed_auth(auth_user, auth_pass_enc, context=f"feed {feed_id}")
+        for feed_id, auth_user, auth_pass_enc in feeds_result
+    }
 
     import asyncio
     loop = asyncio.get_running_loop()
@@ -1033,7 +1028,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
         # _disable_readable_for_403(None, db) for a feed that does not exist.
         is_feedless = article.feed_id is None
 
-        auth_user, auth_pass = feed_auth.get(article.feed_id, (None, None))
+        auth_user, auth_pass = auth_by_feed.get(article.feed_id) or (None, None)
         title = None
         resolved_url = None
         description = None
@@ -1474,19 +1469,13 @@ async def retry_blocked_feeds(db: AsyncSession) -> int:
             await db.commit()
             continue
 
-        auth_pass: Optional[str] = None
-        if feed.fetch_auth_pass_encrypted:
-            try:
-                from app.utils.crypto import decrypt
-                auth_pass = decrypt(feed.fetch_auth_pass_encrypted)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to decrypt fetch_auth_pass for feed %d: %s", feed.id, exc
-                )
+        auth_user, auth_pass = feed_auth(
+            feed.fetch_auth_user, feed.fetch_auth_pass_encrypted, context=f"feed {feed.id}"
+        ) or (None, None)
 
         try:
             content, error, http_status, _ = await loop.run_in_executor(
-                None, extract_readable, article_url, feed.fetch_auth_user, auth_pass
+                None, extract_readable, article_url, auth_user, auth_pass
             )
         except Exception as exc:
             content, error, http_status = None, str(exc)[:200], None

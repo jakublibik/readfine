@@ -4,6 +4,7 @@ Only helpers referenced by 2+ areas live here; single-area helpers stay in their
 own module.
 """
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +16,10 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.services.feed import list_user_feeds
+from app.utils.crypto import feed_auth
 from app.utils.datetime_format import format_until
 from app.utils.parsing import safe_int
+from app.utils.url_validator import split_url_credentials
 
 
 def _ensure_scheme(url: str) -> str:
@@ -24,26 +27,48 @@ def _ensure_scheme(url: str) -> str:
     return f"https://{url}" if url and "://" not in url else url
 
 
-async def _scrape_target_url(form, user: User, db: AsyncSession) -> str:
+class ScrapeTarget(NamedTuple):
+    """Where a scrape helper should fetch from, and what it needs to get in."""
+    url: str
+    auth: tuple[str, str] | None = None
+
+
+async def _scrape_target(form, user: User, db: AsyncSession) -> ScrapeTarget:
     """The page the scrape helpers (preview, AI selector, prompt) should fetch.
 
     An existing feed is addressed by ``feed_id`` and its URL is read from the
     database, so the edit forms never have to carry the stored address in a hidden
-    field: it can hold an API token or HTTP credentials. The setup flow has no feed
-    row yet and still passes the URL the user just typed.
+    field: it can hold an API token or HTTP credentials. Credentials it once carried
+    now live in the feed's own columns, so they are read along with the address,
+    otherwise a preview of a page behind a login would answer 401 while the feed
+    itself scrapes fine. The setup flow has no feed row yet and still passes the URL
+    the user just typed, credentials in it included.
 
-    Returns "" when the id is unknown or the user has no claim to that feed, which
+    ``url`` is "" when the id is unknown or the user has no claim to that feed, which
     the callers report the same way as a missing URL.
     """
     feed_id = safe_int(form.get("feed_id"))
     if feed_id is not None:
-        stmt = select(Feed.feed_url).where(Feed.id == feed_id)
+        stmt = select(
+            Feed.feed_url, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted
+        ).where(Feed.id == feed_id)
         if user.role != "admin":
             stmt = stmt.join(UserFeed, UserFeed.feed_id == Feed.id).where(
                 UserFeed.user_id == user.id
             )
-        return await db.scalar(stmt) or ""
-    return _ensure_scheme((form.get("url") or "").strip())
+        row = (await db.execute(stmt)).first()
+        if row is None:
+            return ScrapeTarget("")
+        return ScrapeTarget(
+            row.feed_url or "",
+            feed_auth(
+                row.fetch_auth_user, row.fetch_auth_pass_encrypted, context=f"feed {feed_id}"
+            ),
+        )
+    url, auth_user, auth_pass = split_url_credentials(
+        _ensure_scheme((form.get("url") or "").strip())
+    )
+    return ScrapeTarget(url, (auth_user, auth_pass) if auth_user is not None else None)
 
 
 def _snap_interval(raw: int) -> int:

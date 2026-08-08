@@ -24,8 +24,9 @@ categories:
           suggest the selector for you.
       - title: Authenticated feeds
         desc: >-
-          Subscribe to feeds behind HTTP Basic Auth with per-feed credentials,
-          stored encrypted.
+          Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own
+          fields or written into the address. Either way the credentials are stored
+          encrypted, per feed.
       - title: Folders
         desc: Group feeds into folders for organizing and for scoping filters.
       - title: Scheduled background fetching

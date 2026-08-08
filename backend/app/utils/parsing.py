@@ -1,7 +1,40 @@
 import re
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import nh3
+
+
+# Tracking parameters that identify the referrer rather than the article, so two
+# links to the same piece must compare equal without them.
+_STRIP_PARAMS = frozenset({
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "fbclid", "gclid", "msclkid",
+})
+
+
+def normalize_url(url: str | None) -> str | None:
+    """The comparable form of an article address, used as a dedup key.
+
+    Lowercases scheme and host, drops the fragment, trailing slash and tracking
+    parameters, and sorts what remains. Returns None for anything that is not an
+    http(s) URL.
+
+    Credentials in the netloc are dropped as well. They say who is asking, not which
+    article this is, and a key holding a password would put it in a second column
+    after the work done to keep it out of ``feeds.feed_url``.
+    """
+    if not url:
+        return None
+    try:
+        p = urlparse(url)
+        if p.scheme not in ("http", "https"):
+            return None
+        path = p.path.rstrip("/") or "/"
+        netloc = p.netloc.rsplit("@", 1)[-1].lower()
+        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
+        return urlunparse((p.scheme.lower(), netloc, path, "", urlencode(params), ""))[:2048]
+    except Exception:
+        return None
 
 
 def rewrite_relative_urls(html: str, base_url: str) -> str:

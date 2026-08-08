@@ -31,6 +31,7 @@ from app.utils.url_validator import (
     format_retry_in,
     rate_limited_until,
     redact_url,
+    split_url_credentials,
 )
 
 from .common import _ai_selector_available, _ensure_scheme, _get_feeds_context, _snap_interval
@@ -80,6 +81,12 @@ async def settings_feeds_test(
                                           {"error": "Please enter a URL."})
     auth_user = fetch_auth_user.strip() or None
     auth_pass = fetch_auth_pass or None
+    # Same split Subscribe will do, so the test says the same thing the subscribe will
+    # find: with the credentials left in the address the "are these needed?" check
+    # never runs, and the parse would be cached under an address Subscribe no longer uses.
+    url, url_auth_user, url_auth_pass = split_url_credentials(url)
+    if url_auth_user is not None and not auth_user and not auth_pass:
+        auth_user, auth_pass = url_auth_user, url_auth_pass
 
     try:
         await async_validate_feed_url(url)
@@ -91,7 +98,9 @@ async def settings_feeds_test(
         "User-Agent": READFINE_UA,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
-    has_auth = bool(auth_user and auth_pass)
+    # Non-NULL, not truthy: credentials out of an address may carry an empty password
+    # (see app.utils.crypto.feed_auth), and the test has to try what the fetch will.
+    has_auth = auth_user is not None and auth_pass is not None
     auth = (auth_user, auth_pass) if has_auth else None
     loop = asyncio.get_running_loop()
 

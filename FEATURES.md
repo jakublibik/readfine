@@ -10,7 +10,7 @@ _Get content in, from anywhere._
 
 - **RSS & Atom feeds:** Subscribe to any standard feed URL.
 - **Web-scraping feeds:** Follow sites that have no feed. Point Readfine at a listing page and a CSS selector that matches the article links; with an AI key it can suggest the selector for you.
-- **Authenticated feeds:** Subscribe to feeds behind HTTP Basic Auth with per-feed credentials, stored encrypted.
+- **Authenticated feeds:** Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own fields or written into the address. Either way the credentials are stored encrypted, per feed.
 - **Folders:** Group feeds into folders for organizing and for scoping filters.
 - **Scheduled background fetching:** New articles are pulled automatically on a schedule, with adaptive per-feed intervals that back off quiet feeds and check busy ones more often.
 - **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS.

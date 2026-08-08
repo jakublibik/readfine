@@ -46,14 +46,11 @@ async def _extract_readable_bg(
     """Background readable extraction fired when user opens an article."""
     from app.database import async_session_factory
     from app.services.readable_service import extract_readable
-    from app.utils.crypto import decrypt
+    from app.utils.crypto import feed_auth
 
-    auth_pass: str | None = None
-    if auth_pass_enc:
-        try:
-            auth_pass = decrypt(auth_pass_enc)
-        except Exception:
-            logger.warning("readable bg: decrypt failed for article %d", article_id)
+    auth_user, auth_pass = feed_auth(
+        auth_user, auth_pass_enc, context=f"article {article_id}"
+    ) or (None, None)
 
     loop = asyncio.get_running_loop()
     try:
@@ -1053,7 +1050,7 @@ async def htmx_extract_readable(
 ):
     """Extract readable content on demand for a single article."""
     from app.services.readable_service import extract_readable_with_title
-    from app.utils.crypto import decrypt
+    from app.utils.crypto import feed_auth
 
     stmt = (
         select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
@@ -1082,14 +1079,9 @@ async def htmx_extract_readable(
     if article.readable_status == "success":
         return HTMLResponse("")  # already done, nothing to do
 
-    auth_pass: str | None = None
-    if auth_pass_enc:
-        try:
-            auth_pass = decrypt(auth_pass_enc)
-        except Exception:
-            # Matches the background path: a decrypt failure signals ENCRYPTION_KEY
-            # drift / corruption, so log it rather than silently fetch without auth.
-            logger.warning("readable: decrypt failed for article %d", article.id)
+    auth_user, auth_pass = feed_auth(
+        auth_user, auth_pass_enc, context=f"article {article.id}"
+    ) or (None, None)
 
     loop = asyncio.get_running_loop()
     # Ask for the title too: on a feedless saved article the page is the only source

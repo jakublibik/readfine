@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -21,9 +21,15 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.services.readable_service import video_body_from_feed
-from app.utils.crypto import decrypt
+from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
-from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
+# normalize_url is re-exported: saved_article_service and the tests import it from here.
+from app.utils.parsing import (  # noqa: F401
+    count_words,
+    normalize_url,
+    rewrite_relative_urls,
+    soften_nbsp_runs,
+)
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_conditional,
@@ -49,25 +55,6 @@ _HEADERS = {
 }
 _TIMEOUT = 30  # seconds
 
-_STRIP_PARAMS = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "utm_id", "fbclid", "gclid", "msclkid",
-})
-
-
-def normalize_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        p = urlparse(url)
-        if p.scheme not in ("http", "https"):
-            return None
-        path = p.path.rstrip("/") or "/"
-        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
-        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
-    except Exception:
-        return None
-
 
 
 class ParsedFeed(NamedTuple):
@@ -80,12 +67,17 @@ class ParsedFeed(NamedTuple):
     permanent_url: str | None
 
 
-async def fetch_and_parse_url(url: str) -> ParsedFeed:
-    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
+async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
+    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure.
+
+    *auth* is the HTTP Basic pair for a feed that needs one. Subscribing to such a
+    feed goes through here before the row exists, so the credentials cannot be read
+    off the feed and have to be handed in.
+    """
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
     page = await loop.run_in_executor(
-        None, fetch_url_page, url, None, _TIMEOUT, _HEADERS
+        None, fetch_url_page, url, auth, _TIMEOUT, _HEADERS
     )
     parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
@@ -154,9 +146,10 @@ async def fetch_feed(
             parsed = prefetched
         else:
             await async_validate_feed_url(feed_url)
-            auth = None
-            if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
-                auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
+            auth = feed_auth(
+                feed.fetch_auth_user, feed.fetch_auth_pass_encrypted,
+                context=f"feed {feed_id}",
+            )
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
                 None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
