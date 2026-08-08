@@ -2,6 +2,7 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,22 @@ from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
 
 logger = logging.getLogger(__name__)
+
+
+class Completion(NamedTuple):
+    """One answer from a provider, with what it cost and whether it finished.
+
+    ``truncated`` is True when the model stopped on the token cap rather than
+    because it was done, so a caller storing the text can mark it as cut off
+    instead of passing it off as complete. Most callers have nothing to do with
+    it, which is the reason for the named field: ``result.text`` reads the same
+    everywhere, while a bare tuple made every one of them spell out a throwaway
+    for a flag they never look at.
+    """
+    text: str
+    input_tokens: int
+    output_tokens: int
+    truncated: bool = False
 
 
 class ProviderEmptyResponse(Exception):
@@ -409,7 +426,8 @@ async def score_article(
         f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
-    raw, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=10)
+    answer = await _complete(prompt, client, provider, model, max_tokens=10)
+    raw = answer.text
     # Extract the first decimal number — tolerates models that wrap the score in
     # prose ("0.8 - relevant", "Score: 0.7"). A truly unparseable response raises,
     # so the caller's retry/failure path handles it instead of silently scoring 0.5.
@@ -417,7 +435,7 @@ async def score_article(
     if match is None:
         raise ValueError(f"score_article: no number in AI response {raw!r}")
     score = float(match.group())
-    return max(0.0, min(1.0, score)), in_tok, out_tok
+    return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
 _DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
@@ -446,10 +464,12 @@ async def summarize_article(
     provider: str,
     model: str,
     custom_prompt: str | None = None,
-) -> tuple[str, int, int, bool]:
+) -> Completion:
     """Generate a concise article summary.
 
-    Returns (text, input_tokens, output_tokens, truncated).
+    The only caller that acts on ``truncated``: a summary cut off by the token cap
+    is still stored, but labelled as such rather than passed off as the model's own
+    choice of ending.
     """
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
@@ -471,8 +491,8 @@ async def get_article_context(
     if focus:
         instruction += f"\n\nFocus on: {focus}"
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    text, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=500)
-    return text, in_tok, out_tok
+    answer = await _complete(prompt, client, provider, model, max_tokens=500)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 async def chat_with_article(
@@ -581,18 +601,16 @@ async def catch_me_up(
     user_prompt = f"Articles from the past {period}:\n\n{article_list}"
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    text, input_tokens, output_tokens, _ = await _complete(
-        full_prompt, client, provider, model, max_tokens=8000
-    )
-    return text, input_tokens, output_tokens
+    answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:
     """Generate a CSS selector for article links from a page."""
     from app.utils.scrape_ai import generate_selector_prompt
     prompt = generate_selector_prompt(url, html)
-    text, _, _, _ = await _complete(prompt, client, provider, model, max_tokens=200)
-    return text.strip().strip('`"\'').split('\n')[0].strip()
+    answer = await _complete(prompt, client, provider, model, max_tokens=200)
+    return answer.text.strip().strip('`"\'').split('\n')[0].strip()
 
 
 async def generate_css_selector_from_sample(
@@ -606,9 +624,9 @@ async def generate_css_selector_from_sample(
     """Generate CSS selector from pre-extracted HTML sample with optional refinement history."""
     from app.utils.scrape_ai import build_selector_prompt
     prompt = build_selector_prompt(url, sample, history)
-    text, in_tok, out_tok, _ = await _complete(prompt, client, provider, model, max_tokens=200)
-    selector = text.strip().strip('`"\'').split('\n')[0].strip()
-    return selector, in_tok, out_tok
+    answer = await _complete(prompt, client, provider, model, max_tokens=200)
+    selector = answer.text.strip().strip('`"\'').split('\n')[0].strip()
+    return selector, answer.input_tokens, answer.output_tokens
 
 
 # Longest behavioural lookback window used by the interest profile (G1). The retention
@@ -797,8 +815,8 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         {"g1": g1_rows, "g2": g2_rows, "g3": g3_rows, "p1": p1_rows, "n1": n1_rows},
         feeds_str,
     )
-    result_text, input_tokens, output_tokens, _ = await _complete(prompt, client, provider, model, max_tokens=500)
-    return result_text, input_tokens, output_tokens
+    answer = await _complete(prompt, client, provider, model, max_tokens=500)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
@@ -860,13 +878,8 @@ async def _anthropic_create(client, **kwargs):
 
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500
-) -> tuple[str, int, int, bool]:
-    """Send a prompt and return (text, input_tokens, output_tokens, truncated).
-
-    *truncated* is True when the model stopped on *max_tokens* rather than
-    finishing, so callers can mark a cut-off result instead of storing it as a
-    complete one. Callers that cannot act on it discard the flag.
-    """
+) -> Completion:
+    """Send a prompt to whichever provider the slot uses and return its answer."""
     if provider == "anthropic":
         resp = await _anthropic_create(
             client,
@@ -874,7 +887,7 @@ async def _complete(
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return (
+        return Completion(
             _extract_text("anthropic", resp),
             resp.usage.input_tokens,
             resp.usage.output_tokens,
@@ -886,7 +899,7 @@ async def _complete(
             max_completion_tokens=_openai_max_tokens(model, max_tokens),
             messages=[{"role": "user", "content": prompt}],
         )
-        return (
+        return Completion(
             _extract_text("openai", resp),
             resp.usage.prompt_tokens,
             resp.usage.completion_tokens,
@@ -900,7 +913,7 @@ async def _complete(
             config=types.GenerateContentConfig(max_output_tokens=max_tokens),
         )
         meta = resp.usage_metadata
-        return (
+        return Completion(
             _extract_text("gemini", resp),
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0,

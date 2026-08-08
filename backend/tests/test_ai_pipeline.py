@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.services.ai_service import Completion
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1234,21 +1236,21 @@ class TestSummaryTruncationFlag:
 
     async def test_truncated_summary_is_stored_and_flagged(self):
         state = make_state()
-        job = await self._run(state, ("Cut off mid-sen", 500, 400, True))
+        job = await self._run(state, Completion("Cut off mid-sen", 500, 400, True))
         assert job.status == "success"          # kept, not failed
         assert state.ai_summary == "Cut off mid-sen"
         assert state.ai_summary_truncated is True
 
     async def test_complete_summary_is_not_flagged(self):
         state = make_state()
-        await self._run(state, ("A whole summary.", 500, 120, False))
+        await self._run(state, Completion("A whole summary.", 500, 120, False))
         assert state.ai_summary_truncated is False
 
     async def test_regenerating_clears_a_stale_flag(self):
         """A previously truncated summary that regenerates in full must lose the
         badge — the flag is written on every success, not only when true."""
         state = make_state(ai_summary="Old cut off", ai_summary_truncated=True)
-        await self._run(state, ("Now complete.", 500, 130, False))
+        await self._run(state, Completion("Now complete.", 500, 130, False))
         assert state.ai_summary == "Now complete."
         assert state.ai_summary_truncated is False
 
