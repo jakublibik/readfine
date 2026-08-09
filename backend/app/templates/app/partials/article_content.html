@@ -23,9 +23,9 @@
   {% endif %}
   <div class="prose max-w-none text-gray-800 article-body">
     {% if article.readable_status == 'success' and article.readable_content %}
-      {{ article.readable_content | safe }}
+      {{ article.readable_content | video_thumbs }}
     {% elif article.content %}
-      {{ article.content | safe }}
+      {{ article.content | video_thumbs }}
     {% elif article.summary and article.feed_id is none %}
       {#- Extraction produced nothing to read, but the page told us about itself.
           Shown for feedless (saved) articles only, which are the only ones that

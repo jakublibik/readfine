@@ -56,7 +56,8 @@ categories:
         desc: >-
           A YouTube or Vimeo link is saved as the video, with its full description
           under it. Playing it starts the player in place, and no player is loaded
-          until you press play.
+          until you press play. The thumbnail is served from your own server, so
+          opening an article never tells the video service your address.
       - title: Adaptive layout
         desc: >-
           Choose a 2- or 3-panel view per screen size, with breakpoints you set

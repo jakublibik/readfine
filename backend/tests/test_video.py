@@ -9,7 +9,10 @@ import pytest
 
 from app.utils.video import (
     description_paragraphs,
+    rewrite_thumb_srcs,
+    thumb_proxy_path,
     video_body_from_feed,
+    video_figure,
     video_target,
     youtube_full_description,
 )
@@ -46,6 +49,64 @@ class TestVideoTarget:
     ])
     def test_ignores_everything_else(self, url):
         assert video_target(url) is None
+
+
+class TestVideoFigure:
+    """The stored markup points its thumbnail at our proxy, never at the video host."""
+
+    def test_youtube_thumbnail_is_the_proxy_path(self):
+        fig = video_figure("youtube", "dQw4w9WgXcQ")
+        assert '<img src="/img/video-thumb/youtube/dQw4w9WgXcQ"' in fig
+        assert "img.youtube.com" not in fig
+        # The link still goes out to the video on its own site.
+        assert 'href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"' in fig
+        # The ids the player rebuilds from survive.
+        assert 'data-video-provider="youtube"' in fig
+        assert 'data-video-id="dQw4w9WgXcQ"' in fig
+
+    def test_vimeo_thumbnail_is_the_proxy_path_not_vumbnail(self):
+        fig = video_figure("vimeo", "76979871")
+        assert '<img src="/img/video-thumb/vimeo/76979871"' in fig
+        assert "vumbnail.com" not in fig
+        assert 'href="https://vimeo.com/76979871"' in fig
+
+    def test_proxy_path_shape(self):
+        assert thumb_proxy_path("youtube", "abc123") == "/img/video-thumb/youtube/abc123"
+
+
+class TestRewriteThumbSrcs:
+    """Bodies stored before the proxy carry absolute thumbnail addresses; rendering
+    redirects those to the proxy so an old article leaks no less than a new one."""
+
+    def test_rewrites_legacy_youtube_thumb(self):
+        html = '<figure><img src="https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"></figure>'
+        assert rewrite_thumb_srcs(html) == (
+            '<figure><img src="/img/video-thumb/youtube/dQw4w9WgXcQ"></figure>'
+        )
+
+    def test_rewrites_legacy_vumbnail_thumb(self):
+        html = '<img src="https://vumbnail.com/76979871.jpg" alt="Video thumbnail">'
+        assert rewrite_thumb_srcs(html) == (
+            '<img src="/img/video-thumb/vimeo/76979871" alt="Video thumbnail">'
+        )
+
+    def test_leaves_ordinary_images_alone(self):
+        html = '<img src="https://cdn.example.com/photo.jpg">'
+        assert rewrite_thumb_srcs(html) == html
+
+    def test_leaves_already_proxied_content_alone(self):
+        html = '<img src="/img/video-thumb/youtube/dQw4w9WgXcQ">'
+        assert rewrite_thumb_srcs(html) == html
+
+    def test_does_not_match_a_bad_id(self):
+        # The path where the id should be is not a valid id, so it is left untouched
+        # rather than proxied to something that would 404 anyway.
+        html = '<img src="https://vumbnail.com/not-a-number.jpg">'
+        assert rewrite_thumb_srcs(html) == html
+
+    @pytest.mark.parametrize("value", [None, ""])
+    def test_passes_empty_through(self, value):
+        assert rewrite_thumb_srcs(value) == value
 
 
 class TestYoutubeFullDescription:

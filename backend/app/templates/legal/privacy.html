@@ -92,10 +92,9 @@
     </p>
     <p class="mt-2">
       An article containing a video shows its thumbnail, and no player, until you click
-      it. Opening such an article does load that thumbnail from the video's own service:
-      img.youtube.com for YouTube, vumbnail.com for Vimeo. Those requests are made by
-      your browser, so the service sees your IP address and which video it was for. They
-      set no cookies of ours and we receive nothing back from them.
+      it. That thumbnail is served by this site, which fetches it from the video service
+      and caches it. Your browser only ever requests it from this site, so opening the
+      article does not tell YouTube or Vimeo your IP address or which video it was for.
     </p>
     <p class="mt-2">
       Clicking the thumbnail is what loads the player, from youtube-nocookie.com or

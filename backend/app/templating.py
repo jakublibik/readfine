@@ -112,6 +112,21 @@ def _redact_url_display(url: str | None) -> str:
 
 templates.env.filters["redact_url_display"] = _redact_url_display
 
+
+def _video_thumbs(html: str | None) -> Markup:
+    """Render stored article body, redirecting legacy video thumbnails to the proxy.
+
+    Replaces the bare ``| safe`` on article content: new bodies already point their
+    thumbnails at our endpoint, and this catches the ones saved before that so no
+    body opens a request to img.youtube.com or vumbnail.com. Trusted-safe like the
+    ``| safe`` it stands in for — the body is our own sanitized HTML.
+    """
+    from app.utils.video import rewrite_thumb_srcs
+    return Markup(rewrite_thumb_srcs(html) or "")
+
+
+templates.env.filters["video_thumbs"] = _video_thumbs
+
 _ai_enabled: bool = False
 
 

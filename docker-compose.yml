@@ -39,6 +39,11 @@ services:
     env_file: .env
     restart: unless-stopped
     logging: *default-logging
+    # Cache of video thumbnails Readfine fetches so a reader's browser never contacts
+    # the video host (see THUMB_CACHE_DIR). Only a cache: safe to delete, rebuilt on
+    # demand. Kept in a volume so it survives a restart instead of re-fetching.
+    volumes:
+      - thumb_cache:/data/thumb-cache
     depends_on:
       db:
         condition: service_healthy
@@ -58,3 +63,4 @@ services:
 
 volumes:
   postgres_data:
+  thumb_cache:

@@ -828,6 +828,40 @@ def fetch_url_with_ssrf_check(
     return fetch_url_page(url, auth, timeout, headers, max_redirects).text
 
 
+class BytesResponse(NamedTuple):
+    """A fetched body as raw bytes, with the content type the server declared.
+
+    The text-returning fetchers above decode the body to ``str``; an image must not
+    be decoded, so this returns the bytes as they arrived. Everything else — SSRF
+    validation on every hop, IP pinning and the decompressed-size cap — is the same,
+    because it all lives in :func:`_resolve_response`.
+    """
+    content: bytes
+    content_type: str
+    final_url: str
+
+
+def fetch_url_bytes(
+    url: str,
+    timeout: int = 30,
+    headers: dict | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> BytesResponse:
+    """SSRF-safe fetch that returns the body as bytes (for images and the like).
+
+    No ``auth`` parameter: the callers that need this fetch public assets (video
+    thumbnails), never a credentialed origin, so there is nothing to scope.
+    """
+    response, _permanent_url, final_url = _resolve_response(
+        url, None, timeout, headers, max_redirects
+    )
+    return BytesResponse(
+        response.content,
+        response.headers.get("content-type", ""),
+        final_url,
+    )
+
+
 class ConditionalResponse(NamedTuple):
     """Result of a conditional HTTP fetch.
 

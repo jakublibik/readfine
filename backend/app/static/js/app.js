@@ -190,13 +190,11 @@ document.body.addEventListener('htmx:afterSettle', function () { openProseLinksI
 // and it stays that way until the reader clicks. No player is loaded before then, so no
 // video service can set a cookie on an article you only scrolled past.
 //
-// The thumbnail itself is a different matter, and worth stating plainly because the rest
-// of this reads like a facade: its src points straight at img.youtube.com / vumbnail.com,
-// so opening an article does hand those hosts the reader's IP and the video id. That has
-// been true since the figures were first stored, long before this player existed. Making
-// it not true means serving the thumbnail ourselves, which is a server-side change, not
-// one that can be made from here: rewriting the src in script is too late, the browser
-// has already started fetching by the time this runs.
+// The thumbnail's src is our own /img/video-thumb endpoint, not the video host, so
+// opening an article no longer hands YouTube or Vimeo the reader's IP and the video id
+// (see app/utils/video.py and video_thumb_service). That is a server-side matter and
+// nothing here needs to touch it — including the old dance of upgrading the src to a
+// sharper image and reverting on error, which the server now resolves once.
 //
 // The click is what loads the player, and the player is built here from the ids on the
 // figure, never from markup a feed supplied. The id is checked against the shape it must
@@ -211,13 +209,6 @@ var VIDEO_PROVIDERS = {
       return 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1&rel=0' +
         (start ? '&start=' + start : '');
     },
-    // Stored content points at hqdefault, the one size YouTube has for every video,
-    // including uploads from before widescreen. It is 480x360 with letterbox bars in
-    // the image, so cropping to 16:9 leaves 480x270 to fill a reading column half as
-    // wide again, which shows. maxresdefault is 1280x720 and needs no cropping, but
-    // it 404s on those same old videos, so it is tried here and reverted on error
-    // rather than being what we store.
-    hiRes: function (src) { return src.replace('/hqdefault.jpg', '/maxresdefault.jpg'); },
   },
   vimeo: {
     id: /^\d{5,15}$/,
@@ -250,17 +241,6 @@ function markVideoFacades(root) {
     fig.setAttribute('data-video-ready', '');
     var link = fig.querySelector('a[href]');
     if (link) link.setAttribute('title', 'Play here (loads the player from ' + spec.label + ')');
-    var img = spec.hiRes && fig.querySelector('img[src]');
-    if (img) {
-      var stored = img.getAttribute('src');
-      var sharper = spec.hiRes(stored);
-      if (sharper !== stored) {
-        // once: the revert restores a URL that is known to exist, so a second error
-        // is not something to answer, and answering it would loop.
-        img.addEventListener('error', function () { img.src = stored; }, { once: true });
-        img.src = sharper;
-      }
-    }
     var caption = fig.querySelector('figcaption');
     if (caption) caption.textContent = spec.label + ' video, loaded only when you play it';
   });

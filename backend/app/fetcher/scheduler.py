@@ -604,6 +604,12 @@ async def _cleanup_expired_pending_emails() -> None:
         await session.commit()
 
 
+async def _sweep_thumb_cache() -> None:
+    """Job: drop video thumbnails nobody has requested within the idle window."""
+    from app.services.video_thumb_service import sweep_idle_thumbnails
+    await asyncio.to_thread(sweep_idle_thumbnails)
+
+
 async def _generate_due_preferences() -> None:
     """Job: regenerate interest profiles for users who have it on a schedule.
 
@@ -840,6 +846,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=0,
         id="cleanup_unverified_users",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _sweep_thumb_cache,
+        trigger="cron",
+        hour=4,
+        minute=50,
+        id="sweep_thumb_cache",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

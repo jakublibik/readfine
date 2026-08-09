@@ -11,13 +11,13 @@ own site, and the two ids the front end rebuilds an embed from once the reader
 presses play (see ``app.js``). Until then no player is loaded and no video service
 can set a cookie.
 
-The thumbnail is the part the word "facade" oversells. Its ``src`` is built below
-to point at img.youtube.com and vumbnail.com, so the reader's browser fetches it
-from those hosts as soon as an article is opened, handing them an IP address and a
-video id. Serving it from here instead would need a server-side step this module
-deliberately does not have (nothing in it touches the network), and for Vimeo that
-step is also the only way off vumbnail.com, which is a third party rather than
-Vimeo and has no business knowing either.
+The thumbnail's ``src`` points at our own ``/img/video-thumb`` endpoint, not at the
+video host, so opening an article no longer hands YouTube or Vimeo the reader's IP
+and the video id before a single click. The server fetches and caches the image
+(see ``video_thumb_service``); this module only builds the local URL, which keeps it
+what it has always been — a set of pure functions that touch neither the network nor
+the database. :func:`rewrite_thumb_srcs` does the same for content stored before this
+existed, whose bodies still carry the old absolute addresses.
 """
 import html as html_mod
 import json
@@ -33,6 +33,15 @@ _YOUTUBE_HOSTS = {"youtube.com", "youtube-nocookie.com", "m.youtube.com", "music
 _YOUTUBE_ID_PATHS = ("/shorts/", "/embed/", "/live/", "/v/")
 
 
+def thumb_proxy_path(provider: str, vid: str) -> str:
+    """The local URL a stored thumbnail points at, served by ``video_thumb_service``.
+
+    The endpoint validates *provider* and *vid* the same way this module does before
+    it fetches anything, so this only has to build the path, not vouch for it.
+    """
+    return f"/img/video-thumb/{provider}/{vid}"
+
+
 def video_figure(provider: str, vid: str) -> str:
     """A video as stored in article content: thumbnail, link, and the ids to rebuild it.
 
@@ -44,19 +53,16 @@ def video_figure(provider: str, vid: str) -> str:
     sanitization also means a feed can put them in its own markup, so anything acting
     on them must validate the id rather than trust it, the same rule that applies to
     every other attribute arriving from a feed.
+
+    The thumbnail ``src`` is our own proxy path, so it is one host (ours) rather than
+    the video's; the caption's link still goes to the video on its own site.
     """
-    if provider == "youtube":
-        href, thumb, caption = (
-            f"https://www.youtube.com/watch?v={vid}",
-            f"https://img.youtube.com/vi/{vid}/hqdefault.jpg",
-            "Watch on YouTube",
-        )
-    else:
-        href, thumb, caption = (
-            f"https://vimeo.com/{vid}",
-            f"https://vumbnail.com/{vid}.jpg",
-            "Watch on Vimeo",
-        )
+    href = (
+        f"https://www.youtube.com/watch?v={vid}" if provider == "youtube"
+        else f"https://vimeo.com/{vid}"
+    )
+    caption = "Watch on YouTube" if provider == "youtube" else "Watch on Vimeo"
+    thumb = thumb_proxy_path(provider, vid)
     return (
         f'<figure data-video-provider="{provider}" data-video-id="{vid}">'
         f'<a href="{href}">'
@@ -65,6 +71,49 @@ def video_figure(provider: str, vid: str) -> str:
         f'<figcaption>&#9654; {caption}</figcaption>'
         f'</figure>'
     )
+
+
+# The two thumbnail addresses this module used to bake into stored content, before it
+# served them through the proxy: YouTube's guessable per-video image, and vumbnail.com
+# (a third party, not Vimeo, which is why it goes away entirely under the proxy). Both
+# are matched only to pull the id back out and point the src at our endpoint instead;
+# the id is re-validated on the way, since content is not to be trusted.
+_YT_THUMB_SRC_RE = re.compile(
+    r"^https?://img\.youtube\.com/vi/([A-Za-z0-9_-]{6,20})/[\w-]+\.jpg$"
+)
+_VUMBNAIL_SRC_RE = re.compile(r"^https?://(?:www\.)?vumbnail\.com/(\d{5,15})\.jpg$")
+_IMG_SRC_RE = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]*)(")', re.IGNORECASE)
+
+
+def _proxy_src_for(src: str) -> str | None:
+    """The proxy path for a legacy thumbnail *src*, or None if it is not one."""
+    m = _YT_THUMB_SRC_RE.match(src)
+    if m:
+        return thumb_proxy_path("youtube", m.group(1))
+    m = _VUMBNAIL_SRC_RE.match(src)
+    if m:
+        return thumb_proxy_path("vimeo", m.group(1))
+    return None
+
+
+def rewrite_thumb_srcs(html: str | None) -> str | None:
+    """Point any baked-in video thumbnail in *html* at the proxy instead.
+
+    New content already stores the proxy path (see :func:`video_figure`); this is for
+    bodies saved before that, whose ``<img src>`` still names img.youtube.com or
+    vumbnail.com. Only those two shapes are touched and only after the id validates,
+    so an ordinary image in the article is left exactly as it was. Applied at render
+    time (a Jinja filter), which is why it must stay cheap and must not depend on the
+    surrounding figure — it rewrites the src from the src alone.
+    """
+    if not html:
+        return html
+
+    def repl(m: re.Match) -> str:
+        proxy = _proxy_src_for(m.group(2))
+        return f"{m.group(1)}{proxy}{m.group(3)}" if proxy else m.group(0)
+
+    return _IMG_SRC_RE.sub(repl, html)
 
 
 def collect_video_figures(html: str) -> list[str]:
