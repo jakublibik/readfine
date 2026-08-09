@@ -88,6 +88,15 @@ async def save_article_by_url(
     else who saved the same URL, so it is not a place to keep one user's password. A
     later Retry from the article panel therefore fetches unauthenticated and reports
     the 401 it gets, which is the honest outcome of not storing the secret.
+
+    Two saves of the same new URL racing each other both find nothing and both insert,
+    leaving two feedless rows for one address. Accepted rather than closed: the cost is
+    a duplicate in Saved, and the obvious fix is worse than the problem. A unique index
+    on ``url_normalized WHERE feed_id IS NULL`` would break unsubscribe, which sets
+    ``feed_id = NULL`` on articles someone keeps for good, and the same article
+    routinely lives in several feeds — two orphans may legitimately share a normalized
+    address. Telling a saved row from an orphaned one needs a column articles does not
+    have, since ``saved_at`` belongs to the user's state row.
     """
     from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
