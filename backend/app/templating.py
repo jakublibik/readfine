@@ -84,12 +84,19 @@ def _hostname(url: str | None) -> str:
 
     A saved-by-URL article has no feed title, and "Unknown feed" would be actively
     wrong — it never had one. The host is what the reader actually wants to see.
+
+    Reads ``hostname`` rather than ``netloc``, which is the whole authority: userinfo
+    and port included. Saved addresses have their credentials split off before they
+    are stored, so nothing should arrive here carrying any, but this is the one filter
+    that puts a stored address on screen and the cost of not relying on that is a
+    single attribute. It also lowercases and drops the port, which is what a label
+    wants anyway.
     """
     if not url:
         return ""
     from urllib.parse import urlsplit
     try:
-        return (urlsplit(url).netloc or "").removeprefix("www.")
+        return (urlsplit(url).hostname or "").removeprefix("www.")
     except ValueError:
         return ""
 
