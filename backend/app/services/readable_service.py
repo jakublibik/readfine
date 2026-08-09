@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
-from app.utils.crypto import feed_auth
+from app.utils.crypto import auth_pair, feed_auth
 from app.utils.http_client import READFINE_UA
 from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
 from app.utils.video import collect_video_figures, video_page_content, video_target
@@ -73,9 +73,7 @@ def _fetch_html(
     any address on request and repeatedly, which is what a race needs.
     """
     from app.utils.url_validator import ResponseTooLarge, fetch_url_page
-    # Non-NULL rather than truthy, matching app.utils.crypto.feed_auth: a feed whose
-    # credentials came out of its URL may legitimately carry an empty password.
-    auth = (auth_user, auth_pass) if auth_user is not None and auth_pass is not None else None
+    auth = auth_pair(auth_user, auth_pass)
     try:
         page = fetch_url_page(
             url,

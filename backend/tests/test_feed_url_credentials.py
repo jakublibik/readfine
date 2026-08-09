@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.utils.crypto import encrypt, feed_auth
+from app.utils.crypto import auth_pair, encrypt, feed_auth
 from app.utils.feed_credentials import plan_article_url_rewrite, plan_feed_credential_split
 from app.utils.parsing import normalize_url
 from app.utils.url_validator import split_url_credentials
@@ -67,6 +67,27 @@ class TestSplitUrlCredentials:
         assert split_url_credentials("https://bob:pw@example.com/f?a=1#top")[0] == (
             "https://example.com/f?a=1#top"
         )
+
+
+class TestAuthPair:
+    """The plaintext half of the same rule, shared by every path that fetches.
+
+    Worth pinning separately from TestFeedAuth: this is what the paths whose password
+    never was encrypted go through (a pasted address, the feed test form, the scrape
+    preview), and the truthy version of the test drops the empty-password pair.
+    """
+
+    def test_both_halves_yield_the_pair(self):
+        assert auth_pair("bob", "hunter2") == ("bob", "hunter2")
+
+    def test_empty_password_still_counts_as_credentials(self):
+        assert auth_pair("bob", "") == ("bob", "")
+
+    def test_missing_password_yields_nothing(self):
+        assert auth_pair("bob", None) is None
+
+    def test_missing_username_yields_nothing(self):
+        assert auth_pair(None, "hunter2") is None
 
 
 class TestFeedAuth:

@@ -21,7 +21,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.feed import cache_feed_preview, subscribe, unsubscribe
 from app.templating import templates
-from app.utils.crypto import encrypt
+from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
 from app.utils.http_client import READFINE_UA
 from app.utils.parsing import safe_int
@@ -98,10 +98,9 @@ async def settings_feeds_test(
         "User-Agent": READFINE_UA,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
-    # Non-NULL, not truthy: credentials out of an address may carry an empty password
-    # (see app.utils.crypto.feed_auth), and the test has to try what the fetch will.
-    has_auth = auth_user is not None and auth_pass is not None
-    auth = (auth_user, auth_pass) if has_auth else None
+    # The test has to try exactly what the fetch will, hence the shared rule.
+    auth = auth_pair(auth_user, auth_pass)
+    has_auth = auth is not None
     loop = asyncio.get_running_loop()
 
     async def _fetch(with_auth):

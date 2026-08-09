@@ -18,7 +18,7 @@ from app.models.user import User
 from app.services.article import permanently_kept_exists, permanently_kept_predicate
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
-from app.utils.crypto import encrypt
+from app.utils.crypto import auth_pair, encrypt
 from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
 logger = logging.getLogger(__name__)
@@ -203,14 +203,8 @@ async def subscribe(
 
     feed: Feed | None = None
     parsed = None
-    # Both halves or nothing, the rule app.utils.crypto.feed_auth reads them back
-    # under. A username on its own is not credentials, and pairing it with None would
-    # hand httpx something it cannot build a header from.
-    auth = (
-        (fetch_auth_user, fetch_auth_pass)
-        if fetch_auth_user is not None and fetch_auth_pass is not None
-        else None
-    )
+    # Both halves or nothing, the same rule feed_auth reads them back under.
+    auth = auth_pair(fetch_auth_user, fetch_auth_pass)
 
     async def _existing_public_feed(feed_url: str) -> Feed | None:
         """The shared public feed row at *feed_url*, if any (raises if subscribed)."""
@@ -392,8 +386,8 @@ async def subscribe_scrape(
     into the address of every article the page links to.
     """
     url, auth_user, auth_pass = split_url_credentials(url)
-    is_private = auth_user is not None
-    auth = (auth_user, auth_pass) if is_private else None
+    auth = auth_pair(auth_user, auth_pass)
+    is_private = auth is not None
     if auth_user and len(auth_user) > 255:
         raise ValueError("Username is too long (max 255 characters)")
 

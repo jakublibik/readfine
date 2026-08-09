@@ -15,6 +15,7 @@ from app.rate_limit import limiter
 from app.services.ai_service import generate_css_selector_from_sample, get_ai_client
 from app.services.feed import subscribe_scrape
 from app.templating import templates
+from app.utils.crypto import auth_pair
 from app.utils.parsing import safe_int
 from app.utils.scrape_ai import build_selector_prompt, extract_article_sample, generate_selector_prompt
 from app.utils.url_validator import split_url_credentials
@@ -46,7 +47,7 @@ async def settings_scrape_setup(
     # about them. Everything else on this page gets the clean address: the AI prompt
     # (which leaves for a provider) and the page title (which becomes the feed's name).
     clean_url, auth_user, auth_pass = split_url_credentials(url)
-    auth = (auth_user, auth_pass) if auth_user is not None else None
+    auth = auth_pair(auth_user, auth_pass)
 
     _, folders, _ = await _get_feeds_context(user, db)
     html = ""
@@ -247,7 +248,7 @@ async def settings_scrape_subscribe(
     # subscribe_scrape splits the credentials out for storage; the clean address is
     # needed here too, so a feed the user gave no name is not named after its password.
     clean_url, auth_user, auth_pass = split_url_credentials(url)
-    auth = (auth_user, auth_pass) if auth_user is not None else None
+    auth = auth_pair(auth_user, auth_pass)
     selector = form.get("selector", "").strip()
     title = form.get("title", "").strip() or clean_url
     folder_id = safe_int(form.get("folder_id"))

@@ -16,7 +16,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.services.feed import list_user_feeds
-from app.utils.crypto import feed_auth
+from app.utils.crypto import auth_pair, feed_auth
 from app.utils.datetime_format import format_until
 from app.utils.parsing import safe_int
 from app.utils.url_validator import split_url_credentials
@@ -68,7 +68,7 @@ async def _scrape_target(form, user: User, db: AsyncSession) -> ScrapeTarget:
     url, auth_user, auth_pass = split_url_credentials(
         _ensure_scheme((form.get("url") or "").strip())
     )
-    return ScrapeTarget(url, (auth_user, auth_pass) if auth_user is not None else None)
+    return ScrapeTarget(url, auth_pair(auth_user, auth_pass))
 
 
 def _snap_interval(raw: int) -> int:
