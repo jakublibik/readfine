@@ -583,10 +583,22 @@ document.body.addEventListener('showToast', function (e) {
 document.body.addEventListener('savedArticleRemoved', function (e) {
   var id = e.detail && e.detail.id;
   if (!id) return;
-  var row = document.querySelector('[data-article-id="' + id + '"]');
+  // Scoped to a row in the list, because data-article-id is on five different things:
+  // the row, the detail's outer div, the <article> inside it, the bottom bar, and the
+  // inline container built below. An unscoped query takes the first in document order,
+  // and the list comes before the detail. With the article open but its row not in the
+  // list (opened from Saved, then another feed picked in the sidebar), that used to
+  // remove the whole detail pane and then find nothing left to put the empty state in.
+  var row = document.querySelector('#article-list .article-row[data-article-id="' + id + '"]');
   if (row) row.remove();
+  // The 2-panel/mobile body is the row's sibling, not its child, so removing the row
+  // leaves it behind: an expanded article with no row above it.
+  var inline = document.getElementById('inline-article-detail');
+  if (inline && inline.dataset.articleId === String(id)) inline.remove();
   var detail = document.getElementById('article-detail');
-  var openDetail = detail && detail.querySelector('[id^="article-content-' + id + '"]');
+  // Exact, not a prefix: the id carries no suffix, and "article-content-1" is a prefix
+  // of "article-content-12", so removing article 1 cleared the pane on article 12.
+  var openDetail = detail && detail.querySelector('#article-content-' + id);
   if (openDetail) {
     // The empty state main.html renders, minus its icon: there is no round trip
     // here to render the real one, and this is the only place that needs it
