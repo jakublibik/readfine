@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.requests import Request
 
 from app.services.readable_service import (
     _extract_title,
@@ -845,3 +846,70 @@ class TestSavedArticleSurvivesFeedDeletion:
         assert await pg.scalar(
             select(ArticleModel).where(ArticleModel.id == article_id)
         ) is None
+
+
+# ── the Retry button — the third door into a terminal state ───────────────────
+
+class TestRetryFinalizesSavedArticle:
+    """A saved article's post-extraction pass has three entry points: the import
+    task, the batch worker, and the Retry button in the article panel.
+
+    Retry is reachable exactly when the other two cannot come back: a transient
+    failure leaves the article 'pending' with a backoff, which is not terminal, so
+    the import task correctly finalizes nothing — and once Retry succeeds the status
+    is 'success', which process_pending_readable never selects. If Retry did not
+    finalize, that article's filters would never run at all.
+    """
+
+    def _request(self):
+        return Request({
+            "type": "http", "http_version": "1.1", "method": "POST",
+            "path": "/htmx/articles/1/extract-readable", "query_string": b"",
+            "headers": [], "scheme": "http", "server": ("testserver", 80),
+            "client": ("127.0.0.1", 1234), "root_path": "", "app": None, "state": {},
+        })
+
+    def _db(self, article):
+        db = MagicMock()
+        row = MagicMock()
+        row.first.return_value = (article, None, None)
+        db.execute = AsyncMock(return_value=row)
+        db.commit = AsyncMock()
+        return db
+
+    async def _retry(self, article):
+        """Drive the route past a successful extraction, reporting what it stored with."""
+        from app.rate_limit import limiter
+        from app.routers.web.app.articles import htmx_extract_readable
+        from app.services.readable_service import ReadableResult
+
+        result = ReadableResult(content="<p>Body</p>", title="Real Headline")
+        store = AsyncMock()
+        was_enabled = limiter.enabled
+        limiter.enabled = False
+        try:
+            with (
+                patch("app.services.readable_service.extract_readable_with_title",
+                      return_value=result),
+                patch("app.services.readable_service.store_saved_extraction", store),
+                patch("app.routers.web.app.articles.get_article",
+                      new=AsyncMock(return_value=None)),
+            ):
+                await htmx_extract_readable(
+                    article.id, self._request(),
+                    user=SimpleNamespace(id=1), db=self._db(article),
+                )
+        finally:
+            limiter.enabled = was_enabled
+        return store
+
+    async def test_a_saved_article_goes_through_the_shared_helper(self):
+        store = await self._retry(make_article(feed_id=None, readable_status="pending"))
+        store.assert_awaited_once()
+
+    async def test_a_feed_article_does_not(self):
+        """Feed articles have no per-saver pass here; the batch worker runs the AI
+        pipeline for them instead, and finalizing only on this path would make the
+        two disagree."""
+        store = await self._retry(make_article(feed_id=5, readable_status="pending"))
+        store.assert_not_called()

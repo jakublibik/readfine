@@ -1073,7 +1073,9 @@ async def htmx_extract_readable(
     db: AsyncSession = Depends(get_db),
 ):
     """Extract readable content on demand for a single article."""
-    from app.services.readable_service import extract_readable_with_title
+    from app.services.readable_service import (
+        extract_readable_with_title, store_saved_extraction,
+    )
     from app.utils.crypto import feed_auth
 
     stmt = add_article_access_joins(
@@ -1105,13 +1107,24 @@ async def htmx_extract_readable(
         article.feed_id is None,  # consent/paywall check: saved articles only
     )
 
-    apply_readable_result(
-        article, result.content, result.error, result.http_status, result.published_at,
-        title=result.title, description=result.description,
-    )
-    from app.services.saved_article_service import adopt_resolved_url
-    adopt_resolved_url(article, result.resolved_url)
-    await db.commit()
+    if article.feed_id is None:
+        # The third door into a terminal state, after the import task and the batch
+        # worker. A saved article's post-extraction pass (its saver's filters, and the
+        # summary those may trigger) belongs to every one of them, so this goes through
+        # the helper the batch worker uses rather than writing the steps out again —
+        # which is how this door came to be the one missing the last of them. Reachable
+        # whenever a transient failure leaves the article 'pending': the batch worker
+        # only ever picks up that status, so once Retry succeeds here nothing would
+        # come back for it.
+        await store_saved_extraction(article, result, db)
+    else:
+        # A feed article keeps its feed-supplied title and never adopts a resolved
+        # address, so the two arguments above are not passed and adopt_resolved_url is
+        # not called: both are no-ops on this branch by construction.
+        apply_readable_result(
+            article, result.content, result.error, result.http_status, result.published_at,
+        )
+        await db.commit()
 
     # Render from the full ArticleResponse (not the raw ORM row) so per-user fields
     # — is_starred/is_archived/labels/readable_active — render correctly in the

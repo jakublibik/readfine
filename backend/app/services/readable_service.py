@@ -757,15 +757,18 @@ async def _extract_for_batch(article: Article, auth, loop) -> ReadableResult:
         return ReadableResult(error=str(exc)[:200])
 
 
-async def _store_saved_extraction(
+async def store_saved_extraction(
     article: Article, result: ReadableResult, db: AsyncSession
 ) -> None:
     """Write a saved-by-URL extraction and run its post-processing. Commits.
 
-    The batch worker's fallback for an article whose import task died or hit a
-    transient error: without it such an article would come out fully extracted and
-    then silently never filtered. Post-processing is per-saver and there is no
-    scoring, which is what keeps it apart from the feed path.
+    Every way an extraction can finish outside the import task ends here: the batch
+    worker picking up an article whose import task died or hit a transient error, and
+    the Retry button doing the same by hand. Without the post-processing such an
+    article comes out fully extracted and then silently never filtered, and writing
+    the steps out at each entry point is how one of them came to miss it. Filters are
+    per-saver and there is no scoring, which is what keeps this apart from the feed
+    path.
     """
     from app.services.saved_article_service import (
         adopt_resolved_url, finalize_for_all_savers,
@@ -853,7 +856,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
         # bookkeeping, so unrelated hosts would pool their 403s and empties and could
         # trip _disable_readable_for_403(None, db) for a feed that does not exist.
         if article.feed_id is None:
-            await _store_saved_extraction(article, result, db)
+            await store_saved_extraction(article, result, db)
             processed += 1
             continue
 
