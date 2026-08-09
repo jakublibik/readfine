@@ -186,7 +186,7 @@ document.body.addEventListener('htmx:afterSettle', function () { openProseLinksI
 
 // ── Videos in article content: play them here instead of leaving for the site
 //
-// Stored content carries only a thumbnail and a link (see readable_service._video_figure),
+// Stored content carries only a thumbnail and a link (see app/utils/video.py, video_figure),
 // and it stays that way until the reader clicks: nothing is requested from YouTube or
 // Vimeo while an article is merely open, which is also why no consent banner is owed
 // for scrolling past one. The click is what loads the player, and the player is built

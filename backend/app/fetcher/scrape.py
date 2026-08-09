@@ -18,7 +18,7 @@ from app.models.feed import Feed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
-from app.utils.parsing import normalize_url
+from app.utils.parsing import normalize_url, soften_nbsp_runs
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -144,7 +144,6 @@ def _excerpt_to_content_html(excerpt: str | None) -> str | None:
     """
     if not excerpt:
         return None
-    from app.utils.parsing import soften_nbsp_runs
     return soften_nbsp_runs(f"<p>{html.escape(excerpt)}</p>")
 
 

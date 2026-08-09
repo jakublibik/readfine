@@ -28,10 +28,13 @@ def video_figure(provider: str, vid: str) -> str:
     """A video as stored in article content: thumbnail, link, and the ids to rebuild it.
 
     ``data-video-provider`` / ``data-video-id`` are what a player can be built from
-    later without re-parsing the link. They survive sanitization (see
-    ``readable_service._sanitize``), which means a feed can put them in its own markup
-    too, so anything acting on them must validate the id rather than trust it — the
-    same rule that applies to every other attribute arriving from a feed.
+    later without re-parsing the link. They survive our own sanitizer, which
+    allowlists them on ``figure`` for exactly this reason (see
+    ``readable_service._sanitize``); nh3's default attribute list drops them, which is
+    why ``video_body_from_feed`` below must not be sanitized after the fact. Surviving
+    sanitization also means a feed can put them in its own markup, so anything acting
+    on them must validate the id rather than trust it, the same rule that applies to
+    every other attribute arriving from a feed.
     """
     if provider == "youtube":
         href, thumb, caption = (

@@ -1,3 +1,4 @@
+{%- from "app/partials/saved_icons.html" import bookmark_icon -%}
 {#- Padding and control height deliberately mirror the sidebar header
     (px-4 py-2.5 around a 24px control): both sit at the very top of their panel,
     side by side, so a couple of pixels apart reads as a misalignment. Matched by
@@ -5,9 +6,7 @@
 {% if saved_view %}
 <div data-list-header
      class="flex items-center gap-2 px-4 py-2.5 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10 dark:bg-blue-950/40 dark:border-blue-900">
-  <svg class="w-3.5 h-3.5 flex-shrink-0 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
-  </svg>
+  {{ bookmark_icon("w-3.5 h-3.5 flex-shrink-0 text-blue-400") }}
   <form id="save-url-form" class="flex items-center gap-2 flex-1 min-w-0"
         hx-post="/htmx/articles/save-url"
         hx-target="#article-list"

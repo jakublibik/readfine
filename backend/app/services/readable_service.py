@@ -19,7 +19,7 @@ from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
-from app.utils.parsing import count_words
+from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
 from app.utils.video import collect_video_figures, video_page_content, video_target
 
 logger = logging.getLogger(__name__)
@@ -694,7 +694,6 @@ def extract_readable_with_title(
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    from app.utils.parsing import rewrite_relative_urls, soften_nbsp_runs
     final = rewrite_relative_urls(
         soften_nbsp_runs(_drop_empty_blocks(_dedupe_images(_sanitize(content)))), url)
     if not _has_visible_content(final):

@@ -1,6 +1,7 @@
 {% from "app/partials/ai_blocks.html" import ai_summary, ai_context, ai_spinner, ai_indicator %}
 {% from "app/partials/article_title.html" import article_title %}
 {% from "app/partials/chat.html" import chat_area %}
+{% from "app/partials/saved_icons.html" import unsave_icon %}
 <!-- Mobile back bar (small bucket fullscreen mode only) -->
 <div id="article-detail-root" data-article-id="{{ article.id }}">
 <div id="mobile-detail-back-bar">
@@ -184,10 +185,7 @@
                     hx-post="/htmx/articles/{{ article.id }}/unsave"
                     hx-swap="none"
                     class="w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2.5">
-              <svg class="w-4 h-4 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
-                <path stroke-linecap="round" stroke-width="2" d="M4 4l16 16"/>
-              </svg>
+              {{ unsave_icon("w-4 h-4 flex-shrink-0 text-gray-400") }}
               <span>Remove from Saved</span>
             </button>
           </div>

@@ -1150,7 +1150,6 @@ async def htmx_save_url(
 @router.post("/htmx/articles/{article_id}/unsave", response_class=HTMLResponse)
 async def htmx_unsave_article(
     article_id: int,
-    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):

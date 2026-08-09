@@ -1,3 +1,4 @@
+{%- from "app/partials/saved_icons.html" import unsave_icon -%}
 <div id="article-content-{{ article.id }}">
   {#- An attempt failed on something that may pass later (a timeout, a 5xx, a page
       that gave nothing), so the article sits at 'pending' with a backoff running and
@@ -174,10 +175,7 @@
               hx-swap="none"
               class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
               title="Remove from Saved">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>
-          <path stroke-linecap="round" stroke-width="2" d="M4 4l16 16"/>
-        </svg>
+        {{ unsave_icon("w-4 h-4") }}
       </button>
       {% endif %}
       <button data-bottom-next

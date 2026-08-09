@@ -47,9 +47,14 @@ logger = logging.getLogger("alembic.runtime.migration")
 def _fernet() -> Fernet:
     """The same Fernet app.utils.crypto builds, spelled out rather than imported.
 
-    A migration has to keep doing what it did on the day it was written. Calling the
-    application's helper would let a later change there (a new token format, key
-    rotation) silently rewrite the history of this one.
+    Written out for the failure below: a migration that cannot encrypt has to say
+    that ENCRYPTION_KEY is the problem and what to set it to, where the application
+    helper raises whatever the crypto library gave it, halfway through a run.
+
+    Not a rule for the whole file, though. ``plan_feed_credential_split`` and
+    ``split_url_credentials`` are imported on purpose: these rows have to be split
+    exactly the way the running application splits every row it stores from now on,
+    and a second copy of that logic here is how the two would come to disagree.
     """
     key = settings.encryption_key.encode()
     if len(key) == 32:  # raw 32-byte key; a pre-encoded Fernet key is 44 chars

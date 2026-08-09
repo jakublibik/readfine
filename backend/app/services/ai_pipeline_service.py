@@ -104,7 +104,6 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> 
 async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession) -> None:
     """Enqueue + immediately process scoring → AI filters → summary for one article+user."""
     from app.services.ai_scoring_service import enqueue_scoring_job
-    from app.services.ai_summary_service import enqueue_summary_job
 
     # 1. scoring
     enqueued = await enqueue_scoring_job(article, user_id, db)
