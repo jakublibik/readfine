@@ -39,6 +39,12 @@ _IMPORT_BUFFER_MIN = 2
 # something and re-extraction risks replacing that with an error banner for everyone.
 _USABLE_CONTENT_CHARS = 400
 
+# Width of articles.url and articles.guid. An address past it is refused rather than
+# stored cut down: the fetch would still use the whole thing and succeed, leaving a
+# row whose stored address is a broken link, which is what "Open original" offers and
+# what Retry re-fetches.
+_URL_MAX = 2048
+
 
 def _buffer_until() -> datetime:
     return datetime.now(timezone.utc) + timedelta(minutes=_IMPORT_BUFFER_MIN)
@@ -69,9 +75,12 @@ async def save_article_by_url(
     """Save a pasted URL for this user. Returns (article, already_known).
 
     Raises ValueError for a URL that cannot be fetched safely — bad scheme, no host,
-    unresolvable, or resolving to a private/loopback address. Everything that can only
-    fail later (404, timeout, paywall) is saved and surfaces as a visible extraction
-    error with a retry button.
+    unresolvable, or resolving to a private/loopback address — and for one too long to
+    store. Everything that can only fail later (404, timeout, paywall) is saved and
+    surfaces as a visible extraction error with a retry button.
+
+    Both entry points (the API and the box in Saved) come through here, so the rules
+    are stated once and neither door can be the lenient one.
 
     Credentials pasted into the address (``https://user:pass@host/article``) are split
     off before anything is stored or logged. They are used for the one extraction this
@@ -83,6 +92,10 @@ async def save_article_by_url(
     from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
     url, auth_user, auth_pass = split_url_credentials(url)
+
+    # Measured after the credentials come off, since that is the address being stored.
+    if len(url) > _URL_MAX:
+        raise ValueError(f"The address is too long to save (over {_URL_MAX} characters)")
 
     await async_validate_feed_url(url)  # ValueError → caller turns it into a toast
 
@@ -161,11 +174,14 @@ async def save_article_by_url(
             await db.commit()
         return existing, True
 
+    # No truncation anywhere below: the guard above means the address fits, so the
+    # stored URL, the guid and the hash all describe the same string. Cutting them
+    # here would have let the hash and the guid disagree about which address this is.
     article = Article(
         feed_id=None,
-        guid=url[:2048],
+        guid=url,
         guid_hash=hashlib.sha256(url.encode()).hexdigest(),
-        url=url[:2048],
+        url=url,
         url_normalized=normalized,
         title=title_from_url(url),
         readable_status="pending",
@@ -213,16 +229,19 @@ def adopt_resolved_url(article: Article, resolved_url: str | None) -> None:
 
     Credentials are stripped here too. The resolved address can be a canonical link
     read off the page, which is the host's text and may carry userinfo — this is the
-    one door left through which it could reach a stored column.
+    one door left through which it could reach a stored column. Being the host's text
+    is also why the length is checked rather than cut to fit: the saved address works,
+    and trading it for the first 2048 characters of a longer one trades it for a link
+    that goes nowhere.
     """
     from app.utils.url_validator import split_url_credentials
 
     if article.feed_id is not None or not resolved_url:
         return
     resolved_url = split_url_credentials(resolved_url)[0]
-    if resolved_url == article.url:
+    if resolved_url == article.url or len(resolved_url) > _URL_MAX:
         return
-    article.url = resolved_url[:2048]
+    article.url = resolved_url
     article.url_normalized = normalize_url(resolved_url)
 
 

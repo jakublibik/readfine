@@ -965,3 +965,52 @@ class TestRetryFinalizesSavedArticle:
         two disagree."""
         store = await self._retry(make_article(feed_id=5, readable_status="pending"))
         store.assert_not_called()
+
+
+# ── addresses too long for the columns that hold them ─────────────────────────
+
+class TestOverlongUrls:
+    """An address past 2048 characters used to be stored cut down while the fetch
+    still used the whole thing, so the article extracted fine and looked normal with
+    a stored link that goes nowhere. That link is what "Open original" offers and what
+    Retry re-fetches, so the row was quietly broken in the two places that matter.
+    """
+
+    def _long(self, extra: int = 100) -> str:
+        base = "https://example.com/"
+        return base + "a" * (2048 - len(base) + extra)
+
+    async def test_a_url_that_will_not_fit_is_refused(self):
+        db = make_db()
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()):
+            with pytest.raises(ValueError, match="too long"):
+                await save_article_by_url(self._long(), SimpleNamespace(id=1), db)
+        db.add.assert_not_called()
+
+    async def test_one_that_just_fits_is_saved_whole(self):
+        """The stored URL, the guid and the hash must all describe one address."""
+        url = self._long(extra=0)
+        db = make_db([None])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("asyncio.create_task", swallow_task()):
+            article, _ = await save_article_by_url(url, SimpleNamespace(id=1), db)
+        assert article.url == url and article.guid == url
+        assert article.guid_hash == hashlib.sha256(url.encode()).hexdigest()
+
+    async def test_the_length_is_measured_after_credentials_come_off(self):
+        """They are split off before anything is stored, so they are not what makes
+        an address too long to store."""
+        url = self._long(extra=0)
+        with_creds = url.replace("https://", "https://user:pw@", 1)
+        db = make_db([None])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("asyncio.create_task", swallow_task()):
+            article, _ = await save_article_by_url(with_creds, SimpleNamespace(id=1), db)
+        assert article.url == url
+
+    def test_an_overlong_resolved_address_is_not_adopted(self):
+        """It is the host's own text (a canonical link), and the address already saved
+        works, so a cut-down replacement would be a straight downgrade."""
+        article = make_article(feed_id=None, url="https://example.com/story")
+        adopt_resolved_url(article, self._long())
+        assert article.url == "https://example.com/story"
