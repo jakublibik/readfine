@@ -272,6 +272,47 @@ async def htmx_article_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The article list as a view of its own. Everything below is in render_list."""
+    return await render_list(
+        request, user=user, db=db,
+        feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+        label_id=label_id, unread_only=unread_only, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only, labeled_only=labeled_only,
+        q=q, sort=sort, read_status=read_status, label_filter=label_filter,
+        offset=offset,
+    )
+
+
+async def render_list(
+    request: Request,
+    *,
+    user: User,
+    db: AsyncSession,
+    feed_id: int | None = None,
+    folder_id: int | None = None,
+    scope_include: str | None = None,
+    label_id: int | None = None,
+    unread_only: bool = False,
+    starred_only: bool = False,
+    archived_only: bool = False,
+    saved_only: bool = False,
+    labeled_only: bool = False,
+    q: str | None = None,
+    sort: str | None = None,
+    read_status: str | None = None,
+    label_filter: str | None = None,
+    offset: int = 0,
+) -> HTMLResponse:
+    """Render the article list for one set of filters.
+
+    Kept apart from the route so the other endpoint that answers with a list
+    (htmx_save_url, which re-renders Saved after an import) can ask for one without
+    calling a route handler. Called that way, FastAPI resolves nothing, so every
+    ``Query(...)`` default arrives as a Query object — and those are truthy, which
+    quietly switched archived_only and its neighbours on. Real defaults here mean a
+    caller names only what it wants, and a filter added later reaches both entry
+    points without anyone having to remember the second one.
+    """
     settings_result = await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
     )
@@ -1106,28 +1147,7 @@ async def htmx_save_url(
         if already_known:
             toast = {"msg": "Already saved — added to Saved.", "type": "info"}
 
-    # Every parameter is passed explicitly: called directly (not through FastAPI's
-    # dependency resolution) the Query(...) defaults would arrive as Query objects,
-    # and those are truthy — archived_only and friends would silently switch on.
-    response = await htmx_article_list(
-        request=request,
-        feed_id=None,
-        folder_id=None,
-        scope_include=None,
-        label_id=None,
-        unread_only=False,
-        starred_only=False,
-        archived_only=False,
-        saved_only=True,
-        labeled_only=False,
-        q=None,
-        sort=None,
-        read_status=None,
-        label_filter=None,
-        offset=0,
-        user=user,
-        db=db,
-    )
+    response = await render_list(request, user=user, db=db, saved_only=True)
     events: dict = {}
     if toast:
         events["showToast"] = toast
