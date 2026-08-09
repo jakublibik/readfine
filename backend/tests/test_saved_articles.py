@@ -195,7 +195,8 @@ class TestSaveArticleByUrl:
         existing = make_article(id=42, feed_id=7, readable_status="success",
                                 readable_content="<p>Full</p>")
         db = make_db([existing])
-        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()):
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("app.services.saved_article_service.finalize_saved_article", AsyncMock()):
             article, already_known = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db
             )
@@ -251,10 +252,26 @@ class TestSaveArticleByUrl:
         )
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("app.services.saved_article_service.finalize_saved_article", AsyncMock()), \
              patch("asyncio.create_task", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "skipped"
         task.assert_not_called()
+
+    async def test_a_dedup_needing_no_extraction_still_gets_the_filter_pass(self):
+        """Nothing else will call it: no extraction runs, so neither the import task
+        nor the batch worker ever comes back for this article. Without this the pass
+        would depend on who saved first, and everyone deduping onto the finished
+        article afterwards would silently go without their filters."""
+        existing = make_article(id=42, feed_id=7, readable_status="success",
+                                readable_content="<p>Full</p>")
+        db = make_db([existing])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("app.services.saved_article_service.finalize_saved_article",
+                   AsyncMock()) as finalize:
+            await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
+        finalize.assert_awaited_once()
+        assert finalize.await_args.args[:2] == (existing, 1)
 
     async def test_feed_article_with_nothing_to_show_is_re_extracted(self):
         existing = make_article(id=42, feed_id=7, readable_status="skipped",
@@ -343,8 +360,10 @@ class TestAdoptResolvedUrl:
 # ── finalize_saved_article — the two guards ───────────────────────────────────
 
 class TestFinalizeGuards:
-    async def _run(self, article, state):
-        db = make_db([state])
+    async def _run(self, article, state, subscription=None):
+        # The subscription lookup is the second scalar() and only happens for an
+        # article that has a feed, so feedless cases queue nothing for it.
+        db = make_db([state] if article.feed_id is None else [state, subscription])
         filters = AsyncMock()
         summary = AsyncMock()
         with patch("app.services.filter_service.apply_filters_to_saved_article", filters), \
@@ -389,6 +408,39 @@ class TestFinalizeGuards:
     async def test_no_op_without_a_state_row(self):
         filters, _ = await self._run(make_article(readable_status="success"), None)
         filters.assert_not_called()
+
+    async def test_a_subscriber_does_not_get_the_same_filters_twice(self):
+        """The feed fetch already ran them on every subscriber and stamped nothing, so
+        filters_applied_at cannot see that pass. Saving such an article (a pasted URL
+        that deduped onto it) would apply star/archive/mark-read a second time, after
+        the reader had undone them."""
+        state = make_state()
+        filters, summary = await self._run(
+            make_article(feed_id=7, readable_status="success"), state, subscription=99,
+        )
+        filters.assert_not_called()
+        summary.assert_not_called()
+        # Not stamped either: nothing ran, and the column would say it did.
+        assert state.filters_applied_at is None
+
+    async def test_a_non_subscriber_does(self):
+        """The same article reached by dedup from someone else's feed. That fetch ran
+        the subscribers' filters, never this user's."""
+        state = make_state()
+        filters, _ = await self._run(
+            make_article(feed_id=7, readable_status="success"), state, subscription=None,
+        )
+        filters.assert_awaited_once()
+        assert state.filters_applied_at is not None
+
+    async def test_skipped_is_terminal_too(self):
+        """A full-content feed leaves its articles 'skipped', which is as final as it
+        gets: extraction will not run at all, so nothing is pending on it."""
+        filters, _ = await self._run(
+            make_article(feed_id=7, readable_status="skipped"), make_state(),
+            subscription=None,
+        )
+        filters.assert_awaited_once()
 
 
 # ── finalize_for_all_savers — the batch worker's entry point ──────────────────

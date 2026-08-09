@@ -152,6 +152,13 @@ async def save_article_by_url(
             ))
         else:
             await db.commit()
+            # Nothing to extract, so nothing will call the post-extraction pass later.
+            # Without this the article's filters depend on who saved it first: the user
+            # whose save triggered the extraction gets them, and everyone deduping onto
+            # the finished article afterwards does not. finalize_saved_article decides
+            # whether they are owed, subscription included.
+            await finalize_saved_article(existing, user.id, db)
+            await db.commit()
         return existing, True
 
     article = Article(
@@ -282,22 +289,33 @@ async def finalize_saved_article(
 ) -> None:
     """Post-extraction pass for one saved article and one user: filters, then summary.
 
-    Two guards, both here rather than in the callers:
+    The rule it enforces: your filters run once on an article you saved, unless they
+    have already run on it because it arrived through a feed you subscribe to. Three
+    guards, all here rather than in the callers, since every caller needs all three:
 
     * **Terminal state.** ``apply_readable_result`` leaves the status at 'pending' on a
       transient error and schedules a backoff, so "the extraction call returned" is not
       the same as "extraction is done". Running filters then would re-apply
-      star/archive/mark-read after every retry.
+      star/archive/mark-read after every retry. 'skipped' counts as terminal: it means
+      extraction will not run at all (a full-content feed, or one that blocked us), so
+      nothing further is coming for that article either.
     * **filters_applied_at.** The terminal check only stops repeats within one attempt.
       An article can reach a terminal state *twice*: it ends 'failed', a second user's
       save pushes it back to 'pending' and re-extracts, and this time it succeeds. The
       first user's filter actions would then be re-applied minutes after they undid
       them. Stamping the first run closes that by construction.
+    * **Subscription.** The feed fetch runs every subscriber's filters on every article
+      it brings in, and it stamps nothing, so for a subscriber the pass is already done
+      and invisible to the guard above. Saving such an article (a pasted URL that
+      deduped onto it) would run the same filters a second time and undo whatever the
+      reader had undone since. Deliberately not stamped when skipped for this reason:
+      nothing ran, and the column says it did.
     """
+    from app.models.feed import UserFeed
     from app.services.ai_pipeline_service import maybe_enqueue_starred_summary
     from app.services.filter_service import apply_filters_to_saved_article
 
-    if article.readable_status not in ("success", "failed"):
+    if article.readable_status not in ("success", "failed", "skipped"):
         return
 
     state = await db.scalar(
@@ -307,6 +325,13 @@ async def finalize_saved_article(
         )
     )
     if state is None or state.saved_at is None or state.filters_applied_at is not None:
+        return
+
+    if article.feed_id is not None and await db.scalar(
+        select(UserFeed.id)
+        .where(UserFeed.feed_id == article.feed_id, UserFeed.user_id == user_id)
+        .limit(1)
+    ):
         return
 
     await apply_filters_to_saved_article(article, user_id, db)
