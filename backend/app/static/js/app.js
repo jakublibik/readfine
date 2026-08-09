@@ -187,12 +187,21 @@ document.body.addEventListener('htmx:afterSettle', function () { openProseLinksI
 // ── Videos in article content: play them here instead of leaving for the site
 //
 // Stored content carries only a thumbnail and a link (see app/utils/video.py, video_figure),
-// and it stays that way until the reader clicks: nothing is requested from YouTube or
-// Vimeo while an article is merely open, which is also why no consent banner is owed
-// for scrolling past one. The click is what loads the player, and the player is built
-// here from the ids on the figure, never from markup a feed supplied. The id is
-// checked against the shape it must have, because it goes into a URL and the figure
-// may well have arrived in a feed's own HTML.
+// and it stays that way until the reader clicks. No player is loaded before then, so no
+// video service can set a cookie on an article you only scrolled past.
+//
+// The thumbnail itself is a different matter, and worth stating plainly because the rest
+// of this reads like a facade: its src points straight at img.youtube.com / vumbnail.com,
+// so opening an article does hand those hosts the reader's IP and the video id. That has
+// been true since the figures were first stored, long before this player existed. Making
+// it not true means serving the thumbnail ourselves, which is a server-side change, not
+// one that can be made from here: rewriting the src in script is too late, the browser
+// has already started fetching by the time this runs.
+//
+// The click is what loads the player, and the player is built here from the ids on the
+// figure, never from markup a feed supplied. The id is checked against the shape it must
+// have, because it goes into a URL and the figure may well have arrived in a feed's own
+// HTML.
 var VIDEO_PROVIDERS = {
   youtube: {
     id: /^[A-Za-z0-9_-]{6,20}$/,

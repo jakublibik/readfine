@@ -8,7 +8,16 @@ database, the network or a request, so it stays a set of pure functions.
 
 What gets stored is a facade, never a player: a thumbnail, a link to the video's
 own site, and the two ids the front end rebuilds an embed from once the reader
-presses play (see ``app.js``). Until then no request reaches YouTube or Vimeo.
+presses play (see ``app.js``). Until then no player is loaded and no video service
+can set a cookie.
+
+The thumbnail is the part the word "facade" oversells. Its ``src`` is built below
+to point at img.youtube.com and vumbnail.com, so the reader's browser fetches it
+from those hosts as soon as an article is opened, handing them an IP address and a
+video id. Serving it from here instead would need a server-side step this module
+deliberately does not have (nothing in it touches the network), and for Vimeo that
+step is also the only way off vumbnail.com, which is a third party rather than
+Vimeo and has no business knowing either.
 """
 import html as html_mod
 import json

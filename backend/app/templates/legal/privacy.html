@@ -91,10 +91,16 @@
       No tracking, analytics, or advertising cookies are used.
     </p>
     <p class="mt-2">
-      An article containing a video shows its thumbnail only. Nothing is requested from
-      YouTube or Vimeo until you click it to play, and that click is what loads their
-      player, which can set their own cookies. YouTube videos are loaded through
-      youtube-nocookie.com. If you never press play, no video service is contacted.
+      An article containing a video shows its thumbnail, and no player, until you click
+      it. Opening such an article does load that thumbnail from the video's own service:
+      img.youtube.com for YouTube, vumbnail.com for Vimeo. Those requests are made by
+      your browser, so the service sees your IP address and which video it was for. They
+      set no cookies of ours and we receive nothing back from them.
+    </p>
+    <p class="mt-2">
+      Clicking the thumbnail is what loads the player, from youtube-nocookie.com or
+      player.vimeo.com, and the player can set that service's own cookies. Until you
+      click, no player is loaded and no video service can set anything.
     </p>
   </section>
 
