@@ -20,6 +20,7 @@ Both counters are consecutive: any successful fetch resets both to zero.
 Also home to :func:`arm_host_cooldown`, the other half of "what a failed fetch
 does" — it writes no columns, it paces sibling feeds on the same host.
 """
+import re
 from datetime import datetime, timedelta
 
 import httpx
@@ -117,6 +118,27 @@ def arm_host_cooldown(feed_url: str, exc: Exception, http_status: int | None, no
             host_throttle.note_block(host, now + host_throttle.FALLBACK_BLOCK_COOLDOWN)
 
 
+# HTTP credentials written into an address (``//user:pass@host``). Matched on shape so
+# an address that reaches the text by some other route is covered too, not only the
+# feed's own; the userinfo is dropped rather than marked, which is what redact_url does.
+_USERINFO_RE = re.compile(r"//[^/@\s]+:[^/@\s]*@")
+
+
+def _redacted(text: str, feed_url: str) -> str:
+    """Strip an address's secrets out of a message that quotes it.
+
+    A message is stored in ``fetch_logs`` and ``Feed.last_error`` and shown in the
+    admin dashboard and the user's feed list, next to a column that runs the address
+    through ``redact_url_display``. Quoting the raw address in the message would walk
+    straight around that redaction, so the same secrets come out here: the whole query
+    string (a feed address legitimately carries an API key in it) when the message
+    quotes the feed's address, and embedded credentials wherever they appear.
+    """
+    if feed_url and feed_url in text:
+        text = text.replace(feed_url, redact_url(feed_url))
+    return _USERINFO_RE.sub("//", text)
+
+
 def failure_message(exc: Exception, feed_url: str) -> str:
     """Human-readable ``last_error`` for a failed fetch.
 
@@ -125,14 +147,14 @@ def failure_message(exc: Exception, feed_url: str) -> str:
     ephemeral address that means nothing to the admin reading the row. Rebuild the
     line from the status, its reason phrase and the feed's own (redacted) URL. Every
     other failure (timeout, DNS, feedparser, SSRF) never carried an IP, so keep its
-    original text.
+    original text, minus anything secret it quoted (see :func:`_redacted`).
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         reason = exc.response.reason_phrase
         label = f"HTTP {status} {reason}".rstrip()
         return f"{label}: {redact_url(feed_url)}"[:500]
-    return str(exc)[:500]
+    return _redacted(str(exc), feed_url)[:500]
 
 
 def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now: datetime) -> dict:

@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from datetime import datetime, timezone
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.feed import Feed
 from app.models.fetch_log import FetchLog
+from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
+from app.utils.parsing import normalize_url, soften_nbsp_runs
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -41,35 +43,18 @@ _HEADERS = {
 }
 _TIMEOUT = 30
 
-_STRIP_PARAMS = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "utm_id", "fbclid", "gclid", "msclkid",
-})
 
-
-def _normalize_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        p = urlparse(url)
-        if p.scheme not in ("http", "https"):
-            return None
-        path = p.path.rstrip("/") or "/"
-        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
-        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
-    except Exception:
-        return None
-
-
-async def fetch_page_html(url: str, timeout: int = 30) -> str:
+async def fetch_page_html(url: str, timeout: int = 30, auth=None) -> str:
     """SSRF-safe fetch of a page's raw HTML for scrape setup / preview / validation.
 
     Runs off the event loop and uses the scrape fetcher's own headers (READFINE_UA),
     so a page tested during selector setup fetches identically when actually scraped.
+    That includes *auth*: a page behind HTTP credentials has to be reachable while the
+    selector is being written, not only once the feed exists.
     """
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
-        None, fetch_url_with_ssrf_check, url, None, timeout, _HEADERS
+        None, fetch_url_with_ssrf_check, url, auth, timeout, _HEADERS
     )
 
 
@@ -159,7 +144,7 @@ def _excerpt_to_content_html(excerpt: str | None) -> str | None:
     """
     if not excerpt:
         return None
-    return f"<p>{html.escape(excerpt)}</p>"
+    return soften_nbsp_runs(f"<p>{html.escape(excerpt)}</p>")
 
 
 _CONTAINER_TAGS = {"article", "li", "div", "section"}
@@ -210,8 +195,9 @@ async def fetch_scrape_feed(
 ) -> int:
     """Fetch a scrape-type feed via CSS selector. Returns number of new articles.
 
-    Note: HTTP auth credentials are intentionally not supported for scrape feeds.
-    Sites requiring auth typically use session cookies or JS challenges, not HTTP Basic Auth.
+    HTTP Basic credentials are supported, but only ever arrive by being typed into
+    the page's address: a site that wants a session cookie or a JS challenge is still
+    out of reach, which is the usual shape of a login-walled page.
     """
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
@@ -221,6 +207,9 @@ async def fetch_scrape_feed(
     # goes for is_private, which the post-commit URL adoption needs.
     block_count = feed.block_count or 0
     is_private = bool(feed.is_private)
+    auth = feed_auth(
+        feed.fetch_auth_user, feed.fetch_auth_pass_encrypted, context=f"feed {feed_id}"
+    )
     selector = (feed.type_config or {}).get("article_links_selector", "")
     fetched_at = datetime.now(timezone.utc)
 
@@ -231,7 +220,7 @@ async def fetch_scrape_feed(
         await async_validate_feed_url(feed_url)
         loop = asyncio.get_running_loop()
         page = await loop.run_in_executor(
-            None, fetch_url_page, feed_url, None, _TIMEOUT, _HEADERS
+            None, fetch_url_page, feed_url, auth, _TIMEOUT, _HEADERS
         )
         links = extract_article_links(page.text, selector, feed_url)
         if not links:
@@ -298,7 +287,7 @@ async def _save_scrape_articles(
 ) -> int:
     urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
-    norm_map = {url: _normalize_url(url) for url in urls}
+    norm_map = {url: normalize_url(url) for url in urls}
 
     existing_hashes: set[str] = set(
         (await db.execute(

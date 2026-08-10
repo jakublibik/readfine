@@ -55,9 +55,12 @@ services:
       # that setup set STAGING_BIND=0.0.0.0 in .env.staging. Keep the host/network
       # firewall restricting inbound to 80/443 (+22) so 8001 stays private.
       - "${STAGING_BIND:-127.0.0.1}:8001:8000"
+    volumes:
+      - thumb_cache_staging:/data/thumb-cache
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   postgres_data_staging:
+  thumb_cache_staging:

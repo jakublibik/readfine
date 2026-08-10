@@ -55,7 +55,7 @@ def _make_session() -> AsyncMock:
 
 def _page(text: str, permanent_url: str | None = None) -> PageResponse:
     """A fetched page, optionally one that permanently redirected."""
-    return PageResponse(text, permanent_url)
+    return PageResponse(text, permanent_url, permanent_url or "https://example.com/feed")
 
 
 _HTML_WITH_ARTICLES = """
@@ -807,3 +807,131 @@ class TestSaveScrapeCutoff:
         added = {c.args[0].url: c.args[0] for c in session.add.call_args_list}
         assert added["https://example.com/nodate"].published_at is None
         assert added["https://example.com/new"].published_at == datetime(2024, 3, 10, tzinfo=timezone.utc)
+
+
+class TestScrapeTargetUrl:
+    """The scrape helpers address an existing feed by id and read its URL from the
+    database, so the stored address never has to sit in a hidden form field: it can
+    carry an API token in the query. Credentials that used to live in the address are
+    read from the feed's own columns alongside it."""
+
+    def _db(self, url_value, auth_user=None, auth_pass_enc=None):
+        db = AsyncMock()
+        recorded = {}
+        row = None if url_value is None else SimpleNamespace(
+            feed_url=url_value,
+            fetch_auth_user=auth_user,
+            fetch_auth_pass_encrypted=auth_pass_enc,
+        )
+
+        async def _execute(stmt, *a, **kw):
+            recorded["sql"] = str(stmt)
+            result = MagicMock()
+            result.first.return_value = row
+            return result
+
+        db.execute = AsyncMock(side_effect=_execute)
+        return db, recorded
+
+    async def test_feed_id_resolves_the_stored_url(self):
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, _ = self._db("https://example.com/news?api_key=secret")
+        target = await _scrape_target({"feed_id": "7"}, make_mock_user(), db)
+
+        assert target.url == "https://example.com/news?api_key=secret"
+        assert target.auth is None
+
+    async def test_stored_credentials_come_back_with_the_url(self):
+        from app.routers.web.settings.common import _scrape_target
+        from app.utils.crypto import encrypt
+        from tests.conftest import make_mock_user
+
+        db, _ = self._db("https://example.com/news", "bob", encrypt("hunter2"))
+        target = await _scrape_target({"feed_id": "7"}, make_mock_user(), db)
+
+        assert target.auth == ("bob", "hunter2")
+
+    async def test_lookup_is_scoped_to_the_users_subscriptions(self):
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, recorded = self._db("https://example.com/news")
+        await _scrape_target({"feed_id": "7"}, make_mock_user(role="user"), db)
+
+        assert "user_feeds" in recorded["sql"]
+
+    async def test_admin_lookup_is_not_scoped(self):
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, recorded = self._db("https://example.com/news")
+        await _scrape_target({"feed_id": "7"}, make_mock_user(role="admin"), db)
+
+        assert "user_feeds" not in recorded["sql"]
+
+    async def test_feed_the_user_cannot_reach_yields_no_url(self):
+        # Scoped-out row or unknown id: the caller reports it like a missing URL
+        # rather than fetching something the user has no claim to.
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, _ = self._db(None)
+        assert (await _scrape_target({"feed_id": "7"}, make_mock_user(), db)).url == ""
+
+    async def test_setup_flow_still_uses_the_typed_url(self):
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, _ = self._db(None)
+        target = await _scrape_target({"url": "example.com/news"}, make_mock_user(), db)
+
+        assert target.url == "https://example.com/news"
+        assert not db.execute.called
+
+    async def test_setup_flow_splits_credentials_out_of_the_typed_url(self):
+        # No feed row exists yet, so the address is the only place the credentials
+        # can come from, and the preview has to be able to get past the login.
+        from app.routers.web.settings.common import _scrape_target
+        from tests.conftest import make_mock_user
+
+        db, _ = self._db(None)
+        target = await _scrape_target(
+            {"url": "https://bob:hunter2@example.com/news"}, make_mock_user(), db
+        )
+
+        assert target == ("https://example.com/news", ("bob", "hunter2"))
+
+
+class TestScrapePreviewEndpoint:
+    URL = "/settings/feeds/scrape-preview"
+
+    def _row(self, mock_db, url_value):
+        row = None if url_value is None else SimpleNamespace(
+            feed_url=url_value, fetch_auth_user=None, fetch_auth_pass_encrypted=None
+        )
+        result = MagicMock()
+        result.first.return_value = row
+        mock_db.execute = AsyncMock(return_value=result)
+
+    def test_foreign_feed_id_is_not_fetched(self, client, mock_db):
+        # The id is the only thing the edit form sends, so it has to be checked:
+        # otherwise anyone could preview (and thereby fetch) another user's feed.
+        self._row(mock_db, None)
+        with patch("app.routers.web.settings.scrape.fetch_page_html",
+                   new=AsyncMock()) as fetch:
+            resp = client.post(self.URL, data={"feed_id": "7", "selector": "article a"})
+
+        assert resp.status_code == 200
+        assert "required" in resp.text.lower()
+        assert not fetch.called
+
+    def test_subscribed_feed_is_fetched_by_id(self, client, mock_db):
+        self._row(mock_db, "https://example.com/news?api_key=s3cret")
+        with patch("app.routers.web.settings.scrape.fetch_page_html",
+                   new=AsyncMock(return_value=_HTML_WITH_ARTICLES)) as fetch:
+            resp = client.post(self.URL, data={"feed_id": "7", "selector": "article a"})
+
+        assert resp.status_code == 200
+        assert fetch.await_args.args[0] == "https://example.com/news?api_key=s3cret"

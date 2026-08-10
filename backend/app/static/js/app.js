@@ -21,20 +21,47 @@ document.addEventListener('htmx:afterRequest', function (e) {
 });
 
 // ── Mobile side-nav: scroll the active tab into view on load ──────────────
+// The strip is a horizontal scroll container and browsers restore its offset
+// when you navigate (e.g. Admin → Settings), which lands *after* the first
+// pass here and leaves the active tab off-screen. So run several passes, each
+// a no-op once the tab is visible, and stop as soon as the user scrolls the
+// strip by hand.
 (function () {
+  var userScrolled = false;
+
   function scrollActiveNavIntoView() {
+    if (userScrolled) return;
     var active = document.querySelector('[data-mobile-nav] [data-mobile-nav-active]');
     if (!active) return;
     var bar = active.closest('[data-mobile-nav]');
     if (!bar || bar.offsetParent === null) return; // hidden (desktop): skip
+    // offsetLeft is relative to the nearest positioned ancestor, not to the
+    // strip, so measure against the strip itself.
+    var left = active.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+    if (left >= 0 && left + active.offsetWidth <= bar.clientWidth) return; // already visible
     // Horizontally center the active tab without scrolling the page vertically.
-    bar.scrollLeft = active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2;
+    bar.scrollLeft += left - (bar.clientWidth - active.offsetWidth) / 2;
   }
+
+  function markUserScroll(e) {
+    if (e.target.closest && e.target.closest('[data-mobile-nav]')) userScrolled = true;
+  }
+  var listenOpts = { capture: true, passive: true };
+  document.addEventListener('pointerdown', markUserScroll, listenOpts);
+  document.addEventListener('touchstart', markUserScroll, listenOpts);
+  document.addEventListener('wheel', markUserScroll, listenOpts);
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', scrollActiveNavIntoView);
   } else {
     scrollActiveNavIntoView();
   }
+  requestAnimationFrame(scrollActiveNavIntoView);
+  window.addEventListener('load', function () {
+    scrollActiveNavIntoView();
+    setTimeout(scrollActiveNavIntoView, 150);
+  });
+  window.addEventListener('pageshow', scrollActiveNavIntoView);
 })();
 
 // ── Sidebar: remove touch-active class after feed refresh ─────────────────
@@ -156,6 +183,188 @@ function openProseLinksInNewTab(root) {
 }
 document.addEventListener('DOMContentLoaded', function () { openProseLinksInNewTab(); });
 document.body.addEventListener('htmx:afterSettle', function () { openProseLinksInNewTab(); });
+
+// ── Videos in article content: play them here instead of leaving for the site
+//
+// Stored content carries only a thumbnail and a link (see app/utils/video.py, video_figure),
+// and it stays that way until the reader clicks. No player is loaded before then, so no
+// video service can set a cookie on an article you only scrolled past.
+//
+// The thumbnail's src is our own /img/video-thumb endpoint, not the video host, so
+// opening an article no longer hands YouTube or Vimeo the reader's IP and the video id
+// (see app/utils/video.py and video_thumb_service). That is a server-side matter and
+// nothing here needs to touch it — including the old dance of upgrading the src to a
+// sharper image and reverting on error, which the server now resolves once.
+//
+// The click is what loads the player, and the player is built here from the ids on the
+// figure, never from markup a feed supplied. The id is checked against the shape it must
+// have, because it goes into a URL and the figure may well have arrived in a feed's own
+// HTML.
+var VIDEO_PROVIDERS = {
+  youtube: {
+    id: /^[A-Za-z0-9_-]{6,20}$/,
+    label: 'YouTube',
+    // youtube-nocookie: no cookies until playback actually starts.
+    src: function (id, start) {
+      return 'https://www.youtube-nocookie.com/embed/' + id + '?autoplay=1&rel=0' +
+        (start ? '&start=' + start : '');
+    },
+  },
+  vimeo: {
+    id: /^\d{5,15}$/,
+    label: 'Vimeo',
+    src: function (id, start) {
+      return 'https://player.vimeo.com/video/' + id + '?autoplay=1' + (start ? '#t=' + start + 's' : '');
+    },
+  },
+};
+
+function _videoProvider(fig) {
+  var spec = VIDEO_PROVIDERS[fig.getAttribute('data-video-provider')];
+  return spec && spec.id.test(fig.getAttribute('data-video-id') || '') ? spec : null;
+}
+
+// Label every figure the handler below can act on. The caption states what the thing
+// is and what playing it costs; it is deliberately not phrased as an instruction,
+// since the badge on the thumbnail is what asks to be clicked and a caption reading
+// "Play video" competes with it for the same click. The invitation lives on the
+// thumbnail, in the badge and in its tooltip.
+//
+// Done in script rather than in the stored markup so articles saved before this
+// existed are described the same way.
+function markVideoFacades(root) {
+  (root || document).querySelectorAll('.prose figure[data-video-id]').forEach(function (fig) {
+    var spec = _videoProvider(fig);
+    // data-video-playing: a figure whose player is already running must not be
+    // described as a facade again by a swap somewhere else on the page.
+    if (!spec || fig.hasAttribute('data-video-ready') || fig.hasAttribute('data-video-playing')) return;
+    fig.setAttribute('data-video-ready', '');
+    var link = fig.querySelector('a[href]');
+    if (link) link.setAttribute('title', 'Play here (loads the player from ' + spec.label + ')');
+    var caption = fig.querySelector('figcaption');
+    if (caption) caption.textContent = spec.label + ' video, loaded only when you play it';
+  });
+}
+document.addEventListener('DOMContentLoaded', function () { markVideoFacades(); });
+document.body.addEventListener('htmx:afterSettle', function () { markVideoFacades(); });
+
+// Start the player in *fig*, at *start* seconds when given. A player already running
+// is re-pointed rather than rebuilt: reloading the frame is a second of black, but it
+// needs no player API, which would mean loading a script from the video site and
+// widening script-src for the sake of a smoother seek.
+function playVideo(fig, spec, start) {
+  var running = fig.querySelector('iframe.video-embed');
+  if (running) {
+    running.src = spec.src(fig.getAttribute('data-video-id'), start);
+    return;
+  }
+  var frame = document.createElement('iframe');
+  frame.src = spec.src(fig.getAttribute('data-video-id'), start);
+  frame.className = 'video-embed';
+  frame.title = spec.label + ' video player';
+  frame.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+  frame.setAttribute('allowfullscreen', '');
+  frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+
+  // The player goes over the thumbnail, not in its place: the picture holds the box
+  // while the frame loads, so there is no moment with the page background showing
+  // between two dark things (see input.css). Nothing below the video moves either,
+  // since the thumbnail keeps taking exactly the room it took, and the caption keeps
+  // its line. What the caption says changes, though: the way out to the site is the
+  // useful thing to offer once the video is already playing here.
+  var link = fig.querySelector('a[href]');
+  var href = link ? link.getAttribute('href') : null;
+  if (link) {
+    // One box around both, so the player takes the thumbnail's box exactly instead of
+    // computing a near-identical one of its own (see input.css).
+    var box = document.createElement('div');
+    box.className = 'video-box';
+    link.replaceWith(box);
+    box.appendChild(link);
+    box.appendChild(frame);
+    // Hide the thumbnail once the frame has painted: it is there to cover the load and
+    // nothing more. Hidden on the element itself rather than by a selector, so the
+    // caption's link out to the site is not caught by the same rule. If the event
+    // never comes, the picture stays behind the player, which is where it started.
+    frame.addEventListener('load', function () { link.style.visibility = 'hidden'; }, { once: true });
+  } else {
+    fig.replaceChildren(frame);
+  }
+
+  var caption = fig.querySelector('figcaption');
+  if (caption && href) {
+    var out = document.createElement('a');
+    out.href = href;
+    out.target = '_blank';
+    out.rel = 'noopener noreferrer';
+    out.textContent = 'Watch on ' + spec.label;
+    caption.replaceChildren(out);
+  } else if (caption) {
+    caption.textContent = spec.label;
+  }
+
+  // Off with the facade marks: the badge belongs to a thumbnail, and leaving the
+  // figure clickable would have the play handler swallow the click on the link the
+  // caption now holds.
+  fig.removeAttribute('data-video-ready');
+  fig.setAttribute('data-video-playing', '');
+}
+
+// Capture, and stopped there: the thumbnail is wrapped in an anchor to the video
+// site, openProseLinksInNewTab has since marked it target="_blank", and the
+// link-opened tracker counts any such click inside an article as the reader leaving
+// for the source. That signal feeds retention and scoring, and pressing play here is
+// not leaving. Bubbling would reach the tracker before this handler, so the click has
+// to be taken on the way down.
+document.addEventListener('click', function (e) {
+  if (!e.target || !e.target.closest) return;
+  var fig = e.target.closest('.prose figure[data-video-ready]');
+  if (!fig) return;
+  var spec = _videoProvider(fig);
+  // Without a provider we never reach here, but if we did, the anchor to the site is
+  // the right thing to leave alone.
+  if (!spec) return;
+  e.preventDefault();
+  e.stopPropagation();
+  playVideo(fig, spec);
+}, true);
+
+// The video a chapter mark belongs to: the last one above it. A description sits
+// under its own video, and an article holding several videos each with their own
+// description would otherwise send every mark to the first player on the page.
+function _videoForSeek(el) {
+  var scope = el.closest('.prose');
+  if (!scope) return null;
+  var found = null;
+  scope.querySelectorAll('figure[data-video-id]').forEach(function (fig) {
+    if (fig.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = fig;
+  });
+  return found;
+}
+
+// Chapter marks in a description seek the player here instead of opening the video
+// site at that point, which is what their href does for anyone this script never
+// reaches. Same capture treatment as above, and for the same reason: the mark is an
+// anchor out to the site, so a bubbling click would be filed as the reader leaving.
+document.addEventListener('click', function (e) {
+  if (!e.target || !e.target.closest) return;
+  var mark = e.target.closest('.prose a[data-seek]');
+  if (!mark) return;
+  var seconds = parseInt(mark.getAttribute('data-seek'), 10);
+  // Stored marks are written by _link_timestamps, but the same attribute in a feed's
+  // own markup would arrive here too, so the value is read as a number or not at all.
+  if (!isFinite(seconds) || seconds < 0) return;
+  var fig = _videoForSeek(mark);
+  if (!fig) return;
+  var spec = _videoProvider(fig);
+  if (!spec) return;
+  e.preventDefault();
+  e.stopPropagation();
+  playVideo(fig, spec, seconds);
+  // A long description puts the player off the top of the screen; block: 'nearest'
+  // leaves it alone when it is already visible.
+  fig.scrollIntoView({ block: 'nearest' });
+}, true);
 
 // Hide duplicate headings emitted by feed/readable content when they repeat the article title.
 function normalizeArticleHeading(text) {
@@ -348,6 +557,107 @@ document.body.addEventListener('showToast', function (e) {
   showToast(e.detail.msg, e.detail.type);
 });
 
+// An article was removed from Saved. It no longer exists in the current view, so
+// drop its row and clear the detail panel. No two-way state sync is needed here
+// (unlike star/archive): nothing survives to keep in sync.
+document.body.addEventListener('savedArticleRemoved', function (e) {
+  var id = e.detail && e.detail.id;
+  if (!id) return;
+  // Scoped to a row in the list, because data-article-id is on five different things:
+  // the row, the detail's outer div, the <article> inside it, the bottom bar, and the
+  // inline container built below. An unscoped query takes the first in document order,
+  // and the list comes before the detail. With the article open but its row not in the
+  // list (opened from Saved, then another feed picked in the sidebar), that used to
+  // remove the whole detail pane and then find nothing left to put the empty state in.
+  var row = document.querySelector('#article-list .article-row[data-article-id="' + id + '"]');
+  if (row) row.remove();
+  // The 2-panel/mobile body is the row's sibling, not its child, so removing the row
+  // leaves it behind: an expanded article with no row above it.
+  var inline = document.getElementById('inline-article-detail');
+  if (inline && inline.dataset.articleId === String(id)) inline.remove();
+  var detail = document.getElementById('article-detail');
+  // Exact, not a prefix: the id carries no suffix, and "article-content-1" is a prefix
+  // of "article-content-12", so removing article 1 cleared the pane on article 12.
+  var openDetail = detail && detail.querySelector('#article-content-' + id);
+  if (openDetail) {
+    // The empty state main.html renders, minus its icon: there is no round trip
+    // here to render the real one, and this is the only place that needs it
+    // client-side. Keep the wording in step with that template.
+    detail.innerHTML =
+      '<div class="flex items-center justify-center h-full text-gray-400">' +
+      '<div class="text-center"><p class="text-sm">Select an article to read</p></div></div>';
+  }
+  showToast('Removed from Saved', 'ok');
+});
+
+// Height of everything pinned above the article list: the mobile top panel (outside
+// the list) and a sticky list header (the Saved URL box, the search-results strip),
+// which stays put while the list scrolls. A row aligned to the list's own top would
+// slide underneath it.
+function listStickyOffset() {
+  var topPanel = document.getElementById('mobile-title-bar');
+  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
+  var offset = barVisible ? topPanel.getBoundingClientRect().height : 0;
+  var listHeader = document.querySelector('#article-list [data-list-header]');
+  if (listHeader) offset += listHeader.getBoundingClientRect().height;
+  return offset;
+}
+
+// An article was added to Saved. The list is ordered by publication date, so the row
+// rarely lands on top — a video from a feed you follow carries the date it was
+// published and can sit far down. Bring it into view and flash it, so saving doesn't
+// look like nothing happened.
+//
+// The event arrives before the list is swapped in (the save form sits inside
+// #article-list, so the swap removes the very element an after-settle trigger would
+// fire on), hence the two steps: remember the id, act once the new list has settled.
+var _pendingSavedRowId = null;
+
+document.body.addEventListener('savedArticleAdded', function (e) {
+  _pendingSavedRowId = (e.detail && e.detail.id) || null;
+});
+
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (!_pendingSavedRowId) return;
+  if (!e.detail.target || e.detail.target.id !== 'article-list') return;
+  var id = _pendingSavedRowId;
+  _pendingSavedRowId = null;
+  var list = e.detail.target;
+  var row = list && list.querySelector('[data-article-id="' + id + '"]');
+  if (!row) {
+    // Older than everything on the first page, so there is no row to point at. Stay
+    // quiet if the server already sent a toast ("Already saved…"): two of them land
+    // on the same spot and the reader gets neither.
+    if (!document.querySelector('[id^="app-toast-"]')) {
+      showToast('Saved, further down the list', 'info');
+    }
+    return;
+  }
+  var offset = listStickyOffset();
+  var rowRect = row.getBoundingClientRect();
+  var listRect = list.getBoundingClientRect();
+  // Move as little as possible: a visible row makes the list stay put, one below the
+  // fold comes up to just above the bottom edge (so the articles you were looking at
+  // keep their place), and one above the fold aligns under the sticky header.
+  var target = null;
+  if (rowRect.top < listRect.top + offset) {
+    target = list.scrollTop + rowRect.top - listRect.top - offset;
+  } else if (rowRect.bottom > listRect.bottom) {
+    target = list.scrollTop + rowRect.bottom - listRect.bottom + 12;
+  }
+  if (target !== null) {
+    // Instant, and with mark-as-read held off: the row can be hundreds of articles
+    // down, and gliding there would run every article in between past the top edge,
+    // which the read-on-scroll observer counts as read. The flash is what points the
+    // row out, so nothing is lost by jumping straight to it.
+    window._suppressMarkRead = true;
+    list.scrollTo({ top: Math.max(0, target), behavior: 'instant' });
+    setTimeout(function () { window._suppressMarkRead = false; }, 300);
+  }
+  row.classList.add('row-just-saved');
+  setTimeout(function () { row.classList.remove('row-just-saved'); }, 2000);
+});
+
 // A manual feed refresh finished — if that feed is the one currently displayed,
 // reload the article list so newly fetched items appear without re-clicking it.
 document.body.addEventListener('feedRefreshed', function (e) {
@@ -488,7 +798,7 @@ function _syncMobileQuicklink() {
 function _autoLoadArticleList() {
   if (!document.getElementById('article-list')) return;
   var url;
-  var view = window.location.search.match(/[?&]view=(starred|labeled)(?:&|$)/);
+  var view = window.location.search.match(/[?&]view=(starred|labeled|saved)(?:&|$)/);
   if (view) {
     url = '/htmx/articles?' + view[1] + '_only=true';
     try { localStorage.setItem('lastNavItem', url); } catch (e) {}
@@ -625,6 +935,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       if (entry.isIntersecting) {
         seen.add(id);
       } else if (!isRead && entry.boundingClientRect.top < 0) {
+        // A jump the app made on the reader's behalf (pointing at a freshly saved
+        // row) is not reading: whatever it flew past stays unread.
+        if (window._suppressMarkRead) return;
         seen.delete(id);
         el.dataset.isRead = 'true';
         el.classList.add('opacity-75');
@@ -730,6 +1043,35 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
+
+// ── The row whose article is open in the detail pane ──────────────────────────
+// Read off the detail rather than set where the click happens. Every way an article
+// reaches the pane ends in a swap into #article-detail — a row click, the
+// ?open_article_id deep link, the Next button — so one place covers all of them, and
+// a row the server re-rendered (the row-poll on a saved article, an out-of-band swap,
+// infinite scroll) gets its mark back at the next settle instead of losing it.
+//
+// Which layouts show it is left to CSS: the class is kept up to date everywhere and
+// only the 3-panel layout draws it, so switching layout cannot strand a stale mark.
+(function () {
+  var ACTIVE = 'article-active';
+
+  function syncActiveRow() {
+    var list = document.getElementById('article-list');
+    if (!list) return;
+    var open = document.querySelector('#article-detail [data-article-id]');
+    var row = open
+      ? list.querySelector('.article-row[data-article-id="' + open.dataset.articleId + '"]')
+      : null;
+    list.querySelectorAll('.' + ACTIVE).forEach(function (el) {
+      if (el !== row) el.classList.remove(ACTIVE);
+    });
+    if (row) row.classList.add(ACTIVE);
+  }
+
+  document.body.addEventListener('htmx:afterSettle', syncActiveRow);
+  document.addEventListener('DOMContentLoaded', syncActiveRow);
+})();
 
 // OPML import form: intercept submit to send CSRF header with multipart upload
 document.addEventListener('DOMContentLoaded', function () {
@@ -1166,6 +1508,15 @@ document.addEventListener('articleStarChanged', function (e) {
   btn.title = isStarred ? 'Remove star' : 'Star article';
 });
 
+// Starring queues a summary that runs in the background. If the article is open,
+// pull in the polling spinner so the reader can see one is being generated.
+document.addEventListener('summaryStarted', function (e) {
+  var id = e.detail && e.detail.id;
+  var block = id ? document.getElementById('ai-summary-' + id) : null;
+  if (!block) return;
+  htmx.ajax('GET', '/htmx/articles/' + id + '/ai-summary/poll', { target: block, swap: 'outerHTML' });
+});
+
 // Optimistic star toggle: fire articleStarChanged immediately on click, revert on error.
 // One path for list rows ([data-star-btn]), the detail bottom bar ([data-bottom-star])
 // and the detail header menu ([data-header-star]).
@@ -1563,17 +1914,18 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     // leave the "Loading…" shell spinning forever.
     _loadInlineContent(articleId);
 
-    // Scroll row into view, accounting for mobile top panel if visible
+    // Scroll the row into view, clearing anything pinned above it: the mobile top
+    // panel sits outside the list, and a sticky list header (the Saved URL box, the
+    // search-results strip) sits inside it and stays put while the list scrolls, so
+    // a row aligned to the list's top would slide underneath it.
     setTimeout(function () {
-      var topPanel = document.getElementById('mobile-title-bar');
-      var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-      var topOffset = barVisible ? topPanel.getBoundingClientRect().height : 0;
+      var topOffset = listStickyOffset();
       if (topOffset > 0) {
         var list = document.getElementById('article-list');
         if (list) {
           var scrollTarget = list.scrollTop + row.getBoundingClientRect().top
             - list.getBoundingClientRect().top - topOffset;
-          list.scrollTo({ top: scrollTarget, behavior: 'smooth' });
+          list.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
         }
       } else {
         row.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -2212,11 +2564,18 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   });
 
+  // The article's url/title live on the <article> element, not on the wrapper div
+  // that also carries data-article-id. Matching on the tag keeps a bare
+  // '[data-article-id]' query from picking up the wrapper and losing the source URL.
+  function currentDetailArticleEl() {
+    return (document.querySelector('#article-detail article[data-article-id]') ||
+            document.querySelector('#inline-article-detail-content article[data-article-id]'));
+  }
+
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#detail-share-pick-original')) return;
     document.getElementById('detail-share-picker').classList.add('hidden');
-    var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
-                     document.querySelector('#inline-article-detail-content [data-article-id]'));
+    var articleEl = currentDetailArticleEl();
     if (!articleEl) return;
     doShare(articleEl.dataset.title || '', articleEl.dataset.url || window.location.href);
   });
@@ -2224,8 +2583,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#detail-share-pick-readfine')) return;
     document.getElementById('detail-share-picker').classList.add('hidden');
-    var articleEl = (document.querySelector('#article-detail [data-article-id]') ||
-                     document.querySelector('#inline-article-detail-content [data-article-id]'));
+    var articleEl = currentDetailArticleEl();
     if (!articleEl) return;
     var id = articleEl.dataset.articleId;
     var title = articleEl.dataset.title || '';
@@ -2353,7 +2711,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // Topbar/bottom next: mark current as read, load next article from list
   document.addEventListener('click', function (e) {
     if (!isMobile() || (!e.target.closest('#detail-topbar-next') && !e.target.closest('[data-bottom-next]'))) return;
-    var detailArticle = document.querySelector('#article-detail [data-article-id]');
+    var detailArticle = currentDetailArticleEl();
     if (!detailArticle) return;
     var currentId = detailArticle.dataset.articleId;
     htmx.ajax('POST', '/htmx/articles/' + currentId + '/set-read?state=true', { swap: 'none' });

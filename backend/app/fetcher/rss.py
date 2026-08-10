@@ -2,12 +2,11 @@
 import asyncio
 import hashlib
 import logging
-import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse
 
 import feedparser
 import httpx
@@ -21,8 +20,14 @@ from sqlalchemy.orm import aliased
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
-from app.utils.crypto import decrypt
+from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA
+from app.utils.parsing import (
+    count_words,
+    normalize_url,
+    rewrite_relative_urls,
+    soften_nbsp_runs,
+)
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_conditional,
@@ -30,6 +35,7 @@ from app.utils.url_validator import (
     redact_url,
     validate_feed_url,
 )
+from app.utils.video import video_body_from_feed
 from app.fetcher import host_throttle
 from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
@@ -48,25 +54,6 @@ _HEADERS = {
 }
 _TIMEOUT = 30  # seconds
 
-_STRIP_PARAMS = frozenset({
-    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
-    "utm_id", "fbclid", "gclid", "msclkid",
-})
-
-
-def _normalize_url(url: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        p = urlparse(url)
-        if p.scheme not in ("http", "https"):
-            return None
-        path = p.path.rstrip("/") or "/"
-        params = [(k, v) for k, v in sorted(parse_qsl(p.query)) if k not in _STRIP_PARAMS]
-        return urlunparse((p.scheme.lower(), p.netloc.lower(), path, "", urlencode(params), ""))[:2048]
-    except Exception:
-        return None
-
 
 
 class ParsedFeed(NamedTuple):
@@ -79,12 +66,17 @@ class ParsedFeed(NamedTuple):
     permanent_url: str | None
 
 
-async def fetch_and_parse_url(url: str) -> ParsedFeed:
-    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure."""
+async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
+    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure.
+
+    *auth* is the HTTP Basic pair for a feed that needs one. Subscribing to such a
+    feed goes through here before the row exists, so the credentials cannot be read
+    off the feed and have to be handed in.
+    """
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
     page = await loop.run_in_executor(
-        None, fetch_url_page, url, None, _TIMEOUT, _HEADERS
+        None, fetch_url_page, url, auth, _TIMEOUT, _HEADERS
     )
     parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
@@ -153,9 +145,10 @@ async def fetch_feed(
             parsed = prefetched
         else:
             await async_validate_feed_url(feed_url)
-            auth = None
-            if feed.fetch_auth_user and feed.fetch_auth_pass_encrypted:
-                auth = (feed.fetch_auth_user, decrypt(feed.fetch_auth_pass_encrypted))
+            auth = feed_auth(
+                feed.fetch_auth_user, feed.fetch_auth_pass_encrypted,
+                context=f"feed {feed_id}",
+            )
             loop = asyncio.get_running_loop()
             resp = await loop.run_in_executor(
                 None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
@@ -326,26 +319,44 @@ async def _save_articles(
         guid = _normalize_guid(entry.get("id") or entry.get("link") or entry.get("title") or "")
         content, content_source = _extract_content(entry)
         if content:
-            content = nh3.clean(content)
+            content = soften_nbsp_runs(nh3.clean(content))
             if article_url:
-                from app.utils.parsing import rewrite_relative_urls
                 content = rewrite_relative_urls(content, article_url)
 
         word_count, estimated_read_min = _reading_stats(content)
         pub = entry.get("published_parsed") or entry.get("updated_parsed")
         published_at = _clamp_published_at(_struct_to_dt(pub) if pub else None, fetched_at)
 
+        # An item that is a video is built here rather than by fetching the watch page
+        # later: the id is in the link and the description is in the item, so the
+        # article can carry the video from the moment it arrives instead of showing
+        # text until somebody opens it. YouTube's own feed writes plain text in
+        # media:description, which is why it is passed as text; any other feed that
+        # happens to link a video keeps its own markup and gets the video above it.
+        readable_body = video_body_from_feed(
+            article_url,
+            description_text=entry.get("summary") if entry.get("yt_videoid") else None,
+            feed_html=content,
+        )
+
         article = Article(
             feed_id=feed.id,
             guid=guid[:2048],
             guid_hash=guid_hash,
             url=article_url,
-            url_normalized=_normalize_url(article_url),
+            url_normalized=normalize_url(article_url),
             title=(entry.get("title") or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,
             content_source=content_source,
-            readable_status="skipped",
+            readable_content=readable_body,
+            # "success" because the article's full body is present, which is what the
+            # status means to everything downstream. It also keeps extraction away:
+            # every trigger (opening, starring, a filter that labels) moves an article
+            # on only from "skipped", so the watch page is never fetched for a body we
+            # already have. Feed content stays in place for list snippets, which read
+            # content and never readable_content.
+            readable_status="success" if readable_body else "skipped",
             published_at=published_at,
             word_count=word_count,
             estimated_read_min=estimated_read_min,
@@ -538,8 +549,7 @@ def is_full_content_feed(parsed: feedparser.FeedParserDict, sample: int = 5, thr
 def _reading_stats(content: str | None) -> tuple[int | None, int | None]:
     if not content:
         return None, None
-    plain = nh3.clean(content, tags=set())
-    words = len(re.findall(r"\w+", plain))
+    words = count_words(content)
     return words, max(1, round(words / 200))
 
 

@@ -3,14 +3,14 @@
 {% block title %}Edit feed – Readfine{% endblock %}
 
 {% block settings_content %}
-{% from "partials/feed_display.html" import fmt_interval %}
+{% from "partials/feed_display.html" import fmt_interval, private_lock %}
 <div class="mb-6">
   <h1 class="text-xl font-semibold text-gray-900 mb-1">Edit feed</h1>
   <p class="text-sm text-gray-700 mb-2">{{ uf.feed.title }}</p>
   <div class="flex flex-wrap items-center gap-2 mb-2">
     <span class="font-mono text-xs bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">{{ uf.feed.feed_type }}</span>
     {% if uf.feed.is_private %}
-      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Private</span>
+      <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">{{ private_lock() }}Private</span>
     {% else %}
       <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
     {% endif %}
@@ -181,7 +181,9 @@
     {% endif %}
 
     <!-- hidden state for AI generation -->
-    <input type="hidden" name="url" value="{{ uf.feed.feed_url }}">
+    {# The scrape helpers resolve the feed's URL from this id server-side, so the
+       stored address (which may carry a token or credentials) stays out of the page. #}
+    <input type="hidden" name="feed_id" value="{{ uf.feed.id }}">
     <input type="hidden" name="html_sample" id="html-sample" value="">
     <input type="hidden" name="conversation_history" id="conversation-history" value="[]">
 

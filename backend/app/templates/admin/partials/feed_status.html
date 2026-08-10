@@ -1,0 +1,31 @@
+{# Current fetch state of a feed, shared by the admin Feeds table and the dashboard's
+   fetch-error list. The state is read live from the feed row, so a feed that failed
+   an hour ago but has fetched fine since shows as active — that is the point of
+   putting it next to a logged error.
+
+   with_count adds the counter behind the badge (consecutive refusals for throttled,
+   consecutive failures otherwise). The Feeds table leaves it off: it spells the same
+   thing out under the title, and a second word wraps its narrow column.
+
+   threshold is how many consecutive refusals earn the throttled badge. The default
+   guards lists that show healthy feeds too, where a lone 403 is noise. A caller whose
+   rows are already there because something failed passes 1: in that company "active"
+   next to a logged refusal reads as a contradiction, not as reassurance. #}
+{% macro status_badge(f, with_count=false, threshold=block_badge_threshold) %}
+{%- if f.status == 'active' and f.block_count >= threshold -%}
+  {# Host is refusing automated requests — amber, not red: the feed is fine and
+     resumes on its own. See app/fetcher/failure.py for the two tiers. #}
+  <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700 whitespace-nowrap"
+        title="The site is refusing automated requests. Nothing is wrong with the feed; fetching backs off and resumes on its own. Switched off after {{ block_disable_threshold }} refusals.">throttled{% if with_count %} &times;{{ f.block_count }}{% endif %}</span>
+{%- elif f.status == 'active' -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+{%- elif f.status == 'error' -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700 whitespace-nowrap"
+        title="Last fetch failed{% if f.fetch_error_count %}, {{ f.fetch_error_count }} in a row{% endif %}. Fetching backs off and keeps retrying.">error{% if with_count and f.fetch_error_count %} &times;{{ f.fetch_error_count }}{% endif %}</span>
+{%- elif f.status == 'disabled' -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-600 whitespace-nowrap"
+        title="Fetching is switched off after repeated failures. It will not retry on its own.">disabled{% if with_count and f.fetch_error_count %} &times;{{ f.fetch_error_count }}{% endif %}</span>
+{%- else -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
+{%- endif -%}
+{% endmacro %}

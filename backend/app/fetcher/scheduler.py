@@ -555,12 +555,14 @@ async def _recompute_derived_intervals() -> None:
 
 
 async def _purge_old_articles() -> None:
-    """Job: delete articles exceeding retention limits."""
+    """Job: delete articles exceeding retention limits, and stale fetch logs with them."""
     if db.async_session_factory is None:
         return
-    from app.services.purge_service import purge_old_articles
+    from app.services.purge_service import purge_old_articles, purge_old_fetch_logs
     async with db.async_session_factory() as session:
         await purge_old_articles(session)
+        # Own session-level commit, so a failure here cannot undo the article pass.
+        await purge_old_fetch_logs(session)
 
 
 async def _cleanup_unverified_users() -> None:
@@ -602,6 +604,12 @@ async def _cleanup_expired_pending_emails() -> None:
         if result.rowcount:
             logger.info("Cleared %d expired pending email changes", result.rowcount)
         await session.commit()
+
+
+async def _sweep_thumb_cache() -> None:
+    """Job: drop video thumbnails nobody has requested within the idle window."""
+    from app.services.video_thumb_service import sweep_idle_thumbnails
+    await asyncio.to_thread(sweep_idle_thumbnails)
 
 
 async def _generate_due_preferences() -> None:
@@ -840,6 +848,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=0,
         id="cleanup_unverified_users",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _sweep_thumb_cache,
+        trigger="cron",
+        hour=4,
+        minute=50,
+        id="sweep_thumb_cache",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

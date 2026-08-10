@@ -52,6 +52,32 @@ class Settings(BaseSettings):
     # host's throttling. Enable via LOG_OUTBOUND_REQUESTS=true and restart the app.
     log_outbound_requests: bool = False
 
+    # Hard cap on the body of any page we download (feed, scraped page, article).
+    # Measured after decompression, so a small response that expands into gigabytes
+    # is stopped too. 10 MB clears the largest real feeds and article pages by a wide
+    # margin; raise it only if a genuine source turns out not to fit.
+    max_fetch_bytes: int = 10 * 1024 * 1024
+
+    # Video thumbnails are served through our own /img/video-thumb endpoint so a
+    # reader's browser never contacts YouTube or Vimeo just by opening an article
+    # (see video_thumb_service). The fetched images are kept in a disk cache under
+    # this directory — one small JPEG per video — so a second reader of the same
+    # video costs no upstream fetch. It is only a cache: deleting it loses nothing,
+    # a missing entry is re-fetched on demand. Point it at a mounted volume in
+    # Docker so it survives a restart.
+    thumb_cache_dir: str = "/data/thumb-cache"
+    # Hard ceiling on the whole cache. Thumbnails are tens to low hundreds of kB, so
+    # 50 MB holds several hundred to a couple thousand distinct videos — a ceiling
+    # most instances never reach, not an expected steady state. When it is passed,
+    # the least-recently-used files are dropped until the cache fits again.
+    thumb_cache_max_mb: int = 50
+    # Soft sweep: a thumbnail not requested in this many days is dropped even below
+    # the ceiling. This is what quietly clears entries for articles that have since
+    # been purged — nobody opens them, so nothing refreshes their access time — with
+    # no coupling to the articles table. Deliberately independent of retention: the
+    # cache key is a video id shared across users, which has no single purge date.
+    thumb_cache_idle_days: int = 30
+
     # Phase offset (minutes, 0–14) for the 15-min feed-fetch schedule. Shifts the
     # four fetch ticks off the default :00/:15/:30/:45 so a second instance sharing
     # the host (e.g. staging next to production) doesn't fetch at the same wall-clock
@@ -69,6 +95,9 @@ class Settings(BaseSettings):
     rate_limit_share_token: str = "20/minute"
     rate_limit_api_tokens: str = "5/hour"
     rate_limit_extract_readable: str = "10/minute"
+    # Saving a URL fetches an arbitrary user-supplied address, so it gets its own
+    # budget rather than riding on the readable-extraction one.
+    rate_limit_save_url: str = "10/minute"
     rate_limit_ai_summary: str = "15/minute"
     rate_limit_ai_context: str = "6/minute"
     rate_limit_ai_chat: str = "20/minute"
@@ -78,6 +107,11 @@ class Settings(BaseSettings):
     # can start. The profile is meant to change every few weeks, hence an hourly cap.
     rate_limit_ai_preference: str = "5/hour"
     rate_limit_feedback: str = "3/hour"
+    # Video-thumbnail proxy. Public (a shared article page renders video figures for
+    # signed-out readers), so it is rate-limited by IP. A single article view fires
+    # one request per video figure and the browser then caches it, so this is
+    # generous on purpose — it exists to cap abuse, not normal reading.
+    rate_limit_video_thumb: str = "120/minute"
 
     @field_validator("fetch_schedule_offset_min", mode="after")
     @classmethod

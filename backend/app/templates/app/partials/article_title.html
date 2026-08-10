@@ -1,0 +1,13 @@
+{#- The article's heading in the reading pane, as a macro so the server can send it
+    again on its own.
+
+    A saved-by-URL article is inserted under a placeholder title (its host + path)
+    and learns its real one when extraction finishes, which lands after the detail
+    was rendered — the readable poll then swaps this in out of band. That is the
+    whole reason it is not written inline in article_detail.html: two copies of the
+    same heading would have to keep the same classes forever, and the one built in
+    Python would drift the moment the other is restyled. -#}
+{%- macro article_title(article, oob=false) -%}
+<h1 id="article-title-{{ article.id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+    class="text-2xl font-bold text-gray-900 leading-snug">{{ article.title or "—" }}</h1>
+{%- endmacro -%}

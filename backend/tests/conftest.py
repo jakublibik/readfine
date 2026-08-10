@@ -3,11 +3,12 @@
 import os
 os.environ["ALLOWED_HOSTS"] = '["testserver","localhost","127.0.0.1"]'
 
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,27 @@ def _apply_null_lifespan():
 
 
 _apply_null_lifespan()
+
+
+# ── Outbound HTTP ─────────────────────────────────────────────────────────────
+
+@contextmanager
+def mock_httpx_client(handler):
+    """Patch the httpx.Client used by _resolve_response to use a MockTransport, so
+    tests exercise the REAL redirect/304/error handling instead of mocking it out.
+
+    Everything that fetches an outside URL goes through that one client, so this
+    covers the readable extraction path as well as the feed fetcher.
+    """
+    transport = httpx.MockTransport(handler)
+    real_client = httpx.Client
+
+    def factory(*args, **kwargs):
+        kwargs.pop("transport", None)
+        return real_client(*args, transport=transport, **kwargs)
+
+    with patch("app.utils.url_validator.httpx.Client", factory):
+        yield
 
 
 # ── Mock objects ──────────────────────────────────────────────────────────────

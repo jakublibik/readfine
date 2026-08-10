@@ -1,0 +1,19 @@
+{#- The bookmark that stands for Saved, and the struck-through one that means
+    "remove from Saved".
+
+    One definition for both, because the same glyph marks the Saved list header, the
+    action in an article's ··· menu and the button in its bottom bar, and a bookmark
+    drawn three ways would read as three different things. The path is written once
+    and the struck version adds the slash to it, so the two cannot drift apart either.
+
+    *classes* is all the callers disagree about: sizing and colour belong to the place
+    the icon sits in, not to the icon. -#}
+{%- set _BOOKMARK_PATH = "M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" -%}
+
+{%- macro bookmark_icon(classes="w-4 h-4") -%}
+<svg class="{{ classes }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ _BOOKMARK_PATH }}"/></svg>
+{%- endmacro -%}
+
+{%- macro unsave_icon(classes="w-4 h-4") -%}
+<svg class="{{ classes }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ _BOOKMARK_PATH }}"/><path stroke-linecap="round" stroke-width="2" d="M4 4l16 16"/></svg>
+{%- endmacro -%}

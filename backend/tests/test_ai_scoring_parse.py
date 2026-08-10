@@ -6,13 +6,13 @@ silently returning a fake 0.5 score that would pollute ranking and AI filters.
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.services.ai_service import score_article
+from app.services.ai_service import Completion, score_article
 
 
 async def _run(raw: str):
     with patch(
         "app.services.ai_service._complete",
-        new=AsyncMock(return_value=(raw, 7, 1)),
+        new=AsyncMock(return_value=Completion(raw, 7, 1, False)),
     ):
         return await score_article("content", "profile", AsyncMock(), "anthropic", "model")
 

@@ -1,15 +1,17 @@
 """Unit tests for SSRF-protection URL validator."""
+import gzip
 import logging
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 from unittest.mock import patch
 
+from tests.conftest import mock_httpx_client as _mock_httpx_client
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    ResponseTooLarge,
     _pin_connection,
     fetch_url_conditional,
     fetch_url_page,
@@ -18,11 +20,15 @@ from app.utils.url_validator import (
     parse_retry_after,
     rate_limited_until,
     redact_url,
+    redact_url_for_display,
     spacing_from_headers,
     validate_feed_url,
 )
 
 _NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+# Stands in for the third element of a _resolve_response result (where the redirect
+# chain ended) in tests that mock the fetch out and only care about the response.
+_URL = "https://example.com/feed.xml"
 
 
 class TestSpacingFromHeaders:
@@ -71,21 +77,6 @@ class TestSpacingFromHeaders:
     def test_expired_reset_returns_none(self):
         past = int(_NOW.timestamp()) - 10
         assert spacing_from_headers(self._h(ratelimit_remaining=5, ratelimit_reset=past), _NOW) is None
-
-
-@contextmanager
-def _mock_httpx_client(handler):
-    """Patch the httpx.Client used by _resolve_response to use a MockTransport, so
-    tests exercise the REAL redirect/304/error handling instead of mocking it out."""
-    transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
-
-    def factory(*args, **kwargs):
-        kwargs.pop("transport", None)
-        return real_client(*args, transport=transport, **kwargs)
-
-    with patch("app.utils.url_validator.httpx.Client", factory):
-        yield
 
 
 class TestIsBotBlock:
@@ -230,6 +221,54 @@ class TestRedactUrl:
         assert out == "https://example.com/feed?<redacted>"
 
 
+class TestRedactUrlForDisplay:
+    def test_strips_userinfo_credentials(self):
+        out = redact_url_for_display("https://user:p4ss@example.com/feed.xml")
+        assert out == "https://example.com/feed.xml"
+
+    def test_strips_userinfo_without_password(self):
+        assert redact_url_for_display("https://user@example.com/feed") == (
+            "https://example.com/feed"
+        )
+
+    def test_redacts_secret_query_value(self):
+        assert redact_url_for_display("https://example.com/feed?api_key=secret123") == (
+            "https://example.com/feed?api_key=<redacted>"
+        )
+
+    def test_keeps_harmless_query_params(self):
+        # The admin feed list is read to tell rows apart; channel_id is what
+        # distinguishes two YouTube feeds on the same host and path.
+        url = "https://youtube.com/feeds/videos.xml?channel_id=UC123"
+        assert redact_url_for_display(url) == url
+
+    def test_redacts_only_the_secret_param(self):
+        out = redact_url_for_display("https://example.com/f?channel_id=UC1&token=abc")
+        assert out == "https://example.com/f?channel_id=UC1&token=<redacted>"
+
+    def test_secret_key_matched_case_insensitively(self):
+        out = redact_url_for_display("https://example.com/f?API_KEY=abc")
+        assert "abc" not in out
+
+    def test_plain_url_returned_unchanged(self):
+        # Callers compare against the input to decide whether it is still linkable,
+        # so an untouched URL has to come back byte for byte.
+        url = "https://example.com:8080/a/b?q=hello%20world&page=2"
+        assert redact_url_for_display(url) is url
+
+    def test_uppercase_host_survives_untouched(self):
+        url = "https://Example.COM/feed"
+        assert redact_url_for_display(url) is url
+
+    def test_non_url_returned_as_is(self):
+        assert redact_url_for_display("not a url") == "not a url"
+
+    def test_empty_secret_value_still_redacted(self):
+        assert redact_url_for_display("https://example.com/f?token=") == (
+            "https://example.com/f?token=<redacted>"
+        )
+
+
 _NOW = datetime(2026, 6, 30, 12, 0, 0, tzinfo=timezone.utc)
 
 
@@ -273,7 +312,7 @@ class TestFetchUrlConditional:
 
     def test_validators_sent_as_conditional_headers(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(304), None)) as mock_resolve:
+                   return_value=(httpx.Response(304), None, _URL)) as mock_resolve:
             fetch_url_conditional(
                 "https://example.com/feed.xml",
                 etag='"abc"', last_modified="Mon, 01 Jan 2024 00:00:00 GMT",
@@ -284,7 +323,7 @@ class TestFetchUrlConditional:
 
     def test_no_conditional_headers_without_validators(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(200), None)) as mock_resolve:
+                   return_value=(httpx.Response(200), None, _URL)) as mock_resolve:
             fetch_url_conditional("https://example.com/feed.xml", headers={"User-Agent": "x"})
         headers = mock_resolve.call_args[0][3]
         assert "If-None-Match" not in headers
@@ -293,7 +332,7 @@ class TestFetchUrlConditional:
 
     def test_304_passthrough(self):
         with patch("app.utils.url_validator._resolve_response",
-                   return_value=(httpx.Response(304), None)):
+                   return_value=(httpx.Response(304), None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml", etag='"abc"')
         assert result.status_code == 304
         assert result.text == ""
@@ -303,7 +342,7 @@ class TestFetchUrlConditional:
             200, text="<rss/>",
             headers={"ETag": '"new"', "Last-Modified": "Wed, 03 Jan 2024 00:00:00 GMT"},
         )
-        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.status_code == 200
         assert result.text == "<rss/>"
@@ -312,7 +351,7 @@ class TestFetchUrlConditional:
 
     def test_long_validators_truncated_to_255(self):
         resp = httpx.Response(200, headers={"ETag": "x" * 400})
-        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None)):
+        with patch("app.utils.url_validator._resolve_response", return_value=(resp, None, _URL)):
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert len(result.etag) == 255
 
@@ -474,6 +513,148 @@ class TestPermanentRedirectTarget:
                 result = fetch_url_conditional("https://example.com/feed", etag='"abc"')
         assert result.status_code == 304
         assert result.permanent_url == "https://example.com/moved"
+
+
+class TestFinalUrl:
+    """fetch_url_page reports where the chain ended, separately from what may be stored.
+
+    A temporary redirect must not be adopted as the feed's address, but it does decide
+    which page the body came from — readable extraction reads relative links and the
+    "did this send us back?" check off that address.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _fetch(self, start, *hops):
+        remaining = list(hops)
+
+        def handler(request):
+            if not remaining:
+                return httpx.Response(200, text="<html/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                return fetch_url_page(start)
+
+    def test_temporary_redirect_sets_final_url_but_not_permanent_url(self):
+        page = self._fetch(
+            "https://example.com/a", (302, "https://example.com/consent?back=/a")
+        )
+        assert page.final_url == "https://example.com/consent?back=/a"
+        assert page.permanent_url is None
+
+    def test_without_redirects_final_url_is_the_requested_one(self):
+        page = self._fetch("https://example.com/a")
+        assert page.final_url == "https://example.com/a"
+
+    def test_final_url_is_the_last_hop_not_the_permanent_prefix(self):
+        page = self._fetch(
+            "https://example.com/a",
+            (301, "https://example.com/moved"),
+            (302, "https://cdn.example/moved"),
+        )
+        assert page.final_url == "https://cdn.example/moved"
+        assert page.permanent_url == "https://example.com/moved"
+
+    def test_relative_location_is_resolved(self):
+        page = self._fetch("https://example.com/a/b", (302, "/c"))
+        assert page.final_url == "https://example.com/c"
+
+
+class TestAuthStaysOnItsOrigin:
+    """Credentials are sent to the host they were given for, and to no other.
+
+    Set on the httpx client they would ride the whole redirect chain, so a feed host
+    answering one 302 could hand its neighbour the subscriber's Basic auth header.
+    """
+
+    _PUBLIC_IP = [(2, 1, 6, "", ("93.184.216.34", 0))]
+
+    def _authorization_headers(self, start, *hops, auth=("bob", "hunter2")):
+        """Fetch *start* through *hops*, returning each hop's Authorization header."""
+        remaining = list(hops)
+        seen: list[str | None] = []
+
+        def handler(request):
+            seen.append(request.headers.get("authorization"))
+            if not remaining:
+                return httpx.Response(200, text="<rss/>")
+            status, location = remaining.pop(0)
+            return httpx.Response(status, headers={"Location": location})
+
+        with _mock_httpx_client(handler):
+            with patch("socket.getaddrinfo", return_value=self._PUBLIC_IP):
+                fetch_url_page(start, auth=auth)
+        return seen
+
+    def test_sent_on_the_first_request(self):
+        assert self._authorization_headers("https://example.com/feed")[0] is not None
+
+    def test_sent_across_a_same_origin_redirect(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (301, "https://example.com/feed/")
+        )
+        assert seen[0] is not None and seen[1] == seen[0]
+
+    def test_default_port_spelled_out_is_still_the_same_origin(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (301, "https://example.com:443/feed/")
+        )
+        assert seen[1] == seen[0]
+
+    def test_withheld_after_a_hop_to_another_host(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "https://evil.example/feed")
+        )
+        assert seen[0] is not None
+        assert seen[1] is None
+
+    def test_kept_across_an_http_to_https_upgrade_on_the_same_host(self):
+        # The shape every feed stored under an http:// address takes on each fetch.
+        # The host is upgrading its own address, not handing us to someone else.
+        seen = self._authorization_headers(
+            "http://example.com/feed", (301, "https://example.com/feed")
+        )
+        assert seen[1] == seen[0] is not None
+
+    def test_upgrade_exception_does_not_extend_to_another_host(self):
+        seen = self._authorization_headers(
+            "http://example.com/feed", (301, "https://evil.example/feed")
+        )
+        assert seen[1] is None
+
+    def test_withheld_after_an_https_to_http_downgrade(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "http://example.com/feed")
+        )
+        assert seen[1] is None
+
+    def test_withheld_after_a_port_change(self):
+        seen = self._authorization_headers(
+            "https://example.com/feed", (302, "https://example.com:8443/feed")
+        )
+        assert seen[1] is None
+
+    def test_not_regained_by_returning_to_the_original_host(self):
+        # The header has already been offered to evil.example by the time the chain
+        # comes back, but there is no reason to keep punishing the real host for it:
+        # the hop is on the origin the credentials were given for, so it gets them.
+        seen = self._authorization_headers(
+            "https://example.com/feed",
+            (302, "https://evil.example/hop"),
+            (302, "https://example.com/feed2"),
+        )
+        assert [h is None for h in seen] == [False, True, False]
+
+    def test_userinfo_in_the_url_still_authenticates_without_explicit_auth(self):
+        # _pin_connection keeps userinfo in the connect URL and httpx builds the
+        # header from it. Passing auth=None per request must not disable that.
+        seen = self._authorization_headers(
+            "https://bob:hunter2@example.com/feed", auth=None
+        )
+        assert seen[0] is not None
 
 
 class TestPinConnection:
@@ -673,3 +854,159 @@ class TestProtocolErrorRetry:
         # Same validated IP both times, and DNS was consulted only once.
         assert hosts == [("93.184.216.34", "example.com")] * 2
         assert resolve.call_count == 1
+
+
+class TestResponseSizeCap:
+    """A body past the cap is abandoned rather than held in memory.
+
+    Bodies are handed to the mock transport as generators, not as bytes: that is what
+    makes httpx stream them, so these tests can tell how much was actually pulled off
+    the wire before the fetch gave up.
+    """
+
+    _CAP = 1000
+
+    def _capped(self):
+        from app.config import settings
+        return patch.object(settings, "max_fetch_bytes", self._CAP)
+
+    def test_declared_length_over_cap_is_refused_before_the_body(self):
+        pulled = []
+
+        def body():
+            pulled.append(1)
+            yield b"x" * (self._CAP * 2)
+
+        def handler(request):
+            return httpx.Response(
+                200, headers={"content-length": str(self._CAP * 2)}, content=body()
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/big")
+        assert pulled == []  # Content-Length alone was enough to say no
+
+    def test_undeclared_body_is_cut_off_at_the_cap(self):
+        # No Content-Length, i.e. a chunked response: the header check has nothing to
+        # go on and the running total is the only thing standing between us and the
+        # whole file.
+        chunks_sent = []
+
+        def body():
+            for i in range(100):
+                chunks_sent.append(i)
+                yield b"x" * 200
+
+        def handler(request):
+            return httpx.Response(200, content=body())
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/big")
+        # Stopped as soon as the total passed the cap, not after draining the source.
+        assert len(chunks_sent) == 6
+        assert len(chunks_sent) * 200 <= self._CAP + 200
+
+    def test_compressed_bomb_is_measured_after_decompression(self):
+        # 100 kB of zeros gzips to a couple of hundred bytes, so both the declared
+        # length and the bytes on the wire stay well under the cap. What costs memory
+        # is what comes out of the decompressor, and that is what is counted.
+        payload = gzip.compress(b"\0" * 100_000)
+        assert len(payload) < self._CAP
+
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={
+                    "content-encoding": "gzip",
+                    "content-length": str(len(payload)),
+                },
+                content=iter([payload]),
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            with pytest.raises(ResponseTooLarge):
+                fetch_url_with_ssrf_check("https://example.com/bomb")
+
+    def test_body_under_the_cap_arrives_whole(self):
+        def handler(request):
+            return httpx.Response(200, content=iter([b"a" * 400, b"b" * 400]))
+
+        with _mock_httpx_client(handler), self._capped():
+            body = fetch_url_with_ssrf_check("https://example.com/ok")
+        assert body == "a" * 400 + "b" * 400
+
+    def test_redirect_body_is_not_downloaded(self):
+        # Only the Location header is wanted from a redirect, so a host answering 302
+        # with a payload attached must not cost us that payload.
+        pulled = []
+
+        def body():
+            pulled.append(1)
+            yield b"x" * (self._CAP * 10)
+
+        def handler(request):
+            if request.url.path == "/start":
+                return httpx.Response(
+                    302, headers={"Location": "https://example.com/end"}, content=body()
+                )
+            return httpx.Response(200, content=iter([b"arrived"]))
+
+        with _mock_httpx_client(handler), self._capped():
+            with patch("socket.getaddrinfo",
+                       return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                result = fetch_url_page("https://example.com/start")
+        assert result.text == "arrived"
+        assert pulled == []
+
+    def test_connection_dying_mid_body_is_retried(self):
+        # The body is read inside the retry, so a connection that survives the headers
+        # and dies part-way through the payload is the same recoverable failure as one
+        # that dies before answering — and the half-read body is dropped with it.
+        attempts = []
+
+        def failing_body():
+            yield b"half a "
+            raise httpx.RemoteProtocolError("peer closed", request=None)
+
+        def handler(request):
+            attempts.append(request.url)
+            if len(attempts) == 1:
+                return httpx.Response(200, content=failing_body())
+            return httpx.Response(200, content=iter([b"whole body"]))
+
+        with _mock_httpx_client(handler), self._capped():
+            with patch("socket.getaddrinfo",
+                       return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]):
+                body = fetch_url_with_ssrf_check("https://example.com/feed.xml")
+        assert body == "whole body"
+        assert len(attempts) == 2
+
+    def test_message_names_the_limit_in_a_unit_that_reads(self):
+        # A cap tuned below a megabyte used to report itself as "0 MB", integer
+        # division having eaten it.
+        from app.utils.url_validator import _too_large
+
+        for cap, expected in ((10 * 1024 * 1024, "10 MB"), (512 * 1024, "512 kB")):
+            with pytest.raises(ResponseTooLarge, match=expected):
+                _too_large("https://example.com/x", cap, "in a test")
+
+    def test_rebuilt_response_keeps_charset_and_headers(self):
+        # The response handed back is assembled around the body we read, so everything
+        # callers take off it has to survive that: the charset that decodes .text, and
+        # the validators the feed fetcher stores.
+        def handler(request):
+            return httpx.Response(
+                200,
+                headers={
+                    "content-type": "text/html; charset=iso-8859-2",
+                    "etag": '"v9"',
+                },
+                content=iter(["příliš".encode("iso-8859-2")]),
+            )
+
+        with _mock_httpx_client(handler), self._capped():
+            result = fetch_url_conditional("https://example.com/feed.xml")
+        assert result.text == "příliš"
+        assert result.etag == '"v9"'

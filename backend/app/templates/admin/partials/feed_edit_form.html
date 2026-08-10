@@ -48,7 +48,9 @@
            value="{{ feed.type_config.article_links_selector if feed.type_config else '' }}"
            placeholder="e.g. article.b-item h3 a"
            class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
-    <input type="hidden" name="url" value="{{ feed.feed_url }}">
+    {# Preview fetches the feed's stored URL, which the server looks up from this id.
+       The URL itself stays out of the page: it can hold an API token or credentials. #}
+    <input type="hidden" name="feed_id" value="{{ feed.id }}">
     <div class="mt-2">
       <span class="inline-flex items-center gap-1.5">
         <button type="button"

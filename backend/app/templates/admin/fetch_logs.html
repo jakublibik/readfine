@@ -22,7 +22,7 @@
       <tr>
         <td class="px-4 py-2 max-w-xs">
           <div class="font-medium text-gray-800 truncate">{{ log.feed.title if log.feed else "Deleted feed" }}</div>
-          {% if log.feed %}<div class="text-xs text-gray-400 truncate">{{ log.feed.feed_url }}</div>{% endif %}
+          {% if log.feed %}<div class="text-xs text-gray-400 truncate">{{ log.feed.feed_url | redact_url_display }}</div>{% endif %}
         </td>
         <td class="px-4 py-2 text-gray-500">{{ log.http_status or "—" }}</td>
         <td class="px-4 py-2 text-red-600 max-w-sm truncate">{{ log.error_message }}</td>

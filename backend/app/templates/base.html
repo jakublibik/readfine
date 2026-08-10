@@ -29,7 +29,6 @@
       #sidebar-full { width: 15rem; }
       #sidebar-rail { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
-      html[data-bucket="small"] .article-row:hover { background-color: transparent !important; }
       .article-row .expand-indicator { visibility: hidden; }
       .article-row.inline-expanded .expand-indicator { visibility: visible; }
       .article-row.inline-expanded { box-shadow: inset 0 6px 8px -6px rgba(0,0,0,0.10); }
@@ -245,6 +244,12 @@
       html.dark .bg-amber-50      { background-color: #422006; }
       html.dark .border-amber-200  { border-color: #78350f; }
       html.dark .text-amber-700   { color: #fcd34d; }
+      /* The amber badge fill (throttled feeds, the 429 tag in the rate-limit modal,
+         the warning on a feed test). Without these the fill kept its light value
+         while the label turned pale amber, leaving the badge unreadable on dark. */
+      html.dark .bg-amber-100     { background-color: #78350f; }
+      html.dark .hover\:bg-amber-200:hover { background-color: #92400e; }
+      html.dark .text-amber-800   { color: #fcd34d; }
       html.dark .bg-purple-100    { background-color: #2e1065; }
       html.dark .text-purple-700  { color: #d8b4fe; }
       html.dark .article-row.inline-expanded { box-shadow: inset 0 6px 8px -6px rgba(0,0,0,0.40); }

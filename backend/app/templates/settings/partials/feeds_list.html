@@ -1,4 +1,4 @@
-{% from "partials/feed_display.html" import fmt_interval %}
+{% from "partials/feed_display.html" import fmt_interval, private_lock %}
 <div id="feeds-list">
   {% if scope_cleanup and scope_cleanup.has_changes %}
     <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 space-y-1">
@@ -77,6 +77,9 @@
                   <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
                 {% endif %}
                 <span class="font-medium text-gray-900 line-clamp-2 break-words min-w-0" title="{{ uf.custom_title or uf.feed.title }}">{{ uf.custom_title or uf.feed.title }}</span>
+                {# Lock first, warning after it: the lock is a fixed property of the feed,
+                   the warning comes and goes, so the one that moves is the one that changes. #}
+                {% if uf.feed.is_private %}{{ private_lock() }}{% endif %}
                 {% if uf.readable_auto_disabled %}
                   <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled - this feed already delivers full articles.{% else %}Full content extraction was automatically disabled - the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}

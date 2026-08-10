@@ -16,8 +16,8 @@
 
       <div class="mb-8">
         <h1 class="text-xl font-semibold text-gray-900 mb-1 dark:text-gray-100">Help &amp; getting started</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400">A quick guide to Readfine. The reading view is meant to be
-          self-explanatory; this page covers setup and the less obvious features. For a complete rundown, see the
+        <p class="text-sm text-gray-500 dark:text-gray-400">A quick guide to Readfine: how to set it up, how to get
+          around the reader, and answers to the questions that come up most. For a complete rundown, see the
           <a href="/features" class="text-blue-600 hover:underline dark:text-blue-400">full feature list</a>.</p>
       </div>
 
@@ -83,6 +83,54 @@
         </ol>
       </section>
 
+      {# ── Getting around the reader ───────────────────────────────────────── #}
+      <section class="mb-10">
+        <h2 class="text-base font-semibold text-gray-900 mb-2 dark:text-gray-100">Getting around the reader</h2>
+        <p class="text-sm text-gray-500 mb-4 dark:text-gray-400">Most of the reader is where you'd expect it. These few
+          things are worth pointing out, because they only show up once you go looking.</p>
+        <dl class="space-y-4 text-sm text-gray-700 dark:text-gray-300">
+
+          <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Row actions in the sidebar</dt>
+            <dd>Hover over a feed, folder, label or one of the views at the top and two small buttons appear on the
+              right: <strong>↻</strong> fetches that feed right away, <strong>✓</strong> marks everything as read.
+              The ✓ always applies to the row you're on, so it works per feed, per folder, per label, or for all
+              articles at once. On a touchscreen, press and hold the row instead of hovering.</dd>
+          </div>
+
+          <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Folding things away</dt>
+            <dd>The small arrow next to a folder or next to Labels collapses that group. The arrow in the sidebar
+              header collapses the whole sidebar into a narrow strip of icons, which keeps your navigation one click
+              away without taking up a panel.</dd>
+          </div>
+
+          <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">The ··· menu on an article</dt>
+            <dd>Next to the article's date sits a <strong>···</strong> button. It holds everything beyond plain
+              reading: star, archive, mark read or unread, <a href="#share" class="text-blue-600 hover:underline dark:text-blue-400">share</a>,
+              copy the text, and, if the article came in as a bare headline, <strong>Extract full content</strong> to
+              pull the full text from the original page. With an AI key it also offers the summary, context and chat.</dd>
+          </div>
+
+          <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Search from anywhere</dt>
+            <dd>Press <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">/</kbd>
+              to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
+              a search by feed, folder, label and read status, and sort the results.
+              <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">Esc</kbd>
+              closes it.</dd>
+          </div>
+
+          <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Keeping an article that isn't in your feeds</dt>
+            <dd>Open <strong>Saved</strong> in the sidebar and paste a link into the bar at the top of the list. See
+              <a href="#saved" class="text-blue-600 hover:underline dark:text-blue-400">What is Saved?</a></dd>
+          </div>
+
+        </dl>
+      </section>
+
       {# ── Suggested workflow ──────────────────────────────────────────────── #}
       <section class="mb-10">
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-gray-700 dark:bg-blue-950/40 dark:border-blue-900 dark:text-gray-300">
@@ -129,6 +177,10 @@
               label, mark as read, or star. You can scope a filter to specific feeds or folders. Filters run on
               new articles as they arrive. Manage them in
               <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a>.</p>
+            <p class="mt-2">A new filter only sees articles that arrive after you save it. To catch up on what's
+              already in your list, use <strong>Apply</strong> next to the filter, which runs it over your existing
+              articles once and shows you what it will do before anything is committed. <strong>Test</strong> next to
+              it checks the conditions against your articles without changing a thing.</p>
           </div>
 
           <div id="regex" class="py-5 first:pt-0 last:pb-0">
@@ -174,7 +226,50 @@
               the <strong>list density</strong> (compact, comfortable or summary, separately for desktop and
               mobile), <strong>dark mode</strong>, and whether articles are <strong>marked read as you
               scroll</strong>. You can also choose how the sidebar behaves on small screens
-              (collapsible or hideable).</p>
+              (collapsible or hideable), and where the breakpoints between screen sizes sit.</p>
+            <p class="mt-2">The same page holds the smaller things that shape day-to-day reading: the
+              <strong>font family and text size</strong> of the reading view, your <strong>timezone</strong> and how
+              dates and numbers are written, the <strong>default sort order</strong> and how many articles load at a
+              time, whether the list starts <strong>filtered to unread</strong>, whether Readfine <strong>jumps to the
+              next feed</strong> after you mark everything read, and whether an article that carries only a headline
+              <strong>opens the original page</strong> straight away.</p>
+          </div>
+
+          <div id="saved" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is Saved?</h3>
+            <p><strong>Saved</strong> is for articles that aren't in any of your feeds. Open it in the sidebar, paste a
+              link into the bar at the top of the list, and Readfine fetches the page and runs it through the same
+              readable extraction as a normal article. Saved articles stay until you remove them, so
+              <a href="#purge" class="text-blue-600 hover:underline dark:text-blue-400">retention</a> never takes them
+              away.</p>
+          </div>
+
+          <div id="share" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I share an article?</h3>
+            <p>Yes. <strong>Share</strong> in the article's <strong>···</strong> menu creates a link that works without
+              signing in, so you can send it to someone who has no Readfine account. Anyone holding the link can read
+              that one article, so treat it as public. The same menu shows the link once it exists, along with
+              <strong>Revoke</strong>, which kills it immediately. Nothing else about your account is exposed, and no
+              article is shared until you ask for it.</p>
+          </div>
+
+          <div id="feed-error" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">A feed shows a red marker. What now?</h3>
+            <p>That means the last fetch failed. Hover the marker to see why: a site that moved, a feed URL that no
+              longer exists, a temporary outage. Hit <strong>↻</strong> on the feed row to retry right away; if it
+              succeeds, the marker disappears. When the URL has genuinely changed, correct it in
+              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>,
+              where you can also set a custom title, move the feed into a folder, adjust how often it's checked, and
+              store credentials for a feed that sits behind a login.</p>
+          </div>
+
+          <div id="stats" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I see how I'm reading?</h3>
+            <p><a href="/settings/stats" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Stats</a>
+              shows what you actually get through: read rate, reading streak, how long you spend on an article, and
+              your most active day and hour. With an AI key it also checks how well relevance scores line up with your
+              real reading, points out <strong>missed gems</strong> the AI rated highly but you never opened, and
+              estimates what your AI usage costs.</p>
           </div>
 
           <div id="ai-key" class="py-5 first:pt-0 last:pb-0">
@@ -203,6 +298,23 @@
             <p><strong>Catch me up</strong> generates an on-demand digest of articles from a period and scope
               you choose. A <strong>briefing</strong> is the same thing on a schedule, delivered to your inbox.
               Both need an AI key. Set them up under Catch me up &amp; briefings in the reader.</p>
+          </div>
+
+          <div id="purge" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How long are articles kept?</h3>
+            <p>Old articles are cleaned up automatically so the archive doesn't grow forever. The exact window is set
+              by whoever runs the instance and is written out at the bottom of
+              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>.
+              Anything you <strong>starred</strong>, <strong>archived</strong> or
+              <a href="#saved" class="text-blue-600 hover:underline dark:text-blue-400">saved by URL</a> is kept
+              indefinitely, so marking an article in any of those ways is how you make sure it stays.</p>
+          </div>
+
+          <div id="api" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is there an API?</h3>
+            <p>Yes, a JSON API for scripts and integrations. Create a token in
+              <a href="/settings/tokens" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Tokens</a>
+              and send it as a bearer token.</p>
           </div>
 
           <div id="privacy" class="py-5 first:pt-0 last:pb-0">

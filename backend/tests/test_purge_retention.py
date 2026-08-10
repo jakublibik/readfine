@@ -17,10 +17,13 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
 from app.services.ai_service import PROFILE_MAX_WINDOW_DAYS
+from app.models.fetch_log import FetchLog
 from app.services.purge_service import (
+    FETCH_LOG_RETENTION_DAYS,
     _engaged_exists,
     _fully_protected_exists,
     _trim_engaged,
+    purge_old_fetch_logs,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -74,11 +77,13 @@ async def _article(session, feed, *, age_days, content="<p>raw</p>", readable=No
 
 
 async def _state(session, user, article, *, dwell=0, opened=False, ever_starred=False,
-                 starred=False, archived=False, share=None, created_days=0) -> UserArticleState:
+                 starred=False, archived=False, share=None, created_days=0,
+                 saved=False) -> UserArticleState:
     st = UserArticleState(
         user_id=user.id, article_id=article.id, dwell_seconds=dwell, link_opened=opened,
         ever_starred=ever_starred, is_starred=starred, is_archived=archived, share_token=share,
         created_at=NOW - timedelta(days=created_days),
+        saved_at=NOW - timedelta(days=created_days) if saved else None,
     )
     session.add(st)
     await session.flush()
@@ -180,6 +185,25 @@ class TestTrim:
         assert await _trim_engaged(pg, feed_id=feed.id, orphan=False, cutoff=CUTOFF, now=NOW) == 0
         assert await _delete_unengaged(pg, feed.id, CUTOFF) == 0
         assert await _exists(pg, a.id)
+
+    async def test_saved_not_trimmed_or_deleted(self, pg):
+        """A saved-by-URL article is kept in full forever — no TTL, no cap. Saved must
+        not be the one place where content quietly expires after the most explicit
+        action a reader can take."""
+        user, feed = await _setup(pg)
+        a = await _article(pg, feed, age_days=100, readable="<p>" + ("w " * 500) + "</p>")
+        await _state(pg, user, a, dwell=120, saved=True)
+        assert await _trim_engaged(pg, feed_id=feed.id, orphan=False, cutoff=CUTOFF, now=NOW) == 0
+        assert await _delete_unengaged(pg, feed.id, CUTOFF) == 0
+        assert await _exists(pg, a.id)
+
+    async def test_unsaving_re_exposes_the_article_to_purge(self, pg):
+        user, feed = await _setup(pg)
+        a = await _article(pg, feed, age_days=100, readable="<p>" + ("w " * 500) + "</p>")
+        st = await _state(pg, user, a, dwell=0, saved=True)
+        st.saved_at = None
+        await pg.flush()
+        assert await _delete_unengaged(pg, feed.id, CUTOFF) == 1
 
     async def test_recent_engaged_not_trimmed(self, pg):
         user, feed = await _setup(pg)
@@ -369,4 +393,38 @@ class TestHidden:
         ids = {it.id for it in items}
         assert normal.id in ids
         assert trimmed.id not in ids
+
+
+class TestFetchLogRetention:
+    """A failing feed logs every attempt, and until now nothing ever pruned the table."""
+
+    async def _log(self, session, feed, *, age_days) -> int:
+        log = FetchLog(feed_id=feed.id, failed_at=NOW - timedelta(days=age_days),
+                       error_message="boom")
+        session.add(log)
+        await session.flush()
+        return log.id
+
+    async def test_deletes_past_the_horizon_and_keeps_the_rest(self, pg):
+        _, feed = await _setup(pg)
+        await self._log(pg, feed, age_days=FETCH_LOG_RETENTION_DAYS + 1)
+        # Just inside the horizon, so the boundary is tested from both sides.
+        fresh = await self._log(pg, feed, age_days=FETCH_LOG_RETENTION_DAYS - 1)
+        recent = await self._log(pg, feed, age_days=1)
+
+        await purge_old_fetch_logs(pg)
+
+        left = set((await pg.execute(
+            select(FetchLog.id).where(FetchLog.feed_id == feed.id)
+        )).scalars())
+        assert left == {fresh, recent}
+
+    async def test_reports_how_many_it_deleted(self, pg):
+        _, feed = await _setup(pg)
+        for _ in range(3):
+            await self._log(pg, feed, age_days=FETCH_LOG_RETENTION_DAYS + 5)
+
+        # A floor, not an equality: the dev database may hold logs of its own that are
+        # past the horizon and get swept in the same statement.
+        assert await purge_old_fetch_logs(pg) >= 3
 

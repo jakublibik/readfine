@@ -47,6 +47,13 @@
     Ar{{ rail_count_total(nav_archived) }}
   </a>
 
+  <!-- Saved -->
+  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm font-medium relative"
+     hx-get="/htmx/articles?saved_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+     title="Saved">
+    Sa{{ rail_count_total(nav_saved) }}
+  </a>
+
   <!-- Labels -->
   <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-sm font-medium relative"
      hx-get="/htmx/articles?labeled_only=true" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
@@ -187,6 +194,20 @@
               title="Mark all as read"
               hx-post="/htmx/articles/mark-read"
               hx-vals='{"archived_only": "1"}'
+              hx-swap="none"
+              data-action="mark-read">✓</button>
+    </div>
+    <div class="group relative mark-read-row">
+      <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
+         hx-get="/htmx/articles?saved_only=true" hx-target="#article-list" hx-swap="innerHTML"
+         hx-push-url="false">
+        <span class="flex-1">Saved</span>
+        {% if nav_unread_saved > 0 %}{{ badge_unread(nav_unread_saved) }}{% else %}{{ badge_total(nav_saved) }}{% endif %}
+      </a>
+      <button class="{{ mark_read_btn }}"
+              title="Mark all as read"
+              hx-post="/htmx/articles/mark-read"
+              hx-vals='{"saved_only": "1"}'
               hx-swap="none"
               data-action="mark-read">✓</button>
     </div>

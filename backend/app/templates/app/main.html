@@ -293,6 +293,9 @@
          hx-trigger="load"
          data-deeplink-open></div>
     {% else %}
+    {# app.js writes a plainer version of this (no icon) when the open article is
+       removed from Saved, since there is no round trip to render one. Keep the
+       wording in step; the two are allowed to differ in ornament, not in words. #}
     <div class="flex items-center justify-center h-full text-gray-400">
       <div class="text-center">
         <svg class="mx-auto mb-3 h-10 w-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">

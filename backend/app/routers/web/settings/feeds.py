@@ -21,7 +21,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.feed import cache_feed_preview, subscribe, unsubscribe
 from app.templating import templates
-from app.utils.crypto import encrypt
+from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
 from app.utils.http_client import READFINE_UA
 from app.utils.parsing import safe_int
@@ -31,6 +31,7 @@ from app.utils.url_validator import (
     format_retry_in,
     rate_limited_until,
     redact_url,
+    split_url_credentials,
 )
 
 from .common import _ai_selector_available, _ensure_scheme, _get_feeds_context, _snap_interval
@@ -80,6 +81,12 @@ async def settings_feeds_test(
                                           {"error": "Please enter a URL."})
     auth_user = fetch_auth_user.strip() or None
     auth_pass = fetch_auth_pass or None
+    # Same split Subscribe will do, so the test says the same thing the subscribe will
+    # find: with the credentials left in the address the "are these needed?" check
+    # never runs, and the parse would be cached under an address Subscribe no longer uses.
+    url, url_auth_user, url_auth_pass = split_url_credentials(url)
+    if url_auth_user is not None and not auth_user and not auth_pass:
+        auth_user, auth_pass = url_auth_user, url_auth_pass
 
     try:
         await async_validate_feed_url(url)
@@ -91,8 +98,9 @@ async def settings_feeds_test(
         "User-Agent": READFINE_UA,
         "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
     }
-    has_auth = bool(auth_user and auth_pass)
-    auth = (auth_user, auth_pass) if has_auth else None
+    # The test has to try exactly what the fetch will, hence the shared rule.
+    auth = auth_pair(auth_user, auth_pass)
+    has_auth = auth is not None
     loop = asyncio.get_running_loop()
 
     async def _fetch(with_auth):
@@ -154,7 +162,8 @@ async def settings_feeds_test(
             "test_url": url,
         })
 
-    feed_title = parsed.feed.get("title") or url
+    original_title = (parsed.feed.get("title") or "").strip() or None
+    feed_title = original_title or url
     entry_count = len(parsed.entries)
     # Cache this parse so a follow-up Subscribe reuses it instead of re-fetching
     # (single network request per add — important for rate-limited sites). Public
@@ -163,6 +172,9 @@ async def settings_feeds_test(
         cache_feed_preview(url, parsed, page.permanent_url)
     return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
         "feed_title": feed_title,
+        # Only the feed's real title, never the URL fallback — the subscribe form uses it
+        # as the "Custom title" placeholder, where a URL would be nonsense.
+        "original_title": original_title,
         "entry_count": entry_count,
         "auth_status": auth_status,
     })
@@ -398,9 +410,12 @@ async def settings_feed_update(
     # Saving the form clears readable_auto_disabled above, which takes the feed out of
     # the revival job's reach, so drop its bookkeeping too: a scheduled probe would
     # otherwise linger on a feed the user has just decided about, and the spent-attempt
-    # count would keep the feed barred from future probes forever.
+    # count would keep the feed barred from future probes forever. The revival timestamp
+    # goes with them, or the admin panel would keep listing a past revival next to the
+    # attempt count we just zeroed, which reads as a feed revived by no probe at all.
     uf.feed.readable_revival_next_at = None
     uf.feed.readable_revival_attempts = 0
+    uf.feed.readable_revived_at = None
 
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)

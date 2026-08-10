@@ -460,8 +460,71 @@ def group_feeds_by_host(items: list[dict]) -> list[dict]:
     return ordered
 
 
+async def list_feed_fetch_errors(
+    db: AsyncSession, *, since: datetime, now: datetime, limit: int = 20
+) -> list[dict]:
+    """Feeds that failed to fetch since *since*, one row per feed, newest failure first.
+
+    A broken feed writes a FetchLog on every attempt, so a flat list of the newest
+    logs is usually the same handful of feeds over and over. Grouping by feed makes
+    the list say how many feeds are affected, and the per-window counts say how hard
+    each one is failing. The feed row travels with the counts because it carries the
+    *current* state: a fetch that succeeded after the last logged failure resets
+    ``status`` and the counters, so a row can legitimately read "active".
+    """
+    day_ago = now - timedelta(hours=24)
+    week_ago = now - timedelta(days=7)
+    window = (FetchLog.failed_at >= since, FetchLog.failed_at <= now)
+    totals = (await db.execute(
+        select(
+            FetchLog.feed_id,
+            func.count().label("fails"),
+            func.count().filter(FetchLog.failed_at >= day_ago).label("fails_24h"),
+            func.count().filter(FetchLog.failed_at >= week_ago).label("fails_7d"),
+            func.max(FetchLog.failed_at).label("last_failed_at"),
+        )
+        .where(*window)
+        .group_by(FetchLog.feed_id)
+        .order_by(func.max(FetchLog.failed_at).desc())
+        .limit(limit)
+    )).all()
+    if not totals:
+        return []
+
+    # The message shown is the newest one per feed, not Feed.last_error, which a
+    # later success clears — the point of the row is what went wrong and whether it
+    # has recovered since.
+    feed_ids = [row.feed_id for row in totals]
+    latest = (await db.execute(
+        select(FetchLog)
+        .options(selectinload(FetchLog.feed))
+        .where(FetchLog.feed_id.in_(feed_ids), *window)
+        .distinct(FetchLog.feed_id)
+        .order_by(FetchLog.feed_id, FetchLog.failed_at.desc())
+    )).scalars().all()
+    by_feed = {log.feed_id: log for log in latest}
+
+    rows = []
+    for row in totals:
+        log = by_feed.get(row.feed_id)
+        if log is None or log.feed is None:
+            continue
+        rows.append({
+            "feed": log.feed,
+            # No http_status alongside it: the message already opens with
+            # "HTTP 429 Too Many Requests" whenever the status is set at all.
+            "error_message": log.error_message,
+            "fails": row.fails,
+            "fails_24h": row.fails_24h,
+            "fails_7d": row.fails_7d,
+            "last_failed_at": row.last_failed_at,
+        })
+    return rows
+
+
 async def get_dashboard_stats(db: AsyncSession) -> dict:
-    since = datetime.now(timezone.utc) - timedelta(days=30)
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=30)
     user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
     active_user_count = (await db.execute(
         select(func.count(User.id)).where(User.is_active == True)
@@ -471,13 +534,20 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     error_feed_count = (await db.execute(
         select(func.count(Feed.id)).where(Feed.status == "error")
     )).scalar() or 0
-    recent_errors = (await db.execute(
-        select(FetchLog)
-        .options(selectinload(FetchLog.feed))
-        .where(FetchLog.failed_at >= since)
-        .order_by(FetchLog.failed_at.desc())
-        .limit(5)
-    )).scalars().all()
+    # Counted separately from error, and without a time window: the scheduler skips a
+    # disabled feed (see fetcher/scheduler.py), so it writes no further FetchLog and
+    # would drop out of the 30-day roll-up below with nothing left to report it. It is
+    # also the one state that never recovers on its own.
+    disabled_feed_count = (await db.execute(
+        select(func.count(Feed.id)).where(Feed.status == "disabled")
+    )).scalar() or 0
+    fetch_error_feeds = await list_feed_fetch_errors(db, since=since, now=now, limit=20)
+    # Same window as the roll-up above, upper bound included, so the "showing X of Y"
+    # line cannot count a failure logged between the two queries.
+    fetch_error_feed_total = (await db.execute(
+        select(func.count(func.distinct(FetchLog.feed_id)))
+        .where(FetchLog.failed_at >= since, FetchLog.failed_at <= now)
+    )).scalar() or 0
     readable_pending = (await db.execute(
         select(func.count(Article.id)).where(Article.readable_status == "pending")
     )).scalar() or 0
@@ -489,7 +559,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .options(selectinload(Article.feed))
         .where(Article.readable_status == "pending")
         .order_by(Article.readable_retries.desc(), Article.id.desc())
-        .limit(10)
+        .limit(15)
     )).scalars().all()
     readable_failed_recent = (await db.execute(
         select(Article)
@@ -497,8 +567,13 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         .where(Article.readable_status == "failed")
         .where(Article.readable_failed_at >= since)
         .order_by(Article.readable_failed_at.desc())
-        .limit(5)
+        .limit(15)
     )).scalars().all()
+    readable_failed_recent_total = (await db.execute(
+        select(func.count(Article.id))
+        .where(Article.readable_status == "failed")
+        .where(Article.readable_failed_at >= since)
+    )).scalar() or 0
     # Feeds whose readable extraction was auto-disabled for 403s: awaiting a probe, or
     # brought back by one. Read from the feed rows rather than kept in memory, since a
     # revival is rare and the job runs at night — an in-process registry would be wiped
@@ -510,7 +585,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         select(Feed)
         .where(Feed.readable_revived_at >= since)
         .order_by(Feed.readable_revived_at.desc())
-        .limit(5)
+        .limit(10)
     )).scalars().all()
     briefing_errors = await list_briefing_errors(db)
     auto_profile_errors = await list_auto_profile_errors(db)
@@ -521,11 +596,14 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "feed_count": feed_count,
         "article_count": article_count,
         "error_feed_count": error_feed_count,
-        "recent_errors": recent_errors,
+        "disabled_feed_count": disabled_feed_count,
+        "fetch_error_feeds": fetch_error_feeds,
+        "fetch_error_feed_total": fetch_error_feed_total,
         "readable_pending": readable_pending,
         "readable_failed": readable_failed,
         "readable_pending_recent": readable_pending_recent,
         "readable_failed_recent": readable_failed_recent,
+        "readable_failed_recent_total": readable_failed_recent_total,
         "readable_revival_pending": readable_revival_pending,
         "readable_revived_recent": readable_revived_recent,
         "briefing_errors": briefing_errors,

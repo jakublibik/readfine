@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.user import UserSettings
-from app.services.ai_jobs import ai_enabled_globally, apply_job_failure, normalize_content
+from app.services.ai_jobs import (
+    ai_enabled_globally, apply_job_failure, clear_last_ai_error, normalize_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,9 @@ async def _execute_summary_job(
         return
 
     try:
-        result, in_tok, out_tok = await summarize_article(content_text, client, provider, model, custom_prompt=s.ai_summary_prompt)
+        answer = await summarize_article(
+            content_text, client, provider, model, custom_prompt=s.ai_summary_prompt
+        )
 
         state = await db.scalar(
             select(UserArticleState).where(
@@ -96,28 +100,43 @@ async def _execute_summary_job(
         if state is None:
             state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
             db.add(state)
-        state.ai_summary = result
+        state.ai_summary = answer.text
+        # Always assigned, not only when true: regenerating clears a stale flag.
+        state.ai_summary_truncated = answer.truncated
 
         job.status = "success"
         job.processed_at = now
         job.error_message = None
-        job.input_tokens = in_tok
-        job.output_tokens = out_tok
+        job.input_tokens = answer.input_tokens
+        job.output_tokens = answer.output_tokens
         if s.last_ai_error:
-            s.last_ai_error = None
-            s.last_ai_error_at = None
+            clear_last_ai_error(s)
 
     except Exception as exc:
         apply_job_failure(job, exc, now, operation="summary", settings=s)
 
 
+async def _stored_summary(user_id: int, article_id: int, db: AsyncSession) -> tuple[str | None, bool]:
+    """The summary written by a successful job, as (text, truncated)."""
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id == article_id,
+        )
+    )
+    if state is None:
+        return None, False
+    return state.ai_summary, state.ai_summary_truncated
+
+
 async def run_summary_on_demand(
     article: Article, user_id: int, db: AsyncSession
-) -> tuple[str | None, str | None]:
+) -> tuple[str | None, bool, str | None]:
     """Enqueue + immediately process summary job.
 
-    Returns (summary_text, error_message).
-    On success: (text, None). On failure: (None, error). On ineligible: (None, None).
+    Returns (summary_text, truncated, error_message).
+    On success: (text, bool, None). On failure: (None, False, error).
+    On ineligible: (None, False, None).
     """
     await enqueue_summary_job(article, user_id, db)
     await db.flush()
@@ -129,15 +148,10 @@ async def run_summary_on_demand(
         )
     )
     if job is None:
-        return None, "Summary could not be started. Check that a quality AI model is configured."
+        return None, False, "Summary could not be started. Check that a quality AI model is configured."
     if job.status == "success":
-        state = await db.scalar(
-            select(UserArticleState).where(
-                UserArticleState.user_id == user_id,
-                UserArticleState.article_id == article.id,
-            )
-        )
-        return (state.ai_summary if state else None), None
+        summary, truncated = await _stored_summary(user_id, article.id, db)
+        return summary, truncated, None
     if job.status in ("failed", "skipped"):
         # On-demand: reset backoff so we retry immediately
         job.status = "pending"
@@ -149,18 +163,13 @@ async def run_summary_on_demand(
     await _execute_summary_job(job, article, s, db, now)
     await db.commit()
     if job.status == "success":
-        state = await db.scalar(
-            select(UserArticleState).where(
-                UserArticleState.user_id == user_id,
-                UserArticleState.article_id == article.id,
-            )
-        )
-        return (state.ai_summary if state else None), None
+        summary, truncated = await _stored_summary(user_id, article.id, db)
+        return summary, truncated, None
     if job.status == "skipped":
-        return None, "Article content is too short or AI model not available."
+        return None, False, "Article content is too short or AI model not available."
     # failed
     error = (job.error_message or "Unknown error")[:200]
-    return None, error
+    return None, False, error
 
 
 async def process_pending_summaries(db: AsyncSession) -> int:

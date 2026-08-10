@@ -15,10 +15,18 @@ from app.rate_limit import limiter
 from app.services.ai_service import generate_css_selector_from_sample, get_ai_client
 from app.services.feed import subscribe_scrape
 from app.templating import templates
+from app.utils.crypto import auth_pair
 from app.utils.parsing import safe_int
 from app.utils.scrape_ai import build_selector_prompt, extract_article_sample, generate_selector_prompt
+from app.utils.url_validator import split_url_credentials
 
-from .common import _ai_selector_available, _ensure_scheme, _get_feeds_context, _snap_interval
+from .common import (
+    _ai_selector_available,
+    _ensure_scheme,
+    _get_feeds_context,
+    _scrape_target,
+    _snap_interval,
+)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -34,6 +42,13 @@ async def settings_scrape_setup(
     if not url.startswith(("http://", "https://")):
         return RedirectResponse("/settings/feeds", status_code=303)
 
+    # Credentials in the address are used to fetch the page and go back into the form
+    # the user is filling in, since that is the only place a scrape feed can be told
+    # about them. Everything else on this page gets the clean address: the AI prompt
+    # (which leaves for a provider) and the page title (which becomes the feed's name).
+    clean_url, auth_user, auth_pass = split_url_credentials(url)
+    auth = auth_pair(auth_user, auth_pass)
+
     _, folders, _ = await _get_feeds_context(user, db)
     html = ""
     page_title = ""
@@ -42,11 +57,11 @@ async def settings_scrape_setup(
 
     html_sample = ""
     try:
-        html = await fetch_page_html(url)
+        html = await fetch_page_html(clean_url, auth=auth)
         soup = BeautifulSoup(html, "lxml")
         title_tag = soup.find("title")
-        page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
-        prompt = generate_selector_prompt(url, html)
+        page_title = title_tag.get_text(strip=True)[:255] if title_tag else clean_url
+        prompt = generate_selector_prompt(clean_url, html)
         html_sample = extract_article_sample(html)
     except Exception as e:
         fetch_error = str(e)
@@ -72,10 +87,10 @@ async def settings_scrape_setup(
 async def settings_scrape_preview(
     request: Request,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    url = form.get("url", "").strip()
-    url = _ensure_scheme(url)
+    url, auth = await _scrape_target(form, user, db)
     selector = (form.get("selector") or form.get("article_links_selector") or "").strip()
 
     if not url or not selector:
@@ -84,7 +99,7 @@ async def settings_scrape_preview(
         })
 
     try:
-        html = await fetch_page_html(url)
+        html = await fetch_page_html(url, auth=auth)
         links = extract_article_links(html, selector, url)
     except Exception as e:
         return templates.TemplateResponse(request, "settings/partials/scrape_preview.html", {
@@ -110,8 +125,7 @@ async def settings_scrape_ai_selector(
     from app.models.article import AiUsageLog
 
     form = await request.form()
-    url = (form.get("url") or "").strip()
-    url = _ensure_scheme(url)
+    url, auth = await _scrape_target(form, user, db)
     html_sample = (form.get("html_sample") or "").strip()
     history_raw = (form.get("conversation_history") or "[]").strip()
 
@@ -127,7 +141,7 @@ async def settings_scrape_ai_selector(
 
     if not html_sample:
         try:
-            html = await fetch_page_html(url)
+            html = await fetch_page_html(url, auth=auth)
             html_sample = extract_article_sample(html)
         except Exception as e:
             prompt_text = ""
@@ -206,14 +220,13 @@ async def settings_scrape_show_prompt(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    url = (form.get("url") or "").strip()
-    url = _ensure_scheme(url)
+    url, auth = await _scrape_target(form, user, db)
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")
 
     try:
-        html = await fetch_page_html(url)
+        html = await fetch_page_html(url, auth=auth)
         prompt = generate_selector_prompt(url, html)
     except Exception as e:
         return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {e}</div>")
@@ -232,8 +245,12 @@ async def settings_scrape_subscribe(
     form = await request.form()
     url = form.get("url", "").strip()
     url = _ensure_scheme(url)
+    # subscribe_scrape splits the credentials out for storage; the clean address is
+    # needed here too, so a feed the user gave no name is not named after its password.
+    clean_url, auth_user, auth_pass = split_url_credentials(url)
+    auth = auth_pair(auth_user, auth_pass)
     selector = form.get("selector", "").strip()
-    title = form.get("title", "").strip() or url
+    title = form.get("title", "").strip() or clean_url
     folder_id = safe_int(form.get("folder_id"))
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
@@ -247,11 +264,11 @@ async def settings_scrape_subscribe(
     except ValueError as e:
         html_sample = ""
         try:
-            html = await fetch_page_html(url)
+            html = await fetch_page_html(clean_url, auth=auth)
             soup = BeautifulSoup(html, "lxml")
             title_tag = soup.find("title")
-            page_title = title_tag.get_text(strip=True)[:255] if title_tag else url
-            prompt = generate_selector_prompt(url, html)
+            page_title = title_tag.get_text(strip=True)[:255] if title_tag else clean_url
+            prompt = generate_selector_prompt(clean_url, html)
             html_sample = extract_article_sample(html)
         except Exception:
             page_title = title

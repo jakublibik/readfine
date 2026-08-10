@@ -2,6 +2,7 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +15,22 @@ from app.utils.text import strip_html
 logger = logging.getLogger(__name__)
 
 
+class Completion(NamedTuple):
+    """One answer from a provider, with what it cost and whether it finished.
+
+    ``truncated`` is True when the model stopped on the token cap rather than
+    because it was done, so a caller storing the text can mark it as cut off
+    instead of passing it off as complete. Most callers have nothing to do with
+    it, which is the reason for the named field: ``result.text`` reads the same
+    everywhere, while a bare tuple made every one of them spell out a throwaway
+    for a flag they never look at.
+    """
+    text: str
+    input_tokens: int
+    output_tokens: int
+    truncated: bool = False
+
+
 class ProviderEmptyResponse(Exception):
     """Raised when an AI provider returns no usable text (blocked/empty/filtered),
     so callers handle it as a controlled error instead of crashing on .strip()."""
@@ -24,12 +41,17 @@ def _extract_text(provider: str, resp) -> str:
     ProviderEmptyResponse when content is missing/empty."""
     text: str | None = None
     if provider == "anthropic":
-        blocks = getattr(resp, "content", None) or []
-        if blocks:
-            # Assumes the first block is the text block. Holds for plain
-            # completions; would need to scan for the text block if an
-            # extended-thinking model is ever used (block[0] = thinking).
-            text = getattr(blocks[0], "text", None)
+        # First text block, not blocks[0]: on models where thinking runs without
+        # being asked for (Opus 5, Sonnet 5, Fable 5) the response opens with a
+        # thinking block, which carries no .text. Requests ask for thinking to be
+        # off (_anthropic_create), but Fable 5 refuses to turn it off at all, so a
+        # leading thinking block still turns up and the answer sits behind it.
+        text = next(
+            (getattr(b, "text", None)
+             for b in (getattr(resp, "content", None) or [])
+             if getattr(b, "type", None) == "text"),
+            None,
+        )
     elif provider == "openai":
         choices = getattr(resp, "choices", None) or []
         if choices:
@@ -39,8 +61,81 @@ def _extract_text(provider: str, resp) -> str:
     else:
         raise ValueError(f"Unknown provider: {provider}")
     if not text or not text.strip():
-        raise ProviderEmptyResponse(f"{provider} returned no usable content")
+        detail = _empty_response_detail(provider, resp)
+        raise ProviderEmptyResponse(
+            f"{provider} returned no usable content" + (f" ({detail})" if detail else "")
+        )
     return text.strip()
+
+
+def _empty_response_detail(provider: str, resp) -> str:
+    """Why the response carried no text, for the error message and the banner.
+
+    "no usable content" alone cannot tell a refusal from a hit token cap from a
+    genuinely empty reply, which are three different things to do something about.
+    Best-effort like _extract_truncated: a provider changing the shape of a field
+    must not replace the real error with an AttributeError from the diagnostics.
+    """
+    try:
+        if provider == "anthropic":
+            blocks = getattr(resp, "content", None) or []
+            block_types = [str(getattr(b, "type", "?")) for b in blocks]
+            stop_reason = getattr(resp, "stop_reason", None)
+            detail = f"stop_reason={stop_reason}, blocks=[{','.join(block_types)}]"
+            # Reasoning we could not switch off ate the whole budget before the
+            # answer began. Worth saying in words: this signature means the model
+            # is wrong for the job rather than the key or the prompt being broken,
+            # and it is what an always-thinking model does on the tightest budget
+            # (scoring asks for a single decimal in 10 tokens). Keyed on the
+            # response, not on a model name, so a future model needs no list entry.
+            if stop_reason == "max_tokens" and "thinking" in block_types:
+                detail += (
+                    "; the model spent the whole token budget reasoning before "
+                    "answering and cannot be told to skip it, so it is not suited "
+                    "to this slot"
+                )
+            return detail
+        if provider == "openai":
+            choices = getattr(resp, "choices", None) or []
+            reason = getattr(choices[0], "finish_reason", None) if choices else None
+            return f"finish_reason={reason}"
+        if provider == "gemini":
+            candidates = getattr(resp, "candidates", None) or []
+            reason = getattr(candidates[0], "finish_reason", None) if candidates else None
+            # A prompt refused up front has no candidate at all; the reason for
+            # that lives on prompt_feedback instead.
+            blocked = getattr(getattr(resp, "prompt_feedback", None), "block_reason", None)
+            detail = f"finish_reason={getattr(reason, 'name', reason)}"
+            return f"{detail}, block_reason={getattr(blocked, 'name', blocked)}" if blocked else detail
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real failure
+        return ""
+    return ""
+
+
+def _extract_truncated(provider: str, resp) -> bool:
+    """True when the provider stopped generating because it hit the token cap.
+
+    Best-effort by design: a missing or unrecognised stop reason reads as "not
+    truncated", so a provider changing the shape of this field can never turn an
+    otherwise good completion into a failure.
+    """
+    try:
+        if provider == "anthropic":
+            return getattr(resp, "stop_reason", None) == "max_tokens"
+        if provider == "openai":
+            choices = getattr(resp, "choices", None) or []
+            return bool(choices) and getattr(choices[0], "finish_reason", None) == "length"
+        if provider == "gemini":
+            candidates = getattr(resp, "candidates", None) or []
+            if not candidates:
+                return False
+            reason = getattr(candidates[0], "finish_reason", None)
+            # google-genai returns an enum; its .name is stable across the enum
+            # and plain-string representations the SDK has used over versions.
+            return getattr(reason, "name", None) == "MAX_TOKENS"
+    except Exception:  # noqa: BLE001 — never let a stop-reason quirk fail a completion
+        return False
+    return False
 
 
 # Docs URLs shown next to the model input field
@@ -258,6 +353,14 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
 
 # ── verification ──────────────────────────────────────────────────────────────
 
+# Room for a greeting, not for an essay. Deliberately more than a greeting needs:
+# a model that cannot be told to skip reasoning (Fable 5) spends some of this
+# before it writes anything, and failing the check there would report the whole
+# slot as broken when only the tightest budget, scoring, actually is. Unused
+# tokens are not billed, so the headroom is free.
+_VERIFY_MAX_TOKENS = 200
+
+
 def _friendly_ai_error(exc: Exception) -> str:
     raw = str(exc)
     low = raw.lower()
@@ -297,25 +400,27 @@ async def verify_ai_slot(
 
     try:
         if provider == "anthropic":
-            resp = await client.messages.create(
+            resp = await _anthropic_create(
+                client,
                 model=model,
-                max_tokens=5,
+                max_tokens=_VERIFY_MAX_TOKENS,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            _ = resp.content
         elif provider == "openai":
             resp = await client.chat.completions.create(
                 model=model,
-                max_completion_tokens=_openai_max_tokens(model, 5),
+                max_completion_tokens=_openai_max_tokens(model, _VERIFY_MAX_TOKENS),
                 messages=[{"role": "user", "content": "Hi"}],
             )
-            _ = resp.choices
         elif provider == "gemini":
             resp = await client.aio.models.generate_content(
                 model=model,
                 contents="Hi",
             )
-            _ = resp.text
+        # Read the answer, don't just touch the envelope: a model that accepts the
+        # request and then writes nothing (all of its budget spent reasoning) used
+        # to pass this check, so the slot reported OK while every real call failed.
+        _extract_text(provider, resp)
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
         return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
@@ -335,7 +440,8 @@ async def score_article(
         f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
-    raw, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=10)
+    answer = await _complete(prompt, client, provider, model, max_tokens=10)
+    raw = answer.text
     # Extract the first decimal number — tolerates models that wrap the score in
     # prose ("0.8 - relevant", "Score: 0.7"). A truly unparseable response raises,
     # so the caller's retry/failure path handles it instead of silently scoring 0.5.
@@ -343,22 +449,56 @@ async def score_article(
     if match is None:
         raise ValueError(f"score_article: no number in AI response {raw!r}")
     score = float(match.group())
-    return max(0.0, min(1.0, score)), in_tok, out_tok
+    return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, a short list) where it genuinely aids clarity."
 _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+# The summary prompt tells the model to scale length with the article, so the
+# output cap scales with it too — a cap sized for a news brief cuts a long feature
+# off mid-sentence. Roughly one output token per 16 input characters, bounded at
+# both ends: the floor keeps short articles from getting a uselessly tight cap,
+# the ceiling stops a custom prompt asking for an essay from running up the bill.
+#
+# The floor is what most news articles actually get: the ratio only overtakes it
+# past ~11k characters, and a typical story is half that. Length is held down by
+# the prompt's 150-word ceiling, roughly 200 tokens, so the floor is deliberately
+# loose on top of it. That slack is the point: these models read a length rule
+# generously, and one that overshoots should still land a whole summary rather
+# than a truncated one. Unused tokens are not billed, so the slack itself is free.
+_SUMMARY_MIN_TOKENS = 700
+_SUMMARY_MAX_TOKENS = 1500
+_SUMMARY_CHARS_PER_TOKEN = 16
+
+
+def _summary_token_budget(content: str) -> int:
+    """Output-token cap for summarizing *content*."""
+    return max(
+        _SUMMARY_MIN_TOKENS,
+        min(_SUMMARY_MAX_TOKENS, len(content) // _SUMMARY_CHARS_PER_TOKEN),
+    )
+
+
 async def summarize_article(
     content: str,
     client,
     provider: str,
     model: str,
     custom_prompt: str | None = None,
-) -> tuple[str, int, int]:
-    """Generate a concise article summary. Returns (text, input_tokens, output_tokens)."""
+) -> Completion:
+    """Generate a concise article summary.
+
+    The only caller that acts on ``truncated``: a summary cut off by the token cap
+    is still stored, but labelled as such rather than passed off as the model's own
+    choice of ending.
+    """
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=500)
+    return await _complete(
+        prompt, client, provider, model,
+        max_tokens=_summary_token_budget(content),
+        reasoning_headroom=_ANTHROPIC_REASONING_BUDGET,
+    )
 
 
 async def get_article_context(
@@ -374,7 +514,8 @@ async def get_article_context(
     if focus:
         instruction += f"\n\nFocus on: {focus}"
     prompt = f"{instruction}\n\nArticle:\n{content}"
-    return await _complete(prompt, client, provider, model, max_tokens=500)
+    answer = await _complete(prompt, client, provider, model, max_tokens=500)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 async def chat_with_article(
@@ -402,7 +543,7 @@ async def chat_with_article(
         )
         if system_prompt:
             kwargs["system"] = system_prompt
-        resp = await client.messages.create(**kwargs)
+        resp = await _anthropic_create(client, **kwargs)
         return (
             _extract_text("anthropic", resp),
             resp.usage.input_tokens,
@@ -483,18 +624,16 @@ async def catch_me_up(
     user_prompt = f"Articles from the past {period}:\n\n{article_list}"
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    text, input_tokens, output_tokens = await _complete(
-        full_prompt, client, provider, model, max_tokens=8000
-    )
-    return text, input_tokens, output_tokens
+    answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:
     """Generate a CSS selector for article links from a page."""
     from app.utils.scrape_ai import generate_selector_prompt
     prompt = generate_selector_prompt(url, html)
-    text, _, _ = await _complete(prompt, client, provider, model, max_tokens=200)
-    return text.strip().strip('`"\'').split('\n')[0].strip()
+    answer = await _complete(prompt, client, provider, model, max_tokens=200)
+    return answer.text.strip().strip('`"\'').split('\n')[0].strip()
 
 
 async def generate_css_selector_from_sample(
@@ -508,9 +647,9 @@ async def generate_css_selector_from_sample(
     """Generate CSS selector from pre-extracted HTML sample with optional refinement history."""
     from app.utils.scrape_ai import build_selector_prompt
     prompt = build_selector_prompt(url, sample, history)
-    text, in_tok, out_tok = await _complete(prompt, client, provider, model, max_tokens=200)
-    selector = text.strip().strip('`"\'').split('\n')[0].strip()
-    return selector, in_tok, out_tok
+    answer = await _complete(prompt, client, provider, model, max_tokens=200)
+    selector = answer.text.strip().strip('`"\'').split('\n')[0].strip()
+    return selector, answer.input_tokens, answer.output_tokens
 
 
 # Longest behavioural lookback window used by the interest profile (G1). The retention
@@ -699,8 +838,8 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
         {"g1": g1_rows, "g2": g2_rows, "g3": g3_rows, "p1": p1_rows, "n1": n1_rows},
         feeds_str,
     )
-    result_text, input_tokens, output_tokens = await _complete(prompt, client, provider, model, max_tokens=500)
-    return result_text, input_tokens, output_tokens
+    answer = await _complete(prompt, client, provider, model, max_tokens=500)
+    return answer.text, answer.input_tokens, answer.output_tokens
 
 
 # ── internal ──────────────────────────────────────────────────────────────────
@@ -722,24 +861,96 @@ def _openai_max_tokens(model: str, max_tokens: int) -> int:
     return max_tokens
 
 
+# Anthropic's newer models (Opus 5, Sonnet 5, Fable 5) think even when the request
+# says nothing about thinking, and those tokens come out of the same max_tokens as
+# the answer. Every budget here is sized for the answer alone — scoring asks for a
+# single decimal in 10 tokens — so the model would spend the budget thinking and
+# return a response with no text block at all. The same problem on OpenAI is solved
+# with headroom above, because there is no way to turn reasoning off; Anthropic can
+# be asked directly, which keeps the budgets meaning what they say.
+_ANTHROPIC_THINKING_OFF = {"type": "disabled"}
+
+
+def _rejects_thinking_param(exc: Exception) -> bool:
+    """True when a 400 is about the thinking parameter rather than the request.
+
+    Deliberately narrow: only a 400 that names the parameter counts, so a bad key,
+    a wrong model name or a rate limit still surfaces as itself instead of being
+    silently retried.
+    """
+    return getattr(exc, "status_code", None) == 400 and "thinking" in str(exc).lower()
+
+
+# Room added to the retry below for the answer to survive alongside reasoning we
+# could not turn off. Same trade as _OPENAI_REASONING_BUDGET: max_tokens is only a
+# ceiling, so unused tokens cost nothing, and a model that ignored the retry (an
+# older one that simply does not know the parameter) keeps behaving exactly as it
+# did. Only callers expecting a long answer ask for it — see reasoning_headroom.
+_ANTHROPIC_REASONING_BUDGET = 8000
+
+
+async def _anthropic_create(client, reasoning_headroom: int = 0, **kwargs):
+    """messages.create with thinking off, retried by models that refuse that.
+
+    Fable 5 always thinks and answers an explicit "disabled" with a 400, and models
+    older than the parameter reject it too. Those two look identical here and need
+    opposite things: the old model does not think, so its budget was never at risk,
+    while Fable 5 spends the answer's budget reasoning and returns a summary cut off
+    mid-sentence. The retry therefore carries *reasoning_headroom* on top of
+    max_tokens, which rescues the second without changing the first.
+
+    Callers on a tight budget pass no headroom on purpose: scoring asks for a single
+    decimal in 10 tokens, and an always-thinking model cannot answer that at any
+    ceiling worth paying for. It fails instead, and _empty_response_detail says why.
+    """
+    try:
+        return await client.messages.create(thinking=_ANTHROPIC_THINKING_OFF, **kwargs)
+    except Exception as exc:
+        if not _rejects_thinking_param(exc):
+            raise
+        logger.info("Model %s rejected thinking=disabled; retrying without it",
+                    kwargs.get("model"))
+        if reasoning_headroom and kwargs.get("max_tokens"):
+            kwargs = {**kwargs, "max_tokens": kwargs["max_tokens"] + reasoning_headroom}
+        return await client.messages.create(**kwargs)
+
+
 async def _complete(
-    prompt: str, client, provider: str, model: str, max_tokens: int = 500
-) -> tuple[str, int, int]:
-    """Send a prompt and return (text, input_tokens, output_tokens)."""
+    prompt: str, client, provider: str, model: str, max_tokens: int = 500,
+    reasoning_headroom: int = 0,
+) -> Completion:
+    """Send a prompt to whichever provider the slot uses and return its answer.
+
+    reasoning_headroom is Anthropic-only and applies to one case: a model that
+    refused to switch thinking off, where the answer has to share max_tokens with
+    reasoning. See _anthropic_create.
+    """
     if provider == "anthropic":
-        resp = await client.messages.create(
+        resp = await _anthropic_create(
+            client,
+            reasoning_headroom=reasoning_headroom,
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],
         )
-        return _extract_text("anthropic", resp), resp.usage.input_tokens, resp.usage.output_tokens
+        return Completion(
+            _extract_text("anthropic", resp),
+            resp.usage.input_tokens,
+            resp.usage.output_tokens,
+            _extract_truncated("anthropic", resp),
+        )
     elif provider == "openai":
         resp = await client.chat.completions.create(
             model=model,
             max_completion_tokens=_openai_max_tokens(model, max_tokens),
             messages=[{"role": "user", "content": prompt}],
         )
-        return _extract_text("openai", resp), resp.usage.prompt_tokens, resp.usage.completion_tokens
+        return Completion(
+            _extract_text("openai", resp),
+            resp.usage.prompt_tokens,
+            resp.usage.completion_tokens,
+            _extract_truncated("openai", resp),
+        )
     elif provider == "gemini":
         from google.genai import types
         resp = await client.aio.models.generate_content(
@@ -748,9 +959,10 @@ async def _complete(
             config=types.GenerateContentConfig(max_output_tokens=max_tokens),
         )
         meta = resp.usage_metadata
-        return (
+        return Completion(
             _extract_text("gemini", resp),
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0,
+            _extract_truncated("gemini", resp),
         )
     raise ValueError(f"Unknown provider: {provider}")

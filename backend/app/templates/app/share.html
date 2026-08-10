@@ -60,9 +60,9 @@
         <!-- Content -->
         <div class="prose max-w-none text-gray-800">
           {% if article.readable_status == 'success' and article.readable_content %}
-            {{ article.readable_content | safe }}
+            {{ article.readable_content | video_thumbs }}
           {% elif article.content %}
-            {{ article.content | safe }}
+            {{ article.content | video_thumbs }}
           {% else %}
             <p class="text-gray-400 italic">No content available.</p>
           {% endif %}

@@ -1,6 +1,7 @@
 """Auto-summary on star: the summary must only be produced when the user has
 enabled auto-summary of starred articles, must fire immediately after a short
 debounce, and a quick unstar (mis-click) must cancel the pending job."""
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -152,6 +153,41 @@ class TestStarRouteSummaryGating:
         assert resp.status_code == 200
         enqueue.assert_awaited_once()
         assert scheduled == []
+
+    def test_enqueued_summary_signals_the_open_article(self, client, mock_db):
+        """The response must carry summaryStarted so an open article can show the
+        "Generating summary…" spinner for a summary that runs in the background."""
+        scheduled: list = []
+        mock_db.scalar = AsyncMock(side_effect=[
+            SimpleNamespace(ai_summary_enabled_default=True),
+            SimpleNamespace(id=5),
+        ])
+        with (
+            patch("app.routers.web.app.articles.toggle_article_state",
+                  new=AsyncMock(return_value=SimpleNamespace(id=5, is_starred=True))),
+            patch("app.routers.web.app.articles._summary_after_star_bg",
+                  new=_noop_coro_factory(scheduled)),
+            patch("app.services.ai_summary_service.enqueue_summary_job",
+                  new=AsyncMock(return_value=True)),
+        ):
+            resp = client.post("/htmx/articles/5/star")
+        assert resp.status_code == 200
+        assert json.loads(resp.headers["HX-Trigger"])["summaryStarted"] == {"id": 5}
+
+    def test_no_summary_signal_when_nothing_enqueued(self, client, mock_db):
+        mock_db.scalar = AsyncMock(side_effect=[
+            SimpleNamespace(ai_summary_enabled_default=True),
+            SimpleNamespace(id=5),
+        ])
+        with (
+            patch("app.routers.web.app.articles.toggle_article_state",
+                  new=AsyncMock(return_value=SimpleNamespace(id=5, is_starred=True))),
+            patch("app.services.ai_summary_service.enqueue_summary_job",
+                  new=AsyncMock(return_value=False)),
+        ):
+            resp = client.post("/htmx/articles/5/star")
+        assert resp.status_code == 200
+        assert "summaryStarted" not in json.loads(resp.headers["HX-Trigger"])
 
     def test_unstar_cancels_pending_summary_job(self, client, mock_db):
         """Unstarring deletes a not-yet-run summary job so a mis-click bills nothing."""

@@ -354,6 +354,11 @@ changing either, and turn the outbound log back off when you're done. It is verb
 docker compose logs --since 24h --no-log-prefix -t app | grep 'outbound host=www.example.com'
 ```
 
+**When two instances share one host**, `FETCH_SCHEDULE_OFFSET_MIN` (0–14 minutes,
+default `0`) shifts the 15-minute feed fetch off the usual :00/:15/:30/:45, so a staging
+instance next to production doesn't hit the same sites at the same moment. A single
+instance can leave it at `0`. Restart the app after changing it.
+
 ## Development
 
 ### Requirements

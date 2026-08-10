@@ -1,3 +1,42 @@
+{% from "app/partials/error_bar.html" import error_bar %}
+{% from "app/partials/row_poll.html" import row_poll %}
+
+{#- Where a saved-by-URL article's row says what is happening to it.
+
+    Such a row is inserted under a placeholder title (the pasted address) and only
+    picks up the real one when extraction finishes, so it needs to say that more is
+    coming — otherwise the address reads as the final title and the swap a few
+    seconds later looks like the list moving on its own. Hence the spinner.
+
+    The bar marks the row that stayed nothing but that address: no text, and not even
+    the page's own description to show as a snippet. Deliberately keyed on having
+    nothing to show rather than on extraction having failed, because the two are not
+    the same row. A site that answers with a consent page still hands over its title
+    and description, so that row reads like any other and a warning on it would be
+    noise; a 403 hands over nothing, and without the bar it is indistinguishable from
+    a row still loading. The reason and the Retry button stay in the article itself,
+    one click away, which is also where an article waiting on another attempt says so.
+
+    Scoped to articles with no feed, like the poller below. A feed article that fails
+    extraction still shows its feed content, so a marker there would flag a row that
+    has nothing wrong with it. -#}
+{% macro row_status(article) %}
+  {%- if not article.feed_id -%}
+    {%- if article.readable_active -%}
+      <span class="flex-shrink-0 self-center flex items-center" title="Fetching the article…">
+        <svg class="animate-spin h-3 w-3 text-gray-400" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+        </svg>
+      </span>
+    {%- elif article.nothing_to_show -%}
+      <span class="flex-shrink-0 self-center flex items-center">
+        {{ error_bar("The full text could not be retrieved. Open the article for details.") }}
+      </span>
+    {%- endif -%}
+  {%- endif -%}
+{% endmacro %}
+
 {% set d = density | default("comfortable") %}
 {% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
 {% set ld = label_display | default("indicator") %}
@@ -11,7 +50,7 @@
 
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 hover:bg-white cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
+     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
@@ -21,6 +60,10 @@
      hx-trigger="click[!event.target.closest('[data-stop-propagation]')]"
      hx-target="#article-detail"
      hx-swap="innerHTML">
+
+  {% if article.readable_active and not article.feed_id %}
+  {{ row_poll(article.id, d, ld) }}
+  {% endif %}
 
   {% if d == "compact" %}
   <!-- Compact: star + title + feed + date all inline -->
@@ -38,6 +81,7 @@
         <span class="text-base text-gray-300 hover:text-gray-500">☆</span>
       {% endif %}
     </button>
+    {{ row_status(article) }}
     <div class="flex-1 min-w-0 truncate">
       <a data-article-title
          {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
@@ -111,6 +155,7 @@
         <span class="text-lg text-gray-300 hover:text-gray-500">☆</span>
       {% endif %}
     </button>
+    {{ row_status(article) }}
     <a data-article-title
        {% if article.url %}href="{{ article.url }}" target="_blank" rel="noopener noreferrer"{% endif %}
        class="min-w-0 break-words text-sm leading-snug text-inherit no-underline {% if not article.is_read %}font-bold text-gray-900{% else %}font-medium text-gray-800{% endif %}">{{ article.title }}</a>
@@ -119,7 +164,7 @@
   <div class="flex items-center justify-between mt-1">
     <div class="flex items-center gap-1.5 min-w-0">
       <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-500 leading-none">▲</span>
-      <span class="text-xs text-gray-500 truncate">{{ article.feed_title or "Unknown feed" }}</span>
+      <span class="text-xs text-gray-500 truncate">{{ article.feed_title or (article.url | hostname) or "Unknown feed" }}</span>
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">

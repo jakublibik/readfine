@@ -1,10 +1,17 @@
-<div id="article-content-{{ article.id }}"
-     {% if article.readable_active %}
-     hx-get="/htmx/articles/{{ article.id }}/readable-poll"
-     hx-trigger="every 2s"
-     hx-swap="outerHTML"
-     {% endif %}>
-  {% if article.readable_status in ['failed', 'skipped'] and article.readable_error %}
+{%- from "app/partials/saved_icons.html" import unsave_icon -%}
+<div id="article-content-{{ article.id }}">
+  {#- An attempt failed on something that may pass later (a timeout, a 5xx, a page
+      that gave nothing), so the article sits at 'pending' with a backoff running and
+      more attempts to come. Not the same as 'failed', and the difference matters: the
+      messages below are a verdict, and this state has not reached one. Deliberately
+      says only that much — what went wrong is worth reading once it is final, where
+      it comes with the actual error. -#}
+  {% set awaiting_retry = article.readable_status == 'pending' and not article.readable_active %}
+  {% if awaiting_retry %}
+  <p class="text-xs text-amber-500 italic mb-4">
+    Full text not retrieved yet. Another attempt is scheduled.
+  </p>
+  {% elif article.readable_status in ['failed', 'skipped'] and article.readable_error %}
   <p class="text-xs text-amber-500 italic mb-4">
     {%- if article.readable_error and '403' in article.readable_error -%}
       Full content could not be retrieved (403 Access denied). The site is likely blocking requests from this server (geo-block or datacenter IP block).
@@ -16,9 +23,44 @@
   {% endif %}
   <div class="prose max-w-none text-gray-800 article-body">
     {% if article.readable_status == 'success' and article.readable_content %}
-      {{ article.readable_content | safe }}
+      {{ article.readable_content | video_thumbs }}
     {% elif article.content %}
-      {{ article.content | safe }}
+      {{ article.content | video_thumbs }}
+    {% elif article.summary and article.feed_id is none %}
+      {#- Extraction produced nothing to read, but the page told us about itself.
+          Shown for feedless (saved) articles only, which are the only ones that
+          carry a summary — a feed article falls back to its feed content instead.
+          Deliberately framed as the site's own description rather than dropped into
+          the body, so it never reads as the article. -#}
+      <p class="text-sm text-gray-500 mb-3 dark:text-gray-400">
+        {% if not awaiting_retry %}The full text could not be retrieved. {% endif %}This
+        is the description the site gives for the article:
+      </p>
+      <blockquote class="border-l-2 border-gray-300 pl-4 text-gray-700 not-italic dark:border-gray-600 dark:text-gray-300">
+        {{ article.summary }}
+      </blockquote>
+      {% if article.url %}
+      <div class="flex flex-wrap items-center gap-2 mt-4 not-prose">
+        <a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" data-external-link
+           class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 no-underline">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/>
+          </svg>
+          Open original
+        </a>
+        <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
+                hx-target="#article-content-{{ article.id }}"
+                hx-swap="outerHTML"
+                hx-indicator="#readable-retry-spinner-{{ article.id }}"
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-50 bg-transparent cursor-pointer">
+          <svg id="readable-retry-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+          </svg>
+          Retry extraction
+        </button>
+      </div>
+      {% endif %}
     {% else %}
       <p class="text-gray-400 italic">No content available.</p>
       {% if article.url %}
@@ -30,7 +72,11 @@
           </svg>
           Open original
         </a>
-        {% if article.readable_status == 'failed' %}
+        {#- Also offered while a retry is pending: this branch has nothing to read and
+            no other action, and waiting out a backoff of up to two hours for an
+            attempt you can make now is not a choice worth enforcing. The sibling
+            branch above (a description to show) has always offered it here. -#}
+        {% if article.readable_status == 'failed' or awaiting_retry %}
         <button hx-post="/htmx/articles/{{ article.id }}/extract-readable"
                 hx-target="#article-content-{{ article.id }}"
                 hx-swap="outerHTML"
@@ -48,13 +94,7 @@
     {% endif %}
   </div>
   {% if article.readable_active %}
-  <div class="flex items-center gap-2 text-xs text-gray-400 italic mt-4">
-    <svg class="animate-spin h-3 w-3 flex-shrink-0" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
-    </svg>
-    Extracting full content…
-  </div>
+  {% include "app/partials/readable_progress.html" %}
   {% endif %}
   <div id="detail-labels-{{ article.id }}" class="detail-labels-area {% if article.labels %}flex flex-wrap items-center gap-x-3 gap-y-1 mt-4{% endif %}">
     {% for label in article.labels %}
@@ -125,6 +165,19 @@
           {% else %}<span class="inline-block w-[9px] h-[9px] rounded-full border border-gray-300"></span>{% endif %}
         </button>
       </div>
+      {# Last of the actions, matching its place at the bottom of the ··· menu: it is
+         the only irreversible one here. Kept ahead of the next-article arrow so a
+         destructive button never sits under the cursor you use to page through. #}
+      {% if article.is_saved %}
+      <button data-unsave="{{ article.id }}"
+              data-stop-propagation
+              hx-post="/htmx/articles/{{ article.id }}/unsave"
+              hx-swap="none"
+              class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
+              title="Remove from Saved">
+        {{ unsave_icon("w-4 h-4") }}
+      </button>
+      {% endif %}
       <button data-bottom-next
               class="hidden w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-400"
               title="Next article">

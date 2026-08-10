@@ -8,7 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.user import UserSettings
-from app.services.ai_jobs import ai_enabled_globally, apply_job_failure, normalize_content
+from app.services.ai_jobs import (
+    ai_enabled_globally, apply_job_failure, clear_last_ai_error, normalize_content,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +158,7 @@ async def _execute_scoring_job(
         job.processed_at = now
         job.error_message = None
         if s.last_ai_error:
-            s.last_ai_error = None
-            s.last_ai_error_at = None
+            clear_last_ai_error(s)
 
     except Exception as exc:
         apply_job_failure(job, exc, now, operation="scoring", settings=s)

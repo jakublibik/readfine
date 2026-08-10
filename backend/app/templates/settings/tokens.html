@@ -84,7 +84,7 @@
         <tr>
           <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
           <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles</td>
-          <td class="px-3 py-2 text-gray-600">List articles. Params: <code class="bg-gray-100 px-1 rounded">feed_id</code> <code class="bg-gray-100 px-1 rounded">folder_id</code> <code class="bg-gray-100 px-1 rounded">unread_only</code> <code class="bg-gray-100 px-1 rounded">starred_only</code> <code class="bg-gray-100 px-1 rounded">archived_only</code> <code class="bg-gray-100 px-1 rounded">q</code> <code class="bg-gray-100 px-1 rounded">limit</code> <code class="bg-gray-100 px-1 rounded">offset</code></td>
+          <td class="px-3 py-2 text-gray-600">List articles. Params: <code class="bg-gray-100 px-1 rounded">feed_id</code> <code class="bg-gray-100 px-1 rounded">folder_id</code> <code class="bg-gray-100 px-1 rounded">unread_only</code> <code class="bg-gray-100 px-1 rounded">starred_only</code> <code class="bg-gray-100 px-1 rounded">archived_only</code> <code class="bg-gray-100 px-1 rounded">saved_only</code> <code class="bg-gray-100 px-1 rounded">q</code> <code class="bg-gray-100 px-1 rounded">limit</code> <code class="bg-gray-100 px-1 rounded">offset</code></td>
         </tr>
         <tr>
           <td class="px-3 py-2 font-mono text-blue-700 border-r border-gray-100">GET</td>
@@ -92,9 +92,14 @@
           <td class="px-3 py-2 text-gray-600">Get article detail (includes readable content)</td>
         </tr>
         <tr>
+          <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>
+          <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/save-url</td>
+          <td class="px-3 py-2 text-gray-600">Save an article by its link. Body: <code class="bg-gray-100 px-1 rounded">{"url": "https://…"}</code>. Returns the article with <code class="bg-gray-100 px-1 rounded">readable_status</code> at <code class="bg-gray-100 px-1 rounded">pending</code>; the page is fetched in the background, so poll GET <code class="bg-gray-100 px-1 rounded">/articles/{id}</code> for the text. 201 when saved, 200 when you already had that link.</td>
+        </tr>
+        <tr>
           <td class="px-3 py-2 font-mono text-amber-700 border-r border-gray-100">PATCH</td>
           <td class="px-3 py-2 font-mono text-gray-800 border-r border-gray-100">/articles/{id}</td>
-          <td class="px-3 py-2 text-gray-600">Update state. Body: <code class="bg-gray-100 px-1 rounded">{"is_read": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_starred": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_archived": true}</code></td>
+          <td class="px-3 py-2 text-gray-600">Update state. Body: <code class="bg-gray-100 px-1 rounded">{"is_read": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_starred": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_archived": true}</code> <code class="bg-gray-100 px-1 rounded">{"is_saved": false}</code></td>
         </tr>
         <tr>
           <td class="px-3 py-2 font-mono text-green-700 border-r border-gray-100">POST</td>

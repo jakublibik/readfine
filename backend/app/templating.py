@@ -78,6 +78,55 @@ def _parse_json_list(value: str | None) -> list:
 
 templates.env.filters["parse_json_list"] = _parse_json_list
 
+
+def _hostname(url: str | None) -> str:
+    """Bare host for a URL, used as the source label on articles with no feed.
+
+    A saved-by-URL article has no feed title, and "Unknown feed" would be actively
+    wrong — it never had one. The host is what the reader actually wants to see.
+
+    Reads ``hostname`` rather than ``netloc``, which is the whole authority: userinfo
+    and port included. Saved addresses have their credentials split off before they
+    are stored, so nothing should arrive here carrying any, but this is the one filter
+    that puts a stored address on screen and the cost of not relying on that is a
+    single attribute. It also lowercases and drops the port, which is what a label
+    wants anyway.
+    """
+    if not url:
+        return ""
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(url).hostname or "").removeprefix("www.")
+    except ValueError:
+        return ""
+
+
+templates.env.filters["hostname"] = _hostname
+
+
+def _redact_url_display(url: str | None) -> str:
+    """Feed URL with its secrets hidden, for the admin views that list feeds."""
+    from app.utils.url_validator import redact_url_for_display
+    return redact_url_for_display(url) if url else ""
+
+
+templates.env.filters["redact_url_display"] = _redact_url_display
+
+
+def _video_thumbs(html: str | None) -> Markup:
+    """Render stored article body, redirecting legacy video thumbnails to the proxy.
+
+    Replaces the bare ``| safe`` on article content: new bodies already point their
+    thumbnails at our endpoint, and this catches the ones saved before that so no
+    body opens a request to img.youtube.com or vumbnail.com. Trusted-safe like the
+    ``| safe`` it stands in for — the body is our own sanitized HTML.
+    """
+    from app.utils.video import rewrite_thumb_srcs
+    return Markup(rewrite_thumb_srcs(html) or "")
+
+
+templates.env.filters["video_thumbs"] = _video_thumbs
+
 _ai_enabled: bool = False
 
 

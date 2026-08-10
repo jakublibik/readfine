@@ -16,7 +16,16 @@ categories:
     summary: Get content in, from anywhere.
     features:
       - title: RSS & Atom feeds
-        desc: Subscribe to any standard feed URL.
+        desc: >-
+          Subscribe to any standard feed URL. Before you commit, a test says whether
+          the address works, what the feed is called, and how many articles it holds.
+      - title: Finds the feed for you
+        desc: >-
+          Hand it the address of a site rather than a feed and it looks for the feeds
+          on the page, then offers them by name so you can tell them apart. Where a
+          site declares nothing, the usual addresses are tried anyway, and a YouTube
+          channel address becomes that channel's feed. If there is genuinely no feed,
+          it offers to scrape the page instead.
       - title: Web-scraping feeds
         desc: >-
           Follow sites that have no feed. Point Readfine at a listing page and a
@@ -24,15 +33,29 @@ categories:
           suggest the selector for you.
       - title: Authenticated feeds
         desc: >-
-          Subscribe to feeds behind HTTP Basic Auth with per-feed credentials,
-          stored encrypted.
+          Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own
+          fields or written into the address. Either way the credentials are stored
+          encrypted, per feed.
+      - title: Shared & private feeds
+        desc: >-
+          On an instance with several accounts, everyone following the same feed shares
+          one fetch, so a site is polled once however many subscribers it has. Mark a
+          feed private and it is kept to your account, with its own fetch and its own
+          copy of the articles.
       - title: Folders
         desc: Group feeds into folders for organizing and for scoping filters.
       - title: Scheduled background fetching
         desc: >-
           New articles are pulled automatically on a schedule, with adaptive
           per-feed intervals that back off quiet feeds and check busy ones more
-          often.
+          often. Any feed can be pinned to a fixed interval instead.
+      - title: Feed health
+        desc: >-
+          A feed that stops working says so instead of just going quiet: a red marker
+          in the sidebar, the reason on hover, and a retry button. Sites that
+          rate-limit get backed off automatically, and readable extraction switches
+          itself off for a site that blocks it rather than filling the reader with
+          empty articles.
       - title: OPML import & export
         desc: >-
           Move your subscriptions in and out, including files compatible with
@@ -51,6 +74,12 @@ categories:
           Feeds that carry only headlines and links leave nothing to read. Such
           articles offer the original page as a button, and can open it in a new
           tab on click if you turn that on.
+      - title: Videos play in the reader
+        desc: >-
+          A YouTube or Vimeo link is saved as the video, with its full description
+          under it. Playing it starts the player in place, and no player is loaded
+          until you press play. The thumbnail is served from your own server, so
+          opening an article never tells the video service your address.
       - title: Adaptive layout
         desc: >-
           Choose a 2- or 3-panel view per screen size, with breakpoints you set
@@ -82,6 +111,16 @@ categories:
         desc: Mark articles read, star favourites, and archive what you want out of the way.
       - title: Labels
         desc: Your own colour-coded tags for sorting articles by hand.
+      - title: Save by URL
+        desc: >-
+          Paste a link to keep an article that is not in any of your feeds. It goes
+          through the same readable extraction, lands in Saved, and is kept until you
+          remove it. Also in the API, so a phone shortcut or a bookmarklet can save
+          a link without opening the app.
+      - title: Share by link
+        desc: >-
+          Hand a single article to someone with no Readfine account. The link reads
+          without signing in and stays live until you revoke it.
 
   - name: Filtering & scoring
     summary: Trim the stream down to what matters.
@@ -98,6 +137,11 @@ categories:
         desc: Restrict any filter to specific feeds or folders.
       - title: Retroactive apply
         desc: Run a filter over existing articles, not just new ones.
+      - title: Duplicates across feeds
+        desc: >-
+          A story that two of your feeds both carry is not put in front of you twice.
+          The first copy stays unread and the later one arrives already marked read,
+          so it is still there if you want it.
       - title: Relevance scoring
         desc: >-
           With an AI key, each incoming article is scored against your interest
@@ -108,7 +152,9 @@ categories:
     summary: Optional AI on your own provider key.
     features:
       - title: Summaries
-        desc: A one-tap summary of any article.
+        desc: >-
+          A one-tap summary of any article, plus an option to have starred articles
+          summarized automatically.
       - title: Chat over articles
         desc: Ask questions about an article and get answers grounded in its text.
       - title: Interest profile

@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import NamedTuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import httpx
 
@@ -34,6 +34,16 @@ RETRYABLE_HTTP_STATUSES = TRANSIENT_HTTP_STATUSES | {403}
 # Statuses a host uses to refuse automated clients, as opposed to reporting a
 # problem with the feed itself.
 _BLOCK_HTTP_STATUSES = frozenset({403, 429})
+
+
+class ResponseTooLarge(Exception):
+    """A response body went past the size cap and was abandoned mid-download.
+
+    Deliberately not a ``ValueError``: that class means "this address is refused"
+    everywhere in this module (bad scheme, private range, blocked redirect), and
+    callers turn it into a message about the address. This one is about what the
+    host sent back, and the address itself may be perfectly fine.
+    """
 
 
 def is_bot_block(status_code: int | None, headers) -> bool:
@@ -231,6 +241,85 @@ def redact_url(url: str) -> str:
     return cleaned
 
 
+# Query parameters whose value is a secret rather than a routing detail. Used by
+# redact_url_for_display only; logging drops the query wholesale and needs no list.
+_SECRET_QUERY_KEYS = frozenset({
+    "access_token", "api_key", "api_secret", "apikey", "auth", "auth_token",
+    "authtoken", "hash", "key", "pass", "passwd", "password", "pw", "secret",
+    "session", "sig", "signature", "token", "user_key", "userkey",
+})
+
+
+def redact_url_for_display(url: str) -> str:
+    """Hide the secrets in a URL while keeping it recognizable on screen.
+
+    Credentials in the netloc (``user:pass@host``) always go. The query string is
+    kept except for the values of parameters that name a secret, because the feed
+    lists are read to tell feeds apart and ``?channel_id=UC…`` is often the only
+    thing that distinguishes two rows on the same host. Logging uses ``redact_url``
+    instead, which drops the whole query, no list of names to keep current.
+
+    Returns the input unchanged when there was nothing to hide, which is also how
+    callers decide whether the URL is still safe to link to.
+    """
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "<unparseable-url>"
+    if not parsed.scheme and not parsed.netloc:
+        return url
+
+    netloc = parsed.netloc.rsplit("@", 1)[-1]
+
+    # Split by hand rather than through parse_qsl: everything that stays must come
+    # back out byte for byte, or an unchanged URL would look changed and lose its link.
+    query = parsed.query
+    if query:
+        parts = []
+        for part in query.split("&"):
+            key = part.split("=", 1)[0]
+            if unquote(key).lower() in _SECRET_QUERY_KEYS:
+                parts.append(f"{key}=<redacted>")
+            else:
+                parts.append(part)
+        query = "&".join(parts)
+
+    if netloc == parsed.netloc and query == parsed.query:
+        return url
+    return urlunparse(parsed._replace(netloc=netloc, query=query))
+
+
+def split_url_credentials(url: str) -> tuple[str, str | None, str | None]:
+    """Separate ``user:pass@`` out of a URL into values fit for the auth columns.
+
+    Returns ``(url, username, password)``, the URL coming back as the same object
+    when it carried no credentials, so a caller can tell at a glance whether anything
+    moved (the convention :func:`redact_url_for_display` uses too).
+
+    Both parts are percent-decoded, because that is what goes on the wire: httpx
+    decodes userinfo before it builds the ``Authorization`` header, so keeping the raw
+    form would change how ``https://user%40mail:pw@host/feed`` authenticates.
+
+    A username with no password comes back paired with ``""`` rather than ``None``.
+    httpx sends Basic auth with an empty password for that URL, and the pair has to
+    survive the move intact or the feed starts answering 401. A bare ``@`` with
+    nothing on either side is not a credential and only costs the ``@`` itself.
+    """
+    try:
+        parsed = urlparse(url)
+        netloc = parsed.netloc
+    except Exception:
+        return url, None, None
+    if "@" not in netloc:
+        return url, None, None
+
+    clean = urlunparse(parsed._replace(netloc=netloc.rsplit("@", 1)[-1]))
+    username, password = parsed.username, parsed.password
+    if not username and not password:
+        return clean, None, None
+    return clean, unquote(username or ""), unquote(password or "")
+
+
 # Rate-limit headers worth recording, in the order they are logged. Each entry is
 # (label, candidate header names) — hosts disagree on the prefix (Reddit sends the
 # x- variants, RFC 9239 drops it), so both spellings are tried.
@@ -424,12 +513,128 @@ def _permanent_redirect_target(original: str, candidate: str) -> str | None:
     return candidate
 
 
+# Ports that need not be spelled out for an origin to be the same one. Used by
+# _origin, which compares hops of a redirect chain.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """The (scheme, host, port) triple that decides who a request is talking to.
+
+    Redirect hops are compared through this rather than by string, so a chain that
+    only adds a path, or spells out the default port, still counts as staying put.
+    """
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    return scheme, (parsed.hostname or "").lower(), parsed.port or _DEFAULT_PORTS.get(scheme)
+
+
+def _keeps_credentials(origin: tuple[str, str, int | None], url: str) -> bool:
+    """True when *url* is still the party the credentials for *origin* were meant for.
+
+    Same origin qualifies, and so does a plain http → https hop on the same host:
+    that is the host upgrading its own address, not handing us to someone else, and
+    it is the shape a feed stored under an ``http://`` address takes on every fetch.
+    httpx makes the same exception in its own redirect handling.
+    """
+    other = _origin(url)
+    if other == origin:
+        return True
+    scheme, host, port = origin
+    return (
+        scheme == "http" and port == _DEFAULT_PORTS["http"]
+        and other[0] == "https" and other[2] == _DEFAULT_PORTS["https"]
+        and other[1] == host
+    )
+
+
+def _max_fetch_bytes() -> int:
+    from app.config import settings
+
+    return settings.max_fetch_bytes
+
+
+def _read_capped(response: httpx.Response, url: str, max_bytes: int) -> bytes:
+    """Read a streamed body, giving up as soon as it goes past *max_bytes*.
+
+    The declared ``Content-Length`` is checked first, which costs nothing and turns
+    away an honest oversized response before a single byte of it is transferred. It
+    cannot be the whole check, though: it is absent on chunked responses and it
+    describes the *compressed* size, so a few hundred kB of gzip can still unpack
+    into gigabytes. The running total below is therefore the real cap — it counts
+    the bytes :meth:`iter_bytes` yields, which are the decompressed ones, i.e. the
+    memory this actually costs us.
+    """
+    declared = response.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes:
+        _too_large(url, max_bytes, f"declared {declared} bytes")
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_bytes():
+        total += len(chunk)
+        if total > max_bytes:
+            _too_large(url, max_bytes, "still going past the cap")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _too_large(url: str, max_bytes: int, detail: str) -> None:
+    """Log which page was abandoned and why, then raise. Never returns.
+
+    The message that travels with the exception says only that a limit was passed:
+    it ends up in a feed's error row and on a saved article, where the reader can do
+    nothing about a server setting. The size and the host go to the log, for whoever
+    can.
+    """
+    logger.warning("response over the %d byte cap (%s): %s", max_bytes, detail, url)
+    # Whole MB for the default and anything like it, kB below that: a cap a
+    # self-hoster tuned down to half a megabyte must not report itself as "0 MB".
+    limit = (
+        f"{max_bytes / (1024 * 1024):g} MB" if max_bytes >= 1024 * 1024
+        else f"{max_bytes // 1024} kB"
+    )
+    raise ResponseTooLarge(f"Response exceeds the {limit} size limit")
+
+
+# Response headers that describe the body *as it travelled*, not as we hand it on:
+# how it was compressed and how many bytes that took. The body has been decompressed
+# on the way in, so a response rebuilt around it must not keep them — httpx would try
+# to gunzip already-plain bytes and fail. It recomputes Content-Length itself.
+_TRANSFER_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def _with_body(response: httpx.Response, body: bytes) -> httpx.Response:
+    """Rebuild *response* around an already-downloaded *body*.
+
+    A streamed response cannot be read once its client is closed, and the body has
+    to be read under the size cap rather than by httpx in one go, so what the caller
+    gets back is assembled here instead of being the object the transport returned.
+    Everything callers read off it is carried over: the status, the request (which
+    ``raise_for_status`` needs), the extensions holding the HTTP version and the
+    server's own reason phrase, and every header except the ones in
+    :data:`_TRANSFER_HEADERS` — including the charset that decodes ``.text``.
+    """
+    headers = [
+        (key, value)
+        for key, value in response.headers.multi_items()
+        if key.lower() not in _TRANSFER_HEADERS
+    ]
+    return httpx.Response(
+        response.status_code,
+        headers=headers,
+        content=body,
+        request=response.request,
+        extensions=response.extensions,
+    )
+
+
 def _get_once_retrying_protocol_error(
     client: httpx.Client,
     logical_url: str,
     connect_url: str,
     host_overlay: dict,
     extensions: dict,
+    auth=None,
 ) -> httpx.Response:
     """GET *connect_url*, retrying once if the connection dies mid-request.
 
@@ -446,11 +651,37 @@ def _get_once_retrying_protocol_error(
 
     The pinned IP from :func:`_pin_connection` is deliberately reused: re-resolving
     for the retry would reopen the DNS-rebinding window the pinning exists to close.
+
+    *auth* is passed per request instead of being set on the client, so the caller can
+    withhold it on a hop that left the origin it was meant for (see
+    :func:`_resolve_response`). ``None`` means "no explicit credentials", which still
+    lets httpx build them from userinfo in the URL, as it does today.
+
+    The body is streamed and read under a size cap rather than being handed over
+    whole by httpx, so a host answering with something enormous costs us the cap and
+    not our memory. Reading it inside the retry, rather than after it, is what makes
+    the retry cover a connection that dies part-way through the body — the same
+    failure the retry exists for, just later in the exchange. The partial body is
+    dropped with the attempt.
     """
+    max_bytes = _max_fetch_bytes()
     for attempt in range(2):
         started = time.monotonic()
         try:
-            response = client.get(connect_url, headers=host_overlay, extensions=extensions)
+            request = client.build_request(
+                "GET", connect_url, headers=host_overlay, extensions=extensions
+            )
+            response = client.send(request, auth=auth, stream=True)
+            try:
+                # A redirect is read for its Location header alone, so its body is
+                # never downloaded: a host that answers 302 with a huge payload
+                # should cost us the header and nothing more.
+                body = (
+                    b"" if response.has_redirect_location
+                    else _read_capped(response, logical_url, max_bytes)
+                )
+            finally:
+                response.close()
         except httpx.RemoteProtocolError as exc:
             log_outbound(logical_url, None, started, error=type(exc).__name__)
             if attempt:
@@ -460,7 +691,7 @@ def _get_once_retrying_protocol_error(
             raise
         else:
             log_outbound(logical_url, response, started)
-            return response
+            return _with_body(response, body)
     raise AssertionError("unreachable")  # pragma: no cover
 
 
@@ -470,22 +701,36 @@ def _resolve_response(
     timeout: int = 30,
     headers: dict | None = None,
     max_redirects: int = _MAX_REDIRECTS,
-) -> tuple[httpx.Response, str | None]:
+) -> tuple[httpx.Response, str | None, str]:
     """Fetch a URL following redirects, validating every hop against SSRF.
 
-    Returns ``(response, permanent_url)``: the final response after
-    ``raise_for_status()``, plus the address the caller may store in place of *url*
+    Returns ``(response, permanent_url, final_url)``: the final response after
+    ``raise_for_status()``, the address the caller may store in place of *url*
     (``None`` when there is nothing safe to adopt — see
-    :func:`_permanent_redirect_target`). A 304 Not Modified is returned without
+    :func:`_permanent_redirect_target`), and the address the chain actually ended at,
+    whatever kind of redirect led there. A 304 Not Modified is returned without
     raising (httpx classifies 304 as a redirect status yet it has no ``Location``,
     so it is treated as a terminal response here, for conditional requests).
+
+    ``final_url`` is not a weaker ``permanent_url``. They answer different questions:
+    what may be *stored* in place of the URL we asked for, versus which page we are
+    *looking at* — and a temporary redirect changes the second without touching the
+    first. Readable extraction needs the second one, to resolve the article's real
+    address and to notice a page that redirected us back where we came from.
 
     ``permanent_url`` tracks the *longest leading run* of 301/308 hops rather than
     requiring the whole chain to be permanent. A host answering ``301`` has stated
     the resource moved for good; whatever a later temporary hop does cannot unsay
     it. Insisting on an all-permanent chain would throw away the most common and
     most valuable case, an http → https hop followed by something temporary.
+
+    ``auth`` is scoped to the origin of *url*. Set on the client it would ride along
+    to wherever a ``Location`` header points, so one 302 from a feed host would hand
+    that host's neighbour the subscriber's Basic auth header. The credentials were
+    given for one host, so they are sent per request and only while the hop is still
+    on it (see :func:`_keeps_credentials`).
     """
+    origin = _origin(url)
     current_url = url
     # Last URL reached through 301/308 hops only; frozen at the first hop that is
     # not permanent, so a temporary redirect never contributes a stored address.
@@ -496,22 +741,35 @@ def _resolve_response(
     # with a header-less 403 / near-zero rate budget (observed on Reddit via Fastly),
     # while serving HTTP/2 clients normally.
     with httpx.Client(
-        timeout=timeout, follow_redirects=False, auth=auth, headers=headers, http2=True
+        timeout=timeout, follow_redirects=False, headers=headers, http2=True
     ) as client:
-        for _ in range(max_redirects + 1):
+        for hop in range(max_redirects + 1):
             # Validate + pin every hop to its resolved IP; connecting to the IP
             # (with the original Host header and HTTPS SNI) removes the re-resolve
             # that would otherwise reopen the DNS-rebinding window.
-            connect_url, host_overlay, extensions = _pin_connection(current_url)
+            try:
+                connect_url, host_overlay, extensions = _pin_connection(current_url)
+            except ValueError as exc:
+                # Whose fault the blocked address is worth saying: the URL the caller
+                # handed us is something the user can fix, a Location header pointing
+                # at a private range is the host's doing.
+                if hop:
+                    raise ValueError(f"Redirect blocked: {exc}") from exc
+                raise
             response = _get_once_retrying_protocol_error(
-                client, current_url, connect_url, host_overlay, extensions
+                client, current_url, connect_url, host_overlay, extensions,
+                auth=auth if _keeps_credentials(origin, current_url) else None,
             )
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.
             if not response.has_redirect_location:
                 if response.status_code != 304:
                     response.raise_for_status()
-                return response, _permanent_redirect_target(url, last_permanent_url)
+                return (
+                    response,
+                    _permanent_redirect_target(url, last_permanent_url),
+                    current_url,
+                )
             redirect_url = response.headers.get("location", "")
             if redirect_url and not redirect_url.startswith(("http://", "https://")):
                 redirect_url = urljoin(current_url, redirect_url)
@@ -527,13 +785,16 @@ def _resolve_response(
 
 
 class PageResponse(NamedTuple):
-    """Body of a fetched page, plus the address it permanently moved to (if any).
+    """Body of a fetched page, plus the two addresses that describe where it came from.
 
     ``permanent_url`` is set only when the caller may safely store it in place of
-    the URL it asked for; ``None`` means keep the original.
+    the URL it asked for; ``None`` means keep the original. ``final_url`` is where
+    the redirect chain ended regardless of what kind of redirects it followed, so it
+    is always set — for a page fetched without redirects it is the requested URL.
     """
     text: str
     permanent_url: str | None
+    final_url: str
 
 
 def fetch_url_page(
@@ -547,10 +808,13 @@ def fetch_url_page(
 
     Use this over :func:`fetch_url_with_ssrf_check` wherever the fetched URL is
     *stored* (feed rows), so a moved feed stops walking its redirect chain on
-    every poll.
+    every poll, or wherever the page has to be read in the context of the address
+    it was really served from (readable extraction).
     """
-    response, permanent_url = _resolve_response(url, auth, timeout, headers, max_redirects)
-    return PageResponse(response.text, permanent_url)
+    response, permanent_url, final_url = _resolve_response(
+        url, auth, timeout, headers, max_redirects
+    )
+    return PageResponse(response.text, permanent_url, final_url)
 
 
 def fetch_url_with_ssrf_check(
@@ -562,6 +826,40 @@ def fetch_url_with_ssrf_check(
 ) -> str:
     """Synchronous HTTP fetch with SSRF-safe redirect validation on every hop."""
     return fetch_url_page(url, auth, timeout, headers, max_redirects).text
+
+
+class BytesResponse(NamedTuple):
+    """A fetched body as raw bytes, with the content type the server declared.
+
+    The text-returning fetchers above decode the body to ``str``; an image must not
+    be decoded, so this returns the bytes as they arrived. Everything else — SSRF
+    validation on every hop, IP pinning and the decompressed-size cap — is the same,
+    because it all lives in :func:`_resolve_response`.
+    """
+    content: bytes
+    content_type: str
+    final_url: str
+
+
+def fetch_url_bytes(
+    url: str,
+    timeout: int = 30,
+    headers: dict | None = None,
+    max_redirects: int = _MAX_REDIRECTS,
+) -> BytesResponse:
+    """SSRF-safe fetch that returns the body as bytes (for images and the like).
+
+    No ``auth`` parameter: the callers that need this fetch public assets (video
+    thumbnails), never a credentialed origin, so there is nothing to scope.
+    """
+    response, _permanent_url, final_url = _resolve_response(
+        url, None, timeout, headers, max_redirects
+    )
+    return BytesResponse(
+        response.content,
+        response.headers.get("content-type", ""),
+        final_url,
+    )
 
 
 class ConditionalResponse(NamedTuple):
@@ -607,7 +905,7 @@ def fetch_url_conditional(
         request_headers["If-None-Match"] = etag
     if last_modified:
         request_headers["If-Modified-Since"] = last_modified
-    response, permanent_url = _resolve_response(
+    response, permanent_url, _final_url = _resolve_response(
         url, auth, timeout, request_headers, max_redirects
     )
     new_etag = response.headers.get("etag")

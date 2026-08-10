@@ -1,0 +1,26 @@
+{#- The invisible ticker that keeps a saved article's list row up to date.
+
+    Such a row is inserted under a placeholder title (the pasted address) and only
+    learns its real one when extraction finishes, which happens after the row was
+    rendered. This polls until then; the endpoint answers with itself while the
+    extraction runs and with the rebuilt row once it is done, retargeted at the row,
+    so the polling stops with the swap.
+
+    A macro because the poll endpoint has to emit the very same element to keep the
+    loop going, and an element that hands itself back must be defined once or the two
+    copies will disagree about the interval, the target or the click guard.
+
+    Scoped by its callers to articles with no feed: a feed article already has its
+    title from the feed, so its row would poll for a change that never comes.
+
+    Both values are url-encoded: the poll endpoint echoes back whatever it was given,
+    so one of them arriving with an & in it would otherwise split into a parameter of
+    its own on the next tick. -#}
+{%- macro row_poll(article_id, density, label_display) -%}
+<div id="row-poll-{{ article_id }}"
+     hx-get="/htmx/articles/{{ article_id }}/row-poll?density={{ density|urlencode }}&amp;label_display={{ label_display|urlencode }}"
+     hx-trigger="every 2s"
+     hx-swap="outerHTML"
+     data-stop-propagation
+     class="hidden"></div>
+{%- endmacro -%}

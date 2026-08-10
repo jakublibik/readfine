@@ -18,26 +18,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.settings import AppSettings
+from app.services.article import permanently_kept_exists
 
 logger = logging.getLogger(__name__)
 
 _SNIPPET_CHARS = 300  # profile snippet length kept on trim
 
+# How long a fetch-failure log is kept. Comfortably past the 30-day window the admin
+# dashboard reports over, so trimming the table never removes a row it would show.
+FETCH_LOG_RETENTION_DAYS = 90
+
 
 # ── retention predicates (correlated EXISTS on the current Article) ───────────
 
 def _fully_protected_exists():
-    """True when some user keeps this article FULL forever (starred or archived).
-    Never trimmed nor age-deleted."""
-    return (
-        select(UserArticleState.article_id)
-        .where(
-            UserArticleState.article_id == Article.id,
-            (UserArticleState.is_starred == True)  # noqa: E712
-            | (UserArticleState.is_archived == True),  # noqa: E712
-        )
-        .exists()
-    )
+    """True when some user keeps this article FULL forever (starred, archived or saved).
+    Never trimmed nor age-deleted.
+
+    Saved-by-URL articles are kept indefinitely on purpose, with no TTL and no cap:
+    pasting a URL by hand is the most explicit thing a reader can do, so Saved must not
+    be the one place where content quietly expires. Like starred/archived this is
+    any-user semantics, so one person saving an article pins the row for the instance.
+    Un-saving re-exposes it to purge, which is the intended way out.
+
+    The predicate itself is shared with feed deletion, which has to keep exactly the
+    same articles alive; see ``services.article.permanently_kept_exists``."""
+    return permanently_kept_exists()
 
 
 def _engaged_exists():
@@ -267,3 +273,26 @@ async def purge_old_articles(db: AsyncSession) -> int:
         total_deleted, age_deleted, count_deleted, t2_deleted, total_trimmed,
     )
     return total_deleted
+
+
+async def purge_old_fetch_logs(db: AsyncSession) -> int:
+    """Delete fetch-failure logs older than the retention horizon. Returns the count.
+
+    Nothing else pruned this table, so a feed that keeps failing wrote a row per
+    attempt and kept it forever. Both readers stop well short of the horizon: the
+    admin dashboard groups the last 30 days and /admin/fetch-logs shows the newest
+    100, so nothing on screen depends on rows this old.
+
+    Not admin-configurable on purpose. It is an operational log, not user content,
+    and there is no reason to tune it per instance.
+    """
+    from app.models.fetch_log import FetchLog
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=FETCH_LOG_RETENTION_DAYS)
+    res = await db.execute(delete(FetchLog).where(FetchLog.failed_at < cutoff))
+    deleted = res.rowcount or 0
+    await db.commit()
+    if deleted:
+        logger.info("Purge: deleted %d fetch log rows older than %d days",
+                    deleted, FETCH_LOG_RETENTION_DAYS)
+    return deleted

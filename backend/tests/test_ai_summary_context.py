@@ -56,6 +56,7 @@ def make_state(**kwargs):
         "user_id": 1,
         "article_id": 10,
         "ai_summary": None,
+        "ai_summary_truncated": False,
         "ai_context": None,
     }
     defaults.update(kwargs)
@@ -106,7 +107,7 @@ class TestHtmxAiSummaryTrigger:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=("This is the summary.", None)),
+            new=AsyncMock(return_value=("This is the summary.", False, None)),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200
@@ -117,7 +118,7 @@ class TestHtmxAiSummaryTrigger:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=(None, "Rate limit exceeded")),
+            new=AsyncMock(return_value=(None, False, "Rate limit exceeded")),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200
@@ -128,11 +129,13 @@ class TestHtmxAiSummaryTrigger:
 # ── GET /htmx/articles/{id}/ai-summary/poll ──────────────────────────────────
 
 class TestHtmxAiSummaryPoll:
-    def test_no_job_returns_spinner(self, client, mock_db):
+    def test_no_job_stops_polling(self, client, mock_db):
+        # Cancelled (unstarred) or never queued — the spinner must not keep spinning.
         mock_db.scalar = AsyncMock(return_value=None)
         resp = client.get("/htmx/articles/10/ai-summary/poll")
         assert resp.status_code == 200
-        assert "hx-get" in resp.text  # spinner has poll trigger
+        assert "hx-get" not in resp.text
+        assert 'id="ai-summary-10"' in resp.text
 
     def test_pending_job_returns_spinner(self, client, mock_db):
         mock_db.scalar = AsyncMock(return_value=make_job(status="pending"))
@@ -278,7 +281,7 @@ class TestAiErrorXSSEscaping:
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
             "app.services.ai_summary_service.run_summary_on_demand",
-            new=AsyncMock(return_value=(None, payload)),
+            new=AsyncMock(return_value=(None, False, payload)),
         ):
             resp = client.post("/htmx/articles/10/ai-summary")
         assert resp.status_code == 200

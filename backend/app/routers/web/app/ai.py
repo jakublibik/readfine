@@ -13,10 +13,10 @@ from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
-from app.models.feed import UserFeed
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally, normalize_content
+from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
 
 router = APIRouter(tags=["web-app"])
@@ -24,19 +24,8 @@ router = APIRouter(tags=["web-app"])
 
 async def _get_article_access(user: User, article_id: int, db: AsyncSession):
     """Return Article ORM object if user has access, else None."""
-    stmt = (
-        select(Article)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
+    stmt = add_article_access_joins(select(Article), user.id).where(
+        Article.id == article_id, article_access_predicate()
     )
     return (await db.execute(stmt)).scalar_one_or_none()
 
@@ -47,8 +36,8 @@ def _ai_macros():
     return templates.env.get_template("app/partials/ai_blocks.html").module
 
 
-def _ai_summary_block(article_id: int, summary: str) -> str:
-    return str(_ai_macros().ai_summary(article_id, summary))
+def _ai_summary_block(article_id: int, summary: str, truncated: bool = False) -> str:
+    return str(_ai_macros().ai_summary(article_id, summary, truncated))
 
 
 def _ai_context_block(article_id: int, context: str) -> str:
@@ -132,13 +121,13 @@ async def htmx_ai_summary_trigger(
     article, settings, content_text = guard
 
     from app.services.ai_summary_service import run_summary_on_demand
-    summary, error = await run_summary_on_demand(article, user.id, db)
+    summary, truncated, error = await run_summary_on_demand(article, user.id, db)
     if summary is None:
         msg = html_module.escape(error) if error else "Summary unavailable."
         return HTMLResponse(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
-    return HTMLResponse(_ai_summary_block(article_id, summary))
+    return HTMLResponse(_ai_summary_block(article_id, summary, truncated))
 
 
 @router.get("/htmx/articles/{article_id}/ai-summary/poll", response_class=HTMLResponse)
@@ -156,7 +145,12 @@ async def htmx_ai_summary_poll(
         )
     )
 
-    if job is None or job.status == "pending":
+    if job is None:
+        # No job (never queued, or cancelled by unstarring) — stop polling instead
+        # of spinning forever on a summary that is not coming.
+        return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
+
+    if job.status == "pending":
         return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
 
     if job.status == "failed":
@@ -172,7 +166,9 @@ async def htmx_ai_summary_poll(
         )
     )
     if state and state.ai_summary:
-        return HTMLResponse(_ai_summary_block(article_id, state.ai_summary))
+        return HTMLResponse(
+            _ai_summary_block(article_id, state.ai_summary, state.ai_summary_truncated)
+        )
 
     return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
 

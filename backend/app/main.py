@@ -153,6 +153,11 @@ def create_app() -> FastAPI:
             f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
             "img-src * data:; "
             "style-src 'self' 'unsafe-inline'; "
+            # The two video players an article body can hold, and nothing else that
+            # frames. Both are only ever loaded after a click on the thumbnail, and
+            # both are framed, not scripted: no player API script is loaded, so
+            # script-src stays as tight as it was.
+            "frame-src https://www.youtube-nocookie.com https://player.vimeo.com; "
             "connect-src 'self';"
         )
         # Authenticated HTML (full pages and HTMX partials) must never be cached: on

@@ -78,19 +78,31 @@ async def htmx_sidebar(
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
+    # Every counter here joins Article for trimmed_at IS NULL, the same filter
+    # list_articles applies, so a badge can never stand above a list that opens onto
+    # fewer rows. Retention cannot trim an article while it is starred, archived or
+    # saved (purge_service._fully_protected_exists), but the reverse reaches it: a
+    # stub trimmed overnight can still be starred from a list rendered before the
+    # trim, and the resulting drift never heals on its own.
     uas_row = (await db.execute(
         select(
             func.count().filter(UserArticleState.is_starred == True).label("starred"),
             func.count().filter((UserArticleState.is_starred == True) & (UserArticleState.is_read == False)).label("unread_starred"),
             func.count().filter(UserArticleState.is_archived == True).label("archived"),
             func.count().filter((UserArticleState.is_archived == True) & (UserArticleState.is_read == False)).label("unread_archived"),
+            func.count().filter(UserArticleState.saved_at.is_not(None)).label("saved"),
+            func.count().filter((UserArticleState.saved_at.is_not(None)) & (UserArticleState.is_read == False)).label("unread_saved"),
         )
-        .where(UserArticleState.user_id == user.id)
+        .select_from(UserArticleState)
+        .join(Article, Article.id == UserArticleState.article_id)
+        .where(UserArticleState.user_id == user.id, Article.trimmed_at.is_(None))
     )).one()
     nav_starred = uas_row.starred or 0
     nav_unread_starred = uas_row.unread_starred or 0
     nav_archived = uas_row.archived or 0
     nav_unread_archived = uas_row.unread_archived or 0
+    nav_saved = uas_row.saved or 0
+    nav_unread_saved = uas_row.unread_saved or 0
     nav_labeled = (await db.execute(
         select(func.count(func.distinct(ArticleLabel.article_id)))
         .select_from(ArticleLabel)
@@ -193,6 +205,8 @@ async def htmx_sidebar(
         "nav_unread_starred": nav_unread_starred,
         "nav_archived": nav_archived,
         "nav_unread_archived": nav_unread_archived,
+        "nav_saved": nav_saved,
+        "nav_unread_saved": nav_unread_saved,
         "nav_labeled": nav_labeled,
         "nav_unread_labeled": nav_unread_labeled,
         "label_unread_counts": label_unread_counts,
@@ -210,6 +224,7 @@ async def htmx_mark_articles_read(
     before: str = Form(...),
     starred_only: str = Form(""),
     archived_only: str = Form(""),
+    saved_only: str = Form(""),
     labeled_only: str = Form(""),
     label_id: str = Form(""),
     user: User = Depends(get_current_user),
@@ -223,11 +238,15 @@ async def htmx_mark_articles_read(
         user, db, before=before_dt,
         starred_only=starred_only == "1",
         archived_only=archived_only == "1",
+        saved_only=saved_only == "1",
         labeled_only=labeled_only == "1",
         label_id=int(label_id) if label_id else None,
     )
     lid = int(label_id) if label_id else None
-    total = await _mark_read_total(user, db, starred_only == "1", archived_only == "1", labeled_only == "1", lid)
+    total = await _mark_read_total(
+        user, db, starred_only == "1", archived_only == "1", saved_only == "1",
+        labeled_only == "1", lid,
+    )
     resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
@@ -289,34 +308,57 @@ def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) ->
 
 async def _mark_read_total(
     user: User, db: AsyncSession,
-    starred_only: bool, archived_only: bool, labeled_only: bool,
+    starred_only: bool, archived_only: bool, saved_only: bool, labeled_only: bool,
     label_id: int | None,
 ) -> int:
+    """How many articles the ✓ on a sidebar row covers, for the badge next to it.
+
+    Every branch filters ``Article.trimmed_at IS NULL``, the same as the counters in
+    htmx_sidebar and the same as list_articles: a retention stub is hidden in the
+    list and in the badge, so counting it here would leave the two numbers on one
+    row disagreeing.
+    """
+    async def _states(*conditions) -> int:
+        return (await db.execute(
+            select(func.count())
+            .select_from(UserArticleState)
+            .join(Article, Article.id == UserArticleState.article_id)
+            .where(
+                UserArticleState.user_id == user.id,
+                Article.trimmed_at.is_(None),
+                *conditions,
+            )
+        )).scalar() or 0
+
     if starred_only:
-        return (await db.execute(
-            select(func.count()).select_from(UserArticleState)
-            .where(UserArticleState.user_id == user.id, UserArticleState.is_starred == True)
-        )).scalar() or 0
+        return await _states(UserArticleState.is_starred == True)
     if archived_only:
-        return (await db.execute(
-            select(func.count()).select_from(UserArticleState)
-            .where(UserArticleState.user_id == user.id, UserArticleState.is_archived == True)
-        )).scalar() or 0
+        return await _states(UserArticleState.is_archived == True)
+    if saved_only:
+        return await _states(UserArticleState.saved_at.is_not(None))
     if label_id is not None:
         return (await db.execute(
             select(func.count(ArticleLabel.article_id))
-            .where(ArticleLabel.user_id == user.id, ArticleLabel.label_id == label_id)
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(
+                ArticleLabel.user_id == user.id,
+                ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
+            )
         )).scalar() or 0
     if labeled_only:
         return (await db.execute(
-            select(func.count()).select_from(
-                select(ArticleLabel.article_id).where(ArticleLabel.user_id == user.id).distinct().subquery()
-            )
+            select(func.count(func.distinct(ArticleLabel.article_id)))
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
         )).scalar() or 0
     # All articles
     return (await db.execute(
         select(func.count(Article.id))
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .where(Article.trimmed_at.is_(None))
     )).scalar() or 0
 
 

@@ -104,7 +104,6 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> 
 async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession) -> None:
     """Enqueue + immediately process scoring → AI filters → summary for one article+user."""
     from app.services.ai_scoring_service import enqueue_scoring_job
-    from app.services.ai_summary_service import enqueue_summary_job
 
     # 1. scoring
     enqueued = await enqueue_scoring_job(article, user_id, db)
@@ -127,19 +126,34 @@ async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession)
     await _run_ai_filters_now(article, user_id, db)
 
     # 3. auto-summary — only if enabled AND article is starred by this user
-    s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
-    if s and s.ai_summary_enabled_default:
-        state = await db.scalar(
-            select(UserArticleState).where(
-                UserArticleState.user_id == user_id,
-                UserArticleState.article_id == article.id,
-            )
-        )
-        if state and state.is_starred:
-            if await enqueue_summary_job(article, user_id, db):
-                await _run_summary_now(article, user_id, db)
+    await maybe_enqueue_starred_summary(article, user_id, db)
 
     logger.info("pipeline: article=%d user=%d done", article.id, user_id)
+
+
+async def maybe_enqueue_starred_summary(
+    article: Article, user_id: int, db: AsyncSession
+) -> None:
+    """Auto-summarize, but only when the user opted in *and* the article is starred.
+
+    Shared with the save-by-URL path so a saved article follows exactly the same rule
+    as a feed article: no policy of its own, no separate setting. A filter that stars
+    it is what triggers the summary.
+    """
+    from app.services.ai_summary_service import enqueue_summary_job
+
+    s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+    if not (s and s.ai_summary_enabled_default):
+        return
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id == article.id,
+        )
+    )
+    if state and state.is_starred:
+        if await enqueue_summary_job(article, user_id, db):
+            await _run_summary_now(article, user_id, db)
 
 
 async def run_pipeline_for_article_all_users(article: Article, db: AsyncSession) -> None:

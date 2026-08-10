@@ -11,6 +11,13 @@
     <span class="font-medium">Last AI error</span>
     ({{ s.last_ai_error_at.strftime("%Y-%m-%d %H:%M") }} UTC):
     {{ s.last_ai_error }}
+    {% if error_article_title %}
+    <div class="mt-1 text-xs text-red-600">
+      While processing
+      <a href="/app?open_article_id={{ s.last_ai_error_article_id }}"
+         class="underline hover:text-red-800">{{ error_article_title|truncate(80) }}</a>
+    </div>
+    {% endif %}
   </div>
   <button hx-post="/settings/ai/dismiss-error"
           hx-target="#ai-error-panel"

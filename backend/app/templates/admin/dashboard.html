@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "admin/partials/feed_status.html" import status_badge %}
 {% block title %}Admin – Readfine{% endblock %}
 {% set active = "dashboard" %}
 
@@ -8,98 +9,160 @@
   <span class="text-xs text-gray-400">Readfine v{{ app_version }}</span>
 </div>
 
-
-<div class="grid grid-cols-2 gap-4 mb-8 sm:grid-cols-4">
+<div class="grid grid-cols-2 gap-4 mb-6 sm:grid-cols-4">
   <a href="/admin/users" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-2xl font-bold text-gray-900">{{ stats.user_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Users <span class="text-gray-400">({{ stats.active_user_count|num }} active)</span></div>
   </a>
   <a href="/admin/feeds" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-2xl font-bold text-gray-900">{{ stats.feed_count|num }}</div>
-    <div class="text-sm text-gray-500 mt-1">Feeds
-      {% if stats.error_feed_count %}<span class="text-red-500">({{ stats.error_feed_count|num }} errors)</span>{% endif %}
-    </div>
+    <div class="text-sm text-gray-500 mt-1">Feeds</div>
   </a>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
     <div class="text-2xl font-bold text-gray-900">{{ stats.article_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Articles</div>
   </div>
+  <a href="/admin/feeds" class="bg-white border {{ 'border-red-200' if stats.error_feed_count else 'border-gray-200' }} rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
+    <div class="text-2xl font-bold {{ 'text-red-600' if stats.error_feed_count else 'text-gray-900' }}">{{ stats.error_feed_count|num }}</div>
+    <div class="text-sm text-gray-500 mt-1">Feeds in error <span class="text-gray-400">now</span></div>
+  </a>
 </div>
 
-{% if stats.readable_pending or stats.readable_failed %}
-<div class="flex items-center gap-4 mb-6">
-  {% if stats.readable_pending %}
-  <span class="text-sm text-gray-500">Readable extraction: <strong class="text-gray-700">{{ stats.readable_pending|num }}</strong> pending</span>
-  {% endif %}
-  {% if stats.readable_failed %}
-  <span class="text-sm text-red-500">{{ stats.readable_failed|num }} failed</span>
-  {% endif %}
+{# One row saying what needs a look, in the order the sections appear below. Built as
+   a list so an all-clear instance gets a single line instead of five empty tables.
+
+   The first pill is the exception: disabled feeds have no section here, because the
+   list would never clear itself (a feed whose site is gone stays disabled until an
+   admin deals with it) and a permanent table is what this dashboard was reordered to
+   get rid of. It leads to the feeds table, where the actions live. It goes first all
+   the same: fetching has stopped for good, and nothing retries it. #}
+{% set attention = [
+  {"count": stats.disabled_feed_count, "one": "feed has fetching switched off",
+   "label": "feeds have fetching switched off", "href": "/admin/feeds",
+   "cls": "border-red-200 bg-red-50 text-red-700"},
+  {"count": stats.fetch_error_feed_total, "one": "feed failed to fetch",
+   "label": "feeds failed to fetch", "href": "#fetch-errors",
+   "cls": "border-red-200 bg-red-50 text-red-700"},
+  {"count": stats.redirect_conflicts|length, "one": "redirect conflict",
+   "label": "redirect conflicts", "href": "#redirect-conflicts",
+   "cls": "border-amber-200 bg-amber-50 text-amber-700"},
+  {"count": stats.briefing_errors|length, "one": "briefing error",
+   "label": "briefing errors", "href": "#briefing-errors",
+   "cls": "border-red-200 bg-red-50 text-red-700"},
+  {"count": stats.auto_profile_errors|length, "one": "interest profile error",
+   "label": "interest profile errors", "href": "#profile-errors",
+   "cls": "border-amber-200 bg-amber-50 text-amber-700"},
+  {"count": stats.readable_failed_recent_total, "one": "article failed extraction",
+   "label": "articles failed extraction", "href": "#readable",
+   "cls": "border-amber-200 bg-amber-50 text-amber-700"},
+] | selectattr("count") | list %}
+
+{% if attention %}
+{# No heading above these: each pill already reads as a sentence, and a label sitting
+   in the same wrapping row made the pills jump about on a narrow screen. #}
+<div class="flex flex-wrap items-center gap-2 mb-8">
+  {% for item in attention %}
+  <a href="{{ item.href }}" class="px-2.5 py-1 text-sm rounded-full border {{ item.cls }} hover:shadow-sm transition-all">
+    <strong class="tabular-nums">{{ item.count|num }}</strong> {{ item.one if item.count == 1 else item.label }}
+  </a>
+  {% endfor %}
 </div>
+{% else %}
+<p class="text-sm text-gray-400 mb-8">All clear: no feeds with fetching switched off, no fetch errors, redirect conflicts, briefing or interest profile failures, and no failed readable extraction in the last 30 days.</p>
 {% endif %}
 
-{% if stats.readable_pending_recent %}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Pending readable extraction</h2>
+{# ── Fetch errors ─────────────────────────────────────────────────────────── #}
+<div class="flex items-baseline justify-between gap-3 mb-1 scroll-mt-4" id="fetch-errors">
+  <h2 class="text-sm font-semibold text-gray-700">Feeds with fetch errors <span class="font-normal text-gray-400">(last 30 days)</span></h2>
+  <a href="/admin/fetch-logs" class="text-xs text-blue-600 hover:underline whitespace-nowrap">Full fetch log</a>
+</div>
+{% if stats.fetch_error_feeds %}
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  One row per feed, newest failure first. Status is the feed's state right now, so a feed
+  that has fetched fine since its last logged failure reads as active, and one whose last
+  fetch the site refused reads as throttled from the first refusal. The counts are failed
+  attempts in each window.
+</p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  <table class="w-full min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Article</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-28">Status</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Next retry</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 24 hours">24h</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 7 days">7d</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 30 days">30d</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Last failure</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
-      {% for article in stats.readable_pending_recent %}
+      {% for row in stats.fetch_error_feeds %}
+      {% set f = row.feed %}
       <tr>
-        <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ article.feed.title if article.feed else "—" }}</td>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">
-          {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+        <td class="px-4 py-2 max-w-xs">
+          <div class="text-gray-700 truncate" title="{{ f.title }}">{{ f.title }}</div>
+          {# Same redaction as the Feeds table: a feed URL can carry a token or HTTP
+             credentials, and this list spans every user's feeds. #}
+          <div class="text-xs text-gray-400 truncate">{{ f.feed_url | redact_url_display }}</div>
         </td>
-        <td class="px-4 py-2 text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 text-red-500 truncate max-w-xs">{{ article.readable_error or "—" }}</td>
+        {# threshold=1: every row here is on screen because a fetch failed, so there is
+           no healthy feed to false-alarm. A refused fetch says "throttled" from the
+           first one instead of a green "active" sitting next to its own error. #}
+        <td class="px-4 py-2">{{ status_badge(f, with_count=true, threshold=1) }}</td>
+        {# No separate status column: a log carries http_status exactly when the
+           failure was an HTTP status error, and that message already opens with
+           "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
+        <td class="px-4 py-2 text-red-600 max-w-xs truncate" title="{{ row.error_message }}">{{ row.error_message }}</td>
+        <td class="px-2 py-2 text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
+        <td class="px-2 py-2 text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
+        <td class="px-2 py-2 text-right tabular-nums text-gray-500">{{ row.fails }}</td>
         <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          {% if article.readable_next_retry_at %}
-            <time datetime="{{ article.readable_next_retry_at.isoformat() }}">{{ article.readable_next_retry_at | utctime('short') }}</time>
-          {% else %}—{% endif %}
+          <time datetime="{{ row.last_failed_at.isoformat() }}">{{ row.last_failed_at | utctime('short') }}</time>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+  {% if stats.fetch_error_feed_total > stats.fetch_error_feeds|length %}
+  <div class="px-4 py-2 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+    Showing {{ stats.fetch_error_feeds|length }} of {{ stats.fetch_error_feed_total|num }} feeds that failed in the last 30 days.
+  </div>
+  {% endif %}
 </div>
+{% else %}
+<p class="text-sm text-gray-400 mb-8">No fetch errors.</p>
 {% endif %}
 
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent readable extraction failures <span class="font-normal text-gray-400">(last 30 days)</span></h2>
-{% if stats.readable_failed_recent %}
+{# ── Redirect conflicts ───────────────────────────────────────────────────── #}
+{% if stats.redirect_conflicts %}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 scroll-mt-4" id="redirect-conflicts">Feed redirect conflicts</h2>
+<p class="text-xs text-gray-400 mb-3 max-w-2xl">
+  These feeds permanently redirect to a URL another feed already occupies, so the
+  address cannot be updated and the feed re-walks its redirect on every fetch. Merge
+  the pair by hand: move the subscribers to the target feed and remove this one.
+</p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Article</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Redirects to</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Held by</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Detected</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
-      {% for article in stats.readable_failed_recent %}
+      {% for c in stats.redirect_conflicts %}
       <tr>
-        <td class="px-4 py-2 text-gray-500 truncate max-w-xs">{{ article.feed.title if article.feed else "—" }}</td>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">
-          {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
-        </td>
-        <td class="px-4 py-2 text-red-500 truncate max-w-xs">{{ article.readable_error or "—" }}</td>
-        <td class="px-4 py-2 text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          {% if article.readable_failed_at %}
-            <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at | utctime('short') }}</time>
-          {% else %}—{% endif %}
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.feed_title }} <span class="text-xs text-gray-400">#{{ c.feed_id }}</span></td>
+        <td class="px-4 py-2 text-gray-500 truncate max-w-xs" title="{{ c.target_url }}">{{ c.target_url }}</td>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.holder_title }} <span class="text-xs text-gray-400">#{{ c.holder_id }}</span></td>
+        <td class="px-4 py-2 whitespace-nowrap">
+          <time class="text-gray-400" datetime="{{ c.detected_at.isoformat() }}">{{ c.detected_at | utctime('short') }}</time>
         </td>
       </tr>
       {% endfor %}
@@ -107,77 +170,12 @@
   </table>
   </div>
 </div>
-{% else %}
-<p class="text-sm text-gray-400 mb-8">No readable extraction failures.</p>
 {% endif %}
 
-{% if stats.readable_revived_recent or stats.readable_revival_pending %}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Readable extraction revival
-  {% if stats.readable_revival_pending %}<span class="font-normal text-gray-400">({{ stats.readable_revival_pending|num }} feed{{ "s" if stats.readable_revival_pending != 1 }} awaiting a probe)</span>{% endif %}
-</h2>
-{% if stats.readable_revived_recent %}
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
-  <div class="overflow-x-auto">
-  <table class="w-full text-sm">
-    <thead class="bg-gray-50 border-b border-gray-200">
-      <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Probes used</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Re-enabled</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-100">
-      {% for feed in stats.readable_revived_recent %}
-      <tr>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">{{ feed.title }}</td>
-        <td class="px-4 py-2 text-gray-400">{{ feed.readable_revival_attempts }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          <time datetime="{{ feed.readable_revived_at.isoformat() }}">{{ feed.readable_revived_at | utctime('short') }}</time>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-</div>
-{% else %}
-<p class="text-sm text-gray-400 mb-8">No feeds revived in the last 30 days.</p>
-{% endif %}
-{% endif %}
-
-<h2 class="text-sm font-semibold text-gray-700 mb-3">Recent fetch errors <span class="font-normal text-gray-400">(last 30 days)</span></h2>
-{% if stats.recent_errors %}
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
-  <div class="overflow-x-auto">
-  <table class="w-full text-sm">
-    <thead class="bg-gray-50 border-b border-gray-200">
-      <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-gray-100">
-      {% for log in stats.recent_errors %}
-      <tr>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ log.feed.title if log.feed else "—" }}</td>
-        <td class="px-4 py-2 text-red-600 truncate max-w-sm">{{ log.error_message }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
-          <time datetime="{{ log.failed_at.isoformat() }}">{{ log.failed_at | utctime('short') }}</time>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  </div>
-</div>
-{% else %}
-<p class="text-sm text-gray-400">No recent fetch errors.</p>
-{% endif %}
-
-<h2 class="text-sm font-semibold text-gray-700 mb-3 mt-8">Briefing errors</h2>
+{# ── Briefing errors ──────────────────────────────────────────────────────── #}
 {% if stats.briefing_errors %}
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+<h2 class="text-sm font-semibold text-gray-700 mb-3 scroll-mt-4" id="briefing-errors">Briefing errors</h2>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
@@ -214,18 +212,17 @@
   </table>
   </div>
 </div>
-{% else %}
-<p class="text-sm text-gray-400">No briefing errors.</p>
 {% endif %}
 
+{# ── Interest profile errors ──────────────────────────────────────────────── #}
 {% if stats.auto_profile_errors %}
-<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Interest profile generation errors</h2>
+<h2 class="text-sm font-semibold text-gray-700 mb-1 scroll-mt-4" id="profile-errors">Interest profile generation errors</h2>
 <p class="text-xs text-gray-400 mb-3 max-w-2xl">
   Scheduled interest-profile regeneration failed and has not recovered. The cause is
   usually the user's own API key or credit; a schedule shown as off turned itself off
   after repeated failures and will not retry.
 </p>
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
@@ -266,32 +263,119 @@
 </div>
 {% endif %}
 
-{% if stats.redirect_conflicts %}
-<h2 class="text-sm font-semibold text-gray-700 mb-1 mt-8">Feed redirect conflicts</h2>
-<p class="text-xs text-gray-400 mb-3 max-w-2xl">
-  These feeds permanently redirect to a URL another feed already occupies, so the
-  address cannot be updated and the feed re-walks its redirect on every fetch. Merge
-  the pair by hand: move the subscribers to the target feed and remove this one.
+{# ── Readable extraction ──────────────────────────────────────────────────── #}
+<h2 class="text-sm font-semibold text-gray-700 mb-1 scroll-mt-4" id="readable">Readable extraction</h2>
+<p class="text-xs text-gray-400 mb-3">
+  {{ stats.readable_pending|num }} article{{ "s" if stats.readable_pending != 1 }} waiting for a retry,
+  {{ stats.readable_failed|num }} given up on (all time).
 </p>
-<div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
+
+<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Failed <span class="font-normal normal-case tracking-normal text-gray-400">(last 30 days)</span></h3>
+{% if stats.readable_failed_recent %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
+  <div class="overflow-x-auto">
+  <table class="w-full table-fixed min-w-[48rem] text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for article in stats.readable_failed_recent %}
+      <tr>
+        <td class="px-4 py-2 align-top">
+          <div class="text-gray-700 truncate" title="{{ article.title }}">
+            {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+          </div>
+          <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
+        </td>
+        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
+        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+          {% if article.readable_failed_at %}
+            <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at | utctime('short') }}</time>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if stats.readable_failed_recent_total > stats.readable_failed_recent|length %}
+  <div class="px-4 py-2 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+    Showing {{ stats.readable_failed_recent|length }} of {{ stats.readable_failed_recent_total|num }} articles that failed in the last 30 days.
+  </div>
+  {% endif %}
+</div>
+{% else %}
+<p class="text-sm text-gray-400 mb-6">No failures in the last 30 days.</p>
+{% endif %}
+
+{% if stats.readable_pending_recent %}
+<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Pending <span class="font-normal normal-case tracking-normal text-gray-400">(most retried first)</span></h3>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
+  <div class="overflow-x-auto">
+  <table class="w-full table-fixed min-w-[48rem] text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Next retry</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for article in stats.readable_pending_recent %}
+      <tr>
+        <td class="px-4 py-2 align-top">
+          <div class="text-gray-700 truncate" title="{{ article.title }}">
+            {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
+          </div>
+          <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
+        </td>
+        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
+        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+          {% if article.readable_next_retry_at %}
+            <time datetime="{{ article.readable_next_retry_at.isoformat() }}">{{ article.readable_next_retry_at | utctime('short') }}</time>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if stats.readable_pending > stats.readable_pending_recent|length %}
+  <div class="px-4 py-2 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+    Showing {{ stats.readable_pending_recent|length }} of {{ stats.readable_pending|num }} articles waiting for a retry.
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if stats.readable_revived_recent or stats.readable_revival_pending %}
+<h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Feeds revived <span class="font-normal normal-case tracking-normal text-gray-400">(last 30 days)</span></h3>
+{% if stats.readable_revived_recent %}
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden {{ 'mb-3' if stats.readable_revival_pending else 'mb-8' }}">
   <div class="overflow-x-auto">
   <table class="w-full text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Redirects to</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Held by</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Detected</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Probes used</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Re-enabled</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
-      {% for c in stats.redirect_conflicts %}
+      {% for feed in stats.readable_revived_recent %}
       <tr>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.feed_title }} <span class="text-xs text-gray-400">#{{ c.feed_id }}</span></td>
-        <td class="px-4 py-2 text-gray-500 truncate max-w-xs" title="{{ c.target_url }}">{{ c.target_url }}</td>
-        <td class="px-4 py-2 text-gray-700 truncate max-w-xs">{{ c.holder_title }} <span class="text-xs text-gray-400">#{{ c.holder_id }}</span></td>
-        <td class="px-4 py-2 whitespace-nowrap">
-          <time class="text-gray-400" datetime="{{ c.detected_at.isoformat() }}">{{ c.detected_at | utctime('short') }}</time>
+        <td class="px-4 py-2 text-gray-700 truncate max-w-sm">{{ feed.title }}</td>
+        <td class="px-4 py-2 text-gray-400">{{ feed.readable_revival_attempts }}</td>
+        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+          <time datetime="{{ feed.readable_revived_at.isoformat() }}">{{ feed.readable_revived_at | utctime('short') }}</time>
         </td>
       </tr>
       {% endfor %}
@@ -299,5 +383,11 @@
   </table>
   </div>
 </div>
+{% else %}
+<p class="text-sm text-gray-400 {{ 'mb-3' if stats.readable_revival_pending else 'mb-8' }}">No feeds revived in the last 30 days.</p>
+{% endif %}
+{% if stats.readable_revival_pending %}
+<p class="text-sm text-gray-400 mb-8">Separately, {{ stats.readable_revival_pending|num }} feed{{ "s" if stats.readable_revival_pending != 1 }} still {{ "have" if stats.readable_revival_pending != 1 else "has" }} extraction disabled and {{ "are" if stats.readable_revival_pending != 1 else "is" }} waiting for the next probe.</p>
+{% endif %}
 {% endif %}
 {% endblock %}

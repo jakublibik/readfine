@@ -15,11 +15,19 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
+from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
-from app.utils.crypto import encrypt
-from app.utils.url_validator import async_validate_feed_url
+from app.utils.crypto import auth_pair, encrypt
+from app.utils.url_validator import async_validate_feed_url, split_url_credentials
 
 logger = logging.getLogger(__name__)
+
+# Recent articles sampled to decide whether a feed already delivers whole articles,
+# when subscribing to one that is already in the database. Smaller than the fetcher's
+# own sample (readable_service._FULL_CONTENT_SAMPLE): the answer is needed while the
+# user waits, and getting it wrong costs them one checkbox in Settings → Feeds.
+_SUBSCRIBE_SAMPLE = 5
 
 
 class FeedSubscriptionError(ValueError):
@@ -97,6 +105,43 @@ def get_cached_permanent_url(url: str) -> str | None:
     return entry[1] if entry else None
 
 
+async def _raise_if_already_subscribed_private(
+    db: AsyncSession,
+    user: User,
+    url: str,
+    fetch_auth_user: str | None,
+    selector: str | None = None,
+) -> None:
+    """Refuse a second subscription to a feed the user already has credentials for.
+
+    A feed carrying credentials gets a row of its own, which is what keeps one
+    subscriber's password off everyone else's fetches. That also puts it out of reach
+    of the shared-row lookup, the one that would otherwise notice the user is already
+    subscribed, so without this the same address added twice would quietly become two
+    feeds: two rows in the sidebar and two fetches an hour for one feed.
+
+    Scoped to rows this user already subscribes to, so two people using the same
+    credentialed address still get a row each rather than silently sharing one.
+    """
+    if fetch_auth_user is None:
+        return
+    stmt = (
+        select(UserFeed.id)
+        .join(Feed, Feed.id == UserFeed.feed_id)
+        .where(
+            UserFeed.user_id == user.id,
+            Feed.feed_url == url,
+            Feed.is_private == True,  # noqa: E712
+            Feed.fetch_auth_user == fetch_auth_user,
+        )
+        .limit(1)
+    )
+    if selector is not None:
+        stmt = stmt.where(Feed.type_config["article_links_selector"].astext == selector)
+    if await db.scalar(stmt) is not None:
+        raise AlreadySubscribed()
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -116,7 +161,21 @@ async def subscribe(
 
     Public feeds (no auth) are shared: if the feed already exists in DB, the
     existing row is reused. Private feeds always get a dedicated row.
+
+    Credentials written into the address (``https://user:pass@host/feed``) are moved
+    into the auth columns before anything else happens, so the password is encrypted
+    like any other, never reaches ``feeds.feed_url`` (and from there the backups, the
+    admin screens, the feed's own display name and an OPML export), and the row is
+    recognised as private rather than shared with everyone else on the instance.
     """
+    url, url_auth_user, url_auth_pass = split_url_credentials(url)
+    if url_auth_user is not None and not fetch_auth_user and not fetch_auth_pass:
+        # Only when the form left both fields empty: pairing a typed username with a
+        # password out of the address would authenticate as neither.
+        fetch_auth_user, fetch_auth_pass = url_auth_user, url_auth_pass
+    if fetch_auth_user and len(fetch_auth_user) > 255:
+        raise ValueError("Username is too long (max 255 characters)")
+
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
@@ -144,6 +203,8 @@ async def subscribe(
 
     feed: Feed | None = None
     parsed = None
+    # Both halves or nothing, the same rule feed_auth reads them back under.
+    auth = auth_pair(fetch_auth_user, fetch_auth_pass)
 
     async def _existing_public_feed(feed_url: str) -> Feed | None:
         """The shared public feed row at *feed_url*, if any (raises if subscribed)."""
@@ -164,6 +225,7 @@ async def subscribe(
                 raise AlreadySubscribed()
         return found
 
+    await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
     feed = await _existing_public_feed(url)
 
     if feed is None:
@@ -173,13 +235,14 @@ async def subscribe(
         parsed = None if is_private else get_cached_feed_preview(url)
         permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed, permanent_url = await fetch_and_parse_url(url)
+            parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
 
         # Create the row on the address the host actually serves. Storing the URL the
         # user typed would make every later poll walk the same redirect chain, and on
         # an OPML re-import it would create a second row for a feed we already have.
         if permanent_url and permanent_url != url:
             url = permanent_url
+            await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
             feed = await _existing_public_feed(url)
 
     if feed is None:
@@ -194,7 +257,13 @@ async def subscribe(
             feed_url=url,
             is_private=is_private,
             fetch_auth_user=fetch_auth_user if is_private else None,
-            fetch_auth_pass_encrypted=encrypt(fetch_auth_pass) if fetch_auth_pass else None,
+            # Non-NULL rather than truthy: an address of the form
+            # https://user@host/feed authenticates with an empty password, and the
+            # pair only survives the move if both columns are written. See
+            # app.utils.crypto.feed_auth, which reads them back under the same rule.
+            fetch_auth_pass_encrypted=(
+                encrypt(fetch_auth_pass) if is_private and fetch_auth_pass is not None else None
+            ),
             title=title[:255],
             site_url=site_url[:2048] if site_url else None,
             subscriber_count=0,
@@ -212,18 +281,12 @@ async def subscribe(
         # New feed: check entries we just fetched
         extract_readable = not is_full_content_feed(parsed)
     else:
-        # Existing feed: derive from recent articles already in DB
-        sample_result = await db.execute(
-            select(Article.word_count)
-            .where(Article.feed_id == feed.id, Article.word_count.isnot(None))
-            .order_by(Article.id.desc())
-            .limit(5)
-        )
-        word_counts = [r[0] for r in sample_result]
-        if word_counts and sum(1 for c in word_counts if c > 500) / len(word_counts) >= 0.8:
-            extract_readable = False
-        else:
-            extract_readable = True
+        # Existing feed: ask the same measurement the fetcher's auto-disable uses, so
+        # the two cannot disagree about the same feed. A smaller sample, because this
+        # answer is needed now and the decision is undone by one checkbox, where
+        # auto-disable turns extraction off for every subscriber at once.
+        sample = await sample_feed_content(feed.id, db, limit=_SUBSCRIBE_SAMPLE)
+        extract_readable = not sample.is_full_content
 
     user_feed = UserFeed(
         user_id=user.id,
@@ -316,7 +379,18 @@ async def subscribe_scrape(
     With validate_selector=False the live page fetch + selector check is skipped
     (used by OPML import to restore a previously-working scrape feed even when the
     page is momentarily unreachable); the background initial fetch still runs.
+
+    A page behind HTTP credentials is scraped by writing them into its address, the
+    only way they can be given for a scrape feed. They are moved into the auth columns
+    here, as they are for RSS: left in the address they would be copied by ``urljoin``
+    into the address of every article the page links to.
     """
+    url, auth_user, auth_pass = split_url_credentials(url)
+    auth = auth_pair(auth_user, auth_pass)
+    is_private = auth is not None
+    if auth_user and len(auth_user) > 255:
+        raise ValueError("Username is too long (max 255 characters)")
+
     await async_validate_feed_url(url)
 
     if folder_id is not None:
@@ -347,7 +421,7 @@ async def subscribe_scrape(
     if validate_selector:
         from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
-            html = await fetch_page_html(url)
+            html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)
@@ -357,16 +431,18 @@ async def subscribe_scrape(
                 "Use the Preview button to test your selector before saving."
             )
 
-    # Share public scrape feeds with matching URL + selector
-    existing = await db.execute(
+    await _raise_if_already_subscribed_private(db, user, url, auth_user, selector=selector)
+
+    # Share public scrape feeds with matching URL + selector. A feed with credentials
+    # is never shared, so it skips the lookup and always gets a row of its own.
+    feed = None if is_private else (await db.execute(
         select(Feed).where(
             Feed.feed_url == url,
             Feed.feed_type == "scrape",
             Feed.is_private == False,
             Feed.type_config["article_links_selector"].astext == selector,
         )
-    )
-    feed = existing.scalar_one_or_none()
+    )).scalar_one_or_none()
     is_new_feed = feed is None
 
     if feed:
@@ -379,7 +455,10 @@ async def subscribe_scrape(
         feed = Feed(
             feed_url=url[:2048],
             feed_type="scrape",
-            is_private=False,
+            is_private=is_private,
+            fetch_auth_user=auth_user,
+            # See subscribe(): non-NULL, not truthy, so an empty password survives.
+            fetch_auth_pass_encrypted=encrypt(auth_pass) if auth_pass is not None else None,
             title=title[:255],
             site_url=url[:2048],
             type_config={"article_links_selector": selector},
@@ -438,12 +517,18 @@ async def _initial_fetch_scrape(feed_id: int) -> None:
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeCleanupResult:
     """Remove a user's subscription with full lifecycle cleanup.
 
-    1. Deletes UserArticleState rows for non-starred, non-archived articles.
+    1. Deletes UserArticleState rows for articles the user does not keep for good.
     2. Deletes the UserFeed row.
     3. Decrements subscriber_count on the Feed.
-    4. If subscriber_count reaches 0: deletes orphan articles (not starred/archived
-       by anyone) and the Feed itself if no articles remain.
+    4. If subscriber_count reaches 0: deletes orphan articles (kept for good by
+       nobody) and the Feed itself if no articles remain.
     5. Strips the feed from the user's filter/catchup/briefing scopes.
+
+    "Kept for good" is ``permanently_kept_predicate`` — starred, archived or saved
+    by URL. Saving belongs there for the same reason starring does, and an article
+    can be saved by a user who never subscribed to the feed it came in through
+    (a paste that deduped onto it), so both the row-level delete and the
+    article-level one have to ask the shared question rather than their own.
 
     Returns the scope-cleanup report (filters deactivated / briefings disabled).
     """
@@ -456,14 +541,13 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
 
     feed_id = user_feed.feed_id
 
-    # 1. Delete non-starred, non-archived UserArticleState rows for this user + feed
+    # 1. Drop this user's state for the feed's articles, except what they keep for good
     article_ids_subq = select(Article.id).where(Article.feed_id == feed_id).scalar_subquery()
     await db.execute(
         delete(UserArticleState).where(
             UserArticleState.user_id == user.id,
             UserArticleState.article_id.in_(article_ids_subq),
-            UserArticleState.is_starred == False,
-            UserArticleState.is_archived == False,
+            ~permanently_kept_predicate(),
         )
     )
 
@@ -482,26 +566,18 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
     if feed:
         # 4. If no subscribers left: orphan surviving articles, delete the rest, delete the feed
         if feed.subscriber_count == 0:
-            starred_or_archived_subq = (
-                select(UserArticleState.article_id)
-                .where(
-                    UserArticleState.article_id == Article.id,
-                    (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
-                )
-                .correlate(Article)
-                .exists()
-            )
-            # Surviving articles (starred/archived by someone): detach from feed (feed_id = NULL)
+            kept_by_someone = permanently_kept_exists()
+            # Surviving articles (kept for good by someone): detach from feed (feed_id = NULL)
             await db.execute(
                 update(Article)
-                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .where(Article.feed_id == feed_id, kept_by_someone)
                 .values(feed_id=None)
             )
-            # Delete the remaining articles (not starred/archived by anyone)
+            # Delete the remaining articles (kept for good by nobody)
             await db.execute(
                 delete(Article).where(
                     Article.feed_id == feed_id,
-                    ~starred_or_archived_subq,
+                    ~kept_by_someone,
                 )
             )
             # Always delete the feed — no subscribers remain
@@ -527,15 +603,9 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     )
     user_feeds = user_feeds_result.scalars().all()
 
-    starred_or_archived_subq = (
-        select(UserArticleState.article_id)
-        .where(
-            UserArticleState.article_id == Article.id,
-            (UserArticleState.is_starred == True) | (UserArticleState.is_archived == True),
-        )
-        .correlate(Article)
-        .exists()
-    )
+    # Same rule as unsubscribe: an article another user keeps for good must outlive
+    # this account's feeds, and saving counts as keeping.
+    kept_by_someone = permanently_kept_exists()
 
     for uf in user_feeds:
         feed_id = uf.feed_id
@@ -545,8 +615,7 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
             delete(UserArticleState).where(
                 UserArticleState.user_id == user_id,
                 UserArticleState.article_id.in_(article_ids_subq),
-                UserArticleState.is_starred == False,
-                UserArticleState.is_archived == False,
+                ~permanently_kept_predicate(),
             )
         )
         await db.delete(uf)
@@ -559,11 +628,11 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
         if feed and feed.subscriber_count == 0:
             await db.execute(
                 update(Article)
-                .where(Article.feed_id == feed_id, starred_or_archived_subq)
+                .where(Article.feed_id == feed_id, kept_by_someone)
                 .values(feed_id=None)
             )
             await db.execute(
-                delete(Article).where(Article.feed_id == feed_id, ~starred_or_archived_subq)
+                delete(Article).where(Article.feed_id == feed_id, ~kept_by_someone)
             )
             await db.delete(feed)
 

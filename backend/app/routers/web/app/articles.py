@@ -22,6 +22,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
+    add_article_access_joins, article_access_predicate,
     filter_accessible_article_ids, get_article, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
@@ -45,14 +46,11 @@ async def _extract_readable_bg(
     """Background readable extraction fired when user opens an article."""
     from app.database import async_session_factory
     from app.services.readable_service import extract_readable
-    from app.utils.crypto import decrypt
+    from app.utils.crypto import feed_auth
 
-    auth_pass: str | None = None
-    if auth_pass_enc:
-        try:
-            auth_pass = decrypt(auth_pass_enc)
-        except Exception:
-            logger.warning("readable bg: decrypt failed for article %d", article_id)
+    auth_user, auth_pass = feed_auth(
+        auth_user, auth_pass_enc, context=f"article {article_id}"
+    ) or (None, None)
 
     loop = asyncio.get_running_loop()
     try:
@@ -195,6 +193,7 @@ def _build_filter_params(
     unread_only: bool,
     starred_only: bool,
     archived_only: bool,
+    saved_only: bool,
     labeled_only: bool,
     q: str | None,
     is_search: bool,
@@ -220,6 +219,8 @@ def _build_filter_params(
         params["starred_only"] = "true"
     if archived_only:
         params["archived_only"] = "true"
+    if saved_only:
+        params["saved_only"] = "true"
     if labeled_only:
         params["labeled_only"] = "true"
     if q and q.strip():
@@ -261,6 +262,7 @@ async def htmx_article_list(
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
+    saved_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
     sort: str | None = Query(None),
@@ -270,6 +272,47 @@ async def htmx_article_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The article list as a view of its own. Everything below is in render_list."""
+    return await render_list(
+        request, user=user, db=db,
+        feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+        label_id=label_id, unread_only=unread_only, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only, labeled_only=labeled_only,
+        q=q, sort=sort, read_status=read_status, label_filter=label_filter,
+        offset=offset,
+    )
+
+
+async def render_list(
+    request: Request,
+    *,
+    user: User,
+    db: AsyncSession,
+    feed_id: int | None = None,
+    folder_id: int | None = None,
+    scope_include: str | None = None,
+    label_id: int | None = None,
+    unread_only: bool = False,
+    starred_only: bool = False,
+    archived_only: bool = False,
+    saved_only: bool = False,
+    labeled_only: bool = False,
+    q: str | None = None,
+    sort: str | None = None,
+    read_status: str | None = None,
+    label_filter: str | None = None,
+    offset: int = 0,
+) -> HTMLResponse:
+    """Render the article list for one set of filters.
+
+    Kept apart from the route so the other endpoint that answers with a list
+    (htmx_save_url, which re-renders Saved after an import) can ask for one without
+    calling a route handler. Called that way, FastAPI resolves nothing, so every
+    ``Query(...)`` default arrives as a Query object — and those are truthy, which
+    quietly switched archived_only and its neighbours on. Real defaults here mean a
+    caller names only what it wants, and a filter added later reaches both entry
+    points without anyone having to remember the second one.
+    """
     settings_result = await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
     )
@@ -292,7 +335,7 @@ async def htmx_article_list(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
-    if is_search or starred_only or archived_only:
+    if is_search or starred_only or archived_only or saved_only:
         # Search uses its own status selector (read_status below); other
         # state-based views always show everything.
         effective_unread_only = False
@@ -327,6 +370,7 @@ async def htmx_article_list(
         read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
+        saved_only=saved_only,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
@@ -374,7 +418,8 @@ async def htmx_article_list(
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
         label_id=label_id, unread_only=effective_unread_only,
-        starred_only=starred_only, archived_only=archived_only, labeled_only=labeled_only,
+        starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
+        labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
         read_status=read_status, label_filter=label_filter,
     )
@@ -409,6 +454,7 @@ async def htmx_article_list(
         unread_only=effective_unread_only,
         starred_only=starred_only,
         archived_only=archived_only,
+        saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
         # Text search uses offset pagination (ts_rank can't be keyset-paged). With a
@@ -440,6 +486,7 @@ async def htmx_article_list_more(
     unread_only: bool = Query(False),
     starred_only: bool = Query(False),
     archived_only: bool = Query(False),
+    saved_only: bool = Query(False),
     labeled_only: bool = Query(False),
     q: str | None = Query(None),
     sort: str | None = Query(None),
@@ -477,6 +524,7 @@ async def htmx_article_list_more(
         read_status=read_status,
         starred_only=starred_only,
         archived_only=archived_only,
+        saved_only=saved_only,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
@@ -490,7 +538,8 @@ async def htmx_article_list_more(
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
         label_id=label_id, unread_only=unread_only,
-        starred_only=starred_only, archived_only=archived_only, labeled_only=labeled_only,
+        starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
+        labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
         read_status=read_status, label_filter=label_filter,
     )
@@ -604,14 +653,109 @@ async def htmx_readable_poll(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Polling endpoint: returns article content fragment. HTMX polling stops once status leaves 'pending'."""
+    """Polling endpoint for a running readable extraction.
+
+    While the extraction runs, only the small progress strip is returned — swapping
+    the whole content block every 2s relaid out the article (images, bottom bar) and
+    made it jump. Once it finishes, the full content block is returned and the swap
+    is retargeted at the content container, so the article is rebuilt exactly once.
+    """
     article = await get_article(user, article_id, db)
     if not article:
         return HTMLResponse("", status_code=404)
-    return _content_with_readtime_oob(request, article)
+    if article.readable_active:
+        return HTMLResponse(
+            templates.env.get_template("app/partials/readable_progress.html").render(
+                request=request, article=article
+            )
+        )
+    response = _content_with_readtime_oob(
+        request, article, extra_oob=await _summary_refresh_oob(article, user, db)
+    )
+    response.headers["HX-Retarget"] = f"#article-content-{article.id}"
+    response.headers["HX-Reswap"] = "outerHTML"
+    return response
 
 
-def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
+@router.get("/htmx/articles/{article_id}/row-poll", response_class=HTMLResponse)
+async def htmx_row_poll(
+    article_id: int,
+    request: Request,
+    density: str | None = Query(None),
+    label_display: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Polling endpoint for a saved article's list row while extraction runs.
+
+    A saved-by-URL article is inserted with a placeholder title and only learns its
+    real one (plus a snippet, and sometimes a publication date) when extraction
+    finishes — after the row was rendered. While it runs the poller answers with
+    itself so it keeps ticking; once done it returns the rebuilt row, retargeted at
+    the row container, and the polling stops with it.
+    """
+    from app.services.article import get_article_list_item
+
+    item = await get_article_list_item(user, article_id, db)
+    if item is None:
+        # Gone (unsaved, purged, or access revoked) — drop the poller.
+        return HTMLResponse("")
+    if item.readable_active:
+        # The same element the row rendered, so the loop carries on unchanged.
+        macros = templates.env.get_template("app/partials/row_poll.html").module
+        return HTMLResponse(
+            str(macros.row_poll(article_id, density or "", label_display or ""))
+        )
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    row_html = templates.env.get_template("app/partials/article_row.html").render(
+        request=request,
+        article=item,
+        density=density or (settings.list_density_web if settings else "comfortable"),
+        label_display=label_display or (settings.label_display if settings else "indicator"),
+        show_ai_score=settings.ai_score_show_in_list if settings else False,
+    )
+    response = HTMLResponse(row_html)
+    response.headers["HX-Retarget"] = f"#article-row-{article_id}"
+    response.headers["HX-Reswap"] = "outerHTML"
+    return response
+
+
+async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
+    """OOB refresh of the AI summary block, or "" when there is nothing to show.
+
+    Finishing a readable extraction runs the AI pipeline, so a summary can be
+    produced (or queued) after the detail was rendered. Without this the reader is
+    left with an empty spot and only sees the summary by reopening the article.
+    """
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    ai = await _ai_availability(settings, db)
+    if not ai.quality:
+        return ""
+    macros = templates.env.get_template("app/partials/ai_blocks.html").module
+    if article.ai_summary:
+        return str(macros.ai_summary(
+            article.id, article.ai_summary, article.ai_summary_truncated, oob=True
+        ))
+    pending = await db.scalar(
+        select(ArticleAiJob.id).where(
+            ArticleAiJob.article_id == article.id,
+            ArticleAiJob.user_id == user.id,
+            ArticleAiJob.operation == "summary",
+            ArticleAiJob.status == "pending",
+        )
+    )
+    if not pending:
+        return ""
+    return str(macros.ai_spinner(
+        f"ai-summary-{article.id}",
+        f"/htmx/articles/{article.id}/ai-summary/poll",
+        "Generating summary…",
+        oob=True,
+    ))
+
+
+def _content_with_readtime_oob(request: Request, article, extra_oob: str = "") -> HTMLResponse:
     """Return article_content.html + OOB span to update the reading-time metadata."""
     content_html = templates.env.get_template("app/partials/article_content.html").render(
         request=request, article=article, chat_available=False
@@ -626,15 +770,28 @@ def _content_with_readtime_oob(request: Request, article) -> HTMLResponse:
     date_oob = templates.env.get_template("app/partials/article_meta_date.html").render(
         request=request, article=article, oob=True
     )
-    return HTMLResponse(content_html + oob + date_oob)
+    # And the heading: a saved-by-URL article starts out titled with its host + path
+    # and gets its real title from the page, which lands after the detail rendered.
+    # Only feedless articles can change title, so nothing else is touched.
+    title_oob = ""
+    if article.feed_id is None:
+        macros = templates.env.get_template("app/partials/article_title.html").module
+        title_oob = str(macros.article_title(article, oob=True))
+    return HTMLResponse(content_html + oob + date_oob + title_oob + extra_oob)
 
 
-def _state_button_response(request: Request, article, *, template: str, event: str, payload: dict) -> HTMLResponse:
+def _state_button_response(
+    request: Request, article, *, template: str, event: str, payload: dict,
+    extra_events: dict | None = None,
+) -> HTMLResponse:
     """Render a state button/icon partial + fire an HX-Trigger event (no OOB row
     swap, to avoid flicker). Shared by the read / star / archive toggles."""
     btn_html = templates.env.get_template(template).render(article=article, request=request)
     response = HTMLResponse(btn_html)
-    response.headers["HX-Trigger"] = json.dumps({"sidebarRefresh": True, event: payload})
+    events = {"sidebarRefresh": True, event: payload}
+    if extra_events:
+        events.update(extra_events)
+    response.headers["HX-Trigger"] = json.dumps(events)
     return response
 
 
@@ -647,12 +804,15 @@ def _read_response(request: Request, article) -> HTMLResponse:
     )
 
 
-def _star_response(request: Request, article) -> HTMLResponse:
+def _star_response(request: Request, article, *, summary_started: bool = False) -> HTMLResponse:
+    # summaryStarted lets an open article swap in the "Generating summary…" spinner;
+    # the summary runs in the background, so otherwise nothing on screen says so.
     return _state_button_response(
         request, article,
         template="app/partials/star_icon.html",
         event="articleStarChanged",
         payload={"id": article.id, "isStarred": article.is_starred},
+        extra_events={"summaryStarted": {"id": article.id}} if summary_started else None,
     )
 
 
@@ -749,6 +909,7 @@ async def htmx_toggle_star(
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
 
+    summary_started = False
     if article.is_starred:
         settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
         if settings and settings.ai_summary_enabled_default:
@@ -758,6 +919,7 @@ async def htmx_toggle_star(
                 enqueued = await enqueue_summary_job(article_obj, user.id, db)
                 await db.commit()
                 if enqueued:
+                    summary_started = True
                     asyncio.create_task(_summary_after_star_bg(article_id, user.id))
     else:
         # Unstarred — cancel a not-yet-run summary job so a mis-click doesn't
@@ -772,7 +934,7 @@ async def htmx_toggle_star(
         )
         await db.commit()
 
-    return _star_response(request, article)
+    return _star_response(request, article, summary_started=summary_started)
 
 
 @router.post("/htmx/articles/{article_id}/archive", response_class=HTMLResponse)
@@ -874,20 +1036,9 @@ async def htmx_toggle_share(
 ):
     """Toggle share token for an article. Generates on first call, revokes on second."""
     # Load article access + state
-    stmt = (
-        select(Article, UserArticleState)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
-    )
+    stmt = add_article_access_joins(
+        select(Article, UserArticleState), user.id
+    ).where(Article.id == article_id, article_access_predicate())
     row = (await db.execute(stmt)).first()
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
@@ -922,24 +1073,16 @@ async def htmx_extract_readable(
     db: AsyncSession = Depends(get_db),
 ):
     """Extract readable content on demand for a single article."""
-    from app.services.readable_service import extract_readable
-    from app.utils.crypto import decrypt
-
-    stmt = (
-        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
-        .outerjoin(Feed, Feed.id == Article.feed_id)
-        .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.id == article_id,
-            (UserFeed.id != None)
-            | (UserArticleState.is_starred == True)
-            | (UserArticleState.is_archived == True),
-        )
+    from app.services.readable_service import (
+        extract_readable_with_title, store_saved_extraction,
     )
+    from app.utils.crypto import feed_auth
+
+    stmt = add_article_access_joins(
+        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
+        .outerjoin(Feed, Feed.id == Article.feed_id),
+        user.id,
+    ).where(Article.id == article_id, article_access_predicate())
     row = (await db.execute(stmt)).first()
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
@@ -951,22 +1094,37 @@ async def htmx_extract_readable(
     if article.readable_status == "success":
         return HTMLResponse("")  # already done, nothing to do
 
-    auth_pass: str | None = None
-    if auth_pass_enc:
-        try:
-            auth_pass = decrypt(auth_pass_enc)
-        except Exception:
-            # Matches the background path: a decrypt failure signals ENCRYPTION_KEY
-            # drift / corruption, so log it rather than silently fetch without auth.
-            logger.warning("readable: decrypt failed for article %d", article.id)
+    auth_user, auth_pass = feed_auth(
+        auth_user, auth_pass_enc, context=f"article {article.id}"
+    ) or (None, None)
 
     loop = asyncio.get_running_loop()
-    content, error, http_status, published_at = await loop.run_in_executor(
-        None, extract_readable, article.url, auth_user, auth_pass
+    # Ask for the title too: on a feedless saved article the page is the only source
+    # of one, so a retry should refresh it. apply_readable_result ignores it for feed
+    # articles, which keep their feed-supplied title.
+    result = await loop.run_in_executor(
+        None, extract_readable_with_title, article.url, auth_user, auth_pass,
+        article.feed_id is None,  # consent/paywall check: saved articles only
     )
 
-    apply_readable_result(article, content, error, http_status, published_at)
-    await db.commit()
+    if article.feed_id is None:
+        # The third door into a terminal state, after the import task and the batch
+        # worker. A saved article's post-extraction pass (its saver's filters, and the
+        # summary those may trigger) belongs to every one of them, so this goes through
+        # the helper the batch worker uses rather than writing the steps out again —
+        # which is how this door came to be the one missing the last of them. Reachable
+        # whenever a transient failure leaves the article 'pending': the batch worker
+        # only ever picks up that status, so once Retry succeeds here nothing would
+        # come back for it.
+        await store_saved_extraction(article, result, db)
+    else:
+        # A feed article keeps its feed-supplied title and never adopts a resolved
+        # address, so the two arguments above are not passed and adopt_resolved_url is
+        # not called: both are no-ops on this branch by construction.
+        apply_readable_result(
+            article, result.content, result.error, result.http_status, result.published_at,
+        )
+        await db.commit()
 
     # Render from the full ArticleResponse (not the raw ORM row) so per-user fields
     # — is_starred/is_archived/labels/readable_active — render correctly in the
@@ -975,3 +1133,66 @@ async def htmx_extract_readable(
     if article_resp is None:
         return HTMLResponse("")
     return _content_with_readtime_oob(request, article_resp)
+
+
+@router.post("/htmx/articles/save-url", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_save_url)
+async def htmx_save_url(
+    request: Request,
+    url: str = Form(...),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a pasted URL as a standalone article and re-render the Saved list."""
+    from app.services.saved_article_service import save_article_by_url
+
+    toast: dict | None = None
+    saved_id: int | None = None
+    try:
+        article, already_known = await save_article_by_url(url.strip(), user, db)
+    except ValueError as exc:
+        # Validation-time rejections only — bad scheme, no host, unresolvable, or a
+        # private/loopback address. Anything that can only fail once the fetch runs
+        # (404, timeout, paywall) is saved and surfaces in the detail panel instead.
+        toast = {"msg": str(exc), "type": "error"}
+    else:
+        saved_id = article.id
+        if already_known:
+            toast = {"msg": "Already saved — added to Saved.", "type": "info"}
+
+    response = await render_list(request, user=user, db=db, saved_only=True)
+    events: dict = {}
+    if toast:
+        events["showToast"] = toast
+    if saved_id is not None:
+        # The list is ordered by publication date, not by when you saved, so an older
+        # article (typically a video from a feed you follow, carrying the date it was
+        # published) lands somewhere down the list instead of on top. Tell the client
+        # which row to point at.
+        #
+        # Plain HX-Trigger, which fires before the swap: this form lives inside
+        # #article-list and the swap removes it, and an event dispatched on a detached
+        # element never reaches document.body, so HX-Trigger-After-Settle would go
+        # nowhere. The handler waits for the settle itself.
+        events["savedArticleAdded"] = {"id": saved_id}
+    if events:
+        response.headers["HX-Trigger"] = json.dumps(events)
+    return response
+
+
+@router.post("/htmx/articles/{article_id}/unsave", response_class=HTMLResponse)
+async def htmx_unsave_article(
+    article_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove an article from Saved. Never deletes the (globally shared) article row."""
+    from app.services.saved_article_service import unsave_article
+
+    await unsave_article(article_id, user.id, db)
+    response = HTMLResponse("")
+    response.headers["HX-Trigger"] = json.dumps({
+        "savedArticleRemoved": {"id": article_id},
+        "sidebarRefresh": True,
+    })
+    return response

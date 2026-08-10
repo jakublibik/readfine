@@ -50,6 +50,21 @@ class Article(Base):
     user_states: Mapped[list["UserArticleState"]] = relationship(back_populates="article", cascade="all, delete-orphan")
     article_labels: Mapped[list["ArticleLabel"]] = relationship(back_populates="article", cascade="all, delete-orphan")
 
+    @property
+    def readable_active(self) -> bool:
+        """A first extraction attempt is in flight, with no failure behind it yet.
+
+        'pending' alone is not enough: a transient failure leaves the article there
+        too, with a backoff running and readable_retries counting the attempts spent.
+        The reader sees a spinner for the first case and "another attempt is
+        scheduled" for the second, so the two must not be conflated.
+
+        Copied onto ArticleResponse / ArticleListItem when they are built, which is
+        what the templates read; that copy is a snapshot, and an extraction finishing
+        afterwards leaves it stale until the next render.
+        """
+        return self.readable_status == "pending" and not self.readable_retries
+
 
 class UserArticleState(Base):
     __tablename__ = "user_article_states"
@@ -62,6 +77,16 @@ class UserArticleState(Base):
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ever_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     starred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the user saved this article by pasting its URL. Carries the Saved view,
+    # access (see article_access_predicate) and the purge exemption on its own, so a
+    # saved article never has to borrow a star to stay alive.
+    saved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Stamped the first time the post-extraction pass ran its filters for this
+    # article+user. A dedup save by another user can push a finished article back to
+    # pending and re-extract it, so "extraction reached a terminal state" can happen
+    # twice — without this, star/archive/mark-read would be re-applied after the user
+    # had undone them. See services.saved_article_service.finalize_saved_article.
+    filters_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dwell_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unstar_dwell_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     link_opened: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -69,6 +94,10 @@ class UserArticleState(Base):
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
     ai_summary: Mapped[str | None] = mapped_column(Text)
+    # The model stopped on its output-token cap, so ai_summary ends mid-thought.
+    # Kept beside the text rather than marked inside it: the summary is also served
+    # over the API, and a regenerated summary just flips this back to False.
+    ai_summary_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_context: Mapped[str | None] = mapped_column(Text)
     ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

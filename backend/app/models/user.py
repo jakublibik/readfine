@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, Integer, SmallInteger, String, Text, ForeignKey, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, SmallInteger, String, Text, ForeignKey, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -91,6 +91,11 @@ class UserSettings(Base):
     ai_content_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=20_000)
     last_ai_error: Mapped[str | None] = mapped_column(Text)
     last_ai_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The article the failed job was working on, so the error panel can link to it.
+    # Null for errors with no article behind them (interest profile). ON DELETE SET
+    # NULL because retention purge can remove the article before the error is read.
+    last_ai_error_article_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("articles.id", ondelete="SET NULL"))
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="settings")
