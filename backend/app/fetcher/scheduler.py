@@ -555,12 +555,14 @@ async def _recompute_derived_intervals() -> None:
 
 
 async def _purge_old_articles() -> None:
-    """Job: delete articles exceeding retention limits."""
+    """Job: delete articles exceeding retention limits, and stale fetch logs with them."""
     if db.async_session_factory is None:
         return
-    from app.services.purge_service import purge_old_articles
+    from app.services.purge_service import purge_old_articles, purge_old_fetch_logs
     async with db.async_session_factory() as session:
         await purge_old_articles(session)
+        # Own session-level commit, so a failure here cannot undo the article pass.
+        await purge_old_fetch_logs(session)
 
 
 async def _cleanup_unverified_users() -> None:
