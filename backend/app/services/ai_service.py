@@ -79,8 +79,22 @@ def _empty_response_detail(provider: str, resp) -> str:
     try:
         if provider == "anthropic":
             blocks = getattr(resp, "content", None) or []
-            types = ",".join(str(getattr(b, "type", "?")) for b in blocks)
-            return f"stop_reason={getattr(resp, 'stop_reason', None)}, blocks=[{types}]"
+            block_types = [str(getattr(b, "type", "?")) for b in blocks]
+            stop_reason = getattr(resp, "stop_reason", None)
+            detail = f"stop_reason={stop_reason}, blocks=[{','.join(block_types)}]"
+            # Reasoning we could not switch off ate the whole budget before the
+            # answer began. Worth saying in words: this signature means the model
+            # is wrong for the job rather than the key or the prompt being broken,
+            # and it is what an always-thinking model does on the tightest budget
+            # (scoring asks for a single decimal in 10 tokens). Keyed on the
+            # response, not on a model name, so a future model needs no list entry.
+            if stop_reason == "max_tokens" and "thinking" in block_types:
+                detail += (
+                    "; the model spent the whole token budget reasoning before "
+                    "answering and cannot be told to skip it, so it is not suited "
+                    "to this slot"
+                )
+            return detail
         if provider == "openai":
             choices = getattr(resp, "choices", None) or []
             reason = getattr(choices[0], "finish_reason", None) if choices else None
@@ -474,7 +488,9 @@ async def summarize_article(
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
     prompt = f"{instruction}\n\nArticle:\n{content}"
     return await _complete(
-        prompt, client, provider, model, max_tokens=_summary_token_budget(content)
+        prompt, client, provider, model,
+        max_tokens=_summary_token_budget(content),
+        reasoning_headroom=_ANTHROPIC_REASONING_BUDGET,
     )
 
 
@@ -858,13 +874,27 @@ def _rejects_thinking_param(exc: Exception) -> bool:
     return getattr(exc, "status_code", None) == 400 and "thinking" in str(exc).lower()
 
 
-async def _anthropic_create(client, **kwargs):
-    """messages.create with thinking off, retried as-is by models that refuse that.
+# Room added to the retry below for the answer to survive alongside reasoning we
+# could not turn off. Same trade as _OPENAI_REASONING_BUDGET: max_tokens is only a
+# ceiling, so unused tokens cost nothing, and a model that ignored the retry (an
+# older one that simply does not know the parameter) keeps behaving exactly as it
+# did. Only callers expecting a long answer ask for it — see reasoning_headroom.
+_ANTHROPIC_REASONING_BUDGET = 8000
+
+
+async def _anthropic_create(client, reasoning_headroom: int = 0, **kwargs):
+    """messages.create with thinking off, retried by models that refuse that.
 
     Fable 5 always thinks and answers an explicit "disabled" with a 400, and models
-    older than the parameter reject it too. For those the retry is exactly the
-    request we would have sent before this existed, so the only cost is one wasted
-    round trip on a model where the budgets were never the problem.
+    older than the parameter reject it too. Those two look identical here and need
+    opposite things: the old model does not think, so its budget was never at risk,
+    while Fable 5 spends the answer's budget reasoning and returns a summary cut off
+    mid-sentence. The retry therefore carries *reasoning_headroom* on top of
+    max_tokens, which rescues the second without changing the first.
+
+    Callers on a tight budget pass no headroom on purpose: scoring asks for a single
+    decimal in 10 tokens, and an always-thinking model cannot answer that at any
+    ceiling worth paying for. It fails instead, and _empty_response_detail says why.
     """
     try:
         return await client.messages.create(thinking=_ANTHROPIC_THINKING_OFF, **kwargs)
@@ -873,16 +903,25 @@ async def _anthropic_create(client, **kwargs):
             raise
         logger.info("Model %s rejected thinking=disabled; retrying without it",
                     kwargs.get("model"))
+        if reasoning_headroom and kwargs.get("max_tokens"):
+            kwargs = {**kwargs, "max_tokens": kwargs["max_tokens"] + reasoning_headroom}
         return await client.messages.create(**kwargs)
 
 
 async def _complete(
-    prompt: str, client, provider: str, model: str, max_tokens: int = 500
+    prompt: str, client, provider: str, model: str, max_tokens: int = 500,
+    reasoning_headroom: int = 0,
 ) -> Completion:
-    """Send a prompt to whichever provider the slot uses and return its answer."""
+    """Send a prompt to whichever provider the slot uses and return its answer.
+
+    reasoning_headroom is Anthropic-only and applies to one case: a model that
+    refused to switch thinking off, where the answer has to share max_tokens with
+    reasoning. See _anthropic_create.
+    """
     if provider == "anthropic":
         resp = await _anthropic_create(
             client,
+            reasoning_headroom=reasoning_headroom,
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],

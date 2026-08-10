@@ -14,11 +14,13 @@ from unittest.mock import AsyncMock
 from app.services import ai_service
 from app.services.ai_service import (
     _anthropic_create,
+    _empty_response_detail,
     _extract_text,
     _extract_truncated,
     _openai_max_tokens,
     _rejects_thinking_param,
     _summary_token_budget,
+    _ANTHROPIC_REASONING_BUDGET,
     _ANTHROPIC_THINKING_OFF,
     _OPENAI_REASONING_BUDGET,
     _SUMMARY_CHARS_PER_TOKEN,
@@ -292,6 +294,37 @@ class TestAnthropicCreate:
         assert create.call_count == 1
 
     @pytest.mark.asyncio
+    async def test_headroom_lets_the_answer_survive_alongside_reasoning(self):
+        """A model that cannot switch thinking off shares max_tokens with it, so a
+        summary sized for the answer alone came back cut off mid-sentence."""
+        create = AsyncMock(side_effect=[_ApiError(400, "thinking cannot be disabled"), "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        result = await _anthropic_create(
+            client, reasoning_headroom=8000, model="claude-fable-5", max_tokens=400,
+        )
+        assert result == "ok"
+        assert create.call_args.kwargs["max_tokens"] == 8400
+
+    @pytest.mark.asyncio
+    async def test_headroom_is_not_spent_when_the_model_took_the_first_request(self):
+        """A model that switched thinking off has nothing to make room for."""
+        client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value="ok")))
+        await _anthropic_create(
+            client, reasoning_headroom=8000, model="claude-sonnet-5", max_tokens=400,
+        )
+        assert client.messages.create.call_args.kwargs["max_tokens"] == 400
+
+    @pytest.mark.asyncio
+    async def test_a_tight_budget_asks_for_no_headroom(self):
+        """Scoring wants one decimal in 10 tokens. An always-thinking model cannot
+        do that at any ceiling worth paying for, so it fails rather than costing
+        8000 tokens per article."""
+        create = AsyncMock(side_effect=[_ApiError(400, "thinking cannot be disabled"), "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
+        assert create.call_args.kwargs["max_tokens"] == 10
+
+    @pytest.mark.asyncio
     async def test_a_refusing_model_that_fails_again_raises_the_second_error(self):
         create = AsyncMock(side_effect=[
             _ApiError(400, "thinking cannot be disabled"),
@@ -301,6 +334,38 @@ class TestAnthropicCreate:
         with pytest.raises(_ApiError) as exc:
             await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
         assert exc.value.status_code == 429
+
+
+class TestEmptyResponseDetailNamesCrowdedOutAnswer:
+    """When reasoning we could not switch off eats the budget before the answer
+    begins, the banner has to say the model is wrong for the slot rather than leave
+    it looking like a broken key."""
+
+    def _detail(self, stop_reason, block_types):
+        return _empty_response_detail("anthropic", SimpleNamespace(
+            stop_reason=stop_reason,
+            content=[SimpleNamespace(type=t) for t in block_types],
+        ))
+
+    def test_thinking_block_on_a_hit_cap_is_explained(self):
+        detail = self._detail("max_tokens", ["thinking"])
+        assert "reasoning" in detail
+        assert "not suited to this slot" in detail
+        # The raw signature stays — it is what a bug report needs.
+        assert "stop_reason=max_tokens" in detail
+
+    def test_a_hit_cap_without_thinking_is_left_alone(self):
+        """An ordinary model that simply ran out of room is a different problem."""
+        assert "reasoning" not in self._detail("max_tokens", ["text"])
+
+    def test_a_refusal_carrying_thinking_is_left_alone(self):
+        """Stopped for its own reasons, not crowded out."""
+        assert "reasoning" not in self._detail("refusal", ["thinking"])
+
+    def test_keyed_on_the_response_not_a_model_name(self):
+        """No model list to keep up to date: any model showing this signature is
+        described the same way."""
+        assert "not suited to this slot" in self._detail("max_tokens", ["thinking", "text"])
 
 
 class TestVerifyAiSlot:
