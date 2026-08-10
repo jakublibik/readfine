@@ -79,6 +79,27 @@ class TestFailureMessage:
     def test_non_http_exception_keeps_its_text(self):
         assert failure_message(httpx.ConnectTimeout("timed out"), FEED_URL) == "timed out"
 
+    def test_non_http_exception_quoting_the_address_is_redacted(self):
+        # The message lands in fetch_logs and Feed.last_error, shown next to a column
+        # that redacts the address — quoting it raw would walk around that.
+        url = "https://example.com/feed.xml?api_key=secret"
+        msg = failure_message(ValueError(f"Redirect blocked: {url}"), url)
+        assert "secret" not in msg
+        assert msg == "Redirect blocked: https://example.com/feed.xml?<redacted>"
+
+    def test_credentials_in_any_address_are_dropped(self):
+        # Shape-matched, so an address the message picked up from somewhere other than
+        # the feed row is covered too.
+        msg = failure_message(ValueError("Redirect blocked: https://u:pw@other.invalid/f"),
+                              FEED_URL)
+        assert "pw" not in msg
+        assert msg == "Redirect blocked: https://other.invalid/f"
+
+    def test_ordinary_text_is_untouched(self):
+        assert failure_message(ValueError("not well-formed (invalid token)"), FEED_URL) == (
+            "not well-formed (invalid token)"
+        )
+
 
 class TestBlockBackoff:
     def test_first_block_uses_the_base(self):

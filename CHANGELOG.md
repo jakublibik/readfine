@@ -41,6 +41,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- The error message on a failed feed no longer quotes the address with its secrets in it. That message is shown in your feed list and in the admin panel, in the latter right next to the address itself, which is printed with any API key in it blanked out. A message that quoted the address in full walked straight around that. HTTP errors were already built from the blanked version; everything else now gets the same treatment, and credentials written into an address are dropped wherever they turn up.
+
 - Saved pages no longer show raw codes like `&#x27;` where an apostrophe belongs. A few sites escape their own text twice, Vimeo does it on every page, so reading it back once left the second layer showing: a saved video arrived titled "Here&#x27;s how to add music" and its description was peppered with the same thing. Such text is now decoded the rest of the way, in the title and in the description a saved video keeps as its body. Text that only escaped its characters once, which is nearly everything, is untouched.
 
 - The amber "throttled" badge is readable in dark mode again. Its fill kept the light theme's pale yellow while the label turned bright amber, so the two sat almost on top of each other and the word was barely there. The fill now darkens with the rest of the theme. The same pairing is used by the 429 tag in the admin rate-limit list and the warning on a feed test in Settings, so those are fixed too.
