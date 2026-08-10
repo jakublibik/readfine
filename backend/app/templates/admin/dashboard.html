@@ -79,8 +79,9 @@
 {% if stats.fetch_error_feeds %}
 <p class="text-xs text-gray-400 mb-3 max-w-2xl">
   One row per feed, newest failure first. Status is the feed's state right now, so a feed
-  that has fetched fine since its last logged failure reads as active. The counts are
-  failed attempts in each window.
+  that has fetched fine since its last logged failure reads as active, and one whose last
+  fetch the site refused reads as throttled from the first refusal. The counts are failed
+  attempts in each window.
 </p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
@@ -106,7 +107,10 @@
              credentials, and this list spans every user's feeds. #}
           <div class="text-xs text-gray-400 truncate">{{ f.feed_url | redact_url_display }}</div>
         </td>
-        <td class="px-4 py-2 align-top">{{ status_badge(f, with_count=true) }}</td>
+        {# threshold=1: every row here is on screen because a fetch failed, so there is
+           no healthy feed to false-alarm. A refused fetch says "throttled" from the
+           first one instead of a green "active" sitting next to its own error. #}
+        <td class="px-4 py-2">{{ status_badge(f, with_count=true, threshold=1) }}</td>
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
            "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}

@@ -5,9 +5,14 @@
 
    with_count adds the counter behind the badge (consecutive refusals for throttled,
    consecutive failures otherwise). The Feeds table leaves it off: it spells the same
-   thing out under the title, and a second word wraps its narrow column. #}
-{% macro status_badge(f, with_count=false) %}
-{%- if f.status == 'active' and f.block_count >= block_badge_threshold -%}
+   thing out under the title, and a second word wraps its narrow column.
+
+   threshold is how many consecutive refusals earn the throttled badge. The default
+   guards lists that show healthy feeds too, where a lone 403 is noise. A caller whose
+   rows are already there because something failed passes 1: in that company "active"
+   next to a logged refusal reads as a contradiction, not as reassurance. #}
+{% macro status_badge(f, with_count=false, threshold=block_badge_threshold) %}
+{%- if f.status == 'active' and f.block_count >= threshold -%}
   {# Host is refusing automated requests — amber, not red: the feed is fine and
      resumes on its own. See app/fetcher/failure.py for the two tiers. #}
   <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700 whitespace-nowrap"

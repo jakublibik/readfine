@@ -41,6 +41,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- A feed the site is refusing no longer reads as "active" in the admin dashboard's list of fetch errors. The throttled badge waited for three refusals in a row, which is right for the feed lists that show healthy feeds too (a single 403 there is noise, not a problem), but in a list where every row is on screen because a fetch failed it meant a green "active" sitting next to the feed's own "HTTP 429" message. In that one list the badge now appears from the first refusal, with the count beside it. Nothing changes in Settings → Feeds or the admin feeds table, and nothing changes about when a refused feed is actually switched off.
+
 - Testing a feed no longer fails in silence when you have tested a lot of them in a row. Ten tests a minute are allowed, and going over that emptied the result box and stopped the spinner with nothing else to show, which read as the test having done nothing at all. It now says the limit was hit and that a minute's wait clears it. Any other failed request in that box reports itself too, instead of disappearing.
 
 - The error message on a failed feed no longer quotes the address with its secrets in it. That message is shown in your feed list and in the admin panel, in the latter right next to the address itself, which is printed with any API key in it blanked out. A message that quoted the address in full walked straight around that. HTTP errors were already built from the blanked version; everything else now gets the same treatment, and credentials written into an address are dropped wherever they turn up.
