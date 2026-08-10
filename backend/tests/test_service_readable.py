@@ -954,3 +954,36 @@ class TestDescriptionCapture:
                    return_value=(page, None, None, "https://x.invalid/a")):
             r = extract_readable_with_title("https://x.invalid/a")
         assert r.description == self.DESC
+
+
+class TestDoubleEncodedMetadata:
+    """Pages that escaped their own text twice, which one decode leaves half-done."""
+
+    def test_description_is_decoded_twice(self):
+        from app.services.readable_service import _extract_og_description
+        page = ('<head><meta property="og:description" '
+                'content="Vimeo&amp;#x27;s player is ad-free"></head>')
+        assert _extract_og_description(page) == "Vimeo's player is ad-free"
+
+    def test_single_encoding_is_left_alone(self):
+        """Ordinary text is decoded once and the second pass does not fire."""
+        from app.services.readable_service import _extract_og_description
+        page = '<head><meta property="og:description" content="Salt &amp; pepper"></head>'
+        assert _extract_og_description(page) == "Salt & pepper"
+
+    def test_a_video_body_carries_the_decoded_description(self):
+        """The case this was found on: a Vimeo watch page, whose description *is* the
+        stored body, showed a literal &#x27; wherever the text had an apostrophe."""
+        from app.services.readable_service import extract_readable_with_title
+        page = ('<html><head><title>Explore Vimeo&amp;#x27;s player</title>'
+                '<meta property="og:description" content="Here&amp;#x27;s how it works">'
+                "</head><body></body></html>")
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://vimeo.com/1054665455")):
+            r = extract_readable_with_title("https://vimeo.com/1054665455")
+        assert r.title == "Explore Vimeo's player"
+        # The body escapes its text back into markup, so an apostrophe legitimately
+        # ends up as &#x27; there. What must not survive is the doubled form, which is
+        # what rendered as a visible entity on screen.
+        assert "&amp;#x27;" not in r.content
+        assert "Here&#x27;s how it works" in r.content

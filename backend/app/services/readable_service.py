@@ -452,12 +452,35 @@ def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"\w{4,}", text.lower())}
 
 
+# A well-formed entity left over *after* decoding, which means the source escaped its
+# text twice. Named entities are matched by shape rather than by name because the point
+# is only to recognise that another pass is warranted, not to decode anything here.
+_LEFTOVER_ENTITY_RE = re.compile(r"&(?:#\d{1,7}|#[xX][0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});")
+
+
+def _unescape_text(raw: str) -> str:
+    """Decode HTML entities in page metadata, double-encoding included.
+
+    Some sites escape their text twice, so what reaches us is ``&amp;#x27;`` and one
+    decode leaves a visible ``&#x27;`` in the title and the description (Vimeo does this
+    across every page). A second pass is taken only when the first one left a
+    well-formed entity behind, so ordinary text is decoded exactly once.
+
+    Stops at two passes rather than looping to a fixed point: triple-encoding is not a
+    thing worth chasing, and text that genuinely *writes about* entities should not be
+    unwound arbitrarily far. Callers of this function pass plain text that is escaped
+    again before it is rendered, so an extra pass cannot revive markup.
+    """
+    once = html_mod.unescape(raw)
+    return html_mod.unescape(once) if _LEFTOVER_ENTITY_RE.search(once) else once
+
+
 def _extract_og_description(html: str) -> Optional[str]:
     head = _head_slice(html)
     m = _OG_DESC_RE.search(head) or _OG_DESC_ALT_RE.search(head)
     if not m:
         return None
-    return re.sub(r"\s+", " ", html_mod.unescape(m.group(1))).strip()
+    return re.sub(r"\s+", " ", _unescape_text(m.group(1))).strip()
 
 
 def _content_contradicts_page(content_html: str, og_description: Optional[str]) -> bool:
@@ -511,7 +534,7 @@ def _extract_title(html: str) -> Optional[str]:
         m = pattern.search(head)
         if not m:
             continue
-        title = html_mod.unescape(m.group(1))
+        title = _unescape_text(m.group(1))
         title = re.sub(r"\s+", " ", title).strip()
         if title:
             return title[:1000]

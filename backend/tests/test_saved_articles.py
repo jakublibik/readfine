@@ -99,6 +99,16 @@ class TestExtractTitle:
         html = "<head><title>Bread &amp; Butter</title></head>"
         assert _extract_title(html) == "Bread & Butter"
 
+    def test_unescapes_double_encoded_entities(self):
+        # Vimeo escapes its markup twice, so one decode leaves a visible &#x27; in
+        # every saved title.
+        html = "<head><title>Here&amp;#x27;s how to add music | Vimeo</title></head>"
+        assert _extract_title(html) == "Here's how to add music | Vimeo"
+
+    def test_stops_after_a_second_decode(self):
+        html = "<head><title>&amp;amp;amp;lt;b&amp;amp;amp;gt;</title></head>"
+        assert _extract_title(html) == "&amp;lt;b&amp;gt;"
+
     def test_collapses_whitespace(self):
         html = "<head><title>\n  Spread   out\n</title></head>"
         assert _extract_title(html) == "Spread out"
