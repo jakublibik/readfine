@@ -29,17 +29,31 @@
 </div>
 
 {# One row saying what needs a look, in the order the sections appear below. Built as
-   a list so an all-clear instance gets a single line instead of five empty tables. #}
+   a list so an all-clear instance gets a single line instead of five empty tables.
+
+   The first pill is the exception: disabled feeds have no section here, because the
+   list would never clear itself (a feed whose site is gone stays disabled until an
+   admin deals with it) and a permanent table is what this dashboard was reordered to
+   get rid of. It leads to the feeds table, where the actions live. It goes first all
+   the same: fetching has stopped for good, and nothing retries it. #}
 {% set attention = [
-  {"count": stats.fetch_error_feed_total, "label": "feeds failed to fetch", "href": "#fetch-errors",
+  {"count": stats.disabled_feed_count, "one": "feed has fetching switched off",
+   "label": "feeds have fetching switched off", "href": "/admin/feeds",
    "cls": "border-red-200 bg-red-50 text-red-700"},
-  {"count": stats.redirect_conflicts|length, "label": "redirect conflicts", "href": "#redirect-conflicts",
-   "cls": "border-amber-200 bg-amber-50 text-amber-700"},
-  {"count": stats.briefing_errors|length, "label": "briefing errors", "href": "#briefing-errors",
+  {"count": stats.fetch_error_feed_total, "one": "feed failed to fetch",
+   "label": "feeds failed to fetch", "href": "#fetch-errors",
    "cls": "border-red-200 bg-red-50 text-red-700"},
-  {"count": stats.auto_profile_errors|length, "label": "interest profile errors", "href": "#profile-errors",
+  {"count": stats.redirect_conflicts|length, "one": "redirect conflict",
+   "label": "redirect conflicts", "href": "#redirect-conflicts",
    "cls": "border-amber-200 bg-amber-50 text-amber-700"},
-  {"count": stats.readable_failed_recent_total, "label": "articles failed extraction", "href": "#readable",
+  {"count": stats.briefing_errors|length, "one": "briefing error",
+   "label": "briefing errors", "href": "#briefing-errors",
+   "cls": "border-red-200 bg-red-50 text-red-700"},
+  {"count": stats.auto_profile_errors|length, "one": "interest profile error",
+   "label": "interest profile errors", "href": "#profile-errors",
+   "cls": "border-amber-200 bg-amber-50 text-amber-700"},
+  {"count": stats.readable_failed_recent_total, "one": "article failed extraction",
+   "label": "articles failed extraction", "href": "#readable",
    "cls": "border-amber-200 bg-amber-50 text-amber-700"},
 ] | selectattr("count") | list %}
 
@@ -49,12 +63,12 @@
 <div class="flex flex-wrap items-center gap-2 mb-8">
   {% for item in attention %}
   <a href="{{ item.href }}" class="px-2.5 py-1 text-sm rounded-full border {{ item.cls }} hover:shadow-sm transition-all">
-    <strong class="tabular-nums">{{ item.count|num }}</strong> {{ item.label }}
+    <strong class="tabular-nums">{{ item.count|num }}</strong> {{ item.one if item.count == 1 else item.label }}
   </a>
   {% endfor %}
 </div>
 {% else %}
-<p class="text-sm text-gray-400 mb-8">All clear: no fetch errors, redirect conflicts, briefing or interest profile failures, and no failed readable extraction in the last 30 days.</p>
+<p class="text-sm text-gray-400 mb-8">All clear: no feeds with fetching switched off, no fetch errors, redirect conflicts, briefing or interest profile failures, and no failed readable extraction in the last 30 days.</p>
 {% endif %}
 
 {# ── Fetch errors ─────────────────────────────────────────────────────────── #}

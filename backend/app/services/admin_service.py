@@ -534,9 +534,19 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     error_feed_count = (await db.execute(
         select(func.count(Feed.id)).where(Feed.status == "error")
     )).scalar() or 0
+    # Counted separately from error, and without a time window: the scheduler skips a
+    # disabled feed (see fetcher/scheduler.py), so it writes no further FetchLog and
+    # would drop out of the 30-day roll-up below with nothing left to report it. It is
+    # also the one state that never recovers on its own.
+    disabled_feed_count = (await db.execute(
+        select(func.count(Feed.id)).where(Feed.status == "disabled")
+    )).scalar() or 0
     fetch_error_feeds = await list_feed_fetch_errors(db, since=since, now=now, limit=20)
+    # Same window as the roll-up above, upper bound included, so the "showing X of Y"
+    # line cannot count a failure logged between the two queries.
     fetch_error_feed_total = (await db.execute(
-        select(func.count(func.distinct(FetchLog.feed_id))).where(FetchLog.failed_at >= since)
+        select(func.count(func.distinct(FetchLog.feed_id)))
+        .where(FetchLog.failed_at >= since, FetchLog.failed_at <= now)
     )).scalar() or 0
     readable_pending = (await db.execute(
         select(func.count(Article.id)).where(Article.readable_status == "pending")
@@ -586,6 +596,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
         "feed_count": feed_count,
         "article_count": article_count,
         "error_feed_count": error_feed_count,
+        "disabled_feed_count": disabled_feed_count,
         "fetch_error_feeds": fetch_error_feeds,
         "fetch_error_feed_total": fetch_error_feed_total,
         "readable_pending": readable_pending,

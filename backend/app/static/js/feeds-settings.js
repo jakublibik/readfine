@@ -12,16 +12,19 @@ document.addEventListener('DOMContentLoaded', function () {
   })();
 
   // --- Subscribe form: show the feed's own title before you commit to it -------------
-  // Without this the name a feed will show up under is a surprise until after subscribing,
-  // which makes "Custom title" impossible to decide on. Testing the URL reveals it, so run
-  // the test on our own once the URL is settled and put the result in the title's
-  // placeholder (blank = keep the feed's title, as on the feed edit page).
+  // The name a feed will show up under is otherwise a surprise until after subscribing,
+  // which makes "Custom title" impossible to decide on. Two places reveal it without
+  // costing a request of their own: the Test the user asked for, and the detected-feed
+  // list, which reads each candidate's name out of the parse the detection already did.
+  // Both land in the title's placeholder (blank = keep the feed's own title, the same
+  // convention as the feed edit page).
+  //
+  // Deliberately not triggered on leaving the URL field. Testing on the user's behalf
+  // costs a slot of the endpoint's 10/minute, fires before the auth fields below it are
+  // filled in (so an authenticated feed answers 401 and reads as broken), and races the
+  // request of whichever button the user was on their way to click.
   var urlInput = document.getElementById('feed-url-input');
   var titleInput = document.getElementById('feed-custom-title');
-
-  // The last URL a test actually ran against. Guards the auto-test: leaving the URL field
-  // again (e.g. tabbing on to the title) must not re-test what was just tested.
-  var lastTestedUrl = null;
 
   function resetTitlePlaceholder() {
     if (titleInput) titleInput.placeholder = titleInput.dataset.defaultPlaceholder || '';
@@ -31,46 +34,13 @@ document.addEventListener('DOMContentLoaded', function () {
     if (titleInput && title) titleInput.placeholder = title;
   }
 
-  // Clicking Test or Subscribe blurs the URL field, and that blur would fire the auto-test
-  // alongside the click's own request — two responses racing for #feed-test-result. The
-  // mousedown lands before the blur, so it can wave the auto-test off.
-  var skipAutoTest = false;
-
-  // `force` is for picking a detected feed: that button lives inside the form, so its own
-  // mousedown would otherwise wave off the very test it wants.
-  function autoTest(force) {
-    if (!urlInput || (skipAutoTest && !force)) return;
-    var url = urlInput.value.trim();
-    // Needs a host with a dot to be worth a request — no probing half-typed addresses.
-    if (!url || url === lastTestedUrl || !/^(https?:\/\/)?[^\s/]+\.[^\s/]{2,}/.test(url)) return;
-    htmx.trigger(urlInput, 'feedAutoTest');
-  }
-
-  var subscribeForm = document.getElementById('feed-subscribe-form');
-  if (subscribeForm) {
-    subscribeForm.addEventListener('mousedown', function (evt) {
-      if (!evt.target.closest('button')) return;
-      skipAutoTest = true;
-      setTimeout(function () { skipAutoTest = false; }, 0);
-    });
-  }
-
   if (urlInput) {
-    // A stale placeholder would name the previous feed, so drop it as soon as the URL moves.
-    urlInput.addEventListener('input', function () {
-      if (urlInput.value.trim() !== lastTestedUrl) resetTitlePlaceholder();
-    });
-    // 'change' fires on blur (and on Enter), but only when the value changed since focus —
-    // lastTestedUrl then rules out the case where that change was already tested.
-    urlInput.addEventListener('change', function () { autoTest(); });
+    // A placeholder naming the feed that was tested a moment ago would misdescribe the
+    // address now in the field, so drop it as soon as that address moves.
+    urlInput.addEventListener('input', resetTitlePlaceholder);
   }
 
-  // Every test (manual, Enter, or auto) records the URL it ran with, so all three paths
-  // keep the guard honest.
   document.body.addEventListener('htmx:configRequest', function (evt) {
-    if (evt.detail.path === '/settings/feeds/test') {
-      lastTestedUrl = (evt.detail.parameters.url || '').trim();
-    }
     // "Feed X added successfully" is server-rendered and would otherwise sit there for the
     // rest of the visit, still naming the previous feed while you work on the next one.
     if (evt.detail.path === '/settings/feeds/test' || evt.detail.path === '/settings/feeds') {
@@ -115,11 +85,11 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!input) return;
     input.value = btn.dataset.url || '';
     input.focus();
-    // The detected list already knows the feed's title — show it right away, then test the
-    // picked URL so the count and the "Feed OK" confirmation follow (and so the subscribe
-    // reuses that parse from the preview cache instead of fetching again).
+    // The detected list already knows the feed's name, so show it with no request of its
+    // own. Reset first: a candidate the detection could not name (no data-title) would
+    // otherwise leave the previously tested feed's name standing.
+    resetTitlePlaceholder();
     setTitlePlaceholder(btn.dataset.title);
-    autoTest(true);
   });
 
   // Creating a folder re-renders the Feeds list into #feeds-list. If the Stats tab was
