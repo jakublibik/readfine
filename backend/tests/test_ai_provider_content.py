@@ -441,3 +441,31 @@ class TestSummaryTokenBudget:
 
     def test_empty_content_still_gets_the_floor(self):
         assert _summary_token_budget("") == _SUMMARY_MIN_TOKENS
+
+    def test_an_ordinary_news_article_gets_the_floor(self):
+        """The case this floor was raised for: a ~5k-character story, which is what
+        most feeds carry. The ratio does not overtake the floor until well past it,
+        so the floor — not the ratio — is what a typical summary is written into."""
+        assert _summary_token_budget("x" * 5_000) == _SUMMARY_MIN_TOKENS
+
+    def test_the_floor_fits_a_sectioned_summary(self):
+        """The prompt allows a few labelled sections, which cost more than the same
+        content as one paragraph. A floor sized for prose alone cut them off."""
+        assert _SUMMARY_MIN_TOKENS >= 700
+
+
+class TestDefaultSummaryPrompt:
+    """The prompt is the only thing holding summary length down: the models it runs
+    on write past a vague "short paragraph" and expand to fill whatever cap they are
+    given, so raising the cap alone just moves where the summary gets cut off."""
+
+    def test_it_bounds_the_length_against_the_article(self):
+        prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
+        assert "small fraction of the original" in prompt
+        assert "never let it approach the length of the article" in prompt
+
+    def test_it_still_allows_the_structure_the_cap_pays_for(self):
+        """Length is bounded, formatting is not — sections and markdown are wanted."""
+        prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
+        assert "section" in prompt
+        assert "markdown" in prompt

@@ -452,14 +452,20 @@ async def score_article(
     return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article. Adjust the length naturally to the article's length and complexity — from one sentence for simple pieces to a short paragraph for complex ones. Capture the main point, key facts, conclusions, and important context or implications. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article. Keep it short: a sentence or two for a simple piece, and at most a few brief labelled sections for a long or complex one. A summary is always a small fraction of the original — never let it approach the length of the article itself. Capture the main point, key facts, conclusions, and important context or implications, and leave out detail that does not change the picture. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, short section labels, lists) where it genuinely aids clarity."
 _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
 # The summary prompt tells the model to scale length with the article, so the
 # output cap scales with it too — a cap sized for a news brief cuts a long feature
 # off mid-sentence. Roughly one output token per 16 input characters, bounded at
 # both ends: the floor keeps short articles from getting a uselessly tight cap,
 # the ceiling stops a custom prompt asking for an essay from running up the bill.
-_SUMMARY_MIN_TOKENS = 400
+#
+# The floor is what most news articles actually get: the ratio only overtakes it
+# past ~11k characters, and a typical story is half that. It is sized for the
+# format the prompt allows rather than for prose alone — a few labelled sections
+# cost more than the same content written as one paragraph, and a 5k-character
+# story summarized that way ran past the old 400 and was cut off mid-sentence.
+_SUMMARY_MIN_TOKENS = 700
 _SUMMARY_MAX_TOKENS = 1500
 _SUMMARY_CHARS_PER_TOKEN = 16
 
