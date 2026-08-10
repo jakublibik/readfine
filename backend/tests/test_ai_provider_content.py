@@ -455,17 +455,39 @@ class TestSummaryTokenBudget:
 
 
 class TestDefaultSummaryPrompt:
-    """The prompt is the only thing holding summary length down: the models it runs
-    on write past a vague "short paragraph" and expand to fill whatever cap they are
-    given, so raising the cap alone just moves where the summary gets cut off."""
+    """The prompt is the only thing holding summary length down: the models expand to
+    fill whatever cap they are given, so raising the cap alone just moves where the
+    summary gets cut off. A qualitative bound was not enough either — the same prompt
+    that Sonnet 4.6 read as ~126 words, Opus 5 read as ~200 — hence a word count."""
 
-    def test_it_bounds_the_length_against_the_article(self):
-        prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
-        assert "small fraction of the original" in prompt
-        assert "never let it approach the length of the article" in prompt
+    def test_it_names_a_number(self):
+        assert "150 words" in ai_service._DEFAULT_SUMMARY_PROMPT
 
-    def test_it_still_allows_the_structure_the_cap_pays_for(self):
-        """Length is bounded, formatting is not — sections and markdown are wanted."""
+    def test_the_numbers_are_ceilings_not_targets(self):
+        """Otherwise every summary grows to meet them, short pieces included."""
         prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
-        assert "section" in prompt
-        assert "markdown" in prompt
+        assert "ceilings rather than targets" in prompt
+
+    def test_the_length_still_scales_up_for_a_long_article(self):
+        """A feature cannot be summarized in the same breath as a news brief, and the
+        token budget goes on scaling past the floor for exactly that case. A single
+        flat cap would have made that scaling pointless."""
+        prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
+        assert "a sentence or two for a brief item" in prompt
+        assert "up to 300 for a long feature" in prompt
+
+    def test_it_bounds_the_length_against_the_article_too(self):
+        """The word count alone says nothing about a very short article."""
+        assert "small fraction of the original" in ai_service._DEFAULT_SUMMARY_PROMPT
+
+    def test_it_asks_for_one_list_rather_than_several_sections(self):
+        """The shape difference between the two models, not just the word count:
+        Opus 5 split the same summary across two labelled sections where Sonnet used
+        one list."""
+        prompt = ai_service._DEFAULT_SUMMARY_PROMPT.lower()
+        assert "one short list" in prompt
+        assert "rather than splitting the summary across several labelled sections" in prompt
+
+    def test_markdown_stays_allowed(self):
+        """Length is bounded, formatting is not — the list is wanted, not tolerated."""
+        assert "markdown" in ai_service._DEFAULT_SUMMARY_PROMPT.lower()

@@ -452,7 +452,7 @@ async def score_article(
     return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article. Keep it short: a sentence or two for a simple piece, and at most a few brief labelled sections for a long or complex one. A summary is always a small fraction of the original — never let it approach the length of the article itself. Capture the main point, key facts, conclusions, and important context or implications, and leave out detail that does not change the picture. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, short section labels, lists) where it genuinely aids clarity."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, a short list) where it genuinely aids clarity."
 _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
 # The summary prompt tells the model to scale length with the article, so the
 # output cap scales with it too — a cap sized for a news brief cuts a long feature
@@ -461,10 +461,11 @@ _DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this 
 # the ceiling stops a custom prompt asking for an essay from running up the bill.
 #
 # The floor is what most news articles actually get: the ratio only overtakes it
-# past ~11k characters, and a typical story is half that. It is sized for the
-# format the prompt allows rather than for prose alone — a few labelled sections
-# cost more than the same content written as one paragraph, and a 5k-character
-# story summarized that way ran past the old 400 and was cut off mid-sentence.
+# past ~11k characters, and a typical story is half that. Length is held down by
+# the prompt's 150-word ceiling, roughly 200 tokens, so the floor is deliberately
+# loose on top of it. That slack is the point: these models read a length rule
+# generously, and one that overshoots should still land a whole summary rather
+# than a truncated one. Unused tokens are not billed, so the slack itself is free.
 _SUMMARY_MIN_TOKENS = 700
 _SUMMARY_MAX_TOKENS = 1500
 _SUMMARY_CHARS_PER_TOKEN = 16
