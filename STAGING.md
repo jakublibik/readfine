@@ -36,8 +36,11 @@ existing edge however you prefer, and **gate it** (it is not meant to be open):
 
 - **Reverse-proxy subdomain:** add a server block to your existing proxy that
   forwards your staging hostname to the app. From a containerised nginx, reach
-  the host with `host.docker.internal` (add
-  `extra_hosts: ["host.docker.internal:host-gateway"]` to that nginx service) and
+  the host with `host.docker.internal` (that nginx service needs
+  `extra_hosts: ["host.docker.internal:host-gateway"]` — if the proxy is Readfine's
+  own production stack, put that in a `docker-compose.override.yml` rather than in
+  `docker-compose.yml`, or the next release that touches that file will stop your
+  `git pull`) and
   `proxy_pass http://host.docker.internal:8001`. In that case the app must NOT be
   bound to loopback only, or the proxy container can't reach it. Set
   `STAGING_BIND=0.0.0.0` in `.env.staging` and keep the host/network firewall

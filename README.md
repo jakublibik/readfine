@@ -249,12 +249,31 @@ docker compose up -d --build
 ```
 
 **If you downloaded the release zip:** download the new release and unzip it. Copy your
-existing `.env`, `certs/`, and `nginx.conf` into it, then rename it to the **same folder name
+existing `.env`, `certs/`, `nginx.conf`, and `docker-compose.override.yml` (if you have one)
+into it, then rename it to the **same folder name
 as before** (`readfine`), replacing the old folder. Keeping the folder name identical is what
 makes Docker reuse the same data volume. From that folder:
 
 ```bash
 docker compose up -d --build
+```
+
+> **Keep your changes out of `docker-compose.yml`.** If you need to change the published
+> ports, add a network, or drop the bundled nginx because you already run a reverse proxy,
+> put it in a `docker-compose.override.yml` next to it. Docker Compose merges that file
+> automatically, and it is git-ignored, so `git pull` keeps working. Editing
+> `docker-compose.yml` itself works right up until a release changes the same file, and then
+> the update stops with `Your local changes to the following files would be overwritten by
+> merge`. To move an existing edit: copy it into the override file, then `git checkout --
+> docker-compose.yml`. Only the service and keys you name are overridden; everything else
+> stays as shipped.
+
+```yaml
+# docker-compose.override.yml — serve on 8080 instead of 80
+services:
+  nginx:
+    ports:
+      - "8080:80"
 ```
 
 Your data lives in a Docker volume, not in the project folder, so it survives updates **as
