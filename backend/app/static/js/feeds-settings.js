@@ -56,6 +56,29 @@ document.addEventListener('DOMContentLoaded', function () {
     else resetTitlePlaceholder();
   });
 
+  // htmx leaves a non-2xx response unswapped, and there is no app-wide handler to fall
+  // back on (the htmx:responseError listeners in app.js are each scoped to the article
+  // list, the star revert or the chat). So a Test that tripped this endpoint's
+  // 10/minute did nothing whatsoever: the spinner stopped, the box stayed empty and the
+  // user had no way to know a limit existed, let alone that waiting would fix it.
+  document.body.addEventListener('htmx:responseError', function (evt) {
+    var cfg = evt.detail.requestConfig;
+    var path = cfg && cfg.path;
+    if (path !== '/settings/feeds/test' && path !== '/settings/feeds') return;
+    var box = document.getElementById('feed-test-result');
+    if (!box) return;
+    var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
+    var line = document.createElement('p');
+    line.className = 'text-sm text-red-600';
+    line.textContent = status === 429
+      ? 'Too many feed tests in a row. Wait a minute and try again.'
+      : 'The request failed (HTTP ' + status + '). Please try again.';
+    box.replaceChildren(line);
+    // Nothing came back to name, and the previous feed's name must not stand for the
+    // address now in the field.
+    resetTitlePlaceholder();
+  });
+
   var tabFeeds = document.getElementById('tab-feeds');
   var tabStats = document.getElementById('tab-stats');
   if (!tabFeeds || !tabStats) return;
