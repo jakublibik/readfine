@@ -162,7 +162,8 @@ async def settings_feeds_test(
             "test_url": url,
         })
 
-    feed_title = parsed.feed.get("title") or url
+    original_title = (parsed.feed.get("title") or "").strip() or None
+    feed_title = original_title or url
     entry_count = len(parsed.entries)
     # Cache this parse so a follow-up Subscribe reuses it instead of re-fetching
     # (single network request per add — important for rate-limited sites). Public
@@ -171,6 +172,9 @@ async def settings_feeds_test(
         cache_feed_preview(url, parsed, page.permanent_url)
     return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
         "feed_title": feed_title,
+        # Only the feed's real title, never the URL fallback — the subscribe form uses it
+        # as the "Custom title" placeholder, where a URL would be nonsense.
+        "original_title": original_title,
         "entry_count": entry_count,
         "auth_status": auth_status,
     })

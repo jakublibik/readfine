@@ -30,8 +30,12 @@ def _youtube_feed_url(url: str) -> str | None:
     return None
 
 
-async def _validate_feed_url(url: str) -> bool:
-    """Fetch a candidate feed URL and verify feedparser can parse it."""
+async def _validate_feed_url(url: str) -> tuple[bool, str | None]:
+    """
+    Fetch a candidate feed URL and verify feedparser can parse it.
+    Returns (is_feed, feed title) — the title comes for free from the parse the
+    validation does anyway, and it's what the subscribe UI shows.
+    """
     import feedparser
     try:
         await async_validate_feed_url(url)
@@ -41,9 +45,11 @@ async def _validate_feed_url(url: str) -> bool:
             lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=10),
         )
         parsed = feedparser.parse(body)
-        return bool(parsed.entries)
+        if not parsed.entries:
+            return False, None
+        return True, (parsed.feed.get("title") or "").strip() or None
     except Exception:
-        return False
+        return False, None
 
 
 async def detect_feeds(url: str) -> list[dict]:
@@ -86,7 +92,12 @@ async def detect_feeds(url: str) -> list[dict]:
     if results:
         # Validate candidates in parallel — only keep reachable feeds
         validations = await asyncio.gather(*[_validate_feed_url(r["url"]) for r in results])
-        validated = [r for r, ok in zip(results, validations) if ok]
+        # The feed's own title wins over the <link title="..."> attribute, which is often
+        # missing or generic ("RSS", "Posts") and tells the user nothing about the feed.
+        validated = [
+            {**r, "title": title or r["title"]}
+            for r, (ok, title) in zip(results, validations) if ok
+        ]
         if validated:
             return _dedup(validated)
         results = []  # all candidates failed — don't carry them into the fallback
@@ -96,9 +107,8 @@ async def detect_feeds(url: str) -> list[dict]:
 
     async def _try_path(path: str) -> dict | None:
         candidate = origin + path
-        if await _validate_feed_url(candidate):
-            return {"url": candidate, "title": None}
-        return None
+        ok, title = await _validate_feed_url(candidate)
+        return {"url": candidate, "title": title} if ok else None
 
     found = await asyncio.gather(*[_try_path(p) for p in _COMMON_PATHS])
     results.extend(r for r in found if r is not None)

@@ -32,9 +32,9 @@ def _rss_with_entries(n=1):
     )
 
 
-def _always_valid():
-    """Patch _validate_feed_url to always return True (used when testing detection logic, not validation)."""
-    return patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=True))
+def _always_valid(title=None):
+    """Patch _validate_feed_url to always accept (used when testing detection logic, not validation)."""
+    return patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=(True, title)))
 
 
 # ── _youtube_feed_url ─────────────────────────────────────────────────────────
@@ -99,23 +99,33 @@ class TestDedup:
 # ── _validate_feed_url ────────────────────────────────────────────────────────
 
 class TestValidateFeedUrl:
-    async def test_valid_feed_with_entries_returns_true(self):
+    async def test_valid_feed_with_entries_returns_true_and_its_title(self):
         rss = _rss_with_entries(3)
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=rss):
-            assert await _validate_feed_url("https://example.com/feed.xml") is True
+            assert await _validate_feed_url("https://example.com/feed.xml") == (True, "Test Feed")
+
+    async def test_titleless_feed_is_valid_without_a_title(self):
+        rss = (
+            '<?xml version="1.0"?><rss version="2.0"><channel>'
+            "<item><title>Article</title><link>https://example.com/1</link></item>"
+            "</channel></rss>"
+        )
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=rss):
+            assert await _validate_feed_url("https://example.com/feed.xml") == (True, None)
 
     async def test_html_page_with_title_but_no_entries_returns_false(self):
         html = "<html><head><title>My Site</title></head><body></body></html>"
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
-            assert await _validate_feed_url("https://example.com/") is False
+            assert await _validate_feed_url("https://example.com/") == (False, None)
 
     async def test_empty_rss_channel_no_entries_returns_false(self):
         empty_rss = '<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title></channel></rss>'
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=empty_rss):
-            assert await _validate_feed_url("https://example.com/feed") is False
+            assert await _validate_feed_url("https://example.com/feed") == (False, None)
 
     async def test_http_404_returns_false(self):
         import httpx
@@ -125,7 +135,7 @@ class TestValidateFeedUrl:
         )
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
-            assert await _validate_feed_url("https://example.com/feed/") is False
+            assert await _validate_feed_url("https://example.com/feed/") == (False, None)
 
     async def test_http_403_returns_false(self):
         import httpx
@@ -135,19 +145,19 @@ class TestValidateFeedUrl:
         )
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
-            assert await _validate_feed_url("https://example.com/feed/") is False
+            assert await _validate_feed_url("https://example.com/feed/") == (False, None)
 
     async def test_connection_error_returns_false(self):
         import httpx
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check",
                    side_effect=httpx.ConnectError("refused")):
-            assert await _validate_feed_url("https://example.com/feed") is False
+            assert await _validate_feed_url("https://example.com/feed") == (False, None)
 
     async def test_ssrf_blocked_url_returns_false(self):
         with patch("app.utils.feed_detect.async_validate_feed_url",
                    AsyncMock(side_effect=ValueError("private IP"))):
-            assert await _validate_feed_url("http://192.168.1.1/feed") is False
+            assert await _validate_feed_url("http://192.168.1.1/feed") == (False, None)
 
 
 # ── detect_feeds — YouTube shortcut ──────────────────────────────────────────
@@ -198,6 +208,24 @@ class TestDetectFeedsAlternateLinks:
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
              _always_valid():
+            result = await detect_feeds("https://example.com")
+        assert result[0]["title"] == "Main feed"
+
+    async def test_feed_own_title_wins_over_link_attribute(self):
+        # A <link title="..."> is routinely generic ("RSS", "Posts"). The name the feed will
+        # actually appear under is its own title, and that's what the picker has to show.
+        html = _html_with_link("/feed.xml", "application/rss+xml", title="RSS")
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid("Actual Feed Name"):
+            result = await detect_feeds("https://example.com")
+        assert result[0]["title"] == "Actual Feed Name"
+
+    async def test_link_attribute_kept_when_feed_has_no_title(self):
+        html = _html_with_link("/feed.xml", "application/rss+xml", title="Main feed")
+        with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
+             _always_valid(None):
             result = await detect_feeds("https://example.com")
         assert result[0]["title"] == "Main feed"
 
@@ -268,7 +296,7 @@ class TestDetectFeedsAlternateLinks:
         </head></html>"""
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
-             patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=False)):
+             patch("app.utils.feed_detect._validate_feed_url", new=AsyncMock(return_value=(False, None))):
             result = await detect_feeds("https://example.com")
         assert result == []
 
@@ -278,7 +306,7 @@ class TestDetectFeedsAlternateLinks:
         rss = _rss_with_entries(1)
 
         async def fake_validate(url):
-            return url == "https://example.com/feed"
+            return (True, None) if url == "https://example.com/feed" else (False, None)
 
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html), \
@@ -307,7 +335,10 @@ class TestDetectFeedsCommonPaths:
              patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch):
             result = await detect_feeds("https://example.com")
 
-        assert any(f["url"] == "https://example.com/feed" for f in result)
+        found = [f for f in result if f["url"] == "https://example.com/feed"]
+        # Guessed paths have no <link title="...">, so the parsed feed is the only source
+        # of a name — without it this branch offers a bare URL and nothing else.
+        assert found and found[0]["title"] == "Test Feed"
 
     async def test_common_path_without_entries_excluded(self):
         plain_html = "<html><body>no feeds</body></html>"

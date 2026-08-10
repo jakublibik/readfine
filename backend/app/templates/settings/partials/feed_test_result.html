@@ -12,6 +12,7 @@
       <li class="flex {{ 'items-start' if feed.title else 'items-center' }} gap-2">
         <button type="button"
                 data-url="{{ feed.url }}"
+                {% if feed.title %}data-title="{{ feed.title }}"{% endif %}
                 data-select-detected-feed
                 class="shrink-0 {{ 'mt-0.5' if feed.title else '' }} px-2 py-0.5 text-xs font-medium bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300 rounded whitespace-nowrap">
           Select RSS
@@ -45,7 +46,8 @@
   {% endif %}
 
 {% else %}
-<div class="text-sm text-green-700 space-y-0.5">
+<div class="text-sm text-green-700 space-y-0.5"
+     {% if original_title %}data-feed-title="{{ original_title }}"{% endif %}>
   <p>
     <span class="font-medium">✓ Feed OK</span> - {{ feed_title }}
     <span class="text-gray-500">({{ entry_count|num }} article{% if entry_count != 1 %}s{% endif %})</span>
