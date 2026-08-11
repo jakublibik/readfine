@@ -38,7 +38,8 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 ## Features
 
 - **Feeds:** RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
-- **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind)
+- **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind); YouTube and Vimeo videos play in the reader
+- **Saved:** paste any link, from a feed or not, and keep it as a readable article that retention never removes (also via the API, so a share sheet or bookmarklet can do it)
 - **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
 - **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
 - **AI (bring-your-own-key):** summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
@@ -249,12 +250,31 @@ docker compose up -d --build
 ```
 
 **If you downloaded the release zip:** download the new release and unzip it. Copy your
-existing `.env`, `certs/`, and `nginx.conf` into it, then rename it to the **same folder name
+existing `.env`, `certs/`, `nginx.conf`, and `docker-compose.override.yml` (if you have one)
+into it, then rename it to the **same folder name
 as before** (`readfine`), replacing the old folder. Keeping the folder name identical is what
 makes Docker reuse the same data volume. From that folder:
 
 ```bash
 docker compose up -d --build
+```
+
+> **Keep your changes out of `docker-compose.yml`.** If you need to change the published
+> ports, add a network, or drop the bundled nginx because you already run a reverse proxy,
+> put it in a `docker-compose.override.yml` next to it. Docker Compose merges that file
+> automatically, and it is git-ignored, so `git pull` keeps working. Editing
+> `docker-compose.yml` itself works right up until a release changes the same file, and then
+> the update stops with `Your local changes to the following files would be overwritten by
+> merge`. To move an existing edit: copy it into the override file, then `git checkout --
+> docker-compose.yml`. Only the service and keys you name are overridden; everything else
+> stays as shipped.
+
+```yaml
+# docker-compose.override.yml — serve on 8080 instead of 80
+services:
+  nginx:
+    ports:
+      - "8080:80"
 ```
 
 Your data lives in a Docker volume, not in the project folder, so it survives updates **as

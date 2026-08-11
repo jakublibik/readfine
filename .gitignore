@@ -13,7 +13,10 @@ PLAN.md
 # Backup config — holds restic/R2 secrets; example template is committed
 backup.env
 
-# Local dev Docker override (keeps prod images immutable)
+# Docker Compose override — where local changes to the stack belong, in dev and
+# on a self-hosted server alike. Compose merges it automatically, and keeping it
+# untracked is what stops a release that edits docker-compose.yml from blocking
+# `git pull`. See README → Updating.
 docker-compose.override.yml
 
 # Python
