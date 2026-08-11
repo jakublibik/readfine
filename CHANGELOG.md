@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-11
+
 ### Added
 
 - **Save an article by pasting its link, even one that isn't in any of your feeds.** A new **Saved** entry sits under Archived in the sidebar, with a box at the top of the list to paste a URL into. The page is fetched, run through the same readable extraction as everything else, and shows up as an ordinary article you can read, label, summarize and chat about. It appears in the list straight away, first under its web address and then under its real headline once the text has been pulled in, with a spinner while the fetch runs and a red mark (the same one a broken feed gets) on a row that yielded nothing at all. Your filters run on it, so a rule scoped to "All articles" can label or star it as it arrives; scoring deliberately doesn't, since you already decided this one was worth keeping. A saved article is kept for good and is never purged by retention until you remove it from Saved yourself, from the article's ··· menu or the button row under it. Video links save as the video, and a link that redirects to a consent, login or paywall page is recognised as such rather than saved as article text; both still offer "Open original" and a retry. Because Saved is ordered by publication date a pasted link often lands partway down the list, so saving jumps to the article and flashes it.
