@@ -9,11 +9,17 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Changed
+
+- You stay signed in for 30 days instead of 14. The session was already sliding, so it only ran out if you didn't visit at all, but two weeks is easy to skip in a reader without meaning to leave, and coming back to a login form you no longer have the password for is enough to lose the habit. Set `SESSION_MAX_AGE_DAYS` to make it shorter on a shared machine or longer on your own.
+
 ### Fixed
 
 - A single HTTP 404 no longer switches a feed off. Readfine read a 404 as the host saying the address is gone for good, which is what 410 means but not what 404 reliably means in practice: sites also serve it while their own backend is briefly unwell, in bursts that take out every feed on that site at once. YouTube's feed addresses do it regularly, so two YouTube subscriptions that had been fetching fine all day could both be disabled at four in the morning and stay dead until someone noticed and switched them back on by hand. A 404 now goes through the ordinary retry counter on a shorter threshold of its own, so a feed is retired after five 404s in a row (around six hours) rather than the first one, and a wobble of a few minutes costs nothing. Addresses that really are retired, 410 and 451, still disable the feed immediately, and a feed disabled by an old 404 needs re-enabling once.
 
 - A feed that has just failed is now re-checked after half an hour, instead of waiting out the full error backoff (two hours at the default fetch interval). Most failures are a site having a moment, over long before the next attempt, so a healthy feed was losing hours to a problem that had already fixed itself. Only the first retry is quick: from the second failure on, the backoff is what it was, so a site that is genuinely down is not polled any harder than before.
+
+- Signing up with an address that already has an account now shows you the way back in. The message said the email was taken and left you there, so the easiest thing to do was register again under a different address, which is exactly what people did: a second account, a second OPML import, and the reading history left behind in the first one. It now offers logging in or resetting the password, both carrying the address you just typed, so getting back to your account is one field instead of starting over.
 
 ## [0.15.0] - 2026-08-11
 

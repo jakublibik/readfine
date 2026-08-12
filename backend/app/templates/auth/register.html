@@ -9,6 +9,13 @@
         {% if error %}
         <div class="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded text-sm">
             {{ error }}
+            {% if email_taken %}
+            <p class="mt-1">
+                <a href="/login?email={{ prefill_email|urlencode }}" class="underline hover:no-underline">Log in instead</a>,
+                or <a href="/reset-password?email={{ prefill_email|urlencode }}" class="underline hover:no-underline">reset your password</a>
+                if you don't remember it.
+            </p>
+            {% endif %}
         </div>
         {% endif %}
 
