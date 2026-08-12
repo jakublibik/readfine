@@ -656,7 +656,7 @@ class TestSubscribeScrape:
         from app.services.feed import subscribe_scrape
 
         user = make_mock_user()
-        existing = SimpleNamespace(id=42, subscriber_count=3)
+        existing = SimpleNamespace(id=42, subscriber_count=3, is_private=False)
         db = self._make_db(existing_feed=existing, existing_subscription=None, feed_count=1)
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
@@ -675,7 +675,7 @@ class TestSubscribeScrape:
         from app.services.feed import subscribe_scrape
 
         user = make_mock_user()
-        existing = SimpleNamespace(id=42, subscriber_count=1)
+        existing = SimpleNamespace(id=42, subscriber_count=1, is_private=False)
         existing_sub = SimpleNamespace(id=99)
         db = self._make_db(existing_feed=existing, existing_subscription=existing_sub, feed_count=1)
 

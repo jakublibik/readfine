@@ -8,7 +8,10 @@ from app.database import get_db
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
-from app.services.feed import AlreadySubscribed, attach_unread_counts, list_user_feeds, subscribe, unsubscribe
+from app.services.feed import (
+    AlreadySubscribed, attach_unread_counts, list_user_feeds, may_edit_feed_auth,
+    subscribe, unsubscribe,
+)
 from app.utils.crypto import encrypt
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
@@ -121,28 +124,33 @@ async def update_feed(
     auth_fields = {"fetch_auth_user", "fetch_auth_pass"} & payload.model_fields_set
     if auth_fields:
         feed = user_feed.feed
+        # The same rule the feed edit form applies, from the same function, because the
+        # two used to disagree: this path refused a shared private feed while the form
+        # allowed it. See services.feed.may_edit_feed_auth.
+        if not may_edit_feed_auth(feed):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "HTTP auth credentials cannot be changed while multiple users are "
+                    "subscribed to this feed. Subscribe to the address again with the "
+                    "credentials to get a private feed of your own."
+                ),
+            )
+        if "fetch_auth_user" in payload.model_fields_set and not payload.fetch_auth_user:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_user cannot be empty")
+
+        # Checks are done; everything below writes to the feed row. The clearing of
+        # status and the error counters used to sit above them, which meant a refused
+        # request still went through the motions of re-enabling the feed.
         if feed.status == "disabled":
             feed.status = "active"
         feed.fetch_error_count = 0
         feed.block_count = 0
         if not feed.is_private:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="HTTP auth credentials can only be set on private feeds",
-            )
-        # Count current subscribers to prevent one user from overwriting shared private feed auth
-        sub_count_result = await db.execute(
-            select(UserFeed).where(UserFeed.feed_id == feed.id)
-        )
-        subscriber_count = len(sub_count_result.scalars().all())
-        if subscriber_count > 1:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="HTTP auth credentials cannot be changed while multiple users are subscribed to this feed",
-            )
+            # Credentials are what makes a row private; leaving it public would put it
+            # back in the shared pool for the next subscriber, password and all.
+            feed.is_private = True
         if "fetch_auth_user" in payload.model_fields_set:
-            if not payload.fetch_auth_user:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fetch_auth_user cannot be empty")
             feed.fetch_auth_user = payload.fetch_auth_user
         if "fetch_auth_pass" in payload.model_fields_set and payload.fetch_auth_pass:
             feed.fetch_auth_pass_encrypted = encrypt(payload.fetch_auth_pass.get_secret_value())
