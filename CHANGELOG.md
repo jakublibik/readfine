@@ -15,6 +15,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- On a phone, opening search from the menu no longer darkens the screen twice over. Search is opened from inside the sliding menu and the menu stays open behind it, so that closing search puts you back where you came from, but both of them dim the screen and the two together came out much darker. Closing search then snapped the screen back to normal brightness, which looked like something had flashed across the whole page. Only the search window dims things now while it is up.
+
 - The search window no longer opens on last time's filters for a moment. Its contents are fetched, but the window itself appeared instantly, so until the new copy landed you were looking at the previous one, scope and label chips included, even when you had opened it fresh from the menu and it was about to come up empty. It now empties on close and keeps its size while it fills.
 
 - Running a search, or switching to another feed, no longer flashes the list you were reading. The list you had open was scrolled back to the top while it was still on screen, so for a frame or two you saw your old articles jump before the new ones took their place. It was most obvious when you had scrolled a fair way down, which is exactly when you are most likely to go looking for something. The new list now simply arrives at the top.

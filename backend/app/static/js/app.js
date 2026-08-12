@@ -1159,6 +1159,8 @@ function openSearchModal(prefill) {
   if (el) el.classList.add('hidden');
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.remove('hidden');
+  // Marks the drawer's backdrop as redundant while this one is up (see base.html).
+  document.documentElement.classList.add('search-modal-open');
   // Only restore the previous query/scope when reopening from the results header
   // (prefill); a fresh search from the menu or the "/" shortcut starts empty.
   window._searchPrefill = !!prefill;
@@ -1177,6 +1179,7 @@ function openSearchModal(prefill) {
 function closeSearchModal() {
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.add('hidden');
+  document.documentElement.classList.remove('search-modal-open');
   // Drop the contents with it. The overlay is shown the moment you open the modal,
   // but its markup is fetched, so whatever was left from last time (your previous
   // scope and label chips, most visibly) sat there until the new copy arrived and

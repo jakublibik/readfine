@@ -127,6 +127,14 @@
       html[data-bucket="small"].mobile-sidebar-open #mobile-sidebar-backdrop {
         display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0,0,0,0.4);
       }
+      /* Search is opened from inside the drawer and the drawer stays open behind it,
+         so closing the search returns you to the menu you came from. Both dim the
+         screen, though, and two backdrops stacked read as one much darker one, which
+         then jumps back to normal the moment the search closes. Drop the drawer's
+         while the search is up: the modal's own backdrop covers the same area. */
+      html[data-bucket="small"].mobile-sidebar-open.search-modal-open #mobile-sidebar-backdrop {
+        display: none;
+      }
 
       /* Hideable: title bar, list offset */
       #mobile-title-bar { display: none; }
