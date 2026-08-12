@@ -121,7 +121,7 @@
       <div class="flex items-center gap-2 sm:gap-3 sm:flex-1">
         <input type="text" name="ai_{{ slot }}_model"
                value="{{ model_val or '' }}"
-               placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
+               placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-5' }}"
                class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
         <button type="button"
                 hx-post="/settings/ai/verify/{{ slot }}"
