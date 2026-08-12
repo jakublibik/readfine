@@ -15,6 +15,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- The search window no longer opens on last time's filters for a moment. Its contents are fetched, but the window itself appeared instantly, so until the new copy landed you were looking at the previous one, scope and label chips included, even when you had opened it fresh from the menu and it was about to come up empty. It now empties on close and keeps its size while it fills.
+
 - Running a search, or switching to another feed, no longer flashes the list you were reading. The list you had open was scrolled back to the top while it was still on screen, so for a frame or two you saw your old articles jump before the new ones took their place. It was most obvious when you had scrolled a fair way down, which is exactly when you are most likely to go looking for something. The new list now simply arrives at the top.
 
 - In dark mode, the bits the browser draws for itself are dark too. Scrollbars, dropdowns, checkboxes and the yellow tint on an autofilled field took their look from the operating system rather than from Readfine, so with a light system theme you got a pale scrollbar running down the side of a dark article list and a white dropdown on a dark settings page. They now follow whichever theme you have picked, including when you switch between them. The landing page and the sign-in screens changed with it.

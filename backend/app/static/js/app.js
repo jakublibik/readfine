@@ -1177,6 +1177,15 @@ function openSearchModal(prefill) {
 function closeSearchModal() {
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.add('hidden');
+  // Drop the contents with it. The overlay is shown the moment you open the modal,
+  // but its markup is fetched, so whatever was left from last time (your previous
+  // scope and label chips, most visibly) sat there until the new copy arrived and
+  // replaced it. The box holds its height from CSS while it is empty, so opening it
+  // is a plain fade-in rather than a flash of the old state. Nothing reads these
+  // fields while the modal is closed: the query and filters are remembered in
+  // window._lastSearch*, and the chips are rendered server-side on reopen.
+  var content = document.getElementById('search-modal-content');
+  if (content) content.innerHTML = '';
 }
 
 function submitSearch() {

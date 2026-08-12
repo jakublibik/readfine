@@ -183,8 +183,12 @@
 <div id="search-modal-overlay"
      class="hidden fixed inset-0 z-50 flex items-center justify-center">
   <div class="absolute inset-0 bg-black/40" data-action="close-search"></div>
+  {# min-h keeps the box from collapsing in the moment between opening the modal and
+     its markup arriving (closeSearchModal empties it), so it grows into its final
+     height instead of popping open from nothing. Capped against the viewport so a
+     phone held sideways doesn't get a modal taller than the screen. #}
   <div id="search-modal-content"
-       class="relative bg-white rounded-xl shadow-2xl w-[480px] max-w-[90vw] max-h-[90vh] overflow-y-auto">
+       class="relative bg-white rounded-xl shadow-2xl w-[480px] max-w-[90vw] min-h-[min(24rem,70vh)] max-h-[90vh] overflow-y-auto">
   </div>
 </div>
 
