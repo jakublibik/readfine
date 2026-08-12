@@ -324,6 +324,7 @@ function applyColorScheme(scheme) {
     document.documentElement.classList.toggle('dark',
       !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches));
   }
+  if (window.syncThemeColor) window.syncThemeColor();
 }
 document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(el) {
   el.addEventListener('change', function() { applyColorScheme(this.value); });

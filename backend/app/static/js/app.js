@@ -82,6 +82,7 @@ document.addEventListener('htmx:afterRequest', function (e) {
     try { cs = localStorage.getItem('colorScheme'); } catch(e) {}
     if ((cs || 'system') === 'system') {
       document.documentElement.classList.toggle('dark', mq.matches);
+      if (window.syncThemeColor) window.syncThemeColor();
     }
   });
 })();
