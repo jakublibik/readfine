@@ -180,7 +180,7 @@ PROVIDER_LABELS: dict[str, str] = {
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
-# Last updated: 2026-07-07
+# Last updated: 2026-08-12
 # Anthropic: https://www.anthropic.com/pricing
 # OpenAI:    https://openai.com/api/pricing
 # Gemini:    https://ai.google.dev/gemini-api/docs/pricing
@@ -188,12 +188,16 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     # Anthropic
     "claude-haiku-4-5": 1.00,
     "claude-haiku-3-5": 0.80,
-    "claude-sonnet-5": 3.00,  # standard; intro $2 in/$10 out through 2026-08-31
+    # The $2 launch price was announced as introductory through 2026-08-31; the
+    # rise to $3 was called off and $2 is now the standard price.
+    "claude-sonnet-5": 2.00,
     "claude-sonnet-4-6": 3.00,
     "claude-sonnet-3-5": 3.00,
+    "claude-opus-5": 5.00,
     "claude-opus-4-8": 5.00,
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
+    "claude-opus-4-5": 5.00,
     "claude-fable-5": 10.00,
     # OpenAI
     "gpt-4o-mini": 0.15,
@@ -210,7 +214,9 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "gemini-2.5-pro": 1.25,
     "gemini-2.5-flash": 0.30,
     "gemini-2.5-flash-lite": 0.10,
+    "gemini-3.6-flash": 1.50,
     "gemini-3.5-flash": 1.50,
+    "gemini-3.5-flash-lite": 0.30,
     "gemini-3.1-flash-lite": 0.25,
     "gemini-3.1-pro-preview": 2.00,
 }
@@ -231,9 +237,11 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "claude-sonnet-5": 5.00,
     "claude-sonnet-4-6": 5.00,
     "claude-sonnet-3-5": 5.00,
+    "claude-opus-5": 5.00,
     "claude-opus-4-8": 5.00,
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
+    "claude-opus-4-5": 5.00,
     "claude-fable-5": 5.00,
     "gpt-4o-mini": 4.00,
     "gpt-4o": 4.00,
@@ -248,7 +256,9 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gemini-2.5-pro": 8.00,
     "gemini-2.5-flash": 2.50 / 0.30,  # $0.30 in / $2.50 out
     "gemini-2.5-flash-lite": 4.00,  # $0.10 in / $0.40 out
+    "gemini-3.6-flash": 5.00,  # $1.50 in / $7.50 out
     "gemini-3.5-flash": 6.00,  # $1.50 in / $9.00 out
+    "gemini-3.5-flash-lite": 2.50 / 0.30,  # $0.30 in / $2.50 out
     "gemini-3.1-flash-lite": 6.00,  # $0.25 in / $1.50 out
     "gemini-3.1-pro-preview": 6.00,  # $2.00 in / $12.00 out
 }
