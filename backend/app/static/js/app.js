@@ -591,17 +591,13 @@ document.body.addEventListener('savedArticleRemoved', function (e) {
   showToast('Removed from Saved', 'ok');
 });
 
-// Height of everything pinned above the article list: the mobile top panel (outside
-// the list) and a sticky list header (the Saved URL box, the search-results strip),
-// which stays put while the list scrolls. A row aligned to the list's own top would
-// slide underneath it.
+// Height of a sticky list header (the Saved URL box, the search-results strip), which
+// stays put while the list scrolls. A row aligned to the list's own top would slide
+// underneath it. The mobile title bar is not counted: the shell reserves its height
+// (see base.html), so the list already starts below it.
 function listStickyOffset() {
-  var topPanel = document.getElementById('mobile-title-bar');
-  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-  var offset = barVisible ? topPanel.getBoundingClientRect().height : 0;
   var listHeader = document.querySelector('#article-list [data-list-header]');
-  if (listHeader) offset += listHeader.getBoundingClientRect().height;
-  return offset;
+  return listHeader ? listHeader.getBoundingClientRect().height : 0;
 }
 
 // An article was added to Saved. The list is ordered by publication date, so the row
@@ -921,10 +917,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   var seen = new Set();
 
-  var topPanel = document.getElementById('mobile-title-bar');
-  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-  var barHeight = barVisible ? Math.round(topPanel.getBoundingClientRect().height) : 0;
-  var topOffset = barVisible ? barHeight : 0;
+  // No inset needed for the mobile title bar: the shell reserves its height (see
+  // base.html), so the list's own top edge already sits below it.
+  var topOffset = 0;
   var bottomOffset = 0;
 
   var observer = new IntersectionObserver(function (entries) {

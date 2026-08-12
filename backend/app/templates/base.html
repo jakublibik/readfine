@@ -137,7 +137,14 @@
         border-bottom: 1px solid #e5e7eb;
         padding: var(--sat) calc(0.75rem + var(--sar)) 0 calc(0.75rem + var(--sal));
       }
-      html[data-bucket="small"][data-sidebar-mode="hideable-up"] #article-list {
+      /* The bar's height comes off the shell, not off the list's padding. Padding
+         moves the content but not the scrollbar, whose track would still start at
+         the top of the viewport and run behind the bar. Shrinking the shell instead
+         puts the list (and with it the track) below the bar. The bar stays fixed, so
+         nothing reflows when it renders. Note that the bottom bar deliberately keeps
+         the overlay treatment: it slides in and out on scroll, and taking its height
+         out of the layout would jog the list every time. */
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] .app-shell {
         padding-top: calc(var(--mobile-bar-h) + var(--sat));
       }
 
