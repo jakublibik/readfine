@@ -416,6 +416,14 @@ async def settings_feed_update(
     uf.feed.readable_revival_next_at = None
     uf.feed.readable_revival_attempts = 0
     uf.feed.readable_revived_at = None
+    if uf.extract_readable:
+        # Start the auto-disable streaks from here, so a feed the user has just turned
+        # extraction back on for is not condemned by the 403s that got it turned off.
+        # Done on every save that leaves extraction on, not only on a re-enable: the
+        # lines above already treat saving the form as a clean slate for the error
+        # counters, and this is the same slate.
+        from app.services.readable_service import stamp_readable_streak_start
+        await stamp_readable_streak_start(uf.feed_id, db)
 
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)

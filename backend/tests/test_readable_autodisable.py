@@ -16,11 +16,17 @@ from app.services.readable_service import (
 
 
 def _db_returning_rows(rows):
-    """An AsyncMock DB whose execute(...).all() yields `rows` (status, error tuples)."""
+    """An AsyncMock DB whose execute(...).all() yields `rows` (status, error tuples).
+
+    scalar() answers None: it is the streak watermark, and None means "count the whole
+    history", which is the window these threshold tests are about. The watermark itself
+    is covered against real Postgres in test_readable_streak_window.py.
+    """
     db = AsyncMock()
     result = MagicMock()
     result.all.return_value = rows
     db.execute = AsyncMock(return_value=result)
+    db.scalar = AsyncMock(return_value=None)
     return db
 
 

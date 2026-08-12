@@ -103,7 +103,14 @@ async def update_feed(
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
         user_feed.folder_id = payload.folder_id
     if payload.extract_readable is not None:
+        was_off = not user_feed.extract_readable
         user_feed.extract_readable = payload.extract_readable
+        if payload.extract_readable and was_off:
+            # Turning extraction back on restarts the auto-disable streaks; without it
+            # the 403s that got the feed disabled are still its newest terminal
+            # articles and the next one re-disables it on the spot.
+            from app.services.readable_service import stamp_readable_streak_start
+            await stamp_readable_streak_start(user_feed.feed_id, db)
     if payload.purge_after_days is not None:
         user_feed.purge_after_days = payload.purge_after_days
     if payload.purge_keep_count is not None:
