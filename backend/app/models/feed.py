@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -41,6 +41,12 @@ class Feed(Base):
         SmallInteger, nullable=False, default=0, server_default="0"
     )
     readable_revived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Newest article at the moment readable extraction was last turned back on. The
+    # consecutive-403 and consecutive-empty checks ignore anything at or below it, so a
+    # feed that comes back does not inherit the failures that got it disabled. NULL =
+    # never re-enabled, count the whole history. See
+    # app.services.readable_service.stamp_readable_streak_start.
+    readable_streak_from_id: Mapped[int | None] = mapped_column(BigInteger)
     last_error: Mapped[str | None] = mapped_column(Text)
     last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # When set, the scheduler skips this feed until this time (honors HTTP 429 Retry-After).

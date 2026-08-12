@@ -34,8 +34,9 @@ def _db(feeds, *, still_disabled=1, article_url="https://example.com/a", user_fe
     """Mocked session for retry_blocked_feeds.
 
     execute() serves the feed query first and then the subscriber query issued by
-    _revive_readable_for_feed; scalar() serves the still-disabled count and the probe
-    article's URL, in that order.
+    _revive_readable_for_feed; scalar() serves the still-disabled count, the probe
+    article's URL, and then the newest article id stamped as the streak watermark when
+    the probe passes, in that order.
     """
     db = AsyncMock()
     feeds_result = MagicMock()
@@ -43,7 +44,7 @@ def _db(feeds, *, still_disabled=1, article_url="https://example.com/a", user_fe
     uf_result = MagicMock()
     uf_result.scalars.return_value.all.return_value = user_feeds or []
     db.execute = AsyncMock(side_effect=[feeds_result, uf_result])
-    db.scalar = AsyncMock(side_effect=[still_disabled, article_url])
+    db.scalar = AsyncMock(side_effect=[still_disabled, article_url, None])
     db.commit = AsyncMock()
     return db
 

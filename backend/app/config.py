@@ -88,6 +88,14 @@ class Settings(BaseSettings):
     first_admin_email: EmailStr | None = None
     first_admin_password: str | None = None
 
+    # How long a signed-in session survives without a visit. Sliding: every
+    # response re-stamps it, so only a real absence runs it out. Two weeks was
+    # short enough to log out someone who skipped a fortnight and meant to come
+    # back; a month covers that with room without leaving a usable cookie lying
+    # around for a season. Changing a password revokes every session regardless
+    # (see session_token_version).
+    session_max_age_days: int = 30
+
     # Rate limiting
     rate_limit_login: str = "5/minute"
     rate_limit_register: str = "3/hour"

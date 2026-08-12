@@ -2,12 +2,40 @@
 <html lang="en" data-font-size="{{ reading_font_size | default('md') }}" data-font-family="{{ reading_font_family | default('sans') }}" data-label-display="{{ label_display | default('indicator') }}" data-bucket-small-max="{{ bucket_small_max | default(640) }}" data-bucket-medium-max="{{ bucket_medium_max | default(1100) }}"{% if open_original_when_empty %} data-open-original-empty="1"{% endif %}>
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {# Kept in step with the shell background by syncThemeColor() in init.js — the
+       colour scheme is a stored preference, so a media-query pair would show the
+       wrong bar to anyone who overrode their device setting. #}
+    <meta name="theme-color" content="#f9fafb">
     <title>{% block title %}Readfine{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
     <style>
+      /* Safe-area insets, aliased once so the rules below stay readable. They are
+         all 0 except on a notched screen with viewport-fit=cover, so every calc()
+         using them collapses to the plain value everywhere else. */
+      :root {
+        --sat: env(safe-area-inset-top, 0px);
+        --sab: env(safe-area-inset-bottom, 0px);
+        --sal: env(safe-area-inset-left, 0px);
+        --sar: env(safe-area-inset-right, 0px);
+        --mobile-bar-h: 2.75rem;
+      }
+
+      /* App shell height. 100vh is the *largest* viewport on mobile, i.e. the one
+         with the address bar retracted, so the bottom bar sat under browser chrome
+         until you scrolled. 100dvh tracks the visible area; the 100vh line stays as
+         the fallback for browsers without dvh. Side insets live here rather than on
+         the panels because the in-flow children inherit them; the fixed ones
+         (sidebar, bars, detail overlay) carry their own below. */
+      .app-shell {
+        height: 100vh;
+        height: 100dvh;
+        padding-left: var(--sal);
+        padding-right: var(--sar);
+      }
+
       .prose h1 { font-size: 1.3em !important; }
       .prose h2 { font-size: 1.15em !important; margin-top: 1.4em; margin-bottom: 0.5em; }
       .prose h3 { font-size: 1.05em !important; margin-top: 1.2em; margin-bottom: 0.4em; }
@@ -69,7 +97,8 @@
       /* Hideable modes: sidebar lives off-screen and slides in — no display:none flash */
       html[data-bucket="small"]:not([data-sidebar-mode="collapsible"]) #sidebar {
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
-        width: 15rem; z-index: 30; overflow-y: auto;
+        width: calc(15rem + var(--sal)); z-index: 30; overflow-y: auto;
+        padding-top: var(--sat); padding-bottom: var(--sab); padding-left: var(--sal);
         transform: translateX(-100%); visibility: hidden; pointer-events: none;
       }
       html[data-bucket="small"]:not([data-sidebar-mode="collapsible"]).mobile-sidebar-open #sidebar {
@@ -82,18 +111,29 @@
          list never reflows on open/close. */
       html[data-bucket="small"][data-sidebar-mode="collapsible"] #sidebar {
         display: block !important; position: fixed; left: 0; top: 0; bottom: 0;
-        width: 3rem !important; z-index: 30; overflow-y: auto;
+        width: calc(3rem + var(--sal)) !important; z-index: 30; overflow-y: auto;
+        padding-top: var(--sat); padding-bottom: var(--sab); padding-left: var(--sal);
       }
+      /* The rail's own left inset comes from the shell's padding, so the list only
+         has to clear the rail itself. */
       html[data-bucket="small"][data-sidebar-mode="collapsible"] #article-list { padding-left: 3rem; }
 
       /* Collapsible: overlay on open — widen the same fixed panel */
       html[data-bucket="small"][data-sidebar-mode="collapsible"].mobile-sidebar-open #sidebar {
-        width: 15rem !important;
+        width: calc(15rem + var(--sal)) !important;
       }
 
       #mobile-sidebar-backdrop { display: none; }
       html[data-bucket="small"].mobile-sidebar-open #mobile-sidebar-backdrop {
         display: block; position: fixed; inset: 0; z-index: 29; background: rgba(0,0,0,0.4);
+      }
+      /* Search is opened from inside the drawer and the drawer stays open behind it,
+         so closing the search returns you to the menu you came from. Both dim the
+         screen, though, and two backdrops stacked read as one much darker one, which
+         then jumps back to normal the moment the search closes. Drop the drawer's
+         while the search is up: the modal's own backdrop covers the same area. */
+      html[data-bucket="small"].mobile-sidebar-open.search-modal-open #mobile-sidebar-backdrop {
+        display: none;
       }
 
       /* Hideable: title bar, list offset */
@@ -101,16 +141,29 @@
       html[data-bucket="small"][data-sidebar-mode="hideable-up"] #mobile-title-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-        height: 2.75rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb; padding: 0 0.75rem;
+        height: calc(var(--mobile-bar-h) + var(--sat)); background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+        padding: var(--sat) calc(0.75rem + var(--sar)) 0 calc(0.75rem + var(--sal));
       }
-      html[data-bucket="small"][data-sidebar-mode="hideable-up"] #article-list { padding-top: 2.75rem; }
+      /* The bar's height comes off the shell, not off the list's padding. Padding
+         moves the content but not the scrollbar, whose track would still start at
+         the top of the viewport and run behind the bar. Shrinking the shell instead
+         puts the list (and with it the track) below the bar. The bar stays fixed, so
+         nothing reflows when it renders. Note that the bottom bar deliberately keeps
+         the overlay treatment: it slides in and out on scroll, and taking its height
+         out of the layout would jog the list every time. */
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] .app-shell {
+        padding-top: calc(var(--mobile-bar-h) + var(--sat));
+      }
 
       /* Hideable-up: scrollable bottom bar */
       #mobile-bottom-bar { display: none; }
       html[data-bucket="small"][data-sidebar-mode="hideable-up"] #mobile-bottom-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; bottom: 0; left: 0; right: 0; z-index: 10;
-        height: 2.75rem; background: #f9fafb; border-top: 1px solid #e5e7eb; padding: 0 0.75rem;
+        height: calc(var(--mobile-bar-h) + var(--sab)); background: #f9fafb;
+        border-top: 1px solid #e5e7eb;
+        padding: 0 calc(0.75rem + var(--sar)) var(--sab) calc(0.75rem + var(--sal));
         transform: translateY(100%); transition: transform 200ms ease;
       }
       html[data-bucket="small"][data-sidebar-mode="hideable-up"] #mobile-bottom-bar.bottom-bar-visible {
@@ -120,7 +173,9 @@
       /* Detail fullscreen overlay */
       html[data-bucket="small"].mobile-detail-open #article-detail {
         display: block !important; position: fixed; inset: 0; z-index: 40;
-        background: white; overflow-y: auto; padding-top: 2.75rem;
+        background: white; overflow-y: auto;
+        padding-top: calc(var(--mobile-bar-h) + var(--sat));
+        padding-bottom: var(--sab); padding-left: var(--sal); padding-right: var(--sar);
       }
       #mobile-detail-back-bar { display: none; }
       html[data-bucket="small"].mobile-detail-open #article-detail article { padding-top: 0.75rem; }
@@ -137,19 +192,25 @@
       html[data-bucket="small"].mobile-detail-open #mobile-detail-back-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; top: 0; left: 0; right: 0; z-index: 41;
-        height: 2.75rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb; padding: 0 0.75rem;
+        height: calc(var(--mobile-bar-h) + var(--sat)); background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+        padding: var(--sat) calc(0.75rem + var(--sar)) 0 calc(0.75rem + var(--sal));
       }
 
       /* Deep-link (?open_article_id=…) detail as a fullscreen overlay in non-large
          layouts, where #article-detail is otherwise hidden. */
       html.deeplink-detail-open #article-detail {
         display: block !important; position: fixed; inset: 0; z-index: 40;
-        background: white; overflow-y: auto; padding-top: 2.75rem;
+        background: white; overflow-y: auto;
+        padding-top: calc(var(--mobile-bar-h) + var(--sat));
+        padding-bottom: var(--sab); padding-left: var(--sal); padding-right: var(--sar);
       }
       html.deeplink-detail-open #mobile-detail-back-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; top: 0; left: 0; right: 0; z-index: 41;
-        height: 2.75rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb; padding: 0 0.75rem;
+        height: calc(var(--mobile-bar-h) + var(--sat)); background: #f9fafb;
+        border-bottom: 1px solid #e5e7eb;
+        padding: var(--sat) calc(0.75rem + var(--sar)) 0 calc(0.75rem + var(--sal));
       }
 
       /* ── AI score indicator ── */

@@ -19,7 +19,7 @@ from app.models.feed import Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.feed import cache_feed_preview, subscribe, unsubscribe
+from app.services.feed import cache_feed_preview, may_edit_feed_auth, subscribe, unsubscribe
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
@@ -332,6 +332,9 @@ async def settings_feed_edit(
         ),
         "is_sole_subscriber": is_sole_subscriber,
         "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
+        # Same function the POST handler gates on, so the form cannot offer a field the
+        # save would then ignore.
+        "can_edit_auth": may_edit_feed_auth(uf.feed),
         "default_interval_min": default_interval,
         # Effective interval Auto would use for this feed — hint next to the "Auto" option.
         "auto_interval_min": auto_interval_min(
@@ -389,7 +392,11 @@ async def settings_feed_update(
         else:
             uf.feed.fetch_interval_min = None
 
-    if uf.feed.is_private or uf.feed.subscriber_count == 1:
+    # Unlike the interval above, credentials are a sole subscriber's to change; see
+    # services.feed.may_edit_feed_auth for why, and feed_edit.html, which hides the
+    # fields under the same rule and tells a shared feed's subscriber how to get a
+    # credentialed copy of their own.
+    if may_edit_feed_auth(uf.feed):
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
         fetch_auth_pass = form.get("fetch_auth_pass", "") or None
         uf.feed.fetch_auth_user = fetch_auth_user
@@ -416,6 +423,14 @@ async def settings_feed_update(
     uf.feed.readable_revival_next_at = None
     uf.feed.readable_revival_attempts = 0
     uf.feed.readable_revived_at = None
+    if uf.extract_readable:
+        # Start the auto-disable streaks from here, so a feed the user has just turned
+        # extraction back on for is not condemned by the 403s that got it turned off.
+        # Done on every save that leaves extraction on, not only on a re-enable: the
+        # lines above already treat saving the form as a clean slate for the error
+        # counters, and this is the same slate.
+        from app.services.readable_service import stamp_readable_streak_start
+        await stamp_readable_streak_start(uf.feed_id, db)
 
     await db.commit()
     return RedirectResponse("/settings/feeds", status_code=303)

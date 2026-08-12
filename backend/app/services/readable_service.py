@@ -1055,6 +1055,29 @@ _REVIVAL_BACKOFF_DAYS = [3, 14]
 _REVIVAL_BATCH_SIZE = 10  # feeds probed per scheduler run
 
 
+async def stamp_readable_streak_start(feed_id: int, db: AsyncSession) -> None:
+    """Record where the streak checks may start counting for a feed.
+
+    Called wherever readable extraction comes back on, by hand or by a revival probe.
+    Disabling leaves articles as they are, so without this the failures that got the
+    feed disabled stay its newest terminal rows and the very next one re-trips the
+    check — a threshold of 3 or 5 collapsing to 1.
+
+    Stores the feed's newest article id rather than a timestamp: a success has to be
+    able to break a streak, and articles only carry readable_failed_at, so a time-based
+    window would silently drop the successes out of the middle of it. Articles that
+    arrived while extraction was off are 'skipped' and never counted anyway.
+
+    Does not commit — every caller writes more than this.
+    """
+    newest = await db.scalar(
+        select(func.max(Article.id)).where(Article.feed_id == feed_id)
+    )
+    feed = await db.get(Feed, feed_id)
+    if feed is not None:
+        feed.readable_streak_from_id = newest
+
+
 def _defer_revival(feed: Feed, now: datetime) -> None:
     """Point a feed at its next revival probe, or stop probing for good.
 
@@ -1062,10 +1085,11 @@ def _defer_revival(feed: Feed, now: datetime) -> None:
     given over its whole lifetime, passing ones included, and is never reset by this
     module. Both halves of that matter. A 403 is usually per-IP or rate-based rather
     than per-URL, so a probe can pass while the feed is still blocked: extraction comes
-    back on, users collect 403s, one article later the feed is disabled again (the old
-    403 articles are still the newest terminal ones, so the streak check trips at once).
-    If a passing probe were free, or the counter reset on re-disable, that would repeat
-    every few days forever. Charging for it lets the loop end by itself.
+    back on and users start collecting 403s again. The streak check no longer counts the
+    old ones (see stamp_readable_streak_start), so the feed gets a fair three articles
+    before it goes off again, but go off it will. If a passing probe were free, or the
+    counter reset on re-disable, that would repeat every few days forever. Charging for
+    it lets the loop end by itself.
     """
     attempts = feed.readable_revival_attempts or 0
     if attempts >= len(_REVIVAL_BACKOFF_DAYS):
@@ -1151,22 +1175,41 @@ async def _disable_readable_for_empty(feed_id: int, db: AsyncSession) -> None:
     )
 
 
-async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
-    """Disable readable if the last N processed articles for the feed all returned 403.
+async def _recent_terminal_articles(
+    feed_id: int, limit: int, db: AsyncSession
+) -> list[tuple[str, Optional[str]]]:
+    """The feed's *limit* newest terminal extraction outcomes, newest first.
 
-    Used for cross-batch detection: when a feed accumulates 403s across multiple scheduler
-    runs (few articles per batch), this catches it once the consecutive count is reached.
+    Successes are in there with the failures: one of them breaks a streak, which is the
+    whole reason the callers look at outcomes rather than at failures alone. Anything at
+    or below Feed.readable_streak_from_id is left out, so failures from before the last
+    re-enable cannot be counted twice.
     """
-    result = await db.execute(
+    stmt = (
         select(Article.readable_status, Article.readable_error)
         .where(
             Article.feed_id == feed_id,
             Article.readable_status.in_(["failed", "success"]),
         )
         .order_by(Article.id.desc())
-        .limit(_CONSECUTIVE_403_THRESHOLD)
+        .limit(limit)
     )
-    rows = result.all()
+    streak_from_id = await db.scalar(
+        select(Feed.readable_streak_from_id).where(Feed.id == feed_id)
+    )
+    if streak_from_id is not None:
+        stmt = stmt.where(Article.id > streak_from_id)
+    result = await db.execute(stmt)
+    return result.all()
+
+
+async def _maybe_disable_readable_for_403(feed_id: int, db: AsyncSession) -> None:
+    """Disable readable if the last N processed articles for the feed all returned 403.
+
+    Used for cross-batch detection: when a feed accumulates 403s across multiple scheduler
+    runs (few articles per batch), this catches it once the consecutive count is reached.
+    """
+    rows = await _recent_terminal_articles(feed_id, _CONSECUTIVE_403_THRESHOLD, db)
 
     if len(rows) < _CONSECUTIVE_403_THRESHOLD:
         return
@@ -1188,16 +1231,7 @@ async def _maybe_disable_readable_for_empty(feed_id: int, db: AsyncSession) -> N
     accumulate across scheduler runs (few articles per batch), this catches the feed
     once enough terminally-failed articles share the empty-content error.
     """
-    result = await db.execute(
-        select(Article.readable_status, Article.readable_error)
-        .where(
-            Article.feed_id == feed_id,
-            Article.readable_status.in_(["failed", "success"]),
-        )
-        .order_by(Article.id.desc())
-        .limit(_CONSECUTIVE_EMPTY_THRESHOLD)
-    )
-    rows = result.all()
+    rows = await _recent_terminal_articles(feed_id, _CONSECUTIVE_EMPTY_THRESHOLD, db)
 
     if len(rows) < _CONSECUTIVE_EMPTY_THRESHOLD:
         return
@@ -1247,6 +1281,7 @@ async def _revive_readable_for_feed(feed: Feed, db: AsyncSession) -> int:
     feed.readable_revival_attempts = (feed.readable_revival_attempts or 0) + 1
     feed.readable_revival_next_at = None
     feed.readable_revived_at = datetime.now(timezone.utc)
+    await stamp_readable_streak_start(feed.id, db)
     await db.commit()
     return len(user_feeds)
 

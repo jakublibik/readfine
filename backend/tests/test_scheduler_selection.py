@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.config import settings as app_settings
 from app.fetcher.interval import derive_interval_min
 from app.fetcher.scheduler import (
+    FETCH_ERROR_DISABLE_THRESHOLD,
     _feed_due_for_selection,
     _select_due_feeds,
     effective_interval_min,
+    error_backoff_minutes,
     recompute_derived_intervals,
 )
 from app.models.article import Article
@@ -110,13 +112,34 @@ class TestSelectDueFeeds:
         assert f.id in await _selected_ids(pg, 30)
 
     async def test_error_feed_due_after_backoff(self, pg):
-        # default_interval=60 → error backoff = max(15, 120) = 120 min; 3h stale → due.
-        f = await _feed(pg, interval=60, status="error", last_offset=timedelta(hours=-3))
+        # default_interval=60 → regular backoff = max(15, 120) = 120 min; 3h stale → due.
+        f = await _feed(pg, interval=60, status="error", error_count=2,
+                        last_offset=timedelta(hours=-3))
         assert f.id in await _selected_ids(pg, 15)
 
     async def test_error_feed_within_backoff_not_selected(self, pg):
-        f = await _feed(pg, interval=60, status="error", last_offset=timedelta(minutes=-30))
+        f = await _feed(pg, interval=60, status="error", error_count=2,
+                        last_offset=timedelta(minutes=-30))
         assert f.id not in await _selected_ids(pg, 15)
+
+    async def test_first_failure_is_re_checked_quickly(self, pg):
+        # One failure so far: 35 min stale is already past the 30-min re-check, so a
+        # host that was briefly unwell costs one slot rather than the full 2 h.
+        f = await _feed(pg, interval=60, status="error", error_count=1,
+                        last_offset=timedelta(minutes=-35))
+        assert f.id in await _selected_ids(pg, 0)
+
+    async def test_second_failure_falls_back_to_the_regular_backoff(self, pg):
+        # Same staleness, one failure further: the quick re-check is not repeated.
+        f = await _feed(pg, interval=60, status="error", error_count=2,
+                        last_offset=timedelta(minutes=-35))
+        assert f.id not in await _selected_ids(pg, 0)
+
+    async def test_past_disable_threshold_waits_a_day(self, pg):
+        f = await _feed(pg, interval=60, status="error",
+                        error_count=FETCH_ERROR_DISABLE_THRESHOLD,
+                        last_offset=timedelta(hours=-3))
+        assert f.id not in await _selected_ids(pg, 0)
 
     async def test_retry_after_blocks_due_feed(self, pg):
         f = await _feed(pg, interval=60, last_offset=timedelta(hours=-2),
@@ -152,7 +175,7 @@ class TestEffectiveIntervalDrift:
             status=feed.status,
             last_fetched_at=feed.last_fetched_at,
             retry_after_until=feed.retry_after_until,
-            error_backoff_min=max(15, self.DEFAULT * 2),
+            error_backoff_min=error_backoff_minutes(feed.fetch_error_count, self.DEFAULT),
             now=now,
         )
 

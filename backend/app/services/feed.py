@@ -54,6 +54,19 @@ class AlreadySubscribed(FeedSubscriptionError):
         super().__init__(message)
 
 
+class SharedPrivateFeed(FeedSubscriptionError):
+    """Refused: a second subscriber on a feed that carries credentials.
+
+    Not reachable from the subscribe flows, which only ever share public rows. It is
+    raised by attach_subscriber as the guard on that rule, so a path added later fails
+    loudly here rather than quietly handing one subscriber's password to another.
+    """
+
+    def __init__(self, feed_id: int):
+        self.feed_id = feed_id
+        super().__init__("A feed with credentials cannot be shared with another subscriber")
+
+
 # Feed IDs for which an initial fetch task is already running.
 # Prevents duplicate concurrent fetches when multiple users subscribe simultaneously.
 _initial_fetch_in_progress: set[int] = set()
@@ -103,6 +116,56 @@ def get_cached_permanent_url(url: str) -> str | None:
     """Return the permanent redirect target recorded with *url*'s cached parse."""
     entry = _live_preview(url)
     return entry[1] if entry else None
+
+
+def may_edit_feed_auth(feed: Feed) -> bool:
+    """Whether the caller may write HTTP credentials to *feed*.
+
+    The rule, in one place because it is applied in three: the feed edit form, the
+    feeds API, and the template deciding whether to draw the fields at all. They used
+    to spell it differently, and the form's version let one subscriber of a shared
+    private feed rewrite the password for everybody.
+
+    Sole subscriber only, private or not. Credentials sit on the feed row and go out on
+    every subscriber's fetch, so on a shared row editing them means editing someone
+    else's. Private is not the same as unshared: migration 0090 turned public rows
+    whose address carried credentials private and left their subscribers in place.
+    Being public is no obstacle, on the other hand, since setting credentials is what
+    makes a row private in the first place.
+
+    The other half of the same rule is attach_subscriber below, which stops a private
+    feed from gaining a second subscriber. Together they keep credentials to one person.
+    """
+    return feed.subscriber_count == 1
+
+
+async def attach_subscriber(feed: Feed, user: User, db: AsyncSession, **fields) -> UserFeed:
+    """Add *user* to *feed*, the only supported way to create a UserFeed row.
+
+    Holds the rule that a private feed has exactly one subscriber. Credentials live on
+    the feed row and are sent on every subscriber's behalf, so a second subscriber on a
+    private row means one person's password fetching for another, and either of them
+    able to rewrite or clear it for both. Both subscribe paths already avoid it by
+    looking up public rows only, but that is a property of a SELECT two functions away
+    from the write; here it is a rule at the write itself, where a later path that
+    reaches for this helper cannot miss it.
+
+    The rule's other half is in the feed edit form and the feeds API: a shared feed
+    cannot be turned private by putting credentials on it. Someone who wants their own
+    credentialed copy adds the address a second time with them, which lands here on a
+    row of its own.
+
+    Does not commit; the caller does, and both callers translate the unique violation
+    on (user_id, feed_id) into AlreadySubscribed.
+    """
+    if feed.is_private and feed.subscriber_count > 0:
+        raise SharedPrivateFeed(feed.id)
+    await db.execute(
+        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
+    )
+    user_feed = UserFeed(user_id=user.id, feed_id=feed.id, **fields)
+    db.add(user_feed)
+    return user_feed
 
 
 async def _raise_if_already_subscribed_private(
@@ -272,10 +335,6 @@ async def subscribe(
         db.add(feed)
         await db.flush()  # get feed.id
 
-    await db.execute(
-        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
-    )
-
     # Determine whether readable extraction makes sense for this feed
     if parsed is not None:
         # New feed: check entries we just fetched
@@ -288,14 +347,12 @@ async def subscribe(
         sample = await sample_feed_content(feed.id, db, limit=_SUBSCRIBE_SAMPLE)
         extract_readable = not sample.is_full_content
 
-    user_feed = UserFeed(
-        user_id=user.id,
-        feed_id=feed.id,
+    user_feed = await attach_subscriber(
+        feed, user, db,
         folder_id=folder_id,
         custom_title=custom_title[:255] if custom_title else None,
         extract_readable=extract_readable,
     )
-    db.add(user_feed)
     try:
         await db.commit()
     except IntegrityError:
@@ -468,17 +525,9 @@ async def subscribe_scrape(
         db.add(feed)
         await db.flush()
 
-    await db.execute(
-        update(Feed).where(Feed.id == feed.id).values(subscriber_count=Feed.subscriber_count + 1)
+    user_feed = await attach_subscriber(
+        feed, user, db, folder_id=folder_id, extract_readable=True,
     )
-
-    user_feed = UserFeed(
-        user_id=user.id,
-        feed_id=feed.id,
-        folder_id=folder_id,
-        extract_readable=True,
-    )
-    db.add(user_feed)
     try:
         await db.commit()
     except IntegrityError:

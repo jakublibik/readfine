@@ -7,6 +7,8 @@ Also covers the stop-reason read that tells a complete summary from one the mode
 cut off on its token cap, the cap itself, and the request-side counterpart: asking
 Anthropic to leave thinking out of that cap.
 """
+import asyncio
+
 import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -26,6 +28,7 @@ from app.services.ai_service import (
     _SUMMARY_CHARS_PER_TOKEN,
     _SUMMARY_MAX_TOKENS,
     _SUMMARY_MIN_TOKENS,
+    ModelCannotSkipThinking,
     ProviderEmptyResponse,
 )
 
@@ -416,6 +419,158 @@ class TestVerifyAiSlot:
         result = await ai_service.verify_ai_slot(1, "fast", db=None)
         assert result["ok"] is False
         assert result["model"] is None
+
+
+class TestScoringRefusesAnAlwaysThinkingModel:
+    """Scoring answers in ten tokens, which a model that reasons unasked spends
+    before it writes anything. Retrying that request without the thinking parameter
+    only buys the same empty answer, so the request is not sent: the model is turned
+    down where it is chosen, and the job it would have failed gives up at once."""
+
+    @pytest.mark.asyncio
+    async def test_the_pointless_retry_is_not_sent(self):
+        create = AsyncMock(side_effect=_ApiError(400, "thinking cannot be disabled"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(ModelCannotSkipThinking) as exc:
+            await _anthropic_create(
+                client, require_thinking_off=True,
+                model="claude-fable-5", max_tokens=10,
+            )
+        assert create.call_count == 1
+        assert "claude-fable-5" in str(exc.value)
+
+    @pytest.mark.asyncio
+    async def test_a_model_that_accepts_the_parameter_is_untouched(self):
+        client = SimpleNamespace(messages=SimpleNamespace(create=AsyncMock(return_value="ok")))
+        result = await _anthropic_create(
+            client, require_thinking_off=True, model="claude-haiku-4-5", max_tokens=10,
+        )
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_400_stays_itself(self):
+        """Only a refusal of the parameter means the model is wrong for the slot."""
+        create = AsyncMock(side_effect=_ApiError(400, "credit balance is too low"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(_ApiError):
+            await _anthropic_create(
+                client, require_thinking_off=True, model="claude-haiku-4-5", max_tokens=10,
+            )
+
+    @pytest.mark.asyncio
+    async def test_scoring_is_the_caller_that_asks_for_it(self):
+        create = AsyncMock(side_effect=_ApiError(400, "thinking cannot be disabled"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(ModelCannotSkipThinking):
+            await ai_service.score_article(
+                "An article.", "Likes tests", client, "anthropic", "claude-fable-5",
+            )
+        assert create.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_summaries_keep_their_retry(self):
+        """The same model is fine for a summary, which can be given room to think."""
+        create = AsyncMock(side_effect=[
+            _ApiError(400, "thinking cannot be disabled"),
+            SimpleNamespace(
+                content=[SimpleNamespace(type="text", text="A summary.")],
+                usage=SimpleNamespace(input_tokens=100, output_tokens=20),
+                stop_reason="end_turn",
+            ),
+        ])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        answer = await ai_service.summarize_article(
+            "An article.", client, "anthropic", "claude-fable-5",
+        )
+        assert answer.text == "A summary."
+        assert create.call_count == 2
+
+    def test_the_job_retry_policy_reads_it_as_permanent(self):
+        """Three attempts at a request that cannot succeed is three times the cost
+        and two hours of backoff before the banner says anything."""
+        from app.services.ai_jobs import extract_http_status
+
+        assert extract_http_status(ModelCannotSkipThinking("claude-fable-5")) == 400
+
+
+class TestScoringModelRejection:
+    """What the settings form asks before storing a fast model. Only the model
+    answering for itself may block a save; every other failure leaves the choice
+    to the person making it."""
+
+    @staticmethod
+    def _probe(monkeypatch, create, key="sk-test"):
+        async def fake_get_api_key(user_id, provider, db):
+            return key
+
+        monkeypatch.setattr(ai_service, "get_api_key", fake_get_api_key)
+        monkeypatch.setattr(
+            ai_service, "_make_client",
+            lambda provider, api_key: SimpleNamespace(
+                messages=SimpleNamespace(create=create)),
+        )
+        return ai_service.scoring_model_rejection(1, "anthropic", "claude-fable-5", db=None)
+
+    @pytest.mark.asyncio
+    async def test_a_refusing_model_is_named_and_turned_down(self, monkeypatch):
+        create = AsyncMock(side_effect=_ApiError(400, "thinking cannot be disabled"))
+        rejection = await self._probe(monkeypatch, create)
+        assert rejection is not None
+        assert "claude-fable-5" in rejection
+
+    @pytest.mark.asyncio
+    async def test_an_empty_answer_counts_too(self, monkeypatch):
+        """The other shape of the same fault: the parameter went through and the
+        model still wrote nothing at a scoring-sized budget."""
+        resp = SimpleNamespace(
+            stop_reason="max_tokens",
+            content=[SimpleNamespace(type="thinking", thinking="")],
+        )
+        rejection = await self._probe(monkeypatch, AsyncMock(return_value=resp))
+        assert rejection is not None
+        assert "cannot score" in rejection
+
+    @pytest.mark.asyncio
+    async def test_a_working_model_passes(self, monkeypatch):
+        resp = SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="1")],
+            usage=SimpleNamespace(input_tokens=12, output_tokens=1),
+            stop_reason="end_turn",
+        )
+        assert await self._probe(monkeypatch, AsyncMock(return_value=resp)) is None
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limit_does_not_block_the_save(self, monkeypatch):
+        create = AsyncMock(side_effect=_ApiError(429, "rate limit"))
+        assert await self._probe(monkeypatch, create) is None
+
+    @pytest.mark.asyncio
+    async def test_a_wrong_key_does_not_block_the_save(self, monkeypatch):
+        """It says nothing about the model, and the key may be the next thing fixed."""
+        create = AsyncMock(side_effect=_ApiError(401, "invalid x-api-key"))
+        assert await self._probe(monkeypatch, create) is None
+
+    @pytest.mark.asyncio
+    async def test_a_hanging_provider_does_not_block_the_save(self, monkeypatch):
+        async def never_answers(**kwargs):
+            await asyncio.sleep(60)
+
+        monkeypatch.setattr(ai_service, "_PROBE_TIMEOUT_SECONDS", 0.01)
+        assert await self._probe(monkeypatch, never_answers) is None
+
+    @pytest.mark.asyncio
+    async def test_no_key_saved_yet_cannot_tell(self, monkeypatch):
+        create = AsyncMock(side_effect=AssertionError("must not be called"))
+        assert await self._probe(monkeypatch, create, key=None) is None
+
+    @pytest.mark.asyncio
+    async def test_an_empty_slot_asks_nothing(self, monkeypatch):
+        async def fake_get_api_key(user_id, provider, db):
+            raise AssertionError("must not be called")
+
+        monkeypatch.setattr(ai_service, "get_api_key", fake_get_api_key)
+        assert await ai_service.scoring_model_rejection(1, None, None, db=None) is None
+        assert await ai_service.scoring_model_rejection(1, "anthropic", None, db=None) is None
 
 
 class TestSummaryTokenBudget:

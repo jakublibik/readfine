@@ -144,6 +144,21 @@ class TestWebRegisterValidation:
         r = web_client.post("/register", data=VALID_FORM)
         assert "new@test.com" in r.text
 
+    def test_duplicate_email_offers_a_way_out(self, web_client, mock_db):
+        """Both doors, with the address carried over.
+
+        Production logs showed someone hit this message, give up on it, and
+        register a second account under another address a week later rather than
+        log in. A dead-end error is what makes that the path of least resistance.
+        """
+        mock_db.execute = AsyncMock(side_effect=[
+            _scalar(_make_app_settings()),
+            _scalar(_make_user()),
+        ])
+        r = web_client.post("/register", data=VALID_FORM)
+        assert "/login?email=new%40test.com" in r.text
+        assert "/reset-password?email=new%40test.com" in r.text
+
     def test_registration_disabled_returns_403(self, web_client, mock_db):
         mock_db.execute = AsyncMock(return_value=_scalar(_make_app_settings(registration_enabled=False)))
         r = web_client.post("/register", data=VALID_FORM)
@@ -379,6 +394,36 @@ class TestWebLoginEmailVerified:
         r = web_client.get("/login?verified=1")
         assert r.status_code == 200
         assert "verified" in r.text.lower()
+
+
+# ── Email hand-off from the "already registered" message ──────────────────────
+
+class TestEmailPrefillHandoff:
+    """?email= lets the register page send someone to the right door with their
+    address already filled in, so getting back in is one field, not three."""
+
+    def test_login_page_prefills_the_address(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(return_value=_scalar(None))
+        r = web_client.get("/login?email=known%40test.com")
+        assert r.status_code == 200
+        assert 'value="known@test.com"' in r.text
+
+    def test_login_page_ignores_a_malformed_address(self, web_client, mock_db):
+        # The field is echoed into the page, so only a real address gets through.
+        mock_db.execute = AsyncMock(return_value=_scalar(None))
+        r = web_client.get("/login?email=not-an-address")
+        assert r.status_code == 200
+        assert "not-an-address" not in r.text
+
+    def test_reset_page_prefills_the_address(self, web_client, mock_db):
+        r = web_client.get("/reset-password?email=known%40test.com")
+        assert r.status_code == 200
+        assert 'value="known@test.com"' in r.text
+
+    def test_reset_page_ignores_a_malformed_address(self, web_client, mock_db):
+        r = web_client.get("/reset-password?email=not-an-address")
+        assert r.status_code == 200
+        assert "not-an-address" not in r.text
 
 
 # ── Registration — bot traps ──────────────────────────────────────────────────

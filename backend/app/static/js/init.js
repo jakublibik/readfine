@@ -32,4 +32,19 @@
   if (_cs === 'dark' || (_cs === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
     document.documentElement.classList.add('dark');
   }
+
+  // Browser/OS chrome around the page (address bar, status bar) follows the shell
+  // background. Shared with the other two places that toggle .dark — app.js's
+  // system-preference listener and the scheme picker in settings — so the bar
+  // never keeps the colour of the scheme the user just left.
+  window.syncThemeColor = function () {
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) {
+      meta.setAttribute(
+        'content',
+        document.documentElement.classList.contains('dark') ? '#141414' : '#f9fafb'
+      );
+    }
+  };
+  window.syncThemeColor();
 })();

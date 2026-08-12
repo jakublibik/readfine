@@ -82,6 +82,7 @@ document.addEventListener('htmx:afterRequest', function (e) {
     try { cs = localStorage.getItem('colorScheme'); } catch(e) {}
     if ((cs || 'system') === 'system') {
       document.documentElement.classList.toggle('dark', mq.matches);
+      if (window.syncThemeColor) window.syncThemeColor();
     }
   });
 })();
@@ -590,17 +591,13 @@ document.body.addEventListener('savedArticleRemoved', function (e) {
   showToast('Removed from Saved', 'ok');
 });
 
-// Height of everything pinned above the article list: the mobile top panel (outside
-// the list) and a sticky list header (the Saved URL box, the search-results strip),
-// which stays put while the list scrolls. A row aligned to the list's own top would
-// slide underneath it.
+// Height of a sticky list header (the Saved URL box, the search-results strip), which
+// stays put while the list scrolls. A row aligned to the list's own top would slide
+// underneath it. The mobile title bar is not counted: the shell reserves its height
+// (see base.html), so the list already starts below it.
 function listStickyOffset() {
-  var topPanel = document.getElementById('mobile-title-bar');
-  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-  var offset = barVisible ? topPanel.getBoundingClientRect().height : 0;
   var listHeader = document.querySelector('#article-list [data-list-header]');
-  if (listHeader) offset += listHeader.getBoundingClientRect().height;
-  return offset;
+  return listHeader ? listHeader.getBoundingClientRect().height : 0;
 }
 
 // An article was added to Saved. The list is ordered by publication date, so the row
@@ -920,10 +917,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   var seen = new Set();
 
-  var topPanel = document.getElementById('mobile-title-bar');
-  var barVisible = topPanel && getComputedStyle(topPanel).display !== 'none';
-  var barHeight = barVisible ? Math.round(topPanel.getBoundingClientRect().height) : 0;
-  var topOffset = barVisible ? barHeight : 0;
+  // No inset needed for the mobile title bar: the shell reserves its height (see
+  // base.html), so the list's own top edge already sits below it.
+  var topOffset = 0;
   var bottomOffset = 0;
 
   var observer = new IntersectionObserver(function (entries) {
@@ -1163,6 +1159,8 @@ function openSearchModal(prefill) {
   if (el) el.classList.add('hidden');
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.remove('hidden');
+  // Marks the drawer's backdrop as redundant while this one is up (see base.html).
+  document.documentElement.classList.add('search-modal-open');
   // Only restore the previous query/scope when reopening from the results header
   // (prefill); a fresh search from the menu or the "/" shortcut starts empty.
   window._searchPrefill = !!prefill;
@@ -1181,6 +1179,16 @@ function openSearchModal(prefill) {
 function closeSearchModal() {
   var overlay = document.getElementById('search-modal-overlay');
   if (overlay) overlay.classList.add('hidden');
+  document.documentElement.classList.remove('search-modal-open');
+  // Drop the contents with it. The overlay is shown the moment you open the modal,
+  // but its markup is fetched, so whatever was left from last time (your previous
+  // scope and label chips, most visibly) sat there until the new copy arrived and
+  // replaced it. The box holds its height from CSS while it is empty, so opening it
+  // is a plain fade-in rather than a flash of the old state. Nothing reads these
+  // fields while the modal is closed: the query and filters are remembered in
+  // window._lastSearch*, and the chips are rendered server-side on reopen.
+  var content = document.getElementById('search-modal-content');
+  if (content) content.innerHTML = '';
 }
 
 function submitSearch() {
@@ -1937,6 +1945,15 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   document.body.addEventListener('htmx:beforeSwap', function (e) {
     if (e.detail.target.id !== 'article-list') return;
     closeInline();
+  });
+
+  // Start the new list at the top. This has to happen after the swap, not before:
+  // resetting the outgoing list scrolls content the reader is still looking at, and
+  // that jump reaches the screen a frame or two before the new list replaces it.
+  // Setting it here runs before the browser paints the new content, so the list
+  // simply arrives at the top.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target.id !== 'article-list') return;
     e.detail.target.scrollTop = 0;
   });
 })();

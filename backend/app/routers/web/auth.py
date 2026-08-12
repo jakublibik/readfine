@@ -87,11 +87,16 @@ async def robots_txt():
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, db: AsyncSession = Depends(get_db)):
+async def login_page(request: Request, email: str = "", db: AsyncSession = Depends(get_db)):
     if request.session.get("user_id"):
         return RedirectResponse("/app", status_code=302)
     registration_open = await get_registration_enabled(db)
-    return templates.TemplateResponse(request, "auth/login.html", {"registration_open": registration_open})
+    # ?email= comes from the "you already have an account" hint on the register
+    # form. Only a well-formed address is echoed back, so the field cannot be
+    # used to park arbitrary text in front of someone.
+    prefill = email.strip() if is_valid_email(email.strip()) else ""
+    return templates.TemplateResponse(request, "auth/login.html",
+                                      {"registration_open": registration_open, "email": prefill})
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -237,7 +242,11 @@ async def register(
 
     result = await db.execute(select(User).where(User.email == email))
     if result.scalar_one_or_none():
-        return _err("This email is already registered.", http_status=status.HTTP_409_CONFLICT)
+        # Someone who forgot they had signed up lands here. Without a way out of
+        # this message people register again under a second address instead of
+        # logging in, so point at both doors and carry the address over.
+        return _err("This email is already registered.",
+                    http_status=status.HTTP_409_CONFLICT, email_taken=True)
 
     if len(password) < 8:
         return _err("Password must be at least 8 characters.")
@@ -419,8 +428,11 @@ async def verify_email_change(request: Request, token: str = "", db: AsyncSessio
 # ── Password reset ─────────────────────────────────────────────────────────────
 
 @router.get("/reset-password", response_class=HTMLResponse)
-async def reset_password_page(request: Request):
-    return templates.TemplateResponse(request, "auth/reset_password_request.html")
+async def reset_password_page(request: Request, email: str = ""):
+    # Same ?email= hand-off as /login, see login_page.
+    prefill = email.strip() if is_valid_email(email.strip()) else ""
+    return templates.TemplateResponse(request, "auth/reset_password_request.html",
+                                      {"email": prefill})
 
 
 @router.post("/reset-password", response_class=HTMLResponse)

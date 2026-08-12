@@ -30,6 +30,7 @@ from app.fetcher.scheduler import (
     compute_next_fetch_at,
     create_scheduler,
     effective_interval_min,
+    error_backoff_minutes,
     _cooldown_wait,
     _COOLDOWN_BUFFER,
     _feed_due_for_selection,
@@ -335,15 +336,25 @@ class TestSchedulerTrigger:
         assert job.trigger.__class__.__name__ == "IntervalTrigger"
 
     def test_error_backoff_is_2x_interval(self):
-        # Verify the backoff formula: max(15, interval * 2).
-        # At default_interval=60, expected backoff = 120 min.
-        default_interval = 60
-        error_backoff_min = max(15, default_interval * 2)
-        assert error_backoff_min == 120
+        # The regular tier (from the second consecutive failure on): max(15, interval * 2).
+        assert error_backoff_minutes(2, 60) == 120
 
     def test_error_backoff_minimum_is_15(self):
         # Very short interval (e.g. 1 min) still yields at least 15 min backoff.
-        assert max(15, 1 * 2) == 15
+        assert error_backoff_minutes(2, 1) == 15
+
+    def test_first_failure_is_re_checked_sooner(self):
+        # A single failure buys one quick re-check instead of the full backoff.
+        assert error_backoff_minutes(1, 60) == 30
+
+    def test_quick_re_check_never_outlasts_the_regular_backoff(self):
+        # A short global interval puts the regular backoff below 30 min; the first
+        # retry must not then be the slowest one of the run.
+        assert error_backoff_minutes(1, 1) == 15
+        assert error_backoff_minutes(1, 10) == 20
+
+    def test_past_disable_threshold_backs_off_a_day(self):
+        assert error_backoff_minutes(FETCH_ERROR_DISABLE_THRESHOLD, 60) == 24 * 60
 
 
 # ── compute_next_fetch_at ─────────────────────────────────────────────────────
@@ -398,15 +409,27 @@ class TestComputeNextFetchAt:
         assert nxt == datetime(2026, 1, 15, 14, 15, tzinfo=timezone.utc)
 
     def test_error_uses_double_default_backoff(self):
-        # error feed, count below threshold → backoff max(15, 60*2) = 120 min.
+        # error feed, count in the regular tier → backoff max(15, 60*2) = 120 min.
         feed = _sched_feed(
             status="error",
-            fetch_error_count=1,
+            fetch_error_count=2,
             last_fetched_at=datetime(2026, 1, 15, 12, 0, 9, tzinfo=timezone.utc),
         )
         now = datetime(2026, 1, 15, 13, 15, tzinfo=timezone.utc)
         nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
         assert nxt == datetime(2026, 1, 15, 14, 0, tzinfo=timezone.utc)
+
+    def test_first_error_is_re_checked_at_the_next_half_hour(self):
+        # One failure so far → 30-min re-check, so the prediction lands two slots
+        # after the failed fetch rather than eight.
+        feed = _sched_feed(
+            status="error",
+            fetch_error_count=1,
+            last_fetched_at=datetime(2026, 1, 15, 12, 0, 9, tzinfo=timezone.utc),
+        )
+        now = datetime(2026, 1, 15, 12, 0, 10, tzinfo=timezone.utc)
+        nxt = compute_next_fetch_at(feed, now=now, **self.DEFAULTS)
+        assert nxt == datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
 
     def test_error_at_disable_threshold_uses_24h(self):
         feed = _sched_feed(
@@ -971,13 +994,15 @@ class TestFetchFeed429Transient:
         assert rau is not None
         assert abs((rau - (before + BLOCK_BACKOFF_BASE)).total_seconds()) < 5
 
-    async def test_404_still_disables(self):
+    async def test_404_does_not_disable_on_first_hit(self):
+        # A 404 is not proof the feed is gone: hosts serve it during their own
+        # wobbles. It goes through the error tier's counter instead.
         feed = _make_feed()
         session = _make_session()
         with patch("app.fetcher.rss.fetch_url_conditional", side_effect=_http_error(404)):
             await fetch_feed(feed, session)
         vals = _update_values(session)
-        assert _status_is_disabled(vals["status"])
+        assert not _status_is_disabled(vals["status"])
         assert vals["retry_after_until"].value is None
 
 
