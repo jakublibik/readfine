@@ -1933,6 +1933,15 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   document.body.addEventListener('htmx:beforeSwap', function (e) {
     if (e.detail.target.id !== 'article-list') return;
     closeInline();
+  });
+
+  // Start the new list at the top. This has to happen after the swap, not before:
+  // resetting the outgoing list scrolls content the reader is still looking at, and
+  // that jump reaches the screen a frame or two before the new list replaces it.
+  // Setting it here runs before the browser paints the new content, so the list
+  // simply arrives at the top.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target.id !== 'article-list') return;
     e.detail.target.scrollTop = 0;
   });
 })();

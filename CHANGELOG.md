@@ -15,6 +15,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Running a search, or switching to another feed, no longer flashes the list you were reading. The list you had open was scrolled back to the top while it was still on screen, so for a frame or two you saw your old articles jump before the new ones took their place. It was most obvious when you had scrolled a fair way down, which is exactly when you are most likely to go looking for something. The new list now simply arrives at the top.
+
 - In dark mode, the bits the browser draws for itself are dark too. Scrollbars, dropdowns, checkboxes and the yellow tint on an autofilled field took their look from the operating system rather than from Readfine, so with a light system theme you got a pale scrollbar running down the side of a dark article list and a white dropdown on a dark settings page. They now follow whichever theme you have picked, including when you switch between them. The landing page and the sign-in screens changed with it.
 
 - In a narrow window, the article list's scrollbar no longer disappears behind the bar at the top. The bar is pinned over the list, and the list was only padded to clear it, which moves the text but not the scrollbar, so the top of the track ran on underneath the bar (and its bottom under the row of buttons whenever that slid in). The list now starts below the bar, so the scrollbar covers exactly the part of the list you can see. The bottom bar still floats over the list on purpose, since it comes and goes as you scroll and the list would jog every time it appeared. On a phone this was easy to miss, because mobile browsers draw the scrollbar over the content and fade it out when you stop scrolling.
