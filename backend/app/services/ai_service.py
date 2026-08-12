@@ -1,4 +1,5 @@
 """AI provider abstraction: client factory, verification, and core AI calls."""
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,28 @@ class Completion(NamedTuple):
 class ProviderEmptyResponse(Exception):
     """Raised when an AI provider returns no usable text (blocked/empty/filtered),
     so callers handle it as a controlled error instead of crashing on .strip()."""
+
+
+class ModelCannotSkipThinking(Exception):
+    """Raised for a model that reasons whether or not it is asked to, on the one
+    call that cannot afford it: scoring answers in ten tokens, which such a model
+    spends thinking before it writes anything.
+
+    ``status_code`` is the provider's own: the refusal arrives as a 400, and
+    carrying it here means the job retry policy reads this as the permanent
+    client error it is (see ``ai_jobs.apply_job_failure``) instead of trying the
+    same impossible request twice more.
+    """
+
+    status_code = 400
+
+    def __init__(self, model: str):
+        self.model = model
+        super().__init__(
+            f"{model} always reasons before it answers and cannot be told to skip it, "
+            f"so nothing is left of the ten tokens a score gets. Choose another model "
+            f"for the fast slot."
+        )
 
 
 def _extract_text(provider: str, resp) -> str:
@@ -375,6 +398,61 @@ def _friendly_ai_error(exc: Exception) -> str:
     return raw.splitlines()[0][:150]
 
 
+# How long the scoring probe below may hold up a settings save. The call itself is
+# two tokens of prompt and ten of answer, so anything past this is the provider
+# being slow rather than the model deliberating, and a slow provider is not a
+# reason to refuse someone their settings.
+_PROBE_TIMEOUT_SECONDS = 15
+
+
+async def scoring_model_rejection(
+    user_id: int, provider: str | None, model: str | None, db: AsyncSession
+) -> str | None:
+    """Why *model* cannot be used for scoring, or None if it can (or we cannot tell).
+
+    Scoring is the one call with no room for reasoning, so a model that insists on
+    it produces an empty answer on every article it touches. That is worth catching
+    when the model is chosen rather than one article at a time, which is what this
+    is for: the settings form calls it before storing a new fast model.
+
+    Deliberately one-sided. Only the model answering for itself counts against it —
+    a refusal to skip thinking, or an empty reply at a scoring-sized budget. A
+    missing key, a rate limit, a timeout or an unreachable provider says nothing
+    about the model, so it returns None and the save goes through. Wrongly blocking
+    someone's settings over a provider hiccup is a worse failure than letting a bad
+    model through, which the job path still catches and reports.
+    """
+    if not provider or not model:
+        return None
+    api_key = await get_api_key(user_id, provider, db)
+    if not api_key:
+        return None
+    try:
+        client = _make_client(provider, api_key)
+        if client is None:
+            return None
+        await asyncio.wait_for(
+            _complete(
+                "Reply with the digit 1 and nothing else.",
+                client, provider, model,
+                max_tokens=10, require_thinking_off=True,
+            ),
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except ModelCannotSkipThinking as exc:
+        return str(exc)
+    except ProviderEmptyResponse:
+        # The other shape of the same fault: the parameter was accepted (or never
+        # refused) and the model still wrote nothing at a scoring-sized budget.
+        return (
+            f"{model} answered a scoring-sized request with nothing at all, so it "
+            f"cannot score articles. Choose another model for the fast slot."
+        )
+    except Exception as exc:
+        logger.info("Scoring probe for %s/%s was inconclusive: %s", provider, model, exc)
+    return None
+
+
 async def verify_ai_slot(
     user_id: int, slot: str, db: AsyncSession,
     provider_override: str | None = None,
@@ -440,7 +518,9 @@ async def score_article(
         f"Article:\n{content}\n\n"
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
-    answer = await _complete(prompt, client, provider, model, max_tokens=10)
+    answer = await _complete(
+        prompt, client, provider, model, max_tokens=10, require_thinking_off=True
+    )
     raw = answer.text
     # Extract the first decimal number — tolerates models that wrap the score in
     # prose ("0.8 - relevant", "Score: 0.7"). A truly unparseable response raises,
@@ -889,7 +969,9 @@ def _rejects_thinking_param(exc: Exception) -> bool:
 _ANTHROPIC_REASONING_BUDGET = 8000
 
 
-async def _anthropic_create(client, reasoning_headroom: int = 0, **kwargs):
+async def _anthropic_create(
+    client, reasoning_headroom: int = 0, require_thinking_off: bool = False, **kwargs
+):
     """messages.create with thinking off, retried by models that refuse that.
 
     Fable 5 always thinks and answers an explicit "disabled" with a 400, and models
@@ -899,15 +981,22 @@ async def _anthropic_create(client, reasoning_headroom: int = 0, **kwargs):
     mid-sentence. The retry therefore carries *reasoning_headroom* on top of
     max_tokens, which rescues the second without changing the first.
 
-    Callers on a tight budget pass no headroom on purpose: scoring asks for a single
-    decimal in 10 tokens, and an always-thinking model cannot answer that at any
-    ceiling worth paying for. It fails instead, and _empty_response_detail says why.
+    *require_thinking_off* is for the one caller the retry cannot help: scoring asks
+    for a single decimal in 10 tokens, and an always-thinking model cannot answer
+    that at any ceiling worth paying for. Rather than send a request that is known
+    to come back empty, it raises ModelCannotSkipThinking and says so in words. Note
+    that this fires for an old model that merely does not know the parameter too:
+    that model would answer fine, but it is not one anybody is scoring with, and
+    guessing which of the two we are talking to would take the wasted call the flag
+    exists to avoid.
     """
     try:
         return await client.messages.create(thinking=_ANTHROPIC_THINKING_OFF, **kwargs)
     except Exception as exc:
         if not _rejects_thinking_param(exc):
             raise
+        if require_thinking_off:
+            raise ModelCannotSkipThinking(kwargs.get("model") or "This model") from exc
         logger.info("Model %s rejected thinking=disabled; retrying without it",
                     kwargs.get("model"))
         if reasoning_headroom and kwargs.get("max_tokens"):
@@ -917,18 +1006,20 @@ async def _anthropic_create(client, reasoning_headroom: int = 0, **kwargs):
 
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500,
-    reasoning_headroom: int = 0,
+    reasoning_headroom: int = 0, require_thinking_off: bool = False,
 ) -> Completion:
     """Send a prompt to whichever provider the slot uses and return its answer.
 
-    reasoning_headroom is Anthropic-only and applies to one case: a model that
-    refused to switch thinking off, where the answer has to share max_tokens with
-    reasoning. See _anthropic_create.
+    reasoning_headroom and require_thinking_off are Anthropic-only and cover the
+    two ends of the same case, a model that refused to switch thinking off: the
+    first gives the answer room to survive alongside reasoning, the second declares
+    that no room would be enough. See _anthropic_create.
     """
     if provider == "anthropic":
         resp = await _anthropic_create(
             client,
             reasoning_headroom=reasoning_headroom,
+            require_thinking_off=require_thinking_off,
             model=model,
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": prompt}],

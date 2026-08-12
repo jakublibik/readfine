@@ -25,6 +25,7 @@ from app.services.ai_service import (
     get_preference_strong_count,
     list_api_keys,
     save_api_key,
+    scoring_model_rejection,
     verify_ai_slot,
 )
 from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
@@ -149,8 +150,23 @@ async def settings_ai_preferences_save(
             ctx = await _ai_page_context(user, db)
             ctx["prefs_error"] = f"Unknown provider '{provider_val}'. Supported: {', '.join(SUPPORTED_PROVIDERS)}."
             return templates.TemplateResponse(request, "settings/ai.html", ctx)
+    fast_model = (form.get("ai_fast_model") or "").strip() or None
+    # The fast slot is the one scoring runs on, and a model that always reasons has
+    # nothing left of its ten tokens by the time it should answer — it would fail on
+    # every article and only say so in the error banner. Ask the model itself before
+    # storing it, and only when the choice actually changed, so an unrelated save
+    # costs no provider call. Anything inconclusive comes back None and saves.
+    if (fast_provider, fast_model) != (s.ai_fast_provider, s.ai_fast_model):
+        rejection = await scoring_model_rejection(user.id, fast_provider, fast_model, db)
+        if rejection:
+            ctx = await _ai_page_context(user, db)
+            ctx["prefs_error"] = rejection
+            ctx["fast_model_submitted"] = fast_model
+            ctx["fast_provider_submitted"] = fast_provider
+            return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
     s.ai_fast_provider = fast_provider
-    s.ai_fast_model = (form.get("ai_fast_model") or "").strip() or None
+    s.ai_fast_model = fast_model
     s.ai_quality_provider = quality_provider
     s.ai_quality_model = (form.get("ai_quality_model") or "").strip() or None
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
@@ -236,6 +252,20 @@ async def settings_ai_verify(
     provider_override = (form.get(f"ai_{slot}_provider") or "").strip() or None
     model_override = (form.get(f"ai_{slot}_model") or "").strip() or None
     result = await verify_ai_slot(user.id, slot, db, provider_override, model_override)
+    # The slot's own check passes a model that reasons its way through a generous
+    # budget, which is right for every use of it except scoring. Since the form
+    # refuses to store such a model in the fast slot, Verify has to agree with it
+    # rather than report a connection the save will then turn down.
+    if result["ok"] and slot == "fast":
+        s = await _get_or_create_settings(user, db)
+        rejection = await scoring_model_rejection(
+            user.id,
+            provider_override or s.ai_fast_provider,
+            model_override or result["model"],
+            db,
+        )
+        if rejection:
+            result = {"ok": False, "model": result["model"], "error": rejection}
     if result["ok"]:
         html = (
             f'<span class="text-green-600 text-sm">✓ Connected — {result["model"]}</span>'
