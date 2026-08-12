@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Tell the browser which scheme the page is painted in, so the parts it draws
+   itself (scrollbars, select and checkbox controls, autofill backgrounds) follow
+   Readfine's theme instead of the operating system's. Without this, a reader on a
+   light desktop with Readfine in dark mode gets a pale scrollbar down the side of a
+   dark list. It keys off the same `.dark` class the theme already toggles, which
+   init.js sets before first paint. */
+:root { color-scheme: light; }
+html.dark { color-scheme: dark; }
+
 .ai-text > :first-child { margin-top: 0; }
 .ai-text > :last-child { margin-bottom: 0; }
 
