@@ -5,7 +5,9 @@ Two tiers, because two very different things get reported as a failed HTTP reque
 * **Error tier** — something is wrong with the feed or the network (timeout, DNS,
   unparseable body, 404, 500). ``fetch_error_count`` climbs, the feed goes to
   ``error``, the scheduler backs it off, and after
-  ``FETCH_ERROR_DISABLE_THRESHOLD`` consecutive failures it is disabled.
+  ``FETCH_ERROR_DISABLE_THRESHOLD`` consecutive failures it is disabled. A 404
+  uses the same counter but a shorter threshold of its own
+  (``NOT_FOUND_DISABLE_THRESHOLD``).
 * **Block tier** — the host is refusing automated clients (anti-bot 403, bare 429).
   ``block_count`` climbs instead, the feed's status is left alone, and it is
   disabled only after ``BLOCK_DISABLE_THRESHOLD`` consecutive blocks.
@@ -44,6 +46,15 @@ from app.utils.url_validator import (
 # existing fetch_error_count tests encode that offset.
 FETCH_ERROR_DISABLE_THRESHOLD = 5
 BLOCK_DISABLE_THRESHOLD = 10
+
+# Consecutive 404s before a feed is disabled. Unlike 410 and 451, a 404 is not a
+# reliable verdict on the address: hosts serve it as a transient backend hiccup, in
+# waves that take out every feed on the host at once. Observed on YouTube's
+# feeds/videos.xml, which 404s for valid channel ids for a stretch and then serves
+# them again — disabling on the first hit turned that into a dead feed that only a
+# manual re-enable brought back. Deliberately lower than the general error
+# threshold: a 404 is still weak evidence the feed is gone, just not proof.
+NOT_FOUND_DISABLE_THRESHOLD = 4
 
 # Consecutive blocks before the UI says anything. A single 403 is noise on a feed
 # that is otherwise fetching fine (at Reddit's measured rate, three in a row happens
@@ -189,17 +200,24 @@ def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now:
         }
 
     # Error tier. 4xx other than the retryable ones is a permanent verdict on the
-    # URL (404, 410, 451 …) — no point backing off, disable straight away.
+    # URL (410, 451 …) — no point backing off, disable straight away. 404 is the
+    # exception: it goes through the counter on its own, shorter threshold, because
+    # hosts also use it for transient failures (see NOT_FOUND_DISABLE_THRESHOLD).
     is_permanent_4xx = (
         http_status is not None
         and 400 <= http_status < 500
+        and http_status != 404
         and http_status not in RETRYABLE_HTTP_STATUSES
     )
     if is_permanent_4xx:
         status = literal("disabled")
     else:
+        threshold = (
+            NOT_FOUND_DISABLE_THRESHOLD if http_status == 404
+            else FETCH_ERROR_DISABLE_THRESHOLD
+        )
         status = case(
-            (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal("disabled")),
+            (Feed.fetch_error_count >= threshold, literal("disabled")),
             else_=literal("error"),
         )
 

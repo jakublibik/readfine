@@ -581,11 +581,21 @@ class TestFetchScrapeFeed429Transient:
         assert "fetch_error_count" not in vals
 
     async def test_permanent_4xx_still_disables(self):
+        # 410 is the host stating the page is gone — nothing to back off from.
+        feed = _make_scrape_feed()
+        session = _make_session()
+        with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(410)):
+            await fetch_scrape_feed(feed, session)
+        assert _scrape_status_is_disabled(_scrape_update_values(session)["status"])
+
+    async def test_404_does_not_disable_on_first_hit(self):
+        # Scrape feeds share the error tier, so a page that 404s while its site is
+        # having a moment gets the same retries an RSS feed does.
         feed = _make_scrape_feed()
         session = _make_session()
         with patch("app.fetcher.scrape.fetch_url_page", side_effect=_scrape_http_error(404)):
             await fetch_scrape_feed(feed, session)
-        assert _scrape_status_is_disabled(_scrape_update_values(session)["status"])
+        assert not _scrape_status_is_disabled(_scrape_update_values(session)["status"])
 
 
 # ── subscribe_scrape service ──────────────────────────────────────────────────

@@ -9,6 +9,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Fixed
+
+- A single HTTP 404 no longer switches a feed off. Readfine read a 404 as the host saying the address is gone for good, which is what 410 means but not what 404 reliably means in practice: sites also serve it while their own backend is briefly unwell, in bursts that take out every feed on that site at once. YouTube's feed addresses do it regularly, so two YouTube subscriptions that had been fetching fine all day could both be disabled at four in the morning and stay dead until someone noticed and switched them back on by hand. A 404 now goes through the ordinary retry counter on a shorter threshold of its own, so a feed is retired after five 404s in a row (around six hours) rather than the first one, and a wobble of a few minutes costs nothing. Addresses that really are retired, 410 and 451, still disable the feed immediately, and a feed disabled by an old 404 needs re-enabling once.
+
+- A feed that has just failed is now re-checked after half an hour, instead of waiting out the full error backoff (two hours at the default fetch interval). Most failures are a site having a moment, over long before the next attempt, so a healthy feed was losing hours to a problem that had already fixed itself. Only the first retry is quick: from the second failure on, the backoff is what it was, so a site that is genuinely down is not polled any harder than before.
+
 ## [0.15.0] - 2026-08-11
 
 ### Added

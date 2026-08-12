@@ -15,6 +15,7 @@ from app.fetcher.failure import (
     BLOCK_BACKOFF_MAX,
     BLOCK_DISABLE_THRESHOLD,
     FETCH_ERROR_DISABLE_THRESHOLD,
+    NOT_FOUND_DISABLE_THRESHOLD,
     block_backoff,
     classify,
     failure_message,
@@ -172,17 +173,31 @@ class TestErrorTier:
         vals = _values(_http_error(408, {"Retry-After": "600"}))
         assert vals["retry_after_until"] == NOW + timedelta(seconds=600)
 
+    def test_404_moves_the_error_count(self):
+        # It used to be disabled outright, writing no counter at all. The threshold
+        # itself needs real SQL to observe — see test_failure_db.py.
+        vals = _values(_http_error(404))
+        assert "fetch_error_count" in vals
+        assert "block_count" not in vals
+        assert vals["retry_after_until"] is None
+
 
 class TestThresholds:
-    def test_both_are_consecutive_counts(self):
-        # Documented invariant: a success resets both, so these count runs, not totals.
+    def test_all_are_consecutive_counts(self):
+        # Documented invariant: a success resets them, so these count runs, not totals.
         assert FETCH_ERROR_DISABLE_THRESHOLD == 5
         assert BLOCK_DISABLE_THRESHOLD == 10
+        assert NOT_FOUND_DISABLE_THRESHOLD == 4
 
     def test_blocks_tolerate_far_more_failures_than_errors(self):
         # The whole point: a host refusing us must not retire a feed as fast as a
         # feed that is actually broken.
         assert BLOCK_DISABLE_THRESHOLD > FETCH_ERROR_DISABLE_THRESHOLD
+
+    def test_a_404_retires_a_feed_faster_than_an_unexplained_error(self):
+        # Ordered by how much the failure says about the address: a 404 names it,
+        # a timeout does not — but neither is the immediate verdict a 410 is.
+        assert NOT_FOUND_DISABLE_THRESHOLD < FETCH_ERROR_DISABLE_THRESHOLD
 
 
 @pytest.mark.parametrize("status", [403, 429])

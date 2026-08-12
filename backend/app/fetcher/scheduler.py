@@ -51,6 +51,15 @@ _COOLDOWN_BUFFER = timedelta(seconds=5)
 # (_feed_due_for_selection), and the UI prediction (compute_next_fetch_at) in sync.
 _DUE_GRACE = timedelta(minutes=2)
 
+# One quick re-check after a feed's first failure, before it settles into the
+# regular error backoff. Most failures we see are a host having a moment (a 5xx, a
+# timeout, a 404 served by a backend that is briefly confused about its own
+# content), and those are over in minutes — while the regular backoff is two hours
+# at the default interval, which is that long a hole in a healthy feed. A failure
+# that is not transient costs exactly one extra request for this: from the second
+# failure on, the feed is back on the regular backoff.
+_FIRST_ERROR_RETRY_MIN = 30
+
 # Phase offset (0–14 min) for the four 15-min fetch ticks. 0 keeps the historical
 # :00/:15/:30/:45; a non-zero value (e.g. staging) shifts them so co-hosted instances
 # don't fetch at the same wall-clock moment. Config already folds it into 0–14.
@@ -183,6 +192,30 @@ def _ceil_to_slot(dt: datetime, offset: int = _SLOT_OFFSET_MIN) -> datetime:
     return floored - timedelta(minutes=rem) + timedelta(minutes=15)
 
 
+def error_backoff_minutes(fetch_error_count: int, default_interval_min: int) -> int:
+    """How long a feed in the ``error`` status waits before the next attempt.
+
+    Three tiers, by consecutive-failure count: one quick re-check after a single
+    failure (see ``_FIRST_ERROR_RETRY_MIN``), the regular backoff while it keeps
+    failing, and 24 h once it is past the disable threshold — at which point the
+    next failure retires it anyway, so this only paces a feed that got there and
+    then started succeeding intermittently.
+
+    The quick re-check is floored by the regular backoff: a deployment with a short
+    global interval can compute a regular backoff under 30 min, and a first retry
+    slower than the later ones would be plainly wrong.
+
+    This is the Python side of the ``error_backoff`` CASE in :func:`_select_due_feeds`;
+    a DB test guards the two against drift.
+    """
+    regular = max(15, default_interval_min * 2)
+    if fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD:
+        return 24 * 60
+    if fetch_error_count <= 1:
+        return min(_FIRST_ERROR_RETRY_MIN, regular)
+    return regular
+
+
 def compute_next_fetch_at(
     feed: Feed,
     *,
@@ -212,11 +245,7 @@ def compute_next_fetch_at(
     if feed.last_fetched_at is None:
         due = now
     elif feed.status == "error":
-        backoff_min = (
-            24 * 60
-            if feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD
-            else max(15, default_interval_min * 2)
-        )
+        backoff_min = error_backoff_minutes(feed.fetch_error_count, default_interval_min)
         due = feed.last_fetched_at + timedelta(minutes=backoff_min)
     else:  # active
         due = feed.last_fetched_at + timedelta(minutes=interval_min)
@@ -275,17 +304,20 @@ async def _select_due_feeds(
     the DB clock) so the due rule can be tested deterministically. See
     :func:`_feed_due_for_selection` for the rule in prose.
     """
-    error_backoff_min = max(15, default_interval * 2)
+    regular_backoff_min = error_backoff_minutes(2, default_interval)
+    first_retry_min = error_backoff_minutes(1, default_interval)
     one_minute = literal_column("interval '1 minute'")
     # manual override (uncapped) or adaptive derived interval, clamped — see
     # effective_interval_sql(); a DB test guards it against the Python mirror.
     effective_interval = (
         effective_interval_sql(default_interval, min_interval, max_interval) * one_minute
     )
-    # count 0–(threshold-1): regular backoff; count threshold+: 24 h, then disabled
+    # SQL mirror of error_backoff_minutes(): count 0–1 a quick re-check, then the
+    # regular backoff, and 24 h from the disable threshold on.
     error_backoff = case(
         (Feed.fetch_error_count >= FETCH_ERROR_DISABLE_THRESHOLD, literal_column("interval '24 hours'")),
-        else_=literal_column(f"interval '{error_backoff_min} minutes'"),
+        (Feed.fetch_error_count <= 1, literal_column(f"interval '{first_retry_min} minutes'")),
+        else_=literal_column(f"interval '{regular_backoff_min} minutes'"),
     )
     due_cutoff = now + _DUE_GRACE
 
