@@ -1,5 +1,6 @@
 {% from "partials/feed_display.html" import fmt_interval, private_lock %}
-{% from "admin/partials/feed_status.html" import status_badge %}
+{% from "partials/feed_status.html" import status_badge %}
+{% from "partials/error_text.html" import error_text %}
 {% macro feed_row(item, default_interval_min, gq) %}
 {% set f = item.feed %}
 <tr class="{% if f.status == 'error' %}bg-red-50{% endif %}">
@@ -20,8 +21,11 @@
     <span class="text-xs text-gray-400 truncate block"
           title="Parts of this URL are hidden because they are credentials.">{{ shown_url }}</span>
     {% endif %}
-    {% if f.status == 'error' and f.last_error %}
-    <div class="text-xs text-red-500 line-clamp-2 break-words mt-0.5" title="{{ f.last_error }}">{{ f.last_error }}</div>
+    {# Disabled feeds show their message too. Triaging one is exactly when the reason
+       matters, and the badge alone says only that fetching stopped. The row keeps its
+       plain background though: an auto-disabled feed is not a live error. #}
+    {% if f.status in ('error', 'disabled') and f.last_error %}
+    {{ error_text(f.last_error, class_="text-xs text-red-500 mt-0.5") }}
     {% elif f.status == 'active' and f.block_count >= block_badge_threshold %}
     {# Explains the badge without a hover (there is none on touch) and shows the run-up
        to being switched off. Gray, not red: the feed is fine and this clears itself. #}

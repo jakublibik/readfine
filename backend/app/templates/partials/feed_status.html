@@ -1,0 +1,43 @@
+{# Current fetch state of a feed, shared by the admin Feeds table, the admin
+   dashboard's fetch-error list and the user's own feed list in settings. The state is
+   read live from the feed row, so a feed that failed an hour ago but has fetched fine
+   since shows as active — that is the point of putting it next to a logged error.
+
+   The tooltips are written for whoever is looking, admin or subscriber: what the state
+   means, whether it clears itself, and what happens next. They are a bonus for a mouse,
+   never the only route to something — touch has no hover, so anything the reader
+   actually needs to act on is spelled out in the row as well.
+
+   with_count adds the counter behind the badge (consecutive refusals for throttled,
+   consecutive failures otherwise). The Feeds tables leave it off: they spell the same
+   thing out under the title, and a second word wraps their narrow column.
+
+   threshold is how many consecutive refusals earn the throttled badge. The default
+   guards lists that show healthy feeds too, where a lone 403 is noise. A caller whose
+   rows are already there because something failed passes 1: in that company "active"
+   next to a logged refusal reads as a contradiction, not as reassurance. #}
+{% macro status_badge(f, with_count=false, threshold=block_badge_threshold) %}
+{%- if f.status == 'active' and f.block_count >= threshold -%}
+  {# Host is refusing automated requests — amber, not red: the feed is fine and
+     resumes on its own. See app/fetcher/failure.py for the two tiers. #}
+  <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700 whitespace-nowrap"
+        title="The site is refusing automated requests. Nothing is wrong with the feed; fetching backs off and resumes on its own. Switched off after {{ block_disable_threshold }} refusals.">throttled{% if with_count %} &times;{{ f.block_count }}{% endif %}</span>
+{%- elif f.status == 'active' -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
+{%- elif f.status == 'error' -%}
+  {# No threshold quoted: the general one is 5 but a 404 disables after 4, and the feed
+     row does not record which kind of failure it was. The count is exact, so state that
+     and leave the number that would sometimes be wrong out. #}
+  <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700 whitespace-nowrap"
+        title="Last fetch failed{% if f.fetch_error_count %}, {{ f.fetch_error_count }} in a row{% endif %}. Fetching backs off and keeps retrying, and is switched off after repeated failures.">error{% if with_count and f.fetch_error_count %} &times;{{ f.fetch_error_count }}{% endif %}</span>
+{%- elif f.status == 'disabled' -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-600 whitespace-nowrap"
+        {# No "save the edit form to re-enable it" here: this macro also renders in the
+           admin tables, where the feed belongs to somebody else and /settings/feeds/{id}/edit
+           is scoped to the current user. The subscriber gets that instruction in their
+           own feed row, which only ever shows their own feeds. #}
+        title="Fetching is switched off and will not retry on its own. Feeds are switched off automatically after repeated failures, and an admin can switch one off by hand.">disabled{% if with_count and f.fetch_error_count %} &times;{{ f.fetch_error_count }}{% endif %}</span>
+{%- else -%}
+  <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ f.status }}</span>
+{%- endif -%}
+{% endmacro %}

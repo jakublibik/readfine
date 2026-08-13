@@ -1,4 +1,6 @@
 {% from "partials/feed_display.html" import fmt_interval, private_lock %}
+{% from "partials/feed_status.html" import status_badge %}
+{% from "partials/error_text.html" import error_text %}
 <div id="feeds-list">
   {% if scope_cleanup and scope_cleanup.has_changes %}
     <div class="mb-4 px-4 py-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700 space-y-1">
@@ -84,8 +86,19 @@
                   <span title="{% if uf.readable_auto_disabled_reason == 'full_content' %}Full content extraction was automatically disabled - this feed already delivers full articles.{% else %}Full content extraction was automatically disabled - the site blocked it or returned no readable content.{% endif %}" class="flex-shrink-0 text-amber-500 text-xs leading-none">⚠</span>
                 {% endif %}
               </div>
-              {% if uf.feed.status == 'error' and uf.feed.last_error %}
-                <div class="text-xs text-red-500 line-clamp-2 break-words mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+              {% if uf.feed.status in ('error', 'disabled') %}
+                {% if uf.feed.last_error %}
+                  {{ error_text(uf.feed.last_error, class_="text-xs text-red-500 mt-0.5 pl-6") }}
+                {% endif %}
+                {% if uf.feed.status == 'disabled' %}
+                  {# The one state the subscriber has to do something about: nothing else
+                     will retry this feed. Spelled out in the row rather than left to the
+                     badge's tooltip, which a phone cannot open. Repeated failures are
+                     only named as the cause when there were repeated failures: an admin
+                     can switch a feed off by hand, and a permanent 4xx (410, 451) is a
+                     verdict on the address that disables it on the first try. #}
+                  <div class="text-xs text-gray-500 mt-0.5 pl-6">Fetching is switched off{% if uf.feed.fetch_error_count > 1 %} after repeated failures{% endif %} - open Edit and save to switch it back on.</div>
+                {% endif %}
               {% elif uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
                 {# Explains the badge without a hover (there is none on touch) and shows
                    the run-up to being switched off, which the badge alone cannot. Gray,
@@ -96,21 +109,9 @@
             <td class="px-1.5 py-2">
               <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ uf.feed.feed_type }}</span>
             </td>
-            <td class="px-1.5 py-2">
-              {% if uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
-                {# The site is refusing automated requests. Not a broken feed, so amber
-                   rather than red — fetching resumes on its own once the block lifts.
-                   One word like the other badges, or the narrow column wraps it. #}
-                <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700"
-                      title="The site is refusing automated requests. Nothing is wrong with the feed; fetching backs off and resumes on its own.">throttled</span>
-              {% elif uf.feed.status == 'active' %}
-                <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
-              {% elif uf.feed.status == 'error' %}
-                <span class="px-2 py-0.5 text-xs rounded bg-red-100 text-red-700" title="{{ uf.feed.last_error }}">error</span>
-              {% else %}
-                <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">{{ uf.feed.status }}</span>
-              {% endif %}
-            </td>
+            {# Same badge as the admin tables. The count stays off here: the row spells
+               the state out underneath it, and the narrow column wraps a second word. #}
+            <td class="px-1.5 py-2">{{ status_badge(uf.feed) }}</td>
             <td class="px-1.5 py-2 text-right text-gray-600">{{ article_counts.get(uf.feed_id, 0)|num }}</td>
             <td class="px-1.5 py-2 text-right text-gray-500">
               {% if uf.feed.fetch_interval_min %}{{ fmt_interval(uf.feed.fetch_interval_min) }}{% else %}<span class="text-gray-400" title="Auto (adaptive)">~{{ fmt_interval(uf.feed.auto_interval_min) }}</span>{% endif %}

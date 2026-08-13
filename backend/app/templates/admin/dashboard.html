@@ -1,5 +1,6 @@
 {% extends "admin/base.html" %}
-{% from "admin/partials/feed_status.html" import status_badge %}
+{% from "partials/feed_status.html" import status_badge %}
+{% from "partials/error_text.html" import error_text %}
 {% block title %}Admin – Readfine{% endblock %}
 {% set active = "dashboard" %}
 
@@ -119,10 +120,8 @@
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
            "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
-        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
-           without breaking the table, hence the wrapper div. #}
         <td class="px-4 py-2 align-middle text-red-600">
-          <div class="line-clamp-2 break-words" title="{{ row.error_message }}">{{ row.error_message }}</div>
+          {{ error_text(row.error_message) }}
         </td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
@@ -208,10 +207,8 @@
         <td class="px-4 py-2 align-middle text-gray-700">
           <div class="truncate" title="{{ c.name }}">{{ c.name }} <span class="text-xs text-gray-400">{{ c.briefing_interval or c.period }}</span></div>
         </td>
-        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
-           without breaking the table, hence the wrapper div. #}
         <td class="px-4 py-2 align-middle text-red-600">
-          <div class="line-clamp-2 break-words" title="{{ c.briefing_last_error }}">{{ c.briefing_last_error }}</div>
+          {{ error_text(c.briefing_last_error) }}
         </td>
         <td class="px-4 py-2 align-middle text-right text-gray-400">{{ c.briefing_retry_count }}</td>
         <td class="px-4 py-2 align-middle whitespace-nowrap">
@@ -258,10 +255,8 @@
           <div class="text-gray-700 truncate">{{ p.user.display_name if p.user else "Deleted user" }}</div>
           {% if p.user %}<div class="text-xs text-gray-400 truncate">{{ p.user.email }}</div>{% endif %}
         </td>
-        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
-           without breaking the table, hence the wrapper div. #}
         <td class="px-4 py-2 align-middle text-red-600">
-          <div class="line-clamp-2 break-words" title="{{ p.ai_preference_last_error }}">{{ p.ai_preference_last_error }}</div>
+          {{ error_text(p.ai_preference_last_error) }}
         </td>
         <td class="px-4 py-2 align-middle text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
         <td class="px-4 py-2 align-middle whitespace-nowrap">
@@ -313,10 +308,8 @@
           </div>
           <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
-           without breaking the table, hence the wrapper div. #}
         <td class="px-4 py-2 align-middle text-red-500">
-          <div class="line-clamp-2 break-words" title="{{ article.readable_error or '' }}">{{ article.readable_error or "—" }}</div>
+          {% if article.readable_error %}{{ error_text(article.readable_error) }}{% else %}—{% endif %}
         </td>
         <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
         <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
@@ -361,10 +354,8 @@
           </div>
           <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
-           without breaking the table, hence the wrapper div. #}
         <td class="px-4 py-2 align-middle text-red-500">
-          <div class="line-clamp-2 break-words" title="{{ article.readable_error or '' }}">{{ article.readable_error or "—" }}</div>
+          {% if article.readable_error %}{{ error_text(article.readable_error) }}{% else %}—{% endif %}
         </td>
         <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
         <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
