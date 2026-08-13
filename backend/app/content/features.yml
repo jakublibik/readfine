@@ -177,7 +177,7 @@ categories:
           encrypted, and used only for your own requests.
       - title: Custom prompts & models
         desc: >-
-          Set a fast model for scoring and a quality model for summaries, chat,
+          Set a small model for scoring and a main model for summaries, chat,
           and briefings, each on the provider you pick. The summary and context
           prompts are editable, and each briefing can carry its own prompt.
 

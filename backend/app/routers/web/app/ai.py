@@ -89,7 +89,7 @@ async def _require_quality_ai_for_article(
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     if not settings or not settings.ai_quality_provider or not settings.ai_quality_model:
-        return _note("Quality AI model not configured.")
+        return _note("Main AI model not configured.")
 
     article = await _get_article_access(user, article_id, db)
     if not article:
@@ -196,7 +196,7 @@ async def htmx_ai_context_trigger(
     client, provider, model = await get_ai_client(user.id, "quality", db)
     if client is None:
         return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Quality AI model not configured.</div>'
+            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Main AI model not configured.</div>'
         )
 
     try:
@@ -280,7 +280,7 @@ async def htmx_general_ai_chat(
         return HTMLResponse(
             f'<div id="general-chat-area" '
             f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-            f'<p class="text-xs text-gray-400 py-2">Quality AI model not configured.</p></div>'
+            f'<p class="text-xs text-gray-400 py-2">Main AI model not configured.</p></div>'
         )
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
@@ -322,7 +322,7 @@ async def htmx_general_ai_chat(
         return HTMLResponse(
             _render_general_chat_area(
                 current_messages[:-1],
-                error="Quality AI model not configured.",
+                error="Main AI model not configured.",
             )
         )
 
@@ -394,7 +394,7 @@ async def htmx_ai_chat(
         return HTMLResponse(
             f'<div id="chat-area-{article_id}" '
             f'class="flex-1 overflow-hidden flex flex-col px-2 sm:px-4 py-3">'
-            f'<p class="text-xs text-gray-400 py-2">Quality AI model not configured.</p></div>'
+            f'<p class="text-xs text-gray-400 py-2">Main AI model not configured.</p></div>'
         )
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
@@ -433,7 +433,7 @@ async def htmx_ai_chat(
     if client is None:
         return HTMLResponse(_render_chat_area(
             article_id, current_messages[:-1], use_article,
-            error="Quality AI model not configured.",
+            error="Main AI model not configured.",
             article_title=title,
         ))
 

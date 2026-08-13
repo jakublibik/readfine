@@ -91,8 +91,14 @@
 <section class="mb-8">
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Models</h2>
   <p class="text-xs text-gray-500 mb-1">
-    Fast model is used for article scoring. Quality model is used for summaries, chat, interest profile generation, and catch me up & briefings (unless overridden per-run).
+    Scoring model rates articles: one number per article, so a small, cheap model is the right choice.
+    Main model does everything else, summaries, chat, interest profile generation, and catch me up & briefings.
   </p>
+  {% if s.ai_fast_provider and s.ai_fast_model and not (s.ai_quality_provider and s.ai_quality_model) %}
+  <p class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-2">
+    Only the scoring model is set up. Summaries, chat, the interest profile and catch me up & briefings all need the main model.
+  </p>
+  {% endif %}
   <p class="text-xs text-gray-500 mb-4">
     Enter a model alias (e.g. <code class="font-mono">claude-haiku-4-5</code>) or a specific version ID. Aliases always resolve to the latest version.
   </p>
@@ -101,9 +107,9 @@
      typed rather than to the model still on the account — otherwise the form
      would answer "that model can't score" while showing a different one. #}
   {% for slot, slot_label, provider_val, model_val in [
-    ("fast",    "Fast",    fast_provider_submitted if fast_provider_submitted is defined else s.ai_fast_provider,
+    ("fast",    "Scoring", fast_provider_submitted if fast_provider_submitted is defined else s.ai_fast_provider,
                            fast_model_submitted if fast_model_submitted is defined else s.ai_fast_model),
-    ("quality", "Quality", s.ai_quality_provider, s.ai_quality_model),
+    ("quality", "Main",    s.ai_quality_provider, s.ai_quality_model),
   ] %}
   <div class="mb-5">
     <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-1">
@@ -161,7 +167,7 @@
       Enable article scoring
     </label>
   </div>
-  <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance using the fast model. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance using the scoring model. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
 
   {# Indent and rule only from sm up: on a phone they would cost the profile
      textarea over a tenth of its width, and the block sits right under its
@@ -212,7 +218,7 @@
         {% elif pref_auto_status == 'cold_start' %}
           Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
         {% elif pref_auto_status == 'no_quality_model' %}
-          Automatic generation needs a quality model configured.
+          Automatic generation needs a main model configured.
         {% elif pref_auto_status == 'no_api_key' %}
           Automatic generation needs an API key for {{ provider_labels[pref_auto_detail.provider] or pref_auto_detail.provider }}.
         {% elif pref_auto_status == 'due' %}
@@ -277,7 +283,7 @@
           Auto-summarize starred articles
         </label>
       </div>
-      <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the quality model. Per-feed override available in feed settings.</p>
+      <p class="text-xs text-gray-500 mt-1 ml-6">Auto-generate AI summaries for starred articles using the main model. Per-feed override available in feed settings.</p>
       <p class="text-xs text-gray-400 mt-1 ml-6">Minimum article length: 1 500 characters of normalized text.</p>
     </div>
     <div>
@@ -312,7 +318,7 @@
       Enable chat
     </label>
   </div>
-  <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat - accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message. Model (quality/fast) is selectable in the chat panel.</p>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Enables AI chat - accessible from the sidebar, mobile toolbar, and article menu. Supports general conversation and article-specific context ("Include article" sends up to the configured content limit). Conversation history (up to 5 turns) is sent with each message.</p>
 </section>
 
 {# ── Limits ────────────────────────────────────────────────────────────────── #}
