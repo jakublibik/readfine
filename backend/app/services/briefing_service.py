@@ -203,11 +203,13 @@ async def send_briefing(
 
     from app.services.ai_service import catch_me_up, get_ai_client  # noqa: PLC0415
 
-    ai_client_info = await get_ai_client(user.id, config.model_slot, db)
-    if ai_client_info is None:
-        raise RuntimeError("No AI client available — check API keys in Settings → AI")
-
-    client, provider, model = ai_client_info
+    # get_ai_client returns a triple, (None, None, None) when the slot has no
+    # model or no usable API key. Checking the return value itself would never
+    # be true and the run would fail deeper in, with an AttributeError as the
+    # error the user gets to see.
+    client, provider, model = await get_ai_client(user.id, config.model_slot, db)
+    if client is None:
+        raise RuntimeError("No AI model configured — set one up in Settings → AI")
 
     scoring_available = bool(
         user.settings and user.settings.ai_scoring_enabled_default

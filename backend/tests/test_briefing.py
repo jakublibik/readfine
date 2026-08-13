@@ -256,6 +256,9 @@ class TestSendBriefing:
 
     @pytest.mark.asyncio
     async def test_no_ai_client_raises(self, mock_db):
+        """An unconfigured slot yields (None, None, None), not None. The error has
+        to be raised here, otherwise the run dies further in on an AttributeError
+        and that is the message the user sees in the briefing's error field."""
         from app.services.briefing_service import send_briefing
         config = make_config()
         user = make_user()
@@ -269,9 +272,15 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=None):
-                with pytest.raises(RuntimeError, match="No AI client"):
-                    await send_briefing(config, user, mock_db, app_settings)
+                       new_callable=AsyncMock, return_value=(None, None, None)):
+                with patch("app.services.ai_service.catch_me_up",
+                           new_callable=AsyncMock) as mock_catchup:
+                    with pytest.raises(RuntimeError, match="No AI model configured"):
+                        await send_briefing(config, user, mock_db, app_settings)
+
+        # Nothing was sent to a model, so nothing gets logged or billed.
+        mock_catchup.assert_not_called()
+        mock_db.add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_smtp_exception_bubbles_up(self, mock_db):
