@@ -104,6 +104,9 @@ async def catchup_page(
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
         "period_descs": period_descs,
         "smtp_available": smtp_available,
+        # Digests and briefings run on the main model only, so a user who set up
+        # just the scoring slot needs to hear about it before they hit Generate.
+        "main_model_configured": bool(settings.ai_quality_provider and settings.ai_quality_model),
     })
 
 
@@ -116,7 +119,6 @@ async def htmx_catchup_estimate(
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     article_limit: int = Query(500),
-    model_slot: str = Query("fast"),
     # Same checkbox semantics as the generate route: an unchecked box submits no
     # value at all, so a missing param means off, not the default.
     include_snippet: str | None = Query(None),
@@ -145,7 +147,7 @@ async def htmx_catchup_estimate(
     else:
         count_html = f'<span>{count} articles</span>'
 
-    cost_html = await _cost_line(user, db, min(count, article_limit), model_slot, include_snippet)
+    cost_html = await _cost_line(user, db, min(count, article_limit), include_snippet)
     return HTMLResponse(f'<div>{count_html}</div><div>{cost_html}</div>')
 
 
@@ -153,7 +155,6 @@ async def _cost_line(
     user: User,
     db: AsyncSession,
     effective_count: int,
-    model_slot: str,
     include_snippet: str | None,
 ) -> str:
     """Cost estimate for `effective_count` articles, or a hint / empty string when
@@ -163,8 +164,10 @@ async def _cost_line(
     from app.services.stats_service import _calc_cost
 
     try:
-        _client, provider, model = await get_ai_client(user.id, model_slot, db)
+        client, provider, model = await get_ai_client(user.id, "quality", db)
     except Exception:
+        client = None
+    if client is None:
         return '<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>'
 
     input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet == "true")
@@ -172,12 +175,11 @@ async def _cost_line(
     if cost is None:
         return ""
 
-    slot_label = "fast" if model_slot == "fast" else "quality"
     est_note = " · model not in price list, approximated" if cost_estimated else ""
     from app.utils.formats import format_number
     return (
         f'<span class="text-gray-500 text-sm">Estimated cost: ~${format_number(cost, 4)} '
-        f'<span class="text-gray-400">({effective_count} articles × {slot_label} model{est_note})</span></span>'
+        f'<span class="text-gray-400">({effective_count} articles × {html_module.escape(model)}{est_note})</span></span>'
     )
 
 
@@ -191,7 +193,6 @@ async def htmx_catchup_generate(
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     config_id: int | None = Form(None),
@@ -236,13 +237,21 @@ async def htmx_catchup_generate(
     if not articles:
         return HTMLResponse('<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>')
 
+    # The digest always runs on the main model; the scoring slot is reserved for
+    # article scoring, where the model is picked to be small.
+    client, provider, model = await get_ai_client(user.id, "quality", db)
+    if client is None:
+        return HTMLResponse(
+            '<div class="text-red-600 text-sm p-4">No main model configured. '
+            'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
+        )
+
     sampled = apply_catchup_limit(articles, article_limit, scoring_available)
     if include_snippet_bool:
         await populate_snippet_sources(sampled, user.id, db)
     articles_meta = build_articles_meta(sampled, include_snippet_bool)
 
     try:
-        client, provider, model = await get_ai_client(user.id, model_slot, db)
         prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else None
         text, input_tokens, output_tokens = await catch_me_up(
             articles_meta=articles_meta,
@@ -265,7 +274,7 @@ async def htmx_catchup_generate(
         output_tokens=output_tokens,
         model=model,
         provider=provider,
-        model_slot=model_slot,
+        model_slot="quality",
     )
     db.add(log)
     await db.commit()
@@ -306,7 +315,6 @@ async def htmx_catchup_config_create(
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
@@ -345,7 +353,6 @@ async def htmx_catchup_config_create(
         config.label_filter = label_filter
         config.filter_score_min = score_min_stored
         config.article_limit = article_limit
-        config.model_slot = model_slot
         config.custom_prompt = custom_prompt
         config.include_snippet = include_snippet_bool
         config.updated_at = datetime.now(timezone.utc)
@@ -359,7 +366,6 @@ async def htmx_catchup_config_create(
             label_filter=label_filter,
             filter_score_min=score_min_stored,
             article_limit=article_limit,
-            model_slot=model_slot,
             custom_prompt=custom_prompt,
             include_snippet=include_snippet_bool,
         )
@@ -380,7 +386,6 @@ async def htmx_catchup_config_update(
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
@@ -412,7 +417,6 @@ async def htmx_catchup_config_update(
     config.label_filter = label_filter
     config.filter_score_min = filter_score_min / 100 if filter_score_min is not None else None
     config.article_limit = article_limit
-    config.model_slot = model_slot
     config.custom_prompt = custom_prompt
     config.include_snippet = include_snippet_bool
     config.updated_at = datetime.now(timezone.utc)

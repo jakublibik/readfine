@@ -56,7 +56,6 @@ def _catchup_config_json(cfg) -> str:
         "label_filter": cfg.label_filter or "",
         "filter_score_min": cfg.filter_score_min,
         "article_limit": cfg.article_limit,
-        "model_slot": cfg.model_slot,
         "custom_prompt": cfg.custom_prompt or "",
         "include_snippet": cfg.include_snippet,
     }

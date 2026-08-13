@@ -22,6 +22,16 @@
   </div>
   {% else %}
 
+  {% if not main_model_configured %}
+  <div class="max-w-5xl mx-auto px-2 sm:px-4 pt-3 sm:pt-6">
+    <div class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+      Digests and briefings run on the main model, and you don't have one set up. The
+      scoring model won't be used for them.
+      <a href="/settings/ai" class="underline font-medium">Pick a main model in Settings → AI.</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="max-w-5xl mx-auto px-2 sm:px-4 py-3 sm:py-6 grid grid-cols-1 lg:grid-cols-[20rem_1fr] gap-3 sm:gap-6 items-start">
 
     <!-- ── Left column: saved configs + form ────────────────────────────── -->
@@ -165,24 +175,6 @@
           <input type="number" name="article_limit" id="article-limit"
                  min="10" max="500" value="500"
                  class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
-        </div>
-
-        <!-- Model slot -->
-        <div>
-          <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
-          <div class="flex gap-2">
-            {% for val, lbl in [("fast", "Fast"), ("quality", "Quality")] %}
-            <label class="flex-1 text-center">
-              <input type="radio" name="model_slot" value="{{ val }}" class="sr-only peer"
-                     {% if val == "fast" %}checked{% endif %}>
-              <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
-                           peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
-                           hover:bg-gray-50 transition-colors">
-                {{ lbl }}
-              </span>
-            </label>
-            {% endfor %}
-          </div>
         </div>
 
         <!-- Include article text -->
@@ -406,10 +398,6 @@
     // Period
     var periodRadio = form.querySelector('input[name="period"][value="' + cfg.period + '"]');
     if (periodRadio) periodRadio.checked = true;
-
-    // Model slot
-    var modelRadio = form.querySelector('input[name="model_slot"][value="' + cfg.model_slot + '"]');
-    if (modelRadio) modelRadio.checked = true;
 
     // Filter status
     var statusRadio = form.querySelector('input[name="filter_status"][value="' + cfg.filter_status + '"]');

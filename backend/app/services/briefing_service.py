@@ -193,7 +193,7 @@ async def send_briefing(
             output_tokens=0,
             model=None,
             provider=None,
-            model_slot=config.model_slot,
+            model_slot="quality",
         ))
         config.briefing_next_send_at = compute_next_send_at(
             config.briefing_interval, config.briefing_day, config.briefing_time or "08:00", tz_str
@@ -203,13 +203,15 @@ async def send_briefing(
 
     from app.services.ai_service import catch_me_up, get_ai_client  # noqa: PLC0415
 
+    # Always the main model: the scoring slot holds a deliberately small model,
+    # picked for one number per article, not for writing a digest.
     # get_ai_client returns a triple, (None, None, None) when the slot has no
     # model or no usable API key. Checking the return value itself would never
     # be true and the run would fail deeper in, with an AttributeError as the
     # error the user gets to see.
-    client, provider, model = await get_ai_client(user.id, config.model_slot, db)
+    client, provider, model = await get_ai_client(user.id, "quality", db)
     if client is None:
-        raise RuntimeError("No AI model configured — set one up in Settings → AI")
+        raise RuntimeError("No main model configured — set one up in Settings → AI")
 
     scoring_available = bool(
         user.settings and user.settings.ai_scoring_enabled_default
@@ -259,7 +261,7 @@ async def send_briefing(
         output_tokens=output_tokens,
         model=model,
         provider=provider,
-        model_slot=config.model_slot,
+        model_slot="quality",
     ))
 
     if not test_mode:

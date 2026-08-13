@@ -11,6 +11,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Catch me up and briefings now always run on the quality model, and the choice between the two models is gone from the form. The two slots had been pulling in opposite directions: scoring gives the model ten tokens to answer in, one number per article, so the model there has to be small, and that same limit decided what could write your digests. The fast slot is the scoring model now and nothing else. If you have only that one set up, Catch me up says so and points you at Settings → AI. Briefings that were set to the fast model have been switched off instead of moved across on their own, because the quality model usually costs more and a bigger bill arriving on schedule is not something to sign someone up for. They are still in your list, with the reason on them, and switching one back on clears it.
+
 - You stay signed in for 30 days instead of 14. The session was already sliding, so it only ran out if you didn't visit at all, but two weeks is easy to skip in a reader without meaning to leave, and coming back to a login form you no longer have the password for is enough to lose the habit. Set `SESSION_MAX_AGE_DAYS` to make it shorter on a shared machine or longer on your own.
 
 ### Fixed
