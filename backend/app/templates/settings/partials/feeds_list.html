@@ -85,7 +85,7 @@
                 {% endif %}
               </div>
               {% if uf.feed.status == 'error' and uf.feed.last_error %}
-                <div class="text-xs text-red-500 truncate mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
+                <div class="text-xs text-red-500 line-clamp-2 break-words mt-0.5 pl-6" title="{{ uf.feed.last_error }}">{{ uf.feed.last_error }}</div>
               {% elif uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
                 {# Explains the badge without a hover (there is none on touch) and shows
                    the run-up to being switched off, which the badge alone cannot. Gray,

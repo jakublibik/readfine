@@ -19,6 +19,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Error messages are no longer cut off after one line. A feed's last error in Settings → Feeds, and the error columns on the admin dashboard and in the fetch log, all clipped the text to a single line, so on a typical fetch failure you got the opening words and nothing else. They now run to two lines before they trim, and the full message is in the tooltip. The readable extraction tables had the opposite problem, wrapping without any limit, where one long message could stretch a row halfway down the page; they follow the same two lines now.
+
 - Generating a digest from further down the Catch me up page now scrolls the result panel fully into view. It scrolled up to the panel, but stopped with the top of it tucked under the header bar pinned across the top of the page, so the first line of the briefing was hidden and it looked like the page had stopped short.
 
 - In Catch me up, the cost estimate now follows the filters. Changing the period, the read/unread state, the labels, the score threshold or which feeds are included updated the number of articles below the form but left the estimate on the article count from before, so the figure you were reading was for a selection you had already moved on from. Only switching the model or the article limit refreshed it. Both now update together on every change.

@@ -8,25 +8,31 @@
 {% if logs %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for. #}
+  <table class="w-full table-fixed min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">HTTP</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[30%]">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">HTTP</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for log in logs %}
       <tr>
-        <td class="px-4 py-2 max-w-xs">
+        <td class="px-4 py-2 align-top">
           <div class="font-medium text-gray-800 truncate">{{ log.feed.title if log.feed else "Deleted feed" }}</div>
           {% if log.feed %}<div class="text-xs text-gray-400 truncate">{{ log.feed.feed_url | redact_url_display }}</div>{% endif %}
         </td>
-        <td class="px-4 py-2 text-gray-500">{{ log.http_status or "—" }}</td>
-        <td class="px-4 py-2 text-red-600 max-w-sm truncate">{{ log.error_message }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-top text-gray-500">{{ log.http_status or "—" }}</td>
+        {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
+           without breaking the table, hence the wrapper div. #}
+        <td class="px-4 py-2 align-top text-red-600">
+          <div class="line-clamp-2 break-words" title="{{ log.error_message }}">{{ log.error_message }}</div>
+        </td>
+        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
           <time datetime="{{ log.failed_at.isoformat() }}">{{ log.failed_at | utctime('short') }}</time>
         </td>
       </tr>
