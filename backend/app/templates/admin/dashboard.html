@@ -103,7 +103,7 @@
       {% for row in stats.fetch_error_feeds %}
       {% set f = row.feed %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ f.title }}">{{ f.title }}</div>
           {# Same redaction as the Feeds table: a feed URL can carry a token or HTTP
              credentials, and this list spans every user's feeds. #}
@@ -112,19 +112,22 @@
         {# threshold=1: every row here is on screen because a fetch failed, so there is
            no healthy feed to false-alarm. A refused fetch says "throttled" from the
            first one instead of a green "active" sitting next to its own error. #}
-        <td class="px-4 py-2 align-top">{{ status_badge(f, with_count=true, threshold=1) }}</td>
+        {# Every cell centres in its row. The error clamps to two lines and the feed block
+           is two lines of its own, so a row is taller than the short cells beside them;
+           top-aligned they hung off the top of it. A one-line error centres the same way. #}
+        <td class="px-4 py-2 align-middle">{{ status_badge(f, with_count=true, threshold=1) }}</td>
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
            "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
         {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
            without breaking the table, hence the wrapper div. #}
-        <td class="px-4 py-2 align-top text-red-600">
+        <td class="px-4 py-2 align-middle text-red-600">
           <div class="line-clamp-2 break-words" title="{{ row.error_message }}">{{ row.error_message }}</div>
         </td>
-        <td class="px-2 py-2 align-top text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
-        <td class="px-2 py-2 align-top text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
-        <td class="px-2 py-2 align-top text-right tabular-nums text-gray-500">{{ row.fails }}</td>
-        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+        <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
+        <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
+        <td class="px-2 py-2 align-middle text-right tabular-nums text-gray-500">{{ row.fails }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           <time datetime="{{ row.last_failed_at.isoformat() }}">{{ row.last_failed_at | utctime('short') }}</time>
         </td>
       </tr>
@@ -198,20 +201,20 @@
     <tbody class="divide-y divide-gray-100">
       {% for c in stats.briefing_errors %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate">{{ c.user.display_name if c.user else "Deleted user" }}</div>
           {% if c.user %}<div class="text-xs text-gray-400 truncate">{{ c.user.email }}</div>{% endif %}
         </td>
-        <td class="px-4 py-2 align-top text-gray-700">
+        <td class="px-4 py-2 align-middle text-gray-700">
           <div class="truncate" title="{{ c.name }}">{{ c.name }} <span class="text-xs text-gray-400">{{ c.briefing_interval or c.period }}</span></div>
         </td>
         {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
            without breaking the table, hence the wrapper div. #}
-        <td class="px-4 py-2 align-top text-red-600">
+        <td class="px-4 py-2 align-middle text-red-600">
           <div class="line-clamp-2 break-words" title="{{ c.briefing_last_error }}">{{ c.briefing_last_error }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-right text-gray-400">{{ c.briefing_retry_count }}</td>
-        <td class="px-4 py-2 align-top whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-right text-gray-400">{{ c.briefing_retry_count }}</td>
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if c.briefing_next_send_at %}
             <time class="text-gray-400" datetime="{{ c.briefing_next_send_at.isoformat() }}">{{ c.briefing_next_send_at | utctime('short') }}</time>
           {% else %}
@@ -251,24 +254,24 @@
     <tbody class="divide-y divide-gray-100">
       {% for p in stats.auto_profile_errors %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate">{{ p.user.display_name if p.user else "Deleted user" }}</div>
           {% if p.user %}<div class="text-xs text-gray-400 truncate">{{ p.user.email }}</div>{% endif %}
         </td>
         {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
            without breaking the table, hence the wrapper div. #}
-        <td class="px-4 py-2 align-top text-red-600">
+        <td class="px-4 py-2 align-middle text-red-600">
           <div class="line-clamp-2 break-words" title="{{ p.ai_preference_last_error }}">{{ p.ai_preference_last_error }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
-        <td class="px-4 py-2 align-top whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if p.ai_preference_auto_days %}
             <span class="text-gray-400">every {{ p.ai_preference_auto_days }} days</span>
           {% else %}
             <span class="text-amber-600 text-xs">off - needs manual fix</span>
           {% endif %}
         </td>
-        <td class="px-4 py-2 align-top whitespace-nowrap">
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if p.ai_preference_last_error_at %}
             <time class="text-gray-400" datetime="{{ p.ai_preference_last_error_at.isoformat() }}">{{ p.ai_preference_last_error_at | utctime('short') }}</time>
           {% endif %}
@@ -304,7 +307,7 @@
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_failed_recent %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ article.title }}">
             {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
           </div>
@@ -312,11 +315,11 @@
         </td>
         {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
            without breaking the table, hence the wrapper div. #}
-        <td class="px-4 py-2 align-top text-red-500">
+        <td class="px-4 py-2 align-middle text-red-500">
           <div class="line-clamp-2 break-words" title="{{ article.readable_error or '' }}">{{ article.readable_error or "—" }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           {% if article.readable_failed_at %}
             <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at | utctime('short') }}</time>
           {% else %}—{% endif %}
@@ -352,7 +355,7 @@
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_pending_recent %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ article.title }}">
             {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
           </div>
@@ -360,11 +363,11 @@
         </td>
         {# line-clamp needs display:-webkit-box, which cannot sit on the cell itself
            without breaking the table, hence the wrapper div. #}
-        <td class="px-4 py-2 align-top text-red-500">
+        <td class="px-4 py-2 align-middle text-red-500">
           <div class="line-clamp-2 break-words" title="{{ article.readable_error or '' }}">{{ article.readable_error or "—" }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           {% if article.readable_next_retry_at %}
             <time datetime="{{ article.readable_next_retry_at.isoformat() }}">{{ article.readable_next_retry_at | utctime('short') }}</time>
           {% else %}—{% endif %}
