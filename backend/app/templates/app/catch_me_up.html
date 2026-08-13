@@ -217,12 +217,10 @@
           </div>
         </div>
 
-        <!-- Count + cost -->
-        <div class="text-xs text-gray-500 space-y-1 min-h-[2.5rem]">
-          <div id="catchup-count">
-            <span class="text-gray-400">Select filters to see article count</span>
-          </div>
-          <div id="catchup-cost"></div>
+        <!-- Count + cost (one request, so the two lines can't disagree) -->
+        <div id="catchup-estimate" class="text-xs text-gray-500 space-y-1 min-h-[2.5rem]">
+          <div><span class="text-gray-400">Select filters to see article count</span></div>
+          <div></div>
         </div>
 
         <!-- Generate button -->
@@ -297,7 +295,7 @@
       var open = !settingsPanel.classList.contains('hidden');
       settingsPanel.classList.toggle('hidden', open);
       settingsArrow.classList.toggle('rotate-90', !open);
-      if (!open) { triggerCountRefresh(); triggerCostRefresh(); }
+      if (!open) { triggerEstimateRefresh(); }
     });
   }
 
@@ -320,8 +318,7 @@
   if (scoreEnabled) {
     scoreEnabled.addEventListener('change', function () {
       applyScoreFilter();
-      triggerCountRefresh();
-      triggerCostRefresh();
+      triggerEstimateRefresh();
     });
   }
   applyScoreFilter();
@@ -339,10 +336,9 @@
   }
 
   // ── Count + cost refresh ──────────────────────────────────────────────────
-  var countTimer = null;
-  var costTimer = null;
+  var estimateTimer = null;
 
-  function buildQueryString(extra) {
+  function buildQueryString() {
     var form = document.getElementById('catchup-form');
     if (!form) return '';
     var fd = new FormData(form);
@@ -350,26 +346,14 @@
     fd.forEach(function (val, key) {
       if (key !== 'custom_prompt') params.append(key, val);
     });
-    if (extra) Object.keys(extra).forEach(function (k) { params.set(k, extra[k]); });
     return params.toString();
   }
 
-  function triggerCountRefresh() {
-    clearTimeout(countTimer);
-    countTimer = setTimeout(function () {
-      var qs = buildQueryString();
-      htmx.ajax('GET', '/htmx/catch-me-up/count?' + qs, {
-        target: '#catchup-count', swap: 'innerHTML'
-      });
-    }, 300);
-  }
-
-  function triggerCostRefresh() {
-    clearTimeout(costTimer);
-    costTimer = setTimeout(function () {
-      var qs = buildQueryString();
-      htmx.ajax('GET', '/htmx/catch-me-up/cost?' + qs, {
-        target: '#catchup-cost', swap: 'innerHTML'
+  function triggerEstimateRefresh() {
+    clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(function () {
+      htmx.ajax('GET', '/htmx/catch-me-up/estimate?' + buildQueryString(), {
+        target: '#catchup-estimate', swap: 'innerHTML'
       });
     }, 300);
   }
@@ -381,21 +365,12 @@
       if (e.target.name === 'period') {
         updatePeriodDesc();
       }
-      // The cost estimate depends on the article count, so every filter change
-      // has to refresh both. Only the model picker leaves the count untouched.
-      triggerCostRefresh();
-      if (e.target.name !== 'model_slot') {
-        triggerCountRefresh();
-      }
+      triggerEstimateRefresh();
     });
-    document.getElementById('article-limit').addEventListener('input', function () {
-      triggerCountRefresh();
-      triggerCostRefresh();
-    });
+    document.getElementById('article-limit').addEventListener('input', triggerEstimateRefresh);
     // Initial load
     updatePeriodDesc();
-    triggerCountRefresh();
-    triggerCostRefresh();
+    triggerEstimateRefresh();
   }
 
   // ── Load saved config into form ───────────────────────────────────────────
@@ -525,8 +500,7 @@
     if (nameInput) nameInput.value = cfg.name;
 
     updatePeriodDesc();
-    triggerCountRefresh();
-    triggerCostRefresh();
+    triggerEstimateRefresh();
   }
 
   // ── Copy button ──────────────────────────────────────────────────────────

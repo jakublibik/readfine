@@ -3,6 +3,7 @@
 Runs against the real (dev) database inside a rolled-back transaction. Skips
 automatically if the database is unreachable.
 """
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -15,7 +16,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
-from app.services.catchup_service import fetch_catchup_articles
+from app.services.catchup_service import count_catchup_articles, fetch_catchup_articles
 
 NOW = datetime.now(timezone.utc)
 
@@ -152,3 +153,46 @@ async def test_label_filter_combined_with_score(pg):
 
     titles = {r.title for r in results}
     assert titles == {"High score"}
+
+
+async def test_count_matches_fetch_for_every_filter(pg):
+    """The UI's article count and cost estimate come from count_catchup_articles,
+    the digest from fetch_catchup_articles. If the two queries drift apart, the
+    estimate silently describes a different set than the one that gets sent."""
+    user, feed = await _setup(pg)
+    lbl = await _label(pg, user, "News")
+
+    labeled = await _article(pg, feed, title="Labeled")
+    plain = await _article(pg, feed, title="Plain")
+    await _article(pg, feed, title="Trimmed", trimmed_at=NOW - timedelta(minutes=30))
+    await _assign_label(pg, user, labeled, lbl)
+    pg.add(UserArticleState(user_id=user.id, article_id=labeled.id, ai_score=0.9))
+    pg.add(UserArticleState(
+        user_id=user.id, article_id=plain.id, ai_score=0.2, dwell_seconds=60,
+    ))
+    await pg.flush()
+
+    # (filters, how many of the three articles they select over the 7 day window)
+    cases = [
+        ({"filter_status": "all", "label_filter": None, "filter_score_min": None}, 2),
+        ({"filter_status": "not_opened", "label_filter": None, "filter_score_min": None}, 1),
+        ({"filter_status": "all", "label_filter": '["any"]', "filter_score_min": None}, 1),
+        ({"filter_status": "all", "label_filter": f'["label:{lbl.id}"]', "filter_score_min": None}, 1),
+        ({"filter_status": "all", "label_filter": None, "filter_score_min": 0.5}, 1),
+        ({"filter_status": "not_opened", "label_filter": '["any"]', "filter_score_min": 0.5}, 1),
+    ]
+    scope = json.dumps([f"feed:{feed.id}"])
+    for case, expected in cases:
+        for period in ("today", "yesterday", "7days"):
+            common = dict(
+                user_id=user.id, tz_str="UTC", db=pg,
+                period=period, scope_include=scope, **case,
+            )
+            fetched = await fetch_catchup_articles(**common)
+            counted = await count_catchup_articles(**common)
+            assert counted == len(fetched), f"{period} {case}"
+            # Pin the 7 day window to real numbers, so the equality above can't
+            # pass by both queries selecting nothing. The shorter periods depend
+            # on the wall clock, so only the equality is checked there.
+            if period == "7days":
+                assert counted == expected, case
