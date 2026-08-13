@@ -19,6 +19,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Generating a digest from further down the Catch me up page now scrolls the result panel fully into view. It scrolled up to the panel, but stopped with the top of it tucked under the header bar pinned across the top of the page, so the first line of the briefing was hidden and it looked like the page had stopped short.
+
 - In Catch me up, the cost estimate now follows the filters. Changing the period, the read/unread state, the labels, the score threshold or which feeds are included updated the number of articles below the form but left the estimate on the article count from before, so the figure you were reading was for a selection you had already moved on from. Only switching the model or the article limit refreshed it. Both now update together on every change.
 
 - Turning off "Include article text" in Catch me up now lowers the cost estimate as it should. Leaving the article text out is most of what you send the model, and the digest itself was built without it correctly, but the estimate always priced the run as though the text were included, so the cheaper option looked no cheaper.

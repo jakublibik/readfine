@@ -230,7 +230,9 @@
     </div>
 
     <!-- ── Right column: result ───────────────────────────────────────── -->
-    <div class="bg-white border border-gray-200 rounded-lg p-5 min-h-[12rem] relative">
+    <!-- scroll-mt clears the sticky header: the generate handlers scrollIntoView() this
+         panel, and block:'start' would otherwise tuck its top under the header. -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 min-h-[12rem] relative scroll-mt-16">
 
       <!-- Copy button -->
       <button id="catchup-copy-btn"
