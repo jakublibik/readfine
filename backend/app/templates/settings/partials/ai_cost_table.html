@@ -44,7 +44,7 @@
       {% else %}
       {# The scoring slot holds one operation, so a line under it does the job a
          subtotal row would have done. #}
-      <tr class="{% if op.is_placeholder %}opacity-40 {% endif %}{% if op.slot == 'fast' %}border-b !border-gray-300{% endif %}">
+      <tr class="{% if op.is_placeholder %}opacity-40 {% endif %}{% if op.slot == 'fast' %}border-b !border-gray-200{% endif %}">
         <td class="py-2 text-gray-700">
           {# No slot chip: the line under Scoring and the Main total below already
              say which model each row ran on. #}
