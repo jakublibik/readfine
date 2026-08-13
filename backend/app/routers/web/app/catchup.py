@@ -142,7 +142,9 @@ async def htmx_catchup_cost(
     request: Request,
     article_limit: int = Query(500),
     model_slot: str = Query("fast"),
-    include_snippet: bool = Query(True),
+    # Same checkbox semantics as the generate route: an unchecked box submits no
+    # value at all, so a missing param means off, not the default.
+    include_snippet: str | None = Query(None),
     period: str = Query("7days"),
     filter_status: str = Query("all"),
     label_filter: str | None = Query(None),
@@ -171,7 +173,7 @@ async def htmx_catchup_cost(
     )
     effective_count = min(len(articles), article_limit)
 
-    input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet)
+    input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet == "true")
     cost, cost_estimated = _calc_cost(model, provider, input_tokens, output_tokens)
     if cost is None:
         return HTMLResponse("")

@@ -15,6 +15,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- In Catch me up, the cost estimate now follows the filters. Changing the period, the read/unread state, the labels, the score threshold or which feeds are included updated the number of articles below the form but left the estimate on the article count from before, so the figure you were reading was for a selection you had already moved on from. Only switching the model or the article limit refreshed it. Both now update together on every change.
+
+- Turning off "Include article text" in Catch me up now lowers the cost estimate as it should. Leaving the article text out is most of what you send the model, and the digest itself was built without it correctly, but the estimate always priced the run as though the text were included, so the cheaper option looked no cheaper.
+
 - On a phone, opening search from the menu no longer darkens the screen twice over. Search is opened from inside the sliding menu and the menu stays open behind it, so that closing search puts you back where you came from, but both of them dim the screen and the two together came out much darker. Closing search then snapped the screen back to normal brightness, which looked like something had flashed across the whole page. Only the search window dims things now while it is up.
 
 - The search window no longer opens on last time's filters for a moment. Its contents are fetched, but the window itself appeared instantly, so until the new copy landed you were looking at the previous one, scope and label chips included, even when you had opened it fresh from the menu and it was about to come up empty. It now empties on close and keeps its size while it fills.

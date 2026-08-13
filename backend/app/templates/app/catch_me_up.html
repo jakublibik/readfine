@@ -321,6 +321,7 @@
     scoreEnabled.addEventListener('change', function () {
       applyScoreFilter();
       triggerCountRefresh();
+      triggerCostRefresh();
     });
   }
   applyScoreFilter();
@@ -380,14 +381,10 @@
       if (e.target.name === 'period') {
         updatePeriodDesc();
       }
-      if (e.target.name === 'model_slot') {
-        triggerCostRefresh();
-      } else if (e.target.name === 'include_snippet') {
-        triggerCostRefresh();
-        triggerCountRefresh();
-      } else if (e.target.id === 'scope-value' || e.target.name === 'scope_include') {
-        triggerCountRefresh();
-      } else {
+      // The cost estimate depends on the article count, so every filter change
+      // has to refresh both. Only the model picker leaves the count untouched.
+      triggerCostRefresh();
+      if (e.target.name !== 'model_slot') {
         triggerCountRefresh();
       }
     });
