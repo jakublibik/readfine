@@ -6,6 +6,7 @@ SQLAlchemy clause. The companion DB test in test_fetcher.py checks that the valu
 actually land in the row.
 """
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -20,7 +21,9 @@ from app.fetcher.failure import (
     INTERNAL_ERROR_MESSAGE,
     block_backoff,
     classify,
+    clear_failure_state,
     failure_values,
+    has_failure_trail,
     is_source_error,
     log_failure_message,
     user_failure_message,
@@ -304,3 +307,73 @@ def test_block_statuses_never_touch_fetch_error_count(status):
 @pytest.mark.parametrize("status", [400, 404, 410, 451, 500, 503])
 def test_non_block_statuses_never_touch_block_count(status):
     assert "block_count" not in _values(_http_error(status))
+
+
+def _feed(**kwargs):
+    """A feed row as the reset path sees it — plain attributes, no session."""
+    defaults = dict(
+        status="active", fetch_error_count=0, block_count=0,
+        last_error=None, retry_after_until=None,
+    )
+    defaults.update(kwargs)
+    return SimpleNamespace(**defaults)
+
+
+class TestHasFailureTrail:
+    def test_a_healthy_feed_has_none(self):
+        assert has_failure_trail(_feed()) is False
+
+    @pytest.mark.parametrize("field,value", [
+        ("last_error", "HTTP 500"),
+        ("fetch_error_count", 1),
+        ("block_count", 1),
+        ("retry_after_until", NOW),
+    ])
+    def test_any_column_a_failure_writes_counts(self, field, value):
+        assert has_failure_trail(_feed(**{field: value})) is True
+
+    def test_a_throttled_feed_counts_while_still_active(self):
+        # The case the admin panel used to have no answer for: the block tier leaves
+        # status 'active', so a status check found nothing to reset.
+        assert has_failure_trail(_feed(status="active", block_count=14)) is True
+
+    def test_a_hand_disabled_feed_with_a_clean_row_does_not(self):
+        # An admin switching a feed off by hand leaves no message and no counters;
+        # offering to "reset errors" there would just undo their decision.
+        assert has_failure_trail(_feed(status="disabled")) is False
+
+
+class TestClearFailureState:
+    def test_a_feed_stopped_by_the_block_tier_comes_all_the_way_back(self):
+        # The bug this exists for: clearing fetch_error_count alone left the feed
+        # carrying its block count and a deferral of up to 24 h, so it read as revived
+        # and was fetched by nothing.
+        feed = _feed(
+            status="disabled", block_count=14, fetch_error_count=0,
+            last_error="HTTP 403 Forbidden", retry_after_until=NOW + timedelta(hours=24),
+        )
+        clear_failure_state(feed)
+        assert (feed.status, feed.block_count, feed.retry_after_until) == ("active", 0, None)
+        assert feed.last_error is None
+
+    def test_an_errored_feed_comes_back_too(self):
+        feed = _feed(status="error", fetch_error_count=5, last_error="Timeout")
+        clear_failure_state(feed)
+        assert (feed.status, feed.fetch_error_count, feed.last_error) == ("active", 0, None)
+
+    def test_a_paused_feed_stays_paused(self):
+        # Paused is somebody's decision, not a failure — resetting errors must not
+        # quietly start fetching it again.
+        feed = _feed(status="paused", fetch_error_count=3, last_error="Timeout")
+        clear_failure_state(feed)
+        assert feed.status == "paused"
+        assert (feed.fetch_error_count, feed.last_error) == (0, None)
+
+    def test_it_leaves_nothing_for_has_failure_trail_to_find(self):
+        # The two are each other's inverse; a column added to one must reach the other.
+        feed = _feed(
+            status="error", fetch_error_count=5, block_count=14,
+            last_error="boom", retry_after_until=NOW,
+        )
+        clear_failure_state(feed)
+        assert has_failure_trail(feed) is False

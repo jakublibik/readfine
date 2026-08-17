@@ -21,6 +21,7 @@ from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
 from app.models.user import User, UserCatchupConfig, UserSettings
 from app.auth.security import generate_token
+from app.fetcher.failure import clear_failure_state, has_failure_trail
 from app.services.scope_cleanup import strip_scope_references
 
 logger = logging.getLogger(__name__)
@@ -318,12 +319,18 @@ async def toggle_feed_pause(db: AsyncSession, feed_id: int) -> Feed | None:
 
 
 async def clear_feed_error(db: AsyncSession, feed_id: int) -> Feed | None:
+    """Reset every trace of a failing fetch on *feed_id*. Returns None when there is
+    nothing to reset (or no such feed), which the route reads as "don't log an audit".
+
+    Used to require status ``error``, which left out the two states that actually need
+    it: a feed switched off after repeated failures, and one the host keeps refusing
+    (that one stays ``active``, so it fell through both this and the admin's own
+    button). Both had to be revived from the subscriber's edit form or not at all.
+    """
     feed = await db.get(Feed, feed_id)
-    if not feed or feed.status != "error":
+    if not feed or not has_failure_trail(feed):
         return None
-    feed.status = "active"
-    feed.last_error = None
-    feed.fetch_error_count = 0
+    clear_failure_state(feed)
     await db.commit()
     await db.refresh(feed)
     return feed
@@ -355,10 +362,12 @@ async def update_feed_admin(
     feed.fetch_interval_min = fetch_interval_min
     if status in _ADMIN_EDITABLE_STATUSES:
         # Bringing a feed back to active from a broken/off state clears the
-        # error trail so the scheduler resumes cleanly (mirrors clear_feed_error).
+        # error trail so the scheduler resumes cleanly (same reset as clear_feed_error).
+        # It used to clear only the message and the error counter, so a feed stopped by
+        # the block tier came back still carrying its block count and a deferral of up
+        # to 24 h — active in the table, and fetched by nothing.
         if status == "active" and feed.status in ("error", "disabled"):
-            feed.last_error = None
-            feed.fetch_error_count = 0
+            clear_failure_state(feed)
         feed.status = status
     if feed.feed_type == "scrape" and article_links_selector is not None:
         sel = article_links_selector.strip()

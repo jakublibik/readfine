@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.fetcher import host_throttle
+from app.fetcher.failure import has_failure_trail
 from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.user import User
@@ -365,6 +366,9 @@ async def _feeds_context(db, group: str = "az") -> dict:
             min_interval_min=min_interval, max_interval_min=max_interval, now=now,
         )
         f.next_fetch_rel = format_until(f.next_fetch_at, now)
+        # Whether the row's menu offers "Reset errors". Same predicate the POST handler
+        # gates on, so the menu cannot offer an action that would then do nothing.
+        f.has_failure_trail = has_failure_trail(f)
         # Effective Auto interval the scheduler would use (capped derived value, or the
         # uncapped default fallback), so the table matches behaviour, not the raw stored value.
         f.auto_interval_min = auto_interval_min(

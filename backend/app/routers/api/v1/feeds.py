@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_api_user
 from app.database import get_db
+from app.fetcher.failure import clear_failure_state
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
 from app.schemas.feed import FeedSubscribeRequest, UserFeedResponse, UserFeedUpdate
@@ -142,10 +143,7 @@ async def update_feed(
         # Checks are done; everything below writes to the feed row. The clearing of
         # status and the error counters used to sit above them, which meant a refused
         # request still went through the motions of re-enabling the feed.
-        if feed.status == "disabled":
-            feed.status = "active"
-        feed.fetch_error_count = 0
-        feed.block_count = 0
+        clear_failure_state(feed)
         if not feed.is_private:
             # Credentials are what makes a row private; leaving it public would put it
             # back in the shared pool for the next subscriber, password and all.

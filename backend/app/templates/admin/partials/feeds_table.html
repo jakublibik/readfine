@@ -92,12 +92,17 @@
           {{ "Unpause" if f.status == 'paused' else "Pause" }}
         </button>
         {% endif %}
-        {% if f.status == 'error' %}
+        {# Offered for anything a failed fetch left behind, not just status 'error':
+           a feed switched off after repeated failures and one the host keeps refusing
+           (which stays 'active') are exactly the two that need it, and both used to
+           fall outside this menu. Clears both counters, the message and the deferral -
+           see app/fetcher/failure.py:clear_failure_state. #}
+        {% if f.has_failure_trail %}
         <button hx-post="/admin/feeds/{{ f.id }}/clear-error{{ gq }}"
                 hx-target="#feeds-table"
                 hx-swap="outerHTML"
                 class="block w-full text-left px-4 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
-          Clear error
+          Reset errors
         </button>
         {% endif %}
         {% if f.subscriber_count == 0 %}

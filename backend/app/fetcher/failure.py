@@ -17,7 +17,9 @@ feed. Reddit refuses ~34 % of requests at 45-minute spacing and ~18 % at 75-seco
 spacing, in waves lasting minutes to hours that hit every feed on the host at once.
 Counting that as feed error disabled healthy feeds after five bad rounds.
 
-Both counters are consecutive: any successful fetch resets both to zero.
+Both counters are consecutive: any successful fetch resets both to zero. When a fetch
+never gets that far, :func:`clear_failure_state` is the manual way back — the one place
+that undoes every column a failure writes.
 
 A third case sits outside both tiers: a fault on *our* side (a broken query, a
 column the code expects before its migration ran) also arrives as an exception in
@@ -219,6 +221,58 @@ def user_failure_message(exc: Exception, feed_url: str) -> str:
     if not is_source_error(exc):
         return INTERNAL_ERROR_MESSAGE
     return log_failure_message(exc, feed_url)
+
+
+def has_failure_trail(feed: Feed) -> bool:
+    """Is there anything on this feed row that a failed fetch put there?
+
+    The condition for offering a "reset errors" action. Deliberately covers
+    ``retry_after_until`` on its own: a feed refused by the host keeps status
+    ``active`` with both counters below their badge thresholds for the first couple
+    of rounds, and the only visible consequence is a fetch deferred by hours.
+
+    The status is *not* part of it. Every automatic stop leaves a message and a counter
+    behind, so a bare ``disabled`` with a clean row is somebody switching the feed off by
+    hand — offering to "reset errors" there would mean an admin undoing their own
+    decision with a button that claims to do something else.
+    """
+    return bool(
+        feed.last_error
+        or feed.fetch_error_count
+        or feed.block_count
+        or feed.retry_after_until is not None
+    )
+
+
+def clear_failure_state(feed: Feed) -> None:
+    """Wipe everything a failed fetch left on the feed row — the counterpart to
+    :func:`failure_values`, and the only supported way back from a stopped feed.
+
+    Lives here so the two halves cannot drift: a new column written by a failure has
+    to be undone by something, and this is the one place that does it. Every deliberate
+    revival goes through it — saving the feed's edit form, the admin's "Reset errors",
+    an admin switching a feed back to active, setting credentials over the API — because
+    each of those used to clear a different subset. Clearing only ``fetch_error_count``
+    is what left feeds sitting at "throttled x14" that no button could bring back.
+
+    ``retry_after_until`` goes too, including a deadline the host itself asked for. It is
+    the whole point of the action: the block tier's own backoff reaches 24 h, so leaving
+    it would mean the feed is revived on paper and still not fetched until tomorrow, by
+    the scheduler *or* by a manual refresh (see :func:`app.fetcher.rss.cooldown_until` —
+    once the block count is zeroed, that deadline starts gating manual fetches too). The
+    host's instruction is not lost with it: ``arm_host_cooldown`` armed the same deadline
+    on the per-host throttle, which gates the scheduler and manual refreshes alike. That
+    one is in-memory, so a restart in between costs at most one request that gets refused
+    again and re-arms both.
+
+    ``paused`` is left alone — that is somebody's decision, not a failure.
+    """
+    if feed.status in ("error", "disabled"):
+        feed.status = "active"
+    feed.fetch_error_count = 0
+    feed.block_count = 0
+    feed.last_error = None
+    feed.retry_after_until = None
 
 
 def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now: datetime) -> dict:
