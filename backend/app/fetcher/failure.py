@@ -19,6 +19,12 @@ Counting that as feed error disabled healthy feeds after five bad rounds.
 
 Both counters are consecutive: any successful fetch resets both to zero.
 
+A third case sits outside both tiers: a fault on *our* side (a broken query, a
+column the code expects before its migration ran) also arrives as an exception in
+the fetcher's broad ``except``. It says nothing about the feed, so it moves no
+counter and changes no status, and its text stays out of the user's feed row — see
+:func:`is_source_error` and :func:`user_failure_message`.
+
 Also home to :func:`arm_host_cooldown`, the other half of "what a failed fetch
 does" — it writes no columns, it paces sibling feeds on the same host.
 """
@@ -34,6 +40,7 @@ from app.models.feed import Feed
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    ResponseTooLarge,
     is_bot_block,
     parse_retry_after,
     rate_limited_until,
@@ -150,15 +157,45 @@ def _redacted(text: str, feed_url: str) -> str:
     return _USERINFO_RE.sub("//", text)
 
 
-def failure_message(exc: Exception, feed_url: str) -> str:
-    """Human-readable ``last_error`` for a failed fetch.
+# Exception types that mean the *source* failed: an HTTP status, a timeout, DNS, TLS,
+# too large a body, a body that will not parse, an address the SSRF validator turned
+# down. Anything else the fetch can raise is a fault on our side. Deliberately an
+# allowlist rather than a list of our own failure modes, so a way of breaking that
+# nobody anticipated reads as internal, which is the safe way round.
+#
+# ValueError is in here because it is how this path reports source problems: "Not a
+# valid RSS/Atom feed" (rss.py), "Cannot resolve hostname" and "Redirect blocked"
+# (url_validator.py), a CSS selector matching no links (scrape.py). That is broad
+# enough that a ValueError raised by a bug of ours goes out to the user too; its text
+# is uninformative rather than revealing, and narrowing it would mean a fetch-specific
+# exception type threaded through the shared, SSRF-safe fetch layer.
+_SOURCE_ERRORS = (httpx.HTTPError, ValueError, ResponseTooLarge)
+
+# What the user's feed row says when the fault was ours. Deliberately says nothing
+# about what broke: the full text is in fetch_logs, which only an admin can read.
+INTERNAL_ERROR_MESSAGE = "Internal error while fetching this feed. The detail is in the fetch log."
+
+
+def is_source_error(exc: Exception) -> bool:
+    """Did the feed's source fail, as opposed to something on our side?
+
+    The fetcher's ``except`` is broad enough to catch our own bugs (a broken query,
+    a column read before its migration ran), and those must not be reported as the
+    feed's fault, in the row or in the counters.
+    """
+    return isinstance(exc, _SOURCE_ERRORS)
+
+
+def log_failure_message(exc: Exception, feed_url: str) -> str:
+    """Full text of a failed fetch, for ``fetch_logs`` (admin-only).
 
     For an HTTP status error, ``str(exc)`` embeds httpx's request URL, whose host
     is the validated IP the connection was pinned to (see ``_pin_connection``) — an
     ephemeral address that means nothing to the admin reading the row. Rebuild the
     line from the status, its reason phrase and the feed's own (redacted) URL. Every
-    other failure (timeout, DNS, feedparser, SSRF) never carried an IP, so keep its
-    original text, minus anything secret it quoted (see :func:`_redacted`).
+    other failure (timeout, DNS, feedparser, SSRF, and our own bugs) never carried an
+    IP, so keep its original text, minus anything secret it quoted (see
+    :func:`_redacted`).
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
@@ -166,6 +203,22 @@ def failure_message(exc: Exception, feed_url: str) -> str:
         label = f"HTTP {status} {reason}".rstrip()
         return f"{label}: {redact_url(feed_url)}"[:500]
     return _redacted(str(exc), feed_url)[:500]
+
+
+def user_failure_message(exc: Exception, feed_url: str) -> str:
+    """``Feed.last_error`` for a failed fetch, as the subscriber will read it.
+
+    Unlike :func:`log_failure_message`, this one is shown outside the admin panel:
+    the feed list and the feed's edit form in Settings, and the error strip above the
+    article list. A source failure goes out verbatim, since the subscriber is the one
+    who can act on it. A fault of ours would put our internals in front of someone
+    who can do nothing with them — an unrun migration used to send the failing SELECT
+    and its column names out this way — so it becomes one flat sentence, with the
+    detail left in ``fetch_logs``.
+    """
+    if not is_source_error(exc):
+        return INTERNAL_ERROR_MESSAGE
+    return log_failure_message(exc, feed_url)
 
 
 def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now: datetime) -> dict:
@@ -176,7 +229,17 @@ def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now:
     fetches cannot lose an increment.
     """
     http_status, is_block = classify(exc)
-    message = failure_message(exc, feed_url)
+    message = user_failure_message(exc, feed_url)
+
+    if not is_source_error(exc):
+        # Our own fault, so no verdict on the feed: record what happened and that we
+        # tried, and leave the counters, the status and any deadline the host asked
+        # for exactly as they were. Without this, the window between deploying code
+        # and its migration running would take healthy feeds down for good — every
+        # feed failing every round, five rounds to the disable threshold, and a
+        # manual re-enable each to bring them back. last_fetched_at is still written,
+        # or the scheduler would retry the same broken round on every pass.
+        return {"last_error": message, "last_fetched_at": now}
 
     if is_block:
         # A host-level refusal: leave status alone (never improve it, never worsen

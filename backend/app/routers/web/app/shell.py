@@ -1,6 +1,7 @@
 """App shell: the main page, the sidebar and the actions it owns (mark scope read,
 manual feed refresh, search modal)."""
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -20,6 +21,8 @@ from app.services.label_service import list_labels
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html, _badge_total_html
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["web-app"])
 
@@ -393,8 +396,15 @@ async def htmx_refresh_feed(
                 from app.fetcher.scrape import fetch_scrape_feed
                 try:
                     await fetch_scrape_feed(feed_obj, fetch_session)
-                except Exception as e:
-                    feed_obj.last_error = str(e)[:500]
+                except Exception:
+                    # fetch_scrape_feed handles a failed scrape itself, message and
+                    # counters and all, so only a failure of its *error* path reaches
+                    # here — which makes this ours, not the feed's. It used to be
+                    # written to feed_obj.last_error, which did nothing twice over: the
+                    # session is closed without a commit, and the instance is expired by
+                    # the rollback inside fetch_scrape_feed. Log it instead of quietly
+                    # dropping it; the row keeps whatever the fetcher already stored.
+                    logger.exception("Manual scrape refresh of feed %d failed", feed_id)
             else:
                 from app.fetcher.rss import fetch_feed
                 await fetch_feed(feed_obj, fetch_session)

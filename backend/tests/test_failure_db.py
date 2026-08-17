@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete
+from sqlalchemy import delete, select
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -22,10 +23,12 @@ from app.fetcher.failure import (
     BLOCK_BACKOFF_BASE,
     BLOCK_DISABLE_THRESHOLD,
     FETCH_ERROR_DISABLE_THRESHOLD,
+    INTERNAL_ERROR_MESSAGE,
     NOT_FOUND_DISABLE_THRESHOLD,
 )
 from app.fetcher.rss import fetch_feed
 from app.models.feed import Feed
+from app.models.fetch_log import FetchLog
 
 pytestmark = pytest.mark.asyncio
 
@@ -198,6 +201,63 @@ class TestNotFoundTierWrites:
         feed = await _feed(pg, status="active", fetch_error_count=0)
         await _fail(pg, feed, _http_error(404))
         assert feed.retry_after_until is None
+
+
+class TestInternalFailureWrites:
+    """A fault of ours writes two columns and blames nothing on the feed.
+
+    The unrun-migration case this guards against is a ProgrammingError raised on
+    every feed at once, so anything it does to the row it does instance-wide.
+    """
+
+    @staticmethod
+    def _internal() -> Exception:
+        return ProgrammingError(
+            "SELECT user_settings.user_id, user_settings.format_profile FROM user_settings",
+            {},
+            Exception("column user_settings.format_profile does not exist"),
+        )
+
+    async def test_touches_neither_counter_nor_status(self, pg):
+        feed = await _feed(pg, status="active", fetch_error_count=0, block_count=0)
+        await _fail(pg, feed, self._internal())
+        assert feed.fetch_error_count == 0
+        assert feed.block_count == 0
+        assert feed.status == "active"
+
+    async def test_a_run_of_them_never_disables_the_feed(self, pg):
+        # The whole point: the window between deploying code and its migration running
+        # is many rounds long, and used to end with every feed disabled.
+        feed = await _feed(pg, status="active", fetch_error_count=0)
+        for _ in range(FETCH_ERROR_DISABLE_THRESHOLD + 2):
+            await _fail(pg, feed, self._internal())
+        assert feed.status == "active"
+        assert feed.fetch_error_count == 0
+
+    async def test_keeps_a_source_failure_the_feed_was_already_in(self, pg):
+        feed = await _feed(pg, status="error", fetch_error_count=3, last_error="HTTP 500 …")
+        await _fail(pg, feed, self._internal())
+        assert feed.status == "error"
+        assert feed.fetch_error_count == 3
+
+    async def test_keeps_a_deadline_the_host_asked_for(self, pg):
+        until = datetime.now(timezone.utc) + timedelta(hours=3)
+        feed = await _feed(pg, status="active", retry_after_until=until)
+        await _fail(pg, feed, self._internal())
+        assert feed.retry_after_until is not None
+        assert abs((feed.retry_after_until - until).total_seconds()) < 5
+
+    async def test_the_user_gets_a_flat_message_and_the_admin_the_detail(self, pg):
+        feed = await _feed(pg, status="active")
+        await _fail(pg, feed, self._internal())
+        assert feed.last_error == INTERNAL_ERROR_MESSAGE
+        assert feed.last_fetched_at is not None
+
+        log = (await pg.execute(
+            select(FetchLog).where(FetchLog.feed_id == feed.id)
+        )).scalars().one()
+        assert "format_profile" in log.error_message
+        assert log.http_status is None
 
 
 class TestCountersAreIndependent:

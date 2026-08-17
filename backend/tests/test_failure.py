@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from sqlalchemy.exc import ProgrammingError
 
 from app.fetcher.failure import (
     BLOCK_BACKOFF_BASE,
@@ -16,11 +17,15 @@ from app.fetcher.failure import (
     BLOCK_DISABLE_THRESHOLD,
     FETCH_ERROR_DISABLE_THRESHOLD,
     NOT_FOUND_DISABLE_THRESHOLD,
+    INTERNAL_ERROR_MESSAGE,
     block_backoff,
     classify,
-    failure_message,
     failure_values,
+    is_source_error,
+    log_failure_message,
+    user_failure_message,
 )
+from app.utils.url_validator import ResponseTooLarge
 
 NOW = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -59,46 +64,104 @@ class TestClassify:
         assert classify(ValueError("Feed parse error")) == (None, False)
 
 
-class TestFailureMessage:
+class TestLogFailureMessage:
     def test_http_error_uses_feed_url_and_reason(self):
         # httpx would embed the pinned IP the request connected to; the message must
         # show the feed's own hostname and the status reason instead.
         exc = _http_error(403, url="https://93.184.216.34/feed.xml")
-        msg = failure_message(exc, FEED_URL)
+        msg = log_failure_message(exc, FEED_URL)
         assert msg == "HTTP 403 Forbidden: https://example.com/feed.xml"
         assert "93.184.216.34" not in msg
 
     def test_reason_phrase_is_included(self):
-        assert failure_message(_http_error(429), FEED_URL).startswith("HTTP 429 Too Many Requests")
+        assert log_failure_message(_http_error(429), FEED_URL).startswith("HTTP 429 Too Many Requests")
 
     def test_query_string_is_redacted(self):
         exc = _http_error(403)
-        msg = failure_message(exc, "https://example.com/feed.xml?api_key=secret")
+        msg = log_failure_message(exc, "https://example.com/feed.xml?api_key=secret")
         assert "secret" not in msg
         assert "<redacted>" in msg
 
     def test_non_http_exception_keeps_its_text(self):
-        assert failure_message(httpx.ConnectTimeout("timed out"), FEED_URL) == "timed out"
+        assert log_failure_message(httpx.ConnectTimeout("timed out"), FEED_URL) == "timed out"
 
     def test_non_http_exception_quoting_the_address_is_redacted(self):
         # The message lands in fetch_logs and Feed.last_error, shown next to a column
         # that redacts the address — quoting it raw would walk around that.
         url = "https://example.com/feed.xml?api_key=secret"
-        msg = failure_message(ValueError(f"Redirect blocked: {url}"), url)
+        msg = log_failure_message(ValueError(f"Redirect blocked: {url}"), url)
         assert "secret" not in msg
         assert msg == "Redirect blocked: https://example.com/feed.xml?<redacted>"
 
     def test_credentials_in_any_address_are_dropped(self):
         # Shape-matched, so an address the message picked up from somewhere other than
         # the feed row is covered too.
-        msg = failure_message(ValueError("Redirect blocked: https://u:pw@other.invalid/f"),
+        msg = log_failure_message(ValueError("Redirect blocked: https://u:pw@other.invalid/f"),
                               FEED_URL)
         assert "pw" not in msg
         assert msg == "Redirect blocked: https://other.invalid/f"
 
     def test_ordinary_text_is_untouched(self):
-        assert failure_message(ValueError("not well-formed (invalid token)"), FEED_URL) == (
+        assert log_failure_message(ValueError("not well-formed (invalid token)"), FEED_URL) == (
             "not well-formed (invalid token)"
+        )
+
+    def test_our_own_failure_keeps_its_detail(self):
+        # The admin log is where the detail has to survive: it is the only copy once
+        # user_failure_message has flattened the user's side of it.
+        msg = log_failure_message(RuntimeError("column user_settings.x does not exist"), FEED_URL)
+        assert msg == "column user_settings.x does not exist"
+
+
+class TestIsSourceError:
+    @pytest.mark.parametrize("exc", [
+        _http_error(500),
+        httpx.ConnectTimeout("timed out"),
+        httpx.ConnectError("dns failure"),
+        httpx.TooManyRedirects("too many redirects"),
+        ValueError("Not a valid RSS/Atom feed"),
+        ResponseTooLarge("Response exceeds the 10485760 size limit"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    ])
+    def test_source_failures(self, exc):
+        assert is_source_error(exc) is True
+
+    @pytest.mark.parametrize("exc", [
+        ProgrammingError("SELECT user_settings.format_profile FROM …", {}, Exception("no column")),
+        AttributeError("'NoneType' object has no attribute 'id'"),
+        TypeError("unsupported operand type(s)"),
+        KeyError("feed_url"),
+        RuntimeError("Event loop is closed"),
+    ])
+    def test_our_own_failures(self, exc):
+        # Anything not in the allowlist counts as ours, so a failure mode nobody
+        # anticipated is reported as internal rather than blamed on the feed.
+        assert is_source_error(exc) is False
+
+
+class TestUserFailureMessage:
+    def test_source_failure_goes_out_verbatim(self):
+        # Whatever the subscriber can act on reads exactly as it does in the log.
+        for exc in (_http_error(404), httpx.ConnectTimeout("timed out"),
+                    ValueError("Not a valid RSS/Atom feed: mismatched tag")):
+            assert user_failure_message(exc, FEED_URL) == log_failure_message(exc, FEED_URL)
+
+    def test_our_own_failure_is_replaced(self):
+        # An unrun migration used to send the failing SELECT, column names and all,
+        # to the feed row the subscriber reads in Settings → Feeds.
+        exc = ProgrammingError(
+            "SELECT user_settings.user_id, user_settings.format_profile FROM user_settings",
+            {},
+            Exception("column user_settings.format_profile does not exist"),
+        )
+        msg = user_failure_message(exc, FEED_URL)
+        assert msg == INTERNAL_ERROR_MESSAGE
+        assert "SELECT" not in msg
+        assert "user_settings" not in msg
+
+    def test_a_bare_exception_says_nothing(self):
+        assert user_failure_message(Exception("/srv/app/secrets.py, line 12"), FEED_URL) == (
+            INTERNAL_ERROR_MESSAGE
         )
 
 
@@ -180,6 +243,39 @@ class TestErrorTier:
         assert "fetch_error_count" in vals
         assert "block_count" not in vals
         assert vals["retry_after_until"] is None
+
+
+class TestInternalFailure:
+    """A fault of ours is neither tier: it says nothing about the feed."""
+
+    INTERNAL = ProgrammingError("SELECT feeds.missing_column FROM feeds", {}, Exception("no column"))
+
+    def test_moves_neither_counter(self):
+        # Five rounds of an unrun migration used to disable every feed on the instance,
+        # each needing a manual re-enable afterwards.
+        vals = _values(self.INTERNAL)
+        assert "fetch_error_count" not in vals
+        assert "block_count" not in vals
+
+    def test_leaves_the_status_alone(self):
+        # Not even to "error": an active feed is still active, and a feed already in
+        # error keeps the source failure that put it there.
+        assert "status" not in _values(self.INTERNAL)
+
+    def test_leaves_any_host_deadline_alone(self):
+        # The error tier writes retry_after_until=None on most failures, which would
+        # clear a Retry-After the host really did ask for.
+        assert "retry_after_until" not in _values(self.INTERNAL)
+
+    def test_records_the_attempt_and_a_flat_message(self):
+        # last_fetched_at still moves, or the scheduler would retry the broken round
+        # on every pass instead of on the feed's interval.
+        vals = _values(self.INTERNAL)
+        assert vals == {"last_error": INTERNAL_ERROR_MESSAGE, "last_fetched_at": NOW}
+
+    def test_a_source_failure_still_moves_a_counter(self):
+        # Guard on the branch itself: the allowlist must not swallow the ordinary path.
+        assert "fetch_error_count" in _values(ValueError("Not a valid RSS/Atom feed"))
 
 
 class TestThresholds:
