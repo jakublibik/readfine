@@ -86,24 +86,38 @@
 </p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  {# table-fixed so the error column has a width to wrap against: with auto layout a
-     max-width on a cell is only a hint and the column takes what the text asks for. #}
-  <table class="w-full table-fixed min-w-[52rem] text-sm">
+  {# Auto layout with one column claiming the slack. The table is w-full, so it has to
+     fill the card whether the rows need it or not, and auto layout hands the surplus out
+     evenly between every column — which is what all the space between the counts was.
+     Nothing removes it; a column has to take it. Feed does, via w-full below, because it
+     is the only one that truncates and can always use more. The rest then sit at the
+     width their own content asks for, hard against each other on the right.
+     (A spell of table-fixed did the opposite: every column guessed at, Feed on a
+     percentage cutting titles in half, and the error column holding room it never used.) #}
+  <table class="w-full min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[26%]">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-full">Feed</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-28">Status</th>
+        {# Width comes from the min-w- on the cell below. Feed claiming the slack leaves
+           every other column on its min-content, and a message that breaks between words
+           has almost none, so without a floor this one collapsed to two words a line. #}
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 24 hours">24h</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 7 days">7d</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 30 days">30d</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Last failure</th>
+        {# No widths on the counts or the timestamp — each holds one short string that
+           cannot wrap, so its own content is a better width than any number picked here.
+           The heading is the widest thing in the column, hence nowrap on the long one. #}
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 24 hours">24h</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 7 days">7d</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 30 days">30d</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last failure</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for row in stats.fetch_error_feeds %}
       {% set f = row.feed %}
       <tr>
+        {# No cap: this is the column holding the table's spare width, and both lines
+           truncate into whatever it ends up being. #}
         <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ f.title }}">{{ f.title }}</div>
           {# Same redaction as the Feeds table: a feed URL can carry a token or HTTP
@@ -120,8 +134,15 @@
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
            "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
+        {# error_headline drops the feed's own address off the end of an HTTP failure:
+           the feed is named in the first column of this very row, so repeating its URL
+           here said nothing and took two thirds of the line. #}
+        {# min-w is what this column is: Feed holds the slack, so everything else gets its
+           min-content and nothing more. 17rem takes the messages that are actually common
+           once the URL is off them ("HTTP 403 Forbidden", "Response exceeds the 10 MB size
+           limit") on one line. max-w-md is the other end, for the rare long one. #}
         <td class="px-4 py-2 align-middle text-red-600">
-          {{ error_text(row.error_message) }}
+          {{ error_text(row.error_message | error_headline, class_="min-w-[17rem] max-w-md") }}
         </td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
@@ -290,10 +311,15 @@
 {% if stats.readable_failed_recent %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
   <div class="overflow-x-auto">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for.
+     Article gets half of it: these errors are short ("HTTP 403 Forbidden" is the usual
+     one) and the headline is what identifies the row, so the split used to be the wrong
+     way round — a truncated title beside an error sitting on room it never used. #}
   <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[50%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
@@ -336,10 +362,15 @@
 <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Pending <span class="font-normal normal-case tracking-normal text-gray-400">(most retried first)</span></h3>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
   <div class="overflow-x-auto">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for.
+     Article gets half of it: these errors are short ("HTTP 403 Forbidden" is the usual
+     one) and the headline is what identifies the row, so the split used to be the wrong
+     way round — a truncated title beside an error sitting on room it never used. #}
   <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[50%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Next retry</th>
