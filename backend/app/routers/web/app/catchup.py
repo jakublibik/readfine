@@ -104,11 +104,14 @@ async def catchup_page(
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
         "period_descs": period_descs,
         "smtp_available": smtp_available,
+        # Digests and briefings run on the main model only, so a user who set up
+        # just the scoring slot needs to hear about it before they hit Generate.
+        "main_model_configured": bool(settings.ai_quality_provider and settings.ai_quality_model),
     })
 
 
-@router.get("/htmx/catch-me-up/count", response_class=HTMLResponse)
-async def htmx_catchup_count(
+@router.get("/htmx/catch-me-up/estimate", response_class=HTMLResponse)
+async def htmx_catchup_estimate(
     request: Request,
     period: str = Query("7days"),
     filter_status: str = Query("all"),
@@ -116,72 +119,67 @@ async def htmx_catchup_count(
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
     article_limit: int = Query(500),
+    # Same checkbox semantics as the generate route: an unchecked box submits no
+    # value at all, so a missing param means off, not the default.
+    include_snippet: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Render the article count and the cost estimate for the current form state.
+
+    Both lines come from one count so they can't disagree, and so a change to the
+    form is one request rather than two.
+    """
     article_limit = max(1, min(article_limit, 500))
-    from app.services.catchup_service import fetch_catchup_articles
+    from app.services.catchup_service import count_catchup_articles
 
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
     tz_str = settings.timezone if settings else "UTC"
 
-    articles = await fetch_catchup_articles(
+    count = await count_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
         filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
     )
-    count = len(articles)
     if count > article_limit:
-        return HTMLResponse(f'<span>{count} articles <span class="text-gray-400">({article_limit} will be used)</span></span>')
-    return HTMLResponse(f'<span>{count} articles</span>')
+        count_html = f'<span>{count} articles <span class="text-gray-400">({article_limit} will be used)</span></span>'
+    else:
+        count_html = f'<span>{count} articles</span>'
+
+    cost_html = await _cost_line(user, db, min(count, article_limit), include_snippet)
+    return HTMLResponse(f'<div>{count_html}</div><div>{cost_html}</div>')
 
 
-@router.get("/htmx/catch-me-up/cost", response_class=HTMLResponse)
-async def htmx_catchup_cost(
-    request: Request,
-    article_limit: int = Query(500),
-    model_slot: str = Query("fast"),
-    include_snippet: bool = Query(True),
-    period: str = Query("7days"),
-    filter_status: str = Query("all"),
-    label_filter: str | None = Query(None),
-    filter_score_min: float | None = Query(None),
-    scope_include: str | None = Query(None),
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    article_limit = max(1, min(article_limit, 500))
-    from app.services.catchup_service import estimate_catchup_tokens, fetch_catchup_articles
+async def _cost_line(
+    user: User,
+    db: AsyncSession,
+    effective_count: int,
+    include_snippet: str | None,
+) -> str:
+    """Cost estimate for `effective_count` articles, or a hint / empty string when
+    there is no price to show. The article count above it renders either way."""
     from app.services.ai_service import get_ai_client
+    from app.services.catchup_service import estimate_catchup_tokens
     from app.services.stats_service import _calc_cost
 
     try:
-        client, provider, model = await get_ai_client(user.id, model_slot, db)
+        client, provider, model = await get_ai_client(user.id, "quality", db)
     except Exception:
-        return HTMLResponse('<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>')
+        client = None
+    if client is None:
+        return '<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>'
 
-    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
-    tz_str = settings.timezone if settings else "UTC"
-    articles = await fetch_catchup_articles(
-        user_id=user.id, tz_str=tz_str, db=db,
-        period=period, scope_include=scope_include,
-        filter_status=filter_status, label_filter=label_filter,
-        filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
-    )
-    effective_count = min(len(articles), article_limit)
-
-    input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet)
+    input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet == "true")
     cost, cost_estimated = _calc_cost(model, provider, input_tokens, output_tokens)
     if cost is None:
-        return HTMLResponse("")
+        return ""
 
-    slot_label = "fast" if model_slot == "fast" else "quality"
     est_note = " · model not in price list, approximated" if cost_estimated else ""
     from app.utils.formats import format_number
-    return HTMLResponse(
+    return (
         f'<span class="text-gray-500 text-sm">Estimated cost: ~${format_number(cost, 4)} '
-        f'<span class="text-gray-400">({effective_count} articles × {slot_label} model{est_note})</span></span>'
+        f'<span class="text-gray-400">({effective_count} articles × {html_module.escape(model)}{est_note})</span></span>'
     )
 
 
@@ -195,7 +193,6 @@ async def htmx_catchup_generate(
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     config_id: int | None = Form(None),
@@ -240,13 +237,21 @@ async def htmx_catchup_generate(
     if not articles:
         return HTMLResponse('<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>')
 
+    # The digest always runs on the main model; the scoring slot is reserved for
+    # article scoring, where the model is picked to be small.
+    client, provider, model = await get_ai_client(user.id, "quality", db)
+    if client is None:
+        return HTMLResponse(
+            '<div class="text-red-600 text-sm p-4">No main model configured. '
+            'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
+        )
+
     sampled = apply_catchup_limit(articles, article_limit, scoring_available)
     if include_snippet_bool:
         await populate_snippet_sources(sampled, user.id, db)
     articles_meta = build_articles_meta(sampled, include_snippet_bool)
 
     try:
-        client, provider, model = await get_ai_client(user.id, model_slot, db)
         prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else None
         text, input_tokens, output_tokens = await catch_me_up(
             articles_meta=articles_meta,
@@ -269,7 +274,7 @@ async def htmx_catchup_generate(
         output_tokens=output_tokens,
         model=model,
         provider=provider,
-        model_slot=model_slot,
+        model_slot="quality",
     )
     db.add(log)
     await db.commit()
@@ -310,7 +315,6 @@ async def htmx_catchup_config_create(
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
@@ -349,7 +353,6 @@ async def htmx_catchup_config_create(
         config.label_filter = label_filter
         config.filter_score_min = score_min_stored
         config.article_limit = article_limit
-        config.model_slot = model_slot
         config.custom_prompt = custom_prompt
         config.include_snippet = include_snippet_bool
         config.updated_at = datetime.now(timezone.utc)
@@ -363,7 +366,6 @@ async def htmx_catchup_config_create(
             label_filter=label_filter,
             filter_score_min=score_min_stored,
             article_limit=article_limit,
-            model_slot=model_slot,
             custom_prompt=custom_prompt,
             include_snippet=include_snippet_bool,
         )
@@ -384,7 +386,6 @@ async def htmx_catchup_config_update(
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    model_slot: str = Form("fast"),
     custom_prompt: str | None = Form(None),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
@@ -416,7 +417,6 @@ async def htmx_catchup_config_update(
     config.label_filter = label_filter
     config.filter_score_min = filter_score_min / 100 if filter_score_min is not None else None
     config.article_limit = article_limit
-    config.model_slot = model_slot
     config.custom_prompt = custom_prompt
     config.include_snippet = include_snippet_bool
     config.updated_at = datetime.now(timezone.utc)

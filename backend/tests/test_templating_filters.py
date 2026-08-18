@@ -1,5 +1,35 @@
 """The Jinja filters that put stored values on screen."""
-from app.templating import _hostname
+from app.templating import _error_headline, _hostname
+
+
+class TestErrorHeadlineFilter:
+    """Fetch error for a table that names the feed in a column of its own."""
+
+    def test_drops_the_feed_url_off_an_http_failure(self):
+        assert _error_headline(
+            "HTTP 403 Forbidden: https://www.reddit.com/r/selfhosted/.rss"
+        ) == "HTTP 403 Forbidden"
+
+    def test_drops_a_url_carrying_a_query(self):
+        assert _error_headline(
+            "HTTP 429 Too Many Requests: http://www.techdirt.com/rss.xml?edition=te"
+        ) == "HTTP 429 Too Many Requests"
+
+    def test_keeps_a_message_that_has_no_url(self):
+        assert _error_headline("The read operation timed out") == "The read operation timed out"
+
+    def test_keeps_a_url_that_is_not_the_tail(self):
+        """A URL the message goes on to say something about is part of what happened,
+        unlike the address repeated after an HTTP status."""
+        msg = "Redirect blocked: https://evil.example.com/x to somewhere else"
+        assert _error_headline(msg) == msg
+
+    def test_keeps_a_message_that_is_nothing_but_a_url(self):
+        """Nothing to cut down to, so cutting would leave an empty cell."""
+        assert _error_headline("https://only.example.com/feed") == "https://only.example.com/feed"
+
+    def test_empty(self):
+        assert _error_headline(None) == "" and _error_headline("") == ""
 
 
 class TestHostnameFilter:

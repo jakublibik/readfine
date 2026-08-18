@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "partials/error_text.html" import error_text %}
 {% block title %}Fetch logs – Admin – Readfine{% endblock %}
 {% set active = "fetch_logs" %}
 
@@ -8,25 +9,32 @@
 {% if logs %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for. #}
+  <table class="w-full table-fixed min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">HTTP</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[30%]">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">HTTP</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Time</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for log in logs %}
       <tr>
-        <td class="px-4 py-2 max-w-xs">
+        <td class="px-4 py-2 align-middle">
           <div class="font-medium text-gray-800 truncate">{{ log.feed.title if log.feed else "Deleted feed" }}</div>
           {% if log.feed %}<div class="text-xs text-gray-400 truncate">{{ log.feed.feed_url | redact_url_display }}</div>{% endif %}
         </td>
-        <td class="px-4 py-2 text-gray-500">{{ log.http_status or "—" }}</td>
-        <td class="px-4 py-2 text-red-600 max-w-sm truncate">{{ log.error_message }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        {# Every cell centres in its row. The error clamps to two lines and the feed block
+           is two lines of its own, so a row is taller than the short cells beside them;
+           top-aligned they hung off the top of it. A one-line error centres the same way. #}
+        <td class="px-4 py-2 align-middle text-gray-500">{{ log.http_status or "—" }}</td>
+        <td class="px-4 py-2 align-middle text-red-600">
+          {{ error_text(log.error_message) }}
+        </td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           <time datetime="{{ log.failed_at.isoformat() }}">{{ log.failed_at | utctime('short') }}</time>
         </td>
       </tr>

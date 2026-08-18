@@ -1,4 +1,5 @@
 import json
+import re
 from markupsafe import Markup
 from jinja2 import Undefined
 from fastapi.templating import Jinja2Templates
@@ -56,7 +57,6 @@ def _catchup_config_json(cfg) -> str:
         "label_filter": cfg.label_filter or "",
         "filter_score_min": cfg.filter_score_min,
         "article_limit": cfg.article_limit,
-        "model_slot": cfg.model_slot,
         "custom_prompt": cfg.custom_prompt or "",
         "include_snippet": cfg.include_snippet,
     }
@@ -111,6 +111,29 @@ def _redact_url_display(url: str | None) -> str:
 
 
 templates.env.filters["redact_url_display"] = _redact_url_display
+
+
+# "HTTP 403 Forbidden: https://www.reddit.com/r/selfhosted/.rss" — the tail is exactly
+# how app.fetcher.failure.log_failure_message builds an HTTP failure, and the only place
+# a stored message ends in an address. Anchored at the end and required to be the whole
+# remainder, so a message that merely mentions a URL partway through is left alone.
+_ERROR_URL_TAIL_RE = re.compile(r":\s*https?://\S+$")
+
+
+def _error_headline(message: str | None) -> str:
+    """An error message with the feed's own address cut off the end.
+
+    For tables that already name the feed in a column of their own, where repeating its
+    URL inside the error says nothing and costs most of the width: "HTTP 403 Forbidden"
+    is the whole of what happened, and the address after it pushed a one-line message
+    onto two. The full text stays in ``fetch_logs``, where there is room for it.
+    """
+    if not message:
+        return ""
+    return _ERROR_URL_TAIL_RE.sub("", message).rstrip() or message
+
+
+templates.env.filters["error_headline"] = _error_headline
 
 
 def _video_thumbs(html: str | None) -> Markup:

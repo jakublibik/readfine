@@ -1,0 +1,25 @@
+{# An error message inside a dense table or list row.
+
+   Clamped to two lines because these run to 500 characters and one bad feed would
+   otherwise own the whole table. The full text sits in the title, which covers a
+   mouse and nothing else: touch has no hover, so the clamped tail was simply
+   unreadable on a phone. app.js measures each one after render and reveals the
+   toggle below only when there is more text than the clamp shows, so a short error
+   (most of them) still costs nothing.
+
+   line-clamp needs display:-webkit-box, which cannot sit on a table cell without
+   breaking the table — hence the inner div rather than clamping the caller's cell.
+
+   class_ styles the wrapper (colour, size, indentation); the caller's cell keeps
+   its own padding. #}
+{% macro error_text(message, class_="") %}
+{%- if message -%}
+<div class="{{ class_ }}">
+  <div class="line-clamp-2 break-words" data-expand title="{{ message }}">{{ message }}</div>
+  {# Hidden until app.js finds the text is actually clipped. type=button so it never
+     submits the form a settings row may sit inside. #}
+  <button type="button" data-expand-toggle
+          class="hidden mt-0.5 text-xs text-gray-400 hover:text-gray-600 underline">Show more</button>
+</div>
+{%- endif -%}
+{% endmacro %}

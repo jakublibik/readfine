@@ -55,7 +55,7 @@ class ModelCannotSkipThinking(Exception):
         super().__init__(
             f"{model} always reasons before it answers and cannot be told to skip it, "
             f"so nothing is left of the ten tokens a score gets. Choose another model "
-            f"for the fast slot."
+            f"for the scoring slot."
         )
 
 
@@ -456,7 +456,7 @@ async def scoring_model_rejection(
         # refused) and the model still wrote nothing at a scoring-sized budget.
         return (
             f"{model} answered a scoring-sized request with nothing at all, so it "
-            f"cannot score articles. Choose another model for the fast slot."
+            f"cannot score articles. Choose another model for the scoring slot."
         )
     except Exception as exc:
         logger.info("Scoring probe for %s/%s was inconclusive: %s", provider, model, exc)

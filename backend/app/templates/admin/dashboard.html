@@ -1,5 +1,6 @@
 {% extends "admin/base.html" %}
-{% from "admin/partials/feed_status.html" import status_badge %}
+{% from "partials/feed_status.html" import status_badge %}
+{% from "partials/error_text.html" import error_text %}
 {% block title %}Admin – Readfine{% endblock %}
 {% set active = "dashboard" %}
 
@@ -85,23 +86,39 @@
 </p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
+  {# Auto layout with one column claiming the slack. The table is w-full, so it has to
+     fill the card whether the rows need it or not, and auto layout hands the surplus out
+     evenly between every column — which is what all the space between the counts was.
+     Nothing removes it; a column has to take it. Feed does, via w-full below, because it
+     is the only one that truncates and can always use more. The rest then sit at the
+     width their own content asks for, hard against each other on the right.
+     (A spell of table-fixed did the opposite: every column guessed at, Feed on a
+     percentage cutting titles in half, and the error column holding room it never used.) #}
   <table class="w-full min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-full">Feed</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-28">Status</th>
+        {# Width comes from the min-w- on the cell below. Feed claiming the slack leaves
+           every other column on its min-content, and a message that breaks between words
+           has almost none, so without a floor this one collapsed to two words a line. #}
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 24 hours">24h</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 7 days">7d</th>
-        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500 w-14" title="Failed fetches in the last 30 days">30d</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Last failure</th>
+        {# No widths on the counts or the timestamp — each holds one short string that
+           cannot wrap, so its own content is a better width than any number picked here.
+           The heading is the widest thing in the column, hence nowrap on the long one. #}
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 24 hours">24h</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 7 days">7d</th>
+        <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Failed fetches in the last 30 days">30d</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 whitespace-nowrap">Last failure</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for row in stats.fetch_error_feeds %}
       {% set f = row.feed %}
       <tr>
-        <td class="px-4 py-2 max-w-xs">
+        {# No cap: this is the column holding the table's spare width, and both lines
+           truncate into whatever it ends up being. #}
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ f.title }}">{{ f.title }}</div>
           {# Same redaction as the Feeds table: a feed URL can carry a token or HTTP
              credentials, and this list spans every user's feeds. #}
@@ -110,15 +127,27 @@
         {# threshold=1: every row here is on screen because a fetch failed, so there is
            no healthy feed to false-alarm. A refused fetch says "throttled" from the
            first one instead of a green "active" sitting next to its own error. #}
-        <td class="px-4 py-2">{{ status_badge(f, with_count=true, threshold=1) }}</td>
+        {# Every cell centres in its row. The error clamps to two lines and the feed block
+           is two lines of its own, so a row is taller than the short cells beside them;
+           top-aligned they hung off the top of it. A one-line error centres the same way. #}
+        <td class="px-4 py-2 align-middle">{{ status_badge(f, with_count=true, threshold=1) }}</td>
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
            "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
-        <td class="px-4 py-2 text-red-600 max-w-xs truncate" title="{{ row.error_message }}">{{ row.error_message }}</td>
-        <td class="px-2 py-2 text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
-        <td class="px-2 py-2 text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
-        <td class="px-2 py-2 text-right tabular-nums text-gray-500">{{ row.fails }}</td>
-        <td class="px-4 py-2 text-gray-400 whitespace-nowrap">
+        {# error_headline drops the feed's own address off the end of an HTTP failure:
+           the feed is named in the first column of this very row, so repeating its URL
+           here said nothing and took two thirds of the line. #}
+        {# min-w is what this column is: Feed holds the slack, so everything else gets its
+           min-content and nothing more. 17rem takes the messages that are actually common
+           once the URL is off them ("HTTP 403 Forbidden", "Response exceeds the 10 MB size
+           limit") on one line. max-w-md is the other end, for the rare long one. #}
+        <td class="px-4 py-2 align-middle text-red-600">
+          {{ error_text(row.error_message | error_headline, class_="min-w-[17rem] max-w-md") }}
+        </td>
+        <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
+        <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
+        <td class="px-2 py-2 align-middle text-right tabular-nums text-gray-500">{{ row.fails }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           <time datetime="{{ row.last_failed_at.isoformat() }}">{{ row.last_failed_at | utctime('short') }}</time>
         </td>
       </tr>
@@ -177,29 +206,33 @@
 <h2 class="text-sm font-semibold text-gray-700 mb-3 scroll-mt-4" id="briefing-errors">Briefing errors</h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for. #}
+  <table class="w-full table-fixed min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">User</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Config</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[22%]">User</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[20%]">Config</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Retries</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Next send</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-48">Next send</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for c in stats.briefing_errors %}
       <tr>
-        <td class="px-4 py-2 max-w-xs">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate">{{ c.user.display_name if c.user else "Deleted user" }}</div>
           {% if c.user %}<div class="text-xs text-gray-400 truncate">{{ c.user.email }}</div>{% endif %}
         </td>
-        <td class="px-4 py-2 text-gray-700">
-          {{ c.name }} <span class="text-xs text-gray-400">{{ c.briefing_interval or c.period }}</span>
+        <td class="px-4 py-2 align-middle text-gray-700">
+          <div class="truncate" title="{{ c.name }}">{{ c.name }} <span class="text-xs text-gray-400">{{ c.briefing_interval or c.period }}</span></div>
         </td>
-        <td class="px-4 py-2 text-red-600 truncate max-w-xs" title="{{ c.briefing_last_error }}">{{ c.briefing_last_error }}</td>
-        <td class="px-4 py-2 text-right text-gray-400">{{ c.briefing_retry_count }}</td>
-        <td class="px-4 py-2 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-red-600">
+          {{ error_text(c.briefing_last_error) }}
+        </td>
+        <td class="px-4 py-2 align-middle text-right text-gray-400">{{ c.briefing_retry_count }}</td>
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if c.briefing_next_send_at %}
             <time class="text-gray-400" datetime="{{ c.briefing_next_send_at.isoformat() }}">{{ c.briefing_next_send_at | utctime('short') }}</time>
           {% else %}
@@ -224,33 +257,37 @@
 </p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for. #}
+  <table class="w-full table-fixed min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">User</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[24%]">User</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
-        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Failures</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Schedule</th>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last failed</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500 w-24">Failures</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-40">Schedule</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Last failed</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-gray-100">
       {% for p in stats.auto_profile_errors %}
       <tr>
-        <td class="px-4 py-2 max-w-xs">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate">{{ p.user.display_name if p.user else "Deleted user" }}</div>
           {% if p.user %}<div class="text-xs text-gray-400 truncate">{{ p.user.email }}</div>{% endif %}
         </td>
-        <td class="px-4 py-2 text-red-600 truncate max-w-xs" title="{{ p.ai_preference_last_error }}">{{ p.ai_preference_last_error }}</td>
-        <td class="px-4 py-2 text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
-        <td class="px-4 py-2 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-red-600">
+          {{ error_text(p.ai_preference_last_error) }}
+        </td>
+        <td class="px-4 py-2 align-middle text-right text-gray-400">{{ p.ai_preference_fail_count }}</td>
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if p.ai_preference_auto_days %}
             <span class="text-gray-400">every {{ p.ai_preference_auto_days }} days</span>
           {% else %}
             <span class="text-amber-600 text-xs">off - needs manual fix</span>
           {% endif %}
         </td>
-        <td class="px-4 py-2 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle whitespace-nowrap">
           {% if p.ai_preference_last_error_at %}
             <time class="text-gray-400" datetime="{{ p.ai_preference_last_error_at.isoformat() }}">{{ p.ai_preference_last_error_at | utctime('short') }}</time>
           {% endif %}
@@ -274,10 +311,15 @@
 {% if stats.readable_failed_recent %}
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
   <div class="overflow-x-auto">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for.
+     Article gets half of it: these errors are short ("HTTP 403 Forbidden" is the usual
+     one) and the headline is what identifies the row, so the split used to be the wrong
+     way round — a truncated title beside an error sitting on room it never used. #}
   <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[50%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Error</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Time</th>
@@ -286,15 +328,17 @@
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_failed_recent %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ article.title }}">
             {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
           </div>
           <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
-        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-red-500">
+          {% if article.readable_error %}{{ error_text(article.readable_error) }}{% else %}—{% endif %}
+        </td>
+        <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           {% if article.readable_failed_at %}
             <time datetime="{{ article.readable_failed_at.isoformat() }}">{{ article.readable_failed_at | utctime('short') }}</time>
           {% else %}—{% endif %}
@@ -318,10 +362,15 @@
 <h3 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Pending <span class="font-normal normal-case tracking-normal text-gray-400">(most retried first)</span></h3>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-6">
   <div class="overflow-x-auto">
+  {# table-fixed so the error column has a width to wrap against: with auto layout a
+     max-width on a cell is only a hint and the column takes what the text asks for.
+     Article gets half of it: these errors are short ("HTTP 403 Forbidden" is the usual
+     one) and the headline is what identifies the row, so the split used to be the wrong
+     way round — a truncated title beside an error sitting on room it never used. #}
   <table class="w-full table-fixed min-w-[48rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[38%]">Article</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-[50%]">Article</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Last error</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-20">Retries</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-32">Next retry</th>
@@ -330,15 +379,17 @@
     <tbody class="divide-y divide-gray-100">
       {% for article in stats.readable_pending_recent %}
       <tr>
-        <td class="px-4 py-2 align-top">
+        <td class="px-4 py-2 align-middle">
           <div class="text-gray-700 truncate" title="{{ article.title }}">
             {% if article.url %}<a href="{{ article.url }}" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ article.title }}</a>{% else %}{{ article.title }}{% endif %}
           </div>
           <div class="text-xs text-gray-400 truncate">{{ article.feed.title if article.feed else "—" }}</div>
         </td>
-        <td class="px-4 py-2 align-top text-red-500 break-words">{{ article.readable_error or "—" }}</td>
-        <td class="px-4 py-2 align-top text-gray-400">{{ article.readable_retries }}</td>
-        <td class="px-4 py-2 align-top text-gray-400 whitespace-nowrap">
+        <td class="px-4 py-2 align-middle text-red-500">
+          {% if article.readable_error %}{{ error_text(article.readable_error) }}{% else %}—{% endif %}
+        </td>
+        <td class="px-4 py-2 align-middle text-gray-400">{{ article.readable_retries }}</td>
+        <td class="px-4 py-2 align-middle text-gray-400 whitespace-nowrap">
           {% if article.readable_next_retry_at %}
             <time datetime="{{ article.readable_next_retry_at.isoformat() }}">{{ article.readable_next_retry_at | utctime('short') }}</time>
           {% else %}—{% endif %}

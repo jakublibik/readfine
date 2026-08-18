@@ -256,6 +256,9 @@ class TestSendBriefing:
 
     @pytest.mark.asyncio
     async def test_no_ai_client_raises(self, mock_db):
+        """An unconfigured slot yields (None, None, None), not None. The error has
+        to be raised here, otherwise the run dies further in on an AttributeError
+        and that is the message the user sees in the briefing's error field."""
         from app.services.briefing_service import send_briefing
         config = make_config()
         user = make_user()
@@ -269,9 +272,15 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=None):
-                with pytest.raises(RuntimeError, match="No AI client"):
-                    await send_briefing(config, user, mock_db, app_settings)
+                       new_callable=AsyncMock, return_value=(None, None, None)):
+                with patch("app.services.ai_service.catch_me_up",
+                           new_callable=AsyncMock) as mock_catchup:
+                    with pytest.raises(RuntimeError, match="No main model configured"):
+                        await send_briefing(config, user, mock_db, app_settings)
+
+        # Nothing was sent to a model, so nothing gets logged or billed.
+        mock_catchup.assert_not_called()
+        mock_db.add.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_smtp_exception_bubbles_up(self, mock_db):
@@ -333,6 +342,38 @@ class TestSendBriefing:
         assert config.briefing_next_send_at is not None
         mock_db.add.assert_called_once()  # CatchupLog
         mock_db.commit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_legacy_fast_config_still_runs_on_the_main_model(self, mock_db):
+        """Configs saved before the slot choice was dropped still carry
+        model_slot='fast'. The scoring model must not write digests."""
+        from app.services.briefing_service import send_briefing
+        config = make_config(model_slot="fast")
+        user = make_user()
+        app_settings = make_app_settings()
+
+        mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
+                                       published_at=None, fetched_at=datetime.now(timezone.utc),
+                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       readable_content=None, content="text")
+
+        with patch("app.services.briefing_service.fetch_catchup_articles",
+                   new_callable=AsyncMock, return_value=[mock_article]):
+            with patch("app.services.ai_service.get_ai_client", new_callable=AsyncMock,
+                       return_value=(MagicMock(), "anthropic", "claude-3")) as mock_client:
+                with patch("app.services.briefing_service.apply_catchup_limit",
+                           return_value=[mock_article]):
+                    with patch("app.services.briefing_service.build_articles_meta",
+                               return_value=[]):
+                        with patch("app.services.ai_service.catch_me_up",
+                                   new_callable=AsyncMock, return_value=("digest text", 100, 50)):
+                            with patch("app.services.briefing_service.send_html_email"):
+                                with patch("app.services.briefing_service._build_email_html",
+                                           return_value="<html>...</html>"):
+                                    await send_briefing(config, user, mock_db, app_settings)
+
+        assert mock_client.call_args[0][1] == "quality"
+        assert mock_db.add.call_args[0][0].model_slot == "quality"
 
     @pytest.mark.asyncio
     async def test_test_mode_does_not_update_next_send_at(self, mock_db):

@@ -24,7 +24,7 @@
     <tbody class="divide-y divide-gray-100">
       {% for op in cost_stats.operations %}
       {% if op.row_type in ("subtotal", "total") %}
-      <tr class="{% if op.operation in ('_total_fast', '_total_all') %}border-t !border-gray-300{% elif op.operation == '_total_quality' %}border-t{% endif %} {% if op.row_type == 'total' %}font-semibold{% else %}text-gray-500{% endif %}">
+      <tr class="{% if op.operation == '_total_all' %}border-t !border-gray-300{% elif op.operation == '_total_quality' %}border-t{% endif %} {% if op.row_type == 'total' %}font-semibold{% else %}text-gray-500{% endif %}">
         <td class="py-1 {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ op.label }}</td>
         <td class="py-1"></td>
         <td class="py-1 text-right {% if op.row_type == 'total' %}text-gray-800{% else %}text-gray-500{% endif %} text-sm">{{ op.input_tokens|num }}</td>
@@ -42,10 +42,13 @@
         </td>
       </tr>
       {% else %}
-      <tr {% if op.is_placeholder %}class="opacity-40"{% endif %}>
+      {# The scoring slot holds one operation, so a line under it does the job a
+         subtotal row would have done. #}
+      <tr class="{% if op.is_placeholder %}opacity-40 {% endif %}{% if op.slot == 'fast' %}border-b !border-gray-200{% endif %}">
         <td class="py-2 text-gray-700">
+          {# No slot chip: the line under Scoring and the Main total below already
+             say which model each row ran on. #}
           {{ op.label }}
-          {% if op.slot and not op.operation.startswith("catch_me_up") %}<span class="text-xs text-gray-400">({{ op.slot }})</span>{% endif %}
         </td>
         {% if op.is_placeholder %}
         <td class="py-2 text-right text-gray-400 text-xs" colspan="3">no runs yet</td>

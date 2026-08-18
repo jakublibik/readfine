@@ -325,7 +325,7 @@ async def settings_ai_generate_preference(
     client, provider, model = await get_ai_client(user.id, "quality", db)
     if client is None:
         return HTMLResponse(
-            '<span class="text-red-600 text-sm">Quality model not configured.</span>'
+            '<span class="text-red-600 text-sm">Main model not configured.</span>'
         )
     try:
         text_result, in_tok, out_tok = await generate_preference_text(user.id, db, client, provider, model)

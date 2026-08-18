@@ -643,9 +643,16 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
             return None
         return round((current - previous) / previous * 100, 1)
 
-    # Accumulate previous-period tokens per slot so the subtotals/total can derive
-    # a cost trend without a separate query (summed from the rows).
-    prev_tok_by_slot: dict[str, list[int]] = {"fast": [0, 0], "quality": [0, 0]}
+    # Accumulate each row's previous-period cost per slot, so the subtotal and the
+    # total can derive a trend without a separate query. Costs rather than tokens,
+    # because the catch-up row prices historical runs by the model that actually
+    # ran them and its tokens can't be re-priced with one model afterwards.
+    prev_cost_by_slot: dict[str, list[float | None]] = {"fast": [], "quality": []}
+
+    def _sum_costs(values: list[float | None]) -> float | None:
+        """Sum of the priced entries, None when nothing in the group has a price."""
+        priced = [v for v in values if v is not None]
+        return round(sum(priced), 4) if priced else None
 
     ops_config = [
         ("scoring", "Scoring", "fast"),
@@ -660,8 +667,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         _, prev_inp, prev_out = await _op_stats(op, prev_cutoff)
         est_cost, est_flag = _calc_cost(model, _prov(slot), inp, out)
         prev_cost = _calc_cost(model, _prov(slot), prev_inp, prev_out)[0]
-        prev_tok_by_slot[slot][0] += prev_inp
-        prev_tok_by_slot[slot][1] += prev_out
+        prev_cost_by_slot[slot].append(prev_cost)
         operation_rows.append(OperationCostRow(
             operation=op,
             label=label,
@@ -757,8 +763,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     _, prev_pref_inp, prev_pref_out = await _usage_log_stats("preference_generation", prev_cutoff)
     pref_cost, pref_est = _calc_cost(quality_model, quality_provider, pref_inp, pref_out)
     prev_pref_cost = _calc_cost(quality_model, quality_provider, prev_pref_inp, prev_pref_out)[0]
-    prev_tok_by_slot["quality"][0] += prev_pref_inp
-    prev_tok_by_slot["quality"][1] += prev_pref_out
+    prev_cost_by_slot["quality"].append(prev_pref_cost)
     operation_rows.append(OperationCostRow(
         operation="preference_generation",
         label="Interest profile",
@@ -775,8 +780,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     _, prev_css_inp, prev_css_out = await _usage_log_stats("css_selector_generation", prev_cutoff)
     css_cost, css_est = _calc_cost(quality_model, quality_provider, css_inp, css_out)
     prev_css_cost = _calc_cost(quality_model, quality_provider, prev_css_inp, prev_css_out)[0]
-    prev_tok_by_slot["quality"][0] += prev_css_inp
-    prev_tok_by_slot["quality"][1] += prev_css_out
+    prev_cost_by_slot["quality"].append(prev_css_cost)
     operation_rows.append(OperationCostRow(
         operation="css_selector_generation",
         label="CSS selector generation",
@@ -791,8 +795,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
 
     chat_cost, chat_est = _calc_cost(quality_model, quality_provider, chat_in_tok, chat_out_tok)
     prev_chat_cost = _calc_cost(quality_model, quality_provider, prev_chat_in_tok, prev_chat_out_tok)[0]
-    prev_tok_by_slot["quality"][0] += prev_chat_in_tok
-    prev_tok_by_slot["quality"][1] += prev_chat_out_tok
+    prev_cost_by_slot["quality"].append(prev_chat_cost)
     operation_rows.append(OperationCostRow(
         operation="chat",
         label="Chat",
@@ -805,65 +808,78 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         trend_pct=_trend(chat_cost, prev_chat_cost),
     ))
 
-    # Catch me up — per slot from catchup_logs
-    async def _catchup_slot_stats(slot: str, period_cutoff: datetime) -> tuple[int, int, int]:
+    # Catch me up — one row, priced per model that actually ran. catchup_logs
+    # records the model with every run, so runs from before the digest moved to
+    # the main model are priced by the model that wrote them rather than by
+    # whatever is configured today.
+    async def _catchup_stats(
+        period_cutoff: datetime,
+    ) -> tuple[int, int, int, float | None, bool]:
         r = await db.execute(
             text("""
-                SELECT COUNT(*),
+                SELECT model, provider,
+                       COUNT(*),
                        COALESCE(SUM(input_tokens), 0),
                        COALESCE(SUM(output_tokens), 0)
                 FROM catchup_logs
                 WHERE user_id = :uid
-                  AND model_slot = :slot
                   AND created_at >= :cutoff
                   AND created_at < :end_cutoff
+                GROUP BY model, provider
             """),
             {
                 "uid": user_id,
-                "slot": slot,
                 "cutoff": period_cutoff,
                 "end_cutoff": period_cutoff + timedelta(days=days),
             },
         )
-        row = r.one()
-        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+        cnt = inp = out = 0
+        costs: list[float | None] = []
+        estimated = False
+        for model, provider, group_cnt, group_inp, group_out in r:
+            cnt += int(group_cnt or 0)
+            inp += int(group_inp or 0)
+            out += int(group_out or 0)
+            # A run that found no articles logs no model and spends nothing.
+            if not model:
+                continue
+            cost, est_flag = _calc_cost(model, provider, int(group_inp or 0), int(group_out or 0))
+            costs.append(cost)
+            estimated = estimated or est_flag
+        return cnt, inp, out, _sum_costs(costs), estimated
 
-    for cu_slot, cu_model in (("fast", fast_model), ("quality", quality_model)):
-        cu_cnt, cu_inp, cu_out = await _catchup_slot_stats(cu_slot, cutoff)
-        _, prev_cu_inp, prev_cu_out = await _catchup_slot_stats(cu_slot, prev_cutoff)
-        # Cold start: no runs yet → estimated per-run cost
-        if cu_cnt == 0:
-            from app.services.catchup_service import estimate_catchup_tokens  # noqa: PLC0415
-            est_inp, est_out = estimate_catchup_tokens(200, include_snippet=True)
-            est, est_flag = _calc_cost(cu_model, _prov(cu_slot), est_inp, est_out)
-            operation_rows.append(OperationCostRow(
-                operation=f"catch_me_up_{cu_slot}",
-                label=f"Catch me up & Briefings ({cu_slot})",
-                slot=cu_slot,
-                count=0,
-                input_tokens=0,
-                output_tokens=0,
-                est_cost=est,
-                is_estimated=est_flag,
-                trend_pct=None,
-                is_placeholder=True,
-            ))
-        else:
-            cu_cost, cu_est = _calc_cost(cu_model, _prov(cu_slot), cu_inp, cu_out)
-            prev_cu_cost = _calc_cost(cu_model, _prov(cu_slot), prev_cu_inp, prev_cu_out)[0]
-            prev_tok_by_slot[cu_slot][0] += prev_cu_inp
-            prev_tok_by_slot[cu_slot][1] += prev_cu_out
-            operation_rows.append(OperationCostRow(
-                operation=f"catch_me_up_{cu_slot}",
-                label=f"Catch me up & Briefings ({cu_slot})",
-                slot=cu_slot,
-                count=cu_cnt,
-                input_tokens=cu_inp,
-                output_tokens=cu_out,
-                est_cost=cu_cost,
-                is_estimated=cu_est,
-                trend_pct=_trend(cu_cost, prev_cu_cost),
-            ))
+    cu_cnt, cu_inp, cu_out, cu_cost, cu_est = await _catchup_stats(cutoff)
+    if cu_cnt == 0:
+        # Cold start: no runs yet → estimated cost of one run on the main model
+        from app.services.catchup_service import estimate_catchup_tokens  # noqa: PLC0415
+        est_inp, est_out = estimate_catchup_tokens(200, include_snippet=True)
+        est, est_flag = _calc_cost(quality_model, quality_provider, est_inp, est_out)
+        operation_rows.append(OperationCostRow(
+            operation="catch_me_up",
+            label="Catch me up & Briefings",
+            slot="quality",
+            count=0,
+            input_tokens=0,
+            output_tokens=0,
+            est_cost=est,
+            is_estimated=est_flag,
+            trend_pct=None,
+            is_placeholder=True,
+        ))
+    else:
+        prev_cu_cost = (await _catchup_stats(prev_cutoff))[3]
+        prev_cost_by_slot["quality"].append(prev_cu_cost)
+        operation_rows.append(OperationCostRow(
+            operation="catch_me_up",
+            label="Catch me up & Briefings",
+            slot="quality",
+            count=cu_cnt,
+            input_tokens=cu_inp,
+            output_tokens=cu_out,
+            est_cost=cu_cost,
+            is_estimated=cu_est,
+            trend_pct=_trend(cu_cost, prev_cu_cost),
+        ))
 
     # Subtotals
     real_rows = [r for r in operation_rows if not r.is_placeholder]
@@ -872,13 +888,13 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
 
     def _subtotal(
         rows: list[OperationCostRow], label: str, slot: str,
-        model: str | None, provider: str | None,
     ) -> tuple[OperationCostRow, float | None]:
         inp = sum(r.input_tokens for r in rows)
         out = sum(r.output_tokens for r in rows)
-        cost, est_flag = _calc_cost(model, provider, inp, out)
-        prev_inp, prev_out = prev_tok_by_slot[slot]
-        prev_cost = _calc_cost(model, provider, prev_inp, prev_out)[0]
+        # Summed from the rows rather than re-priced from the tokens: the catch-up
+        # row can hold runs from several models and there is no one price for them.
+        cost = _sum_costs([r.est_cost for r in rows])
+        prev_cost = _sum_costs(prev_cost_by_slot[slot])
         row = OperationCostRow(
             operation=f"_total_{slot}",
             label=label,
@@ -887,14 +903,16 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
             input_tokens=inp,
             output_tokens=out,
             est_cost=cost,
-            is_estimated=est_flag,
+            is_estimated=any(r.is_estimated for r in rows),
             trend_pct=_trend(cost, prev_cost),
             row_type="subtotal",
         )
         return row, prev_cost
 
-    fast_total, fast_prev_cost = _subtotal(fast_rows, "Fast total", "fast", fast_model, fast_provider)
-    quality_total, quality_prev_cost = _subtotal(quality_rows, "Quality total", "quality", quality_model, quality_provider)
+    # Scoring is the only operation on the fast slot, so its subtotal would just
+    # repeat the row. It is still aggregated here, for the grand total.
+    fast_total, fast_prev_cost = _subtotal(fast_rows, "Scoring total", "fast")
+    quality_total, quality_prev_cost = _subtotal(quality_rows, "Main total", "quality")
 
     all_inp = fast_total.input_tokens + quality_total.input_tokens
     all_out = fast_total.output_tokens + quality_total.output_tokens
@@ -928,6 +946,6 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         row_type="total",
     )
 
-    operation_rows += [fast_total, quality_total, grand_total]
+    operation_rows += [quality_total, grand_total]
 
     return AiCostStats(period_days=days, operations=operation_rows)

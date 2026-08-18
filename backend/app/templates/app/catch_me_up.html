@@ -22,6 +22,16 @@
   </div>
   {% else %}
 
+  {% if not main_model_configured %}
+  <div class="max-w-5xl mx-auto px-2 sm:px-4 pt-3 sm:pt-6">
+    <div class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-3">
+      Digests and briefings run on the main model, and you don't have one set up. The
+      scoring model won't be used for them.
+      <a href="/settings/ai" class="underline font-medium">Pick a main model in Settings → AI.</a>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="max-w-5xl mx-auto px-2 sm:px-4 py-3 sm:py-6 grid grid-cols-1 lg:grid-cols-[20rem_1fr] gap-3 sm:gap-6 items-start">
 
     <!-- ── Left column: saved configs + form ────────────────────────────── -->
@@ -167,24 +177,6 @@
                  class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
         </div>
 
-        <!-- Model slot -->
-        <div>
-          <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
-          <div class="flex gap-2">
-            {% for val, lbl in [("fast", "Fast"), ("quality", "Quality")] %}
-            <label class="flex-1 text-center">
-              <input type="radio" name="model_slot" value="{{ val }}" class="sr-only peer"
-                     {% if val == "fast" %}checked{% endif %}>
-              <span class="block text-sm py-1.5 px-2 rounded border border-gray-200 cursor-pointer
-                           peer-checked:bg-blue-600 peer-checked:text-white peer-checked:border-blue-600
-                           hover:bg-gray-50 transition-colors">
-                {{ lbl }}
-              </span>
-            </label>
-            {% endfor %}
-          </div>
-        </div>
-
         <!-- Include article text -->
         <label class="flex items-start gap-2 cursor-pointer">
           <input type="checkbox" name="include_snippet" value="true" checked
@@ -217,12 +209,10 @@
           </div>
         </div>
 
-        <!-- Count + cost -->
-        <div class="text-xs text-gray-500 space-y-1 min-h-[2.5rem]">
-          <div id="catchup-count">
-            <span class="text-gray-400">Select filters to see article count</span>
-          </div>
-          <div id="catchup-cost"></div>
+        <!-- Count + cost (one request, so the two lines can't disagree) -->
+        <div id="catchup-estimate" class="text-xs text-gray-500 space-y-1 min-h-[2.5rem]">
+          <div><span class="text-gray-400">Select filters to see article count</span></div>
+          <div></div>
         </div>
 
         <!-- Generate button -->
@@ -240,7 +230,9 @@
     </div>
 
     <!-- ── Right column: result ───────────────────────────────────────── -->
-    <div class="bg-white border border-gray-200 rounded-lg p-5 min-h-[12rem] relative">
+    <!-- scroll-mt clears the sticky header: the generate handlers scrollIntoView() this
+         panel, and block:'start' would otherwise tuck its top under the header. -->
+    <div class="bg-white border border-gray-200 rounded-lg p-5 min-h-[12rem] relative scroll-mt-16">
 
       <!-- Copy button -->
       <button id="catchup-copy-btn"
@@ -297,7 +289,7 @@
       var open = !settingsPanel.classList.contains('hidden');
       settingsPanel.classList.toggle('hidden', open);
       settingsArrow.classList.toggle('rotate-90', !open);
-      if (!open) { triggerCountRefresh(); triggerCostRefresh(); }
+      if (!open) { triggerEstimateRefresh(); }
     });
   }
 
@@ -320,7 +312,7 @@
   if (scoreEnabled) {
     scoreEnabled.addEventListener('change', function () {
       applyScoreFilter();
-      triggerCountRefresh();
+      triggerEstimateRefresh();
     });
   }
   applyScoreFilter();
@@ -338,10 +330,9 @@
   }
 
   // ── Count + cost refresh ──────────────────────────────────────────────────
-  var countTimer = null;
-  var costTimer = null;
+  var estimateTimer = null;
 
-  function buildQueryString(extra) {
+  function buildQueryString() {
     var form = document.getElementById('catchup-form');
     if (!form) return '';
     var fd = new FormData(form);
@@ -349,26 +340,14 @@
     fd.forEach(function (val, key) {
       if (key !== 'custom_prompt') params.append(key, val);
     });
-    if (extra) Object.keys(extra).forEach(function (k) { params.set(k, extra[k]); });
     return params.toString();
   }
 
-  function triggerCountRefresh() {
-    clearTimeout(countTimer);
-    countTimer = setTimeout(function () {
-      var qs = buildQueryString();
-      htmx.ajax('GET', '/htmx/catch-me-up/count?' + qs, {
-        target: '#catchup-count', swap: 'innerHTML'
-      });
-    }, 300);
-  }
-
-  function triggerCostRefresh() {
-    clearTimeout(costTimer);
-    costTimer = setTimeout(function () {
-      var qs = buildQueryString();
-      htmx.ajax('GET', '/htmx/catch-me-up/cost?' + qs, {
-        target: '#catchup-cost', swap: 'innerHTML'
+  function triggerEstimateRefresh() {
+    clearTimeout(estimateTimer);
+    estimateTimer = setTimeout(function () {
+      htmx.ajax('GET', '/htmx/catch-me-up/estimate?' + buildQueryString(), {
+        target: '#catchup-estimate', swap: 'innerHTML'
       });
     }, 300);
   }
@@ -380,25 +359,12 @@
       if (e.target.name === 'period') {
         updatePeriodDesc();
       }
-      if (e.target.name === 'model_slot') {
-        triggerCostRefresh();
-      } else if (e.target.name === 'include_snippet') {
-        triggerCostRefresh();
-        triggerCountRefresh();
-      } else if (e.target.id === 'scope-value' || e.target.name === 'scope_include') {
-        triggerCountRefresh();
-      } else {
-        triggerCountRefresh();
-      }
+      triggerEstimateRefresh();
     });
-    document.getElementById('article-limit').addEventListener('input', function () {
-      triggerCountRefresh();
-      triggerCostRefresh();
-    });
+    document.getElementById('article-limit').addEventListener('input', triggerEstimateRefresh);
     // Initial load
     updatePeriodDesc();
-    triggerCountRefresh();
-    triggerCostRefresh();
+    triggerEstimateRefresh();
   }
 
   // ── Load saved config into form ───────────────────────────────────────────
@@ -434,10 +400,6 @@
     // Period
     var periodRadio = form.querySelector('input[name="period"][value="' + cfg.period + '"]');
     if (periodRadio) periodRadio.checked = true;
-
-    // Model slot
-    var modelRadio = form.querySelector('input[name="model_slot"][value="' + cfg.model_slot + '"]');
-    if (modelRadio) modelRadio.checked = true;
 
     // Filter status
     var statusRadio = form.querySelector('input[name="filter_status"][value="' + cfg.filter_status + '"]');
@@ -528,8 +490,7 @@
     if (nameInput) nameInput.value = cfg.name;
 
     updatePeriodDesc();
-    triggerCountRefresh();
-    triggerCostRefresh();
+    triggerEstimateRefresh();
   }
 
   // ── Copy button ──────────────────────────────────────────────────────────

@@ -152,7 +152,7 @@ async def settings_scrape_ai_selector(
 
     client, provider, model = await get_ai_client(user.id, "quality", db)
     if client is None:
-        return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Quality model not configured. Set it in <a href='/settings/ai' class='underline'>Settings → AI</a>.</div>")
+        return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Main model not configured. Set it in <a href='/settings/ai' class='underline'>Settings → AI</a>.</div>")
 
     in_tok = out_tok = 0
     try:

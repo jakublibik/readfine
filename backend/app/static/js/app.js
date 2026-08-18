@@ -3430,3 +3430,47 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     applyRemembered();
   }
 })();
+
+// --- Expandable error text ----------------------------------------------------------
+// Error messages in tables and feed rows clamp to two lines (see
+// templates/partials/error_text.html). The full text lives in the title attribute,
+// which is a mouse-only affordance: on a phone the clipped tail was simply unreadable.
+// Measure each one after render and reveal its "Show more" toggle when there is more
+// text than the clamp shows, so the short majority stays exactly as it was.
+(function () {
+  function sync(el) {
+    if (el.dataset.expanded === '1') return;  // open already, nothing to measure
+    var btn = el.parentElement && el.parentElement.querySelector('[data-expand-toggle]');
+    if (!btn) return;
+    btn.classList.toggle('hidden', el.scrollHeight <= el.clientHeight + 1);
+  }
+
+  function scan() {
+    Array.prototype.forEach.call(document.querySelectorAll('[data-expand]'), sync);
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('[data-expand-toggle]');
+    if (!btn) return;
+    var el = btn.parentElement.querySelector('[data-expand]');
+    if (!el) return;
+    var open = el.dataset.expanded === '1';
+    el.classList.toggle('line-clamp-2', open);
+    el.dataset.expanded = open ? '0' : '1';
+    btn.textContent = open ? 'Show more' : 'Show less';
+  });
+
+  // A swapped-in table and a rotated phone both change what fits into two lines.
+  document.body.addEventListener('htmx:afterSettle', scan);
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(scan, 150);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', scan);
+  } else {
+    scan();
+  }
+})();

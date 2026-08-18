@@ -12,16 +12,19 @@
       <span class="block text-xs text-gray-400">{{ period_labels.get(cfg.period, cfg.period) }}</span>
     </button>
     <div class="flex items-center gap-1 flex-shrink-0">
-      {# Briefing button #}
+      {# Briefing button. A briefing switched off by an error looks the same as one
+         the user switched off, so the error state gets its own colour and tooltip. #}
+      {% set briefing_failed = not cfg.briefing_enabled and cfg.briefing_last_error %}
       <button type="button"
               class="bg-transparent border-0 cursor-pointer px-1 flex items-center
                 {% if cfg.briefing_enabled %}text-blue-500 hover:text-blue-700
+                {% elif briefing_failed %}text-amber-500 hover:text-amber-700
                 {% elif smtp_available is defined and not smtp_available %}text-amber-400 hover:text-amber-600
                 {% else %}text-gray-400 hover:text-blue-500{% endif %}"
               data-action="open-briefing-modal"
               data-config-id="{{ cfg.id }}"
               data-config-name="{{ cfg.name | e }}"
-              title="{% if cfg.briefing_enabled %}Briefing: {{ cfg.briefing_interval | capitalize }}{% if cfg.briefing_interval == 'weekly' %} {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][cfg.briefing_day or 0] }}{% endif %} {{ cfg.briefing_time or '08:00' }}{% elif smtp_available is defined and not smtp_available %}Email not configured{% else %}Set up briefing{% endif %}">
+              title="{% if cfg.briefing_enabled %}Briefing: {{ cfg.briefing_interval | capitalize }}{% if cfg.briefing_interval == 'weekly' %} {{ ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][cfg.briefing_day or 0] }}{% endif %} {{ cfg.briefing_time or '08:00' }}{% elif briefing_failed %}Briefing turned off: {{ cfg.briefing_last_error | truncate(160) }}{% elif smtp_available is defined and not smtp_available %}Email not configured{% else %}Set up briefing{% endif %}">
         {% if cfg.briefing_enabled %}
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
           <path d="M1.5 8.67v8.58a3 3 0 003 3h15a3 3 0 003-3V8.67l-8.928 5.493a3 3 0 01-3.144 0L1.5 8.67z"/>

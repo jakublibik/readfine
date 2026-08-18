@@ -94,36 +94,29 @@ def _snippet(article: CatchupArticle) -> str:
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 
-async def fetch_catchup_articles(
+def _catchup_stmt(
+    selection,
     user_id: int,
     tz_str: str | None,
-    db: AsyncSession,
     period: str,
     scope_include: str | None,
     filter_status: str,
     label_filter: str | None,
     filter_score_min: float | None,
-) -> list[CatchupArticle]:
-    """Fetch articles matching the given catchup parameters."""
+):
+    """Build the catchup query over `selection` with all filters applied.
+
+    Shared by fetch_catchup_articles and count_catchup_articles so the estimate
+    shown in the UI can never be counted over a different set than the digest
+    is built from.
+    """
     start_dt = _period_to_start_dt(period, tz_str)
     feed_ids, folder_ids = parse_scope_tokens(scope_include)
 
-    # Lightweight projection: bodies (content / readable_content / ai_summary) are
-    # NOT selected here — they're only needed to build snippets for the <=limit
-    # articles that survive sampling, and only when include_snippet is on. Pulling
-    # full bodies for the whole period window would transfer megabytes the count /
-    # cost routes never read and generate mostly discards. populate_snippet_sources
-    # loads them for the sampled subset.
     stmt = (
-        select(
-            Article.id,
-            Article.title,
-            Feed.title.label("feed_title"),
-            Article.published_at,
-            Article.fetched_at,
-            UserFeed.folder_id,
-            UserArticleState.ai_score,
-        )
+        select(*selection)
+        # Explicit, because a count() selection carries no entity to join from.
+        .select_from(Article)
         .join(Feed, Article.feed_id == Feed.id)
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user_id))
         .outerjoin(
@@ -177,6 +170,40 @@ async def fetch_catchup_articles(
     if filter_score_min is not None:
         stmt = stmt.where(UserArticleState.ai_score >= filter_score_min)
 
+    return stmt
+
+
+async def fetch_catchup_articles(
+    user_id: int,
+    tz_str: str | None,
+    db: AsyncSession,
+    period: str,
+    scope_include: str | None,
+    filter_status: str,
+    label_filter: str | None,
+    filter_score_min: float | None,
+) -> list[CatchupArticle]:
+    """Fetch articles matching the given catchup parameters."""
+    # Lightweight projection: bodies (content / readable_content / ai_summary) are
+    # NOT selected here — they're only needed to build snippets for the <=limit
+    # articles that survive sampling, and only when include_snippet is on. Pulling
+    # full bodies for the whole period window would transfer megabytes generate
+    # mostly discards. populate_snippet_sources loads them for the sampled subset.
+    stmt = _catchup_stmt(
+        (
+            Article.id,
+            Article.title,
+            Feed.title.label("feed_title"),
+            Article.published_at,
+            Article.fetched_at,
+            UserFeed.folder_id,
+            UserArticleState.ai_score,
+        ),
+        user_id=user_id, tz_str=tz_str, period=period,
+        scope_include=scope_include, filter_status=filter_status,
+        label_filter=label_filter, filter_score_min=filter_score_min,
+    )
+
     rows = await db.execute(stmt)
     return [
         CatchupArticle(
@@ -193,6 +220,30 @@ async def fetch_catchup_articles(
         )
         for r in rows
     ]
+
+
+async def count_catchup_articles(
+    user_id: int,
+    tz_str: str | None,
+    db: AsyncSession,
+    period: str,
+    scope_include: str | None,
+    filter_status: str,
+    label_filter: str | None,
+    filter_score_min: float | None,
+) -> int:
+    """Count articles matching the given catchup parameters.
+
+    The estimate route only needs the size of the selection, so it counts in the
+    database instead of materializing every row in the period window.
+    """
+    stmt = _catchup_stmt(
+        (func.count(),),
+        user_id=user_id, tz_str=tz_str, period=period,
+        scope_include=scope_include, filter_status=filter_status,
+        label_filter=label_filter, filter_score_min=filter_score_min,
+    )
+    return int((await db.execute(stmt)).scalar_one())
 
 
 async def populate_snippet_sources(

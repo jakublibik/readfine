@@ -139,12 +139,12 @@ class TestScrapeAiSelectorEndpoint:
         assert resp.status_code == 200
         assert "URL is required" in resp.text
 
-    def test_quality_model_not_configured(self, ai_client, mock_db):
+    def test_main_model_not_configured(self, ai_client, mock_db):
         with patch("app.routers.web.settings.scrape.get_ai_client",
                    new=AsyncMock(return_value=(None, None, None))):
             resp = ai_client.post(self.URL, data={"url": "https://example.com", "html_sample": _SAMPLE_HTML})
         assert resp.status_code == 200
-        assert "Quality model not configured" in resp.text
+        assert "Main model not configured" in resp.text
 
     def test_valid_selector_returned(self, ai_client, mock_db):
         with (

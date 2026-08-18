@@ -42,8 +42,8 @@ from app.fetcher.redirects import adopt_permanent_url
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
     arm_host_cooldown,
-    failure_message,
     failure_values,
+    log_failure_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,7 +235,7 @@ async def fetch_feed(
             feed_id=feed_id,
             failed_at=now,
             http_status=http_status,
-            error_message=failure_message(exc, feed_url),
+            error_message=log_failure_message(exc, feed_url),
         ))
         arm_host_cooldown(feed_url, exc, http_status, now)
         await db.execute(

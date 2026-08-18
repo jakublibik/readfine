@@ -14,10 +14,16 @@
     {% else %}
       <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">Public</span>
     {% endif %}
-    {% if uf.feed.status == 'active' %}
+    {# Same states as the feed list's badge, in this page's own outlined style. The
+       block tier keeps status 'active', so it has to be tested before it. #}
+    {% if uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Throttled</span>
+    {% elif uf.feed.status == 'active' %}
       <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-50 text-green-700 border border-green-200">Active</span>
     {% elif uf.feed.status == 'error' %}
       <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-red-50 text-red-700 border border-red-200">Error</span>
+    {% elif uf.feed.status == 'disabled' %}
+      <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-600 border border-gray-300">Disabled</span>
     {% else %}
       <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500 border border-gray-200">{{ uf.feed.status }}</span>
     {% endif %}
@@ -224,17 +230,46 @@
   </div>
   {% endif %}
 
+  {# The full story about a failing feed lives here rather than in the feed list, where
+     a row has no space for it on a phone. The message is shown unclipped on purpose.
+     A refusing host (block tier) is not a broken feed, so it gets amber and its own
+     wording - see app/fetcher/failure.py for the split. #}
   {% if uf.feed.last_error %}
-  <div class="px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
-    <span class="font-medium">Last error:</span> {{ uf.feed.last_error }}
+  {% set throttled = uf.feed.status == 'active' and uf.feed.block_count >= block_badge_threshold %}
+  {% set muted = 'text-amber-700/80' if throttled else 'text-red-600/80' %}
+  <div class="px-4 py-3 rounded text-sm {{ 'bg-amber-50 border border-amber-200 text-amber-800' if throttled else 'bg-red-50 border border-red-200 text-red-700' }}">
+    {% if throttled %}
+      <span class="font-medium">Last response:</span> {{ uf.feed.last_error }}
+      <div class="mt-1 {{ muted }}">The site refused the last {{ uf.feed.block_count }} fetches (switched off after {{ block_disable_threshold }}).
+        Nothing is wrong with the feed - fetching backs off and resumes on its own.</div>
+    {% else %}
+      <span class="font-medium">Last error:</span> {{ uf.feed.last_error }}
+      {% if uf.feed.fetch_error_count > 1 %}
+      {# Exact count, no threshold quoted: the general one is 5 but a 404 disables after
+         4, and the feed row does not record which kind of failure it was.
+
+         "Since the last successful fetch" rather than "in a row", because the counter
+         only moves on the error tier: a feed that failed twice and is now being refused
+         by the host keeps the count at 2 while the message above it is the 403. Counting
+         from the last success is true in both cases. #}
+      <div class="mt-1 {{ muted }}">Failed {{ uf.feed.fetch_error_count }} times since the last successful fetch. A feed is switched off after repeated failures.</div>
+      {% endif %}
+    {% endif %}
     {% if next_fetch_at %}
-    <div class="mt-1 text-red-600/80">Next fetch
+    <div class="mt-1 {{ muted }}">Next fetch
       <time datetime="{{ next_fetch_at.isoformat() }}"
             title="{{ next_fetch_at | localtime('long') }}">~ {{ next_fetch_at | localtime('short') }}</time>
     </div>
     {% elif uf.feed.status == 'disabled' %}
-    <div class="mt-1 text-red-600/80">No fetch scheduled - this feed was auto-disabled after repeated errors. Save changes to re-enable it.</div>
+    <div class="mt-1 {{ muted }}">No fetch scheduled - this feed was auto-disabled after repeated errors. Save changes to re-enable it.</div>
     {% endif %}
+  </div>
+  {% elif uf.feed.status == 'disabled' %}
+  {# Switched off with no failure recorded against it, which is what an admin switching
+     a feed off by hand leaves behind. Neutral rather than red: nothing here is broken,
+     but the feed still fetches nothing until someone says otherwise. #}
+  <div class="px-4 py-3 bg-gray-100 border border-gray-200 rounded text-sm text-gray-600">
+    Fetching is switched off for this feed, and nothing will retry it on its own. Save changes to switch it back on.
   </div>
   {% endif %}
 

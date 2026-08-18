@@ -115,7 +115,8 @@ class UserCatchupConfig(Base):
     label_filter: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array: ["any"] or ["label:3", …]
     filter_score_min: Mapped[float | None] = mapped_column(Float, nullable=True)
     article_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=200)
-    model_slot: Mapped[str] = mapped_column(String(10), nullable=False, default="fast")
+    # Kept for history; digests and briefings always run on the main model now.
+    model_slot: Mapped[str] = mapped_column(String(10), nullable=False, default="quality")
     custom_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     include_snippet: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

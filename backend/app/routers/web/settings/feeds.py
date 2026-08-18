@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
+from app.fetcher.failure import clear_failure_state
 from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.feed import Folder, UserFeed
@@ -410,10 +411,11 @@ async def settings_feed_update(
         if new_selector:
             uf.feed.type_config = {**(uf.feed.type_config or {}), "article_links_selector": new_selector}
 
-    if uf.feed.status == "disabled":
-        uf.feed.status = "active"
-    uf.feed.fetch_error_count = 0
-    uf.feed.block_count = 0
+    # Saving the form is the subscriber's way of saying "try this again": it switches a
+    # stopped feed back on and drops the whole failure trail, deferral included. Clearing
+    # only the counters used to leave a feed active but deferred by the block backoff for
+    # up to a day, with the manual refresh button answering "rate-limited" as well.
+    clear_failure_state(uf.feed)
     # Saving the form clears readable_auto_disabled above, which takes the feed out of
     # the revival job's reach, so drop its bookkeeping too: a scheduled probe would
     # otherwise linger on a feed the user has just decided about, and the spent-attempt
