@@ -138,7 +138,7 @@
         <td class="px-4 py-2 align-middle">{{ status_badge(f, with_count=true, threshold=1) }}</td>
         {# No separate status column: a log carries http_status exactly when the
            failure was an HTTP status error, and that message already opens with
-           "HTTP 429 Too Many Requests". See fetcher/failure.py:failure_message. #}
+           "HTTP 429 Too Many Requests". See fetcher/failure.py:log_failure_message. #}
         {# error_headline drops the feed's own address off the end of an HTTP failure:
            the feed is named in the first column of this very row, so repeating its URL
            here said nothing and took two thirds of the line. #}
