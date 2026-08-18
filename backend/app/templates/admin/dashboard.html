@@ -97,7 +97,7 @@
   <table class="w-full min-w-[52rem] text-sm">
     <thead class="bg-gray-50 border-b border-gray-200">
       <tr>
-        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-full">Feed</th>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-full min-w-[16rem]">Feed</th>
         <th class="text-left px-4 py-2 text-xs font-medium text-gray-500 w-28">Status</th>
         {# Width comes from the min-w- on the cell below. Feed claiming the slack leaves
            every other column on its min-content, and a message that breaks between words
@@ -116,9 +116,14 @@
       {% for row in stats.fetch_error_feeds %}
       {% set f = row.feed %}
       <tr>
-        {# No cap: this is the column holding the table's spare width, and both lines
-           truncate into whatever it ends up being. #}
-        <td class="px-4 py-2 align-middle">
+        {# max-w-0 is what makes the truncating work at all. In auto layout a cell asks
+           for as much width as its widest unbreakable line, and truncate makes both of
+           these lines unbreakable, so a feed with a long address (a YouTube channel URL,
+           say) pushed the table past the card and left the whole thing scrolling
+           sideways. A cell capped at zero asks for nothing, min-w gives it its floor
+           back, and w-full above still hands it the slack. Same pattern as the Feeds
+           table, see admin/partials/feeds_table.html. #}
+        <td class="px-4 py-2 align-middle w-full min-w-[16rem] max-w-0">
           <div class="text-gray-700 truncate" title="{{ f.title }}">{{ f.title }}</div>
           {# Same redaction as the Feeds table: a feed URL can carry a token or HTTP
              credentials, and this list spans every user's feeds. #}
@@ -138,11 +143,13 @@
            the feed is named in the first column of this very row, so repeating its URL
            here said nothing and took two thirds of the line. #}
         {# min-w is what this column is: Feed holds the slack, so everything else gets its
-           min-content and nothing more. 17rem takes the messages that are actually common
-           once the URL is off them ("HTTP 403 Forbidden", "Response exceeds the 10 MB size
-           limit") on one line. max-w-md is the other end, for the rare long one. #}
+           min-content and nothing more, and a message that breaks between words asks for
+           almost none. 15rem takes the statuses that are actually common once the URL is
+           off them ("HTTP 500 Internal Server Error" is about the longest) on one line,
+           and leaves the row as a whole enough room to fit a normal window without the
+           table scrolling. max-w-md is the other end, for the rare long one. #}
         <td class="px-4 py-2 align-middle text-red-600">
-          {{ error_text(row.error_message | error_headline, class_="min-w-[17rem] max-w-md") }}
+          {{ error_text(row.error_message | error_headline, class_="min-w-[15rem] max-w-md") }}
         </td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_24h else 'text-gray-300' }}">{{ row.fails_24h }}</td>
         <td class="px-2 py-2 align-middle text-right tabular-nums {{ 'text-gray-700' if row.fails_7d else 'text-gray-300' }}">{{ row.fails_7d }}</td>
