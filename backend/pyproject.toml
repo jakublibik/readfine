@@ -1,6 +1,6 @@
 [project]
 name = "readfine"
-version = "0.15.0"
+version = "0.16.0"
 description = "Self-hosted RSS reader"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"

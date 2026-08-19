@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-19
+
 ### Changed
 
 - Settings → Feeds now explains a feed that has stopped fetching instead of just labelling it. A feed switched off after repeated failures showed a gray "disabled" and nothing more, which is the one state that will not clear up on its own, so the row now says fetching was switched off and that saving the feed's edit form turns it back on. A feed the site is refusing gets the same "throttled" badge as the admin tables, with the same explanation behind it. The feed's edit page adds how many times it has failed since it last fetched successfully, and reports a refusing site in the site's own words, in amber rather than red, because nothing is wrong with the feed and it comes back by itself.
