@@ -9,6 +9,16 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- AI can now run on a model of your own. Settings → AI has a fourth provider, **Custom (OpenAI-compatible)**, and an Endpoint field to go with it, so Readfine will talk to anything that speaks the OpenAI API: Ollama or llama.cpp on your own machine, LM Studio, vLLM, a LiteLLM proxy, or a gateway like OpenRouter. A local server needs no API key, so the key field can stay empty. One endpoint per account, shared by both slots, but each slot still picks its own model, so a small model can score while a larger one writes summaries. Ollama wants the `/v1` suffix on the address and llama.cpp does not, which is the usual first stumble; the help page covers that and the rest of the setup. Self-hosting on a private address (localhost, a Docker network) needs `AI_ALLOW_PRIVATE_ENDPOINTS=true` in the environment, because on an instance with other people's accounts the endpoint is theirs to type and that is what keeps it from reaching services inside your network. Feed addresses are unaffected by the setting.
+
+- Thinking models work on a custom endpoint without any setup, on both slots at once. Scoring answers with one number in ten tokens, so a model that reasons first spends all ten on that and comes back empty, which is the state Qwen3 and friends arrive in by default. Readfine now asks the endpoint to skip reasoning for scoring, which Ollama, llama.cpp and vLLM all understand; summaries, chat and briefings have room to think and are left as they are. One capable model can therefore serve both slots instead of having to keep a second, quieter one around just for scoring. A server too old to know the request gets the call anyway rather than an error, and if the model then answers scoring with nothing, saving it says so.
+
+- The scoring slot check now covers local models too. It was already there for the hosted providers but skipped anything without an API key, which is every local model, so the one setup most likely to hit the empty-answer problem was the one that went unchecked.
+
+- The cost report tells you what it cannot price. A custom endpoint has no price list here, so its rows show tokens with an empty cost column and the total covers the paid models alone, which keeps a mixed setup (scoring at home, main model on a paid provider) adding up to something true. Two notes under the table say so, including that costs follow the model set for each slot now rather than the one that ran at the time. Worth knowing because compatible proxies often serve models under names like `gpt-4o`, and pricing a local run at OpenAI's rate would have looked exact while being invented.
+
 ## [0.16.0] - 2026-08-19
 
 ### Changed

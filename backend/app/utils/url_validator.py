@@ -474,6 +474,80 @@ async def async_validate_feed_url(url: str) -> None:
     await loop.run_in_executor(None, validate_feed_url, url)
 
 
+def validate_ai_endpoint_url(url: str) -> None:
+    """Validate a user-supplied AI endpoint (the custom provider's ``base_url``).
+
+    Same job as :func:`validate_feed_url`, with one difference that has to exist:
+    a self-hoster's whole reason for this feature is usually an Ollama on
+    localhost or a container on the compose network, both of which the feed rules
+    reject on purpose. ``AI_ALLOW_PRIVATE_ENDPOINTS`` unlocks exactly that, and
+    only for this URL — feeds keep their rules whatever it is set to.
+
+    With the switch on, the address is not resolved at all. Resolving it would
+    only produce an answer nothing is allowed to act on, and it would turn a
+    typo'd hostname into a settings error at save time on an instance that has
+    deliberately opted out of the check.
+    """
+    from app.config import settings
+
+    parsed = urlparse(url)
+
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"Invalid URL scheme '{parsed.scheme}': only http and https are allowed")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError("URL has no hostname")
+
+    if settings.ai_allow_private_endpoints:
+        return
+
+    _resolve_and_pin(hostname)
+
+
+async def async_validate_ai_endpoint_url(url: str) -> None:
+    """Async wrapper around validate_ai_endpoint_url — DNS resolution blocks."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, validate_ai_endpoint_url, url)
+
+
+class PinnedAsyncTransport(httpx.AsyncHTTPTransport):
+    """An httpx transport that re-validates and pins every request it carries.
+
+    Validating the endpoint when it is saved is not enough on its own: the check
+    and the request that trusts it are minutes or weeks apart, and in between the
+    hostname's DNS can start answering ``127.0.0.1``. The feed path closes that
+    window by pinning each connection to the address it just checked
+    (:func:`_pin_connection`), and this is the same move for the AI client, which
+    reaches the network through the provider SDK rather than through our own
+    fetch code.
+
+    ``AI_ALLOW_PRIVATE_ENDPOINTS`` passes the request through untouched. On such
+    an instance the private address is the point, so there is nothing to pin
+    against and rewriting the URL would only break Docker's own service names,
+    which resolve inside the container network rather than through us.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        from app.config import settings
+
+        if settings.ai_allow_private_endpoints:
+            return await super().handle_async_request(request)
+
+        loop = asyncio.get_running_loop()
+        connect_url, host_overlay, extensions = await loop.run_in_executor(
+            None, _pin_connection, str(request.url)
+        )
+        request.url = httpx.URL(connect_url)
+        # Host has to be set rather than added: httpx already wrote the hostname
+        # one into the request when it was built, and a second one would either be
+        # ignored or reach the server as a duplicate header.
+        for name, value in host_overlay.items():
+            request.headers[name] = value
+        request.extensions = {**request.extensions, **extensions}
+        return await super().handle_async_request(request)
+
+
 def _permanent_redirect_target(original: str, candidate: str) -> str | None:
     """The address *original* may safely be rewritten to, or ``None`` to keep it.
 

@@ -31,12 +31,16 @@ from app.services.ai_service import (
 from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
 from app.services.stats_service import get_ai_cost_stats
 from app.templating import templates
+from app.utils.url_validator import async_validate_ai_endpoint_url
 
 from .common import _get_or_create_settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+# Matches the column width of user_settings.ai_custom_base_url.
+_MAX_BASE_URL_LEN = 500
 
 
 async def _ai_page_context(user: User, db: AsyncSession) -> dict:
@@ -133,7 +137,36 @@ async def settings_ai_keys_save(
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
+async def _prefs_error(
+    request: Request, user: User, db: AsyncSession, message: str, form,
+) -> HTMLResponse:
+    """Re-render the AI settings page with an error and the values as submitted.
+
+    The page otherwise draws the slots from the stored record, which a rejected
+    save has not touched — so the form would answer "fill in the endpoint" while
+    showing the provider the user just moved away from, and the endpoint field
+    would be hidden because nothing on file says custom. Everything the Models
+    section holds is handed back, not just the field the message is about.
+    """
+    ctx = await _ai_page_context(user, db)
+    ctx["prefs_error"] = message
+    for slot in ("fast", "quality"):
+        ctx[f"{slot}_provider_submitted"] = (form.get(f"ai_{slot}_provider") or "").strip() or None
+        ctx[f"{slot}_model_submitted"] = (form.get(f"ai_{slot}_model") or "").strip() or None
+    if "ai_custom_base_url" in form:
+        ctx["custom_base_url_submitted"] = (form.get("ai_custom_base_url") or "").strip() or None
+    return templates.TemplateResponse(request, "settings/ai.html", ctx)
+
+
+# Rate limited because this route reaches out to the network: saving a new
+# scoring model probes it (see scoring_model_rejection), and with the custom
+# provider the address being probed is whatever the form carries. Without a limit
+# a signed-in user could have the server issue POSTs to any public address as
+# fast as it can submit the form. Every other route here that fetches something
+# on the user's behalf is capped the same way; matched to the key form's 10/min,
+# which is generous for a settings page nobody submits in a loop by hand.
 @router.post("/ai/preferences", response_class=HTMLResponse)
+@limiter.limit("10/minute")
 async def settings_ai_preferences_save(
     request: Request,
     user: User = Depends(get_current_user),
@@ -147,24 +180,67 @@ async def settings_ai_preferences_save(
     quality_provider = (form.get("ai_quality_provider") or "").strip() or None
     for provider_val in (fast_provider, quality_provider):
         if provider_val is not None and provider_val not in SUPPORTED_PROVIDERS:
-            ctx = await _ai_page_context(user, db)
-            ctx["prefs_error"] = f"Unknown provider '{provider_val}'. Supported: {', '.join(SUPPORTED_PROVIDERS)}."
-            return templates.TemplateResponse(request, "settings/ai.html", ctx)
+            return await _prefs_error(
+                request, user, db,
+                f"Unknown provider '{provider_val}'. Supported: {', '.join(SUPPORTED_PROVIDERS)}.",
+                form,
+            )
+
+    # The endpoint is settled before anything is sent to it. The scoring probe
+    # below is a real request to whatever address this form carries, so checking
+    # the URL afterwards would leave that one request outside the SSRF check the
+    # whole feature is gated on.
+    # Absent from the submit means "not up for changing" rather than "clear it",
+    # as elsewhere in this handler: the field is hidden while neither slot is on
+    # custom, and a save made then must not throw the endpoint away.
+    custom_base_url = (
+        ((form.get("ai_custom_base_url") or "").strip() or None)
+        if "ai_custom_base_url" in form
+        else s.ai_custom_base_url
+    )
+    uses_custom = "custom" in (fast_provider, quality_provider)
+    if uses_custom:
+        # Checked before the column has to hold it: ai_custom_base_url is
+        # varchar(500), and anything longer reaches Postgres as a truncation
+        # error, i.e. a 500 page instead of a sentence about the field.
+        if custom_base_url and len(custom_base_url) > _MAX_BASE_URL_LEN:
+            return await _prefs_error(
+                request, user, db,
+                f"That endpoint URL is too long ({len(custom_base_url)} characters). "
+                f"Maximum is {_MAX_BASE_URL_LEN}.",
+                form,
+            )
+        if not custom_base_url:
+            return await _prefs_error(
+                request, user, db,
+                "Enter the endpoint URL for the custom provider "
+                "(for example http://localhost:11434/v1).",
+                form,
+            )
+        try:
+            await async_validate_ai_endpoint_url(custom_base_url)
+        except ValueError as exc:
+            return await _prefs_error(request, user, db, str(exc), form)
+
     fast_model = (form.get("ai_fast_model") or "").strip() or None
     # The fast slot is the one scoring runs on, and a model that always reasons has
     # nothing left of its ten tokens by the time it should answer — it would fail on
     # every article and only say so in the error banner. Ask the model itself before
     # storing it, and only when the choice actually changed, so an unrelated save
     # costs no provider call. Anything inconclusive comes back None and saves.
-    if (fast_provider, fast_model) != (s.ai_fast_provider, s.ai_fast_model):
-        rejection = await scoring_model_rejection(user.id, fast_provider, fast_model, db)
+    # The endpoint comes from the form, not from the record: on the save that
+    # first sets up a custom endpoint nothing is stored yet, and probing the
+    # empty stored value would turn every such first save into a failure.
+    if (fast_provider, fast_model) != (s.ai_fast_provider, s.ai_fast_model) or (
+        fast_provider == "custom" and custom_base_url != s.ai_custom_base_url
+    ):
+        rejection = await scoring_model_rejection(
+            user.id, fast_provider, fast_model, db, base_url=custom_base_url
+        )
         if rejection:
-            ctx = await _ai_page_context(user, db)
-            ctx["prefs_error"] = rejection
-            ctx["fast_model_submitted"] = fast_model
-            ctx["fast_provider_submitted"] = fast_provider
-            return templates.TemplateResponse(request, "settings/ai.html", ctx)
+            return await _prefs_error(request, user, db, rejection, form)
 
+    s.ai_custom_base_url = custom_base_url
     s.ai_fast_provider = fast_provider
     s.ai_fast_model = fast_model
     s.ai_quality_provider = quality_provider
@@ -251,7 +327,12 @@ async def settings_ai_verify(
     form = await request.form()
     provider_override = (form.get(f"ai_{slot}_provider") or "").strip() or None
     model_override = (form.get(f"ai_{slot}_model") or "").strip() or None
-    result = await verify_ai_slot(user.id, slot, db, provider_override, model_override)
+    # Sent along by the Models form, so Verify checks the endpoint on screen
+    # rather than the one last saved.
+    base_url_override = (form.get("ai_custom_base_url") or "").strip() or None
+    result = await verify_ai_slot(
+        user.id, slot, db, provider_override, model_override, base_url_override
+    )
     # The slot's own check passes a model that reasons its way through a generous
     # budget, which is right for every use of it except scoring. Since the form
     # refuses to store such a model in the fast slot, Verify has to agree with it
@@ -263,6 +344,7 @@ async def settings_ai_verify(
             provider_override or s.ai_fast_provider,
             model_override or result["model"],
             db,
+            base_url=base_url_override or s.ai_custom_base_url,
         )
         if rejection:
             result = {"ok": False, "model": result["model"], "error": rejection}

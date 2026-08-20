@@ -22,23 +22,54 @@ document.addEventListener('change', function (e) {
   });
 });
 
-document.addEventListener('DOMContentLoaded', function () {
-  // Provider select → update "Available models" link
-  document.querySelectorAll('select[data-slot]').forEach(function (sel) {
-    var slot = sel.dataset.slot;
-    var link = document.getElementById('models-link-' + slot);
-    if (!link) return;
-    sel.addEventListener('change', function () {
-      var v = sel.value;
-      if (v && link.dataset[v]) {
-        link.href = link.dataset[v];
-        link.classList.remove('hidden');
-      } else {
-        link.classList.add('hidden');
-      }
-    });
-  });
+// The endpoint field only means anything while a slot is on the custom provider.
+// Asks every slot rather than the one that changed, so switching one away leaves
+// the field up while the other still needs it.
+function syncCustomEndpointRow() {
+  var row = document.getElementById('custom-endpoint-row');
+  if (!row) return;
+  var anyCustom = Array.prototype.some.call(
+    document.querySelectorAll('select[data-slot]'),
+    function (s) { return s.value === 'custom'; }
+  );
+  row.classList.toggle('hidden', !anyCustom);
+}
 
+// Provider select → show or hide the endpoint field and update the docs link.
+// Custom points at our own help page rather than a provider's model list, so it
+// also changes the wording and stops opening in a new tab.
+//
+// Delegated for the same reason as the scoring checkbox above: a save swaps the
+// whole page in through hx-boost, and handlers bound to the elements that were
+// replaced would be gone — which is exactly the state a rejected save leaves the
+// form in, right when the endpoint field has to appear again.
+document.addEventListener('change', function (e) {
+  var sel = e.target;
+  if (!sel || !sel.matches || !sel.matches('select[data-slot]')) return;
+
+  syncCustomEndpointRow();
+
+  var link = document.getElementById('models-link-' + sel.dataset.slot);
+  if (!link) return;
+  var v = sel.value;
+  if (v && link.dataset[v]) {
+    link.href = link.dataset[v];
+    var custom = v === 'custom';
+    link.textContent = custom ? link.dataset.labelCustom : link.dataset.labelDefault;
+    if (custom) {
+      link.removeAttribute('target');
+      link.removeAttribute('rel');
+    } else {
+      link.target = '_blank';
+      link.rel = 'noopener';
+    }
+    link.classList.remove('hidden');
+  } else {
+    link.classList.add('hidden');
+  }
+});
+
+document.addEventListener('DOMContentLoaded', function () {
   // Remove API key button → clear password input before submit
   document.querySelectorAll('button[data-clear-key]').forEach(function (btn) {
     btn.addEventListener('click', function () {

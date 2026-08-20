@@ -51,8 +51,21 @@
     <form method="POST" action="/settings/ai/keys" hx-boost="true" hx-push-url="/settings/ai"
           class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <input type="hidden" name="provider" value="{{ provider }}">
+      {# A label that qualifies itself in brackets ("Custom (OpenAI-compatible)")
+         breaks onto a second line wherever the column happens to end, which lands
+         mid-phrase. Split at the bracket instead, so the qualifier gets its own
+         line and reads as the aside it is. #}
+      {% set provider_label = provider_labels[provider] or provider %}
+      {% set label_name, label_bracket, label_qualifier = provider_label.partition(' (') %}
       <div class="flex items-center gap-3">
-        <span class="w-24 text-sm text-gray-700">{{ provider_labels[provider] or provider }}</span>
+        {# Fixed width so the inputs line up down the column. Sized for the
+           qualifier on its own line rather than for the whole label, which is
+           what made the gap: nowrap keeps it there if it runs a pixel or two
+           over, since the spare room next to it is only the gap. #}
+        <span class="w-32 text-sm text-gray-700 leading-tight">
+          {{- label_name -}}
+          {%- if label_qualifier %}<br><span class="text-xs text-gray-500 whitespace-nowrap">({{ label_qualifier }}</span>{% endif -%}
+        </span>
         {% if keys[provider] %}
           <span class="text-xs text-green-600">✓ <span class="font-mono">{{ keys[provider] }}…</span></span>
         {% endif %}
@@ -66,7 +79,8 @@
                   class="flex-1 sm:flex-none px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">Remove</button>
         </div>
       {% else %}
-        <input type="text" name="api_key" autocomplete="off" placeholder="Paste API key…"
+        <input type="text" name="api_key" autocomplete="off"
+               placeholder="{{ 'Optional — leave blank for a local model…' if provider == 'custom' else 'Paste API key…' }}"
                class="w-full sm:flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono min-w-0">
         <button type="submit" class="sm:self-auto px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">Save</button>
       {% endif %}
@@ -103,13 +117,42 @@
     Enter a model alias (e.g. <code class="font-mono">claude-haiku-4-5</code>) or a specific version ID. Aliases always resolve to the latest version.
   </p>
 
-  {# A rejected fast model was never stored, so the field falls back to what was
-     typed rather than to the model still on the account — otherwise the form
-     would answer "that model can't score" while showing a different one. #}
+  {# Above the slots, and inside this form rather than the API Keys one: Verify
+     posts the fields it can see, so an endpoint living in the other form would
+     never reach it. Hidden until a slot is set to custom (ai-settings.js toggles
+     it on change) — it is the only field here that applies to one provider. It
+     stays in the form while hidden, so an endpoint set earlier survives a save
+     made after switching a slot away from custom. #}
+  {% set custom_base_url_val = custom_base_url_submitted if custom_base_url_submitted is defined else s.ai_custom_base_url %}
+  {% set custom_selected = 'custom' in [
+       fast_provider_submitted if fast_provider_submitted is defined else s.ai_fast_provider,
+       quality_provider_submitted if quality_provider_submitted is defined else s.ai_quality_provider,
+     ] %}
+  <div id="custom-endpoint-row" class="mb-5 {% if not custom_selected %}hidden{% endif %}">
+    <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+      <span class="w-16 text-sm font-medium text-gray-700 shrink-0">Endpoint</span>
+      <input type="url" name="ai_custom_base_url"
+             value="{{ custom_base_url_val or '' }}"
+             placeholder="http://localhost:11434/v1"
+             class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
+    </div>
+    <p class="text-xs text-gray-500 mt-1 sm:ml-[4.75rem]">
+      For the <strong>Custom (OpenAI-compatible)</strong> provider only: Ollama, llama.cpp, vLLM, LiteLLM, OpenRouter.
+      Ollama needs the <code class="font-mono">/v1</code> suffix, llama.cpp does not.
+      One endpoint per account, shared by both slots, though each slot can run a different model on it.
+      <a href="/help#custom-endpoint" class="text-blue-500 hover:underline">Setup guide</a>
+    </p>
+  </div>
+
+  {# A rejected save stored nothing, so the fields fall back to what was typed
+     rather than to what is still on the account — otherwise the form would
+     answer "that model can't score" while showing a different one, or ask for an
+     endpoint next to a provider that no longer says custom. #}
   {% for slot, slot_label, provider_val, model_val in [
     ("fast",    "Scoring", fast_provider_submitted if fast_provider_submitted is defined else s.ai_fast_provider,
                            fast_model_submitted if fast_model_submitted is defined else s.ai_fast_model),
-    ("quality", "Main",    s.ai_quality_provider, s.ai_quality_model),
+    ("quality", "Main",    quality_provider_submitted if quality_provider_submitted is defined else s.ai_quality_provider,
+                           quality_model_submitted if quality_model_submitted is defined else s.ai_quality_model),
   ] %}
   <div class="mb-5">
     <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-1">
@@ -117,7 +160,7 @@
         <span class="w-16 text-sm font-medium text-gray-700">{{ slot_label }}</span>
         <select name="ai_{{ slot }}_provider"
                 data-slot="{{ slot }}"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32">
+                class="border border-gray-300 rounded px-2 py-1.5 text-sm w-32 sm:w-52">
           <option value="">— provider —</option>
           {% for p in providers %}
           <option value="{{ p }}" {% if provider_val == p %}selected{% endif %}>{{ provider_labels[p] or p }}</option>
@@ -133,7 +176,7 @@
                 hx-post="/settings/ai/verify/{{ slot }}"
                 hx-target="#verify-{{ slot }}"
                 hx-swap="innerHTML"
-                hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model']"
+                hx-include="[name='ai_{{ slot }}_provider'],[name='ai_{{ slot }}_model'],[name='ai_custom_base_url']"
                 data-loading-target="verify-{{ slot }}" data-loading-text="Verifying…"
                 class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 whitespace-nowrap">
           Verify
@@ -143,13 +186,18 @@
     <div class="flex items-center gap-3 mt-0.5">
       <span class="w-16 hidden sm:block"></span>
       <span id="verify-{{ slot }}" class="text-sm text-gray-400"></span>
+      {# Custom points at our own help page, so it opens in place and is named for
+         what it is: which models exist is a question about the user's own server. #}
       <a id="models-link-{{ slot }}"
          href="{{ provider_docs[provider_val] if provider_val else '#' }}"
-         target="_blank" rel="noopener"
+         {% if provider_val != 'custom' %}target="_blank" rel="noopener"{% endif %}
          data-anthropic="https://docs.anthropic.com/en/docs/about-claude/models"
          data-openai="https://platform.openai.com/docs/models"
          data-gemini="https://ai.google.dev/gemini-api/docs/models/gemini"
-         class="text-xs text-blue-500 hover:underline {% if not provider_val %}hidden{% endif %}">Available models →</a>
+         data-custom="/help#custom-endpoint"
+         data-label-custom="Setup guide →"
+         data-label-default="Available models →"
+         class="text-xs text-blue-500 hover:underline {% if not provider_val %}hidden{% endif %}">{{ "Setup guide →" if provider_val == 'custom' else "Available models →" }}</a>
     </div>
   </div>
   {% endfor %}
@@ -221,6 +269,8 @@
           Automatic generation needs a main model configured.
         {% elif pref_auto_status == 'no_api_key' %}
           Automatic generation needs an API key for {{ provider_labels[pref_auto_detail.provider] or pref_auto_detail.provider }}.
+        {% elif pref_auto_status == 'no_endpoint' %}
+          Automatic generation needs the endpoint URL for your custom provider.
         {% elif pref_auto_status == 'due' %}
           The next generation runs tonight.
         {% endif %}

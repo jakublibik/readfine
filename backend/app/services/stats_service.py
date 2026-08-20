@@ -112,6 +112,16 @@ class OperationCostRow:
 class AiCostStats:
     period_days: int
     operations: list[OperationCostRow]
+    # True when either slot runs on a custom endpoint, which is why some rows
+    # carry tokens but no price.
+    has_unpriced_provider: bool = False
+    # True when the table shows any priced usage at all. Separate from the flag
+    # above on purpose: prices are worked out from the model each slot holds
+    # *now*, so switching a slot re-prices everything behind it — and that is
+    # least obvious right after moving off a custom endpoint, when a month of
+    # unpriced runs suddenly acquires the new model's rate. Keying the note on
+    # the custom provider still being configured would hide it exactly then.
+    prices_follow_current_model: bool = False
 
 
 # ── Feed stats (for Settings → Feeds stats toggle) ────────────────────────────
@@ -572,6 +582,13 @@ def _calc_cost(
     provider fallback can be priced."""
     if not model:
         return None, False
+    # A custom endpoint has no price list of ours, and leaving it out of
+    # _PROVIDER_FALLBACK_MODEL is not enough on its own: the catalog is consulted
+    # by model name first, and proxies serve models under names like "gpt-4o", so
+    # a local run would be billed at OpenAI's rate and not even be flagged as an
+    # estimate. Whatever the model calls itself, we do not know what it costs.
+    if provider == "custom":
+        return None, False
     key = _MODEL_ALIAS_MAP.get(model, model)
     input_cost_per_m = _MODEL_INPUT_COST_PER_M.get(key)
     is_estimated = False
@@ -590,6 +607,16 @@ def _calc_cost(
         4,
     )
     return cost, is_estimated
+
+
+def _sum_costs(values: list[float | None]) -> float | None:
+    """Sum of the priced entries, None when nothing in the group has a price.
+
+    What makes a mixed table work: with scoring on a local endpoint and the main
+    slot on a paid provider, the total is the paid work rather than nothing.
+    """
+    priced = [v for v in values if v is not None]
+    return round(sum(priced), 4) if priced else None
 
 
 async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiCostStats:
@@ -648,11 +675,6 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     # because the catch-up row prices historical runs by the model that actually
     # ran them and its tokens can't be re-priced with one model afterwards.
     prev_cost_by_slot: dict[str, list[float | None]] = {"fast": [], "quality": []}
-
-    def _sum_costs(values: list[float | None]) -> float | None:
-        """Sum of the priced entries, None when nothing in the group has a price."""
-        priced = [v for v in values if v is not None]
-        return round(sum(priced), 4) if priced else None
 
     ops_config = [
         ("scoring", "Scoring", "fast"),
@@ -948,4 +970,12 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
 
     operation_rows += [quality_total, grand_total]
 
-    return AiCostStats(period_days=days, operations=operation_rows)
+    return AiCostStats(
+        period_days=days,
+        operations=operation_rows,
+        has_unpriced_provider="custom" in (fast_provider, quality_provider),
+        prices_follow_current_model=any(
+            r.est_cost is not None and not r.is_placeholder
+            for r in operation_rows
+        ),
+    )

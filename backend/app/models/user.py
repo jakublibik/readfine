@@ -69,6 +69,12 @@ class UserSettings(Base):
     ai_fast_model: Mapped[str | None] = mapped_column(String(100))
     ai_quality_provider: Mapped[str | None] = mapped_column(String(30))
     ai_quality_model: Mapped[str | None] = mapped_column(String(100))
+    # Endpoint for the "custom" provider (any OpenAI-compatible server: Ollama,
+    # llama.cpp, vLLM, LiteLLM, OpenRouter). Lives here rather than on
+    # user_ai_keys because that table cannot hold a row without a key, and the
+    # local servers this is for do not have one. One URL per user, shared by both
+    # slots — the model is already per-slot, so two models on one server work.
+    ai_custom_base_url: Mapped[str | None] = mapped_column(String(500))
     ai_preference_text: Mapped[str | None] = mapped_column(Text)
     # Interest profile bookkeeping: when the text last changed, who changed it,
     # and the automatic regeneration schedule (0 = off, otherwise 14 or 28 days).

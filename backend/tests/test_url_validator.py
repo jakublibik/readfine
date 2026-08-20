@@ -8,9 +8,11 @@ import pytest
 from unittest.mock import patch
 
 from tests.conftest import mock_httpx_client as _mock_httpx_client
+from app.config import settings as app_settings
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    PinnedAsyncTransport,
     ResponseTooLarge,
     _pin_connection,
     fetch_url_conditional,
@@ -22,6 +24,7 @@ from app.utils.url_validator import (
     redact_url,
     redact_url_for_display,
     spacing_from_headers,
+    validate_ai_endpoint_url,
     validate_feed_url,
 )
 
@@ -1010,3 +1013,117 @@ class TestResponseSizeCap:
             result = fetch_url_conditional("https://example.com/feed.xml")
         assert result.text == "příliš"
         assert result.etag == '"v9"'
+
+
+class TestValidateAiEndpointUrl:
+    """The custom AI provider's base_url is user input on a hosted instance, so it
+    goes through the same address rules as a feed — unless the operator has said
+    otherwise, which is the one thing this validator does differently."""
+
+    def _dns(self, ip: str):
+        family = 10 if ":" in ip else 2
+        sockaddr = (ip, 0, 0, 0) if ":" in ip else (ip, 0)
+        return patch("socket.getaddrinfo", return_value=[(family, 1, 6, "", sockaddr)])
+
+    def _allow_private(self, allowed: bool):
+        return patch.object(app_settings, "ai_allow_private_endpoints", allowed)
+
+    def test_public_address_allowed_either_way(self):
+        for allowed in (False, True):
+            with self._dns("1.2.3.4"), self._allow_private(allowed):
+                validate_ai_endpoint_url("https://api.openrouter.ai/v1")
+
+    def test_loopback_rejected_by_default(self):
+        with self._dns("127.0.0.1"), self._allow_private(False):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_ai_endpoint_url("http://localhost:11434/v1")
+
+    def test_private_range_rejected_by_default(self):
+        with self._dns("172.17.0.2"), self._allow_private(False):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_ai_endpoint_url("http://ollama:11434/v1")
+
+    def test_cloud_metadata_address_rejected_by_default(self):
+        with self._dns("169.254.169.254"), self._allow_private(False):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_ai_endpoint_url("http://metadata.internal/v1")
+
+    def test_private_allowed_when_operator_opts_in(self):
+        # And without a lookup at all: on such an instance nothing could act on the
+        # answer, and a hostname only Docker can resolve must not fail at save time.
+        with patch("socket.getaddrinfo", side_effect=AssertionError("must not resolve")):
+            with self._allow_private(True):
+                validate_ai_endpoint_url("http://ollama:11434/v1")
+
+    def test_non_http_scheme_rejected_in_both_modes(self):
+        for allowed in (False, True):
+            with self._allow_private(allowed):
+                with pytest.raises(ValueError, match="scheme"):
+                    validate_ai_endpoint_url("file:///etc/passwd")
+
+    def test_missing_hostname_rejected(self):
+        with self._allow_private(False):
+            with pytest.raises(ValueError, match="hostname"):
+                validate_ai_endpoint_url("http:///v1")
+
+
+class TestPinnedAsyncTransport:
+    """Validating the endpoint when it was saved says nothing about the request made
+    weeks later: the same hostname can start answering 127.0.0.1 in between. Every
+    request re-checks and connects to the address it just checked."""
+
+    def _dns(self, ip: str):
+        return patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", (ip, 0))])
+
+    def _request(self):
+        return httpx.Request("POST", "https://ai.example.com/v1/chat/completions")
+
+    @pytest.mark.asyncio
+    async def test_rebound_hostname_is_refused_at_request_time(self):
+        transport = PinnedAsyncTransport()
+        with self._dns("127.0.0.1"), patch.object(
+            app_settings, "ai_allow_private_endpoints", False
+        ):
+            with pytest.raises(ValueError, match="disallowed"):
+                await transport.handle_async_request(self._request())
+
+    @pytest.mark.asyncio
+    async def test_public_host_connects_to_the_validated_ip(self):
+        transport = PinnedAsyncTransport()
+        sent = {}
+
+        async def fake_send(self, request):
+            sent["url"] = str(request.url)
+            sent["host"] = request.headers.get("host")
+            sent["sni"] = request.extensions.get("sni_hostname")
+            return httpx.Response(200)
+
+        with self._dns("93.184.216.34"), patch.object(
+            app_settings, "ai_allow_private_endpoints", False
+        ), patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send):
+            await transport.handle_async_request(self._request())
+
+        # Connect to the checked IP, but keep the name for virtual hosting and TLS,
+        # so a re-resolve cannot slip a different address in between.
+        assert sent["url"] == "https://93.184.216.34/v1/chat/completions"
+        assert sent["host"] == "ai.example.com"
+        assert sent["sni"] == "ai.example.com"
+
+    @pytest.mark.asyncio
+    async def test_opt_in_instance_passes_the_request_through(self):
+        transport = PinnedAsyncTransport()
+        sent = {}
+
+        async def fake_send(self, request):
+            sent["url"] = str(request.url)
+            return httpx.Response(200)
+
+        # No rewrite: a Docker service name resolves inside the container network,
+        # and pinning it to an IP we refuse to look up would break it.
+        with patch.object(app_settings, "ai_allow_private_endpoints", True), patch.object(
+            httpx.AsyncHTTPTransport, "handle_async_request", fake_send
+        ):
+            await transport.handle_async_request(
+                httpx.Request("POST", "http://ollama:11434/v1/chat/completions")
+            )
+        assert sent["url"] == "http://ollama:11434/v1/chat/completions"

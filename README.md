@@ -42,7 +42,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - **Saved:** paste any link, from a feed or not, and keep it as a readable article that retention never removes (also via the API, so a share sheet or bookmarklet can do it)
 - **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
 - **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
-- **AI (bring-your-own-key):** summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini)
+- **AI (bring-your-own-key):** summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini, or your own OpenAI-compatible endpoint such as Ollama)
 - **Accounts:** per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
 - **Import/export:** OPML (incl. Tiny Tiny RSS compatibility)
 
@@ -165,6 +165,14 @@ Open your browser at the URL shown at the end of setup and log in with the admin
 > and set per user under Settings → AI; SMTP (for verification/reset emails) is set by an
 > admin in the admin panel. The only secrets in `.env` are the database, `SECRET_KEY`, and
 > `ENCRYPTION_KEY`.
+
+> **Running the models yourself.** The **Custom (OpenAI-compatible)** provider points
+> Readfine at any OpenAI-API server: Ollama, llama.cpp, vLLM, a LiteLLM proxy, or a
+> gateway like OpenRouter. A local server needs no API key. If it listens on a private
+> address (localhost, the Docker network), set `AI_ALLOW_PRIVATE_ENDPOINTS=true` in
+> `.env` — otherwise only public addresses are accepted, which is what keeps a
+> multi-user instance from being pointed at its own internal services. The in-app help
+> page has the setup details.
 
 ---
 

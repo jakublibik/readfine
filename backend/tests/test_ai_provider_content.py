@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.services import ai_service
 from app.services.ai_service import (
@@ -506,7 +506,7 @@ class TestScoringModelRejection:
         monkeypatch.setattr(ai_service, "get_api_key", fake_get_api_key)
         monkeypatch.setattr(
             ai_service, "_make_client",
-            lambda provider, api_key: SimpleNamespace(
+            lambda provider, api_key, base_url=None: SimpleNamespace(
                 messages=SimpleNamespace(create=create)),
         )
         return ai_service.scoring_model_rejection(1, "anthropic", "claude-fable-5", db=None)
@@ -646,3 +646,277 @@ class TestDefaultSummaryPrompt:
     def test_markdown_stays_allowed(self):
         """Length is bounded, formatting is not — the list is wanted, not tolerated."""
         assert "markdown" in ai_service._DEFAULT_SUMMARY_PROMPT.lower()
+
+
+# ── Custom (OpenAI-compatible) endpoints ─────────────────────────────────────
+
+class _FakeSettings:
+    """Just the fields the client factory reads off user_settings."""
+
+    def __init__(self, provider, model, base_url=None):
+        self.user_id = 1
+        self.ai_fast_provider = provider
+        self.ai_fast_model = model
+        self.ai_quality_provider = provider
+        self.ai_quality_model = model
+        self.ai_custom_base_url = base_url
+
+
+def _db_returning(settings):
+    db = SimpleNamespace()
+
+    async def scalar(*args, **kwargs):
+        return settings
+
+    db.scalar = scalar
+    return db
+
+
+class TestProviderRequiresKey:
+    def test_hosted_providers_need_a_key(self):
+        for provider in ("anthropic", "openai", "gemini"):
+            assert ai_service.provider_requires_key(provider) is True
+
+    def test_custom_does_not(self):
+        # A model on your own machine has no key to hand over, and treating that
+        # as "not configured" would make the whole provider look broken.
+        assert ai_service.provider_requires_key("custom") is False
+
+
+class TestOpenAiTokenKwargs:
+    def test_openai_gets_the_current_parameter_name(self):
+        assert ai_service._openai_token_kwargs("openai", "gpt-4o", 200) == {
+            "max_completion_tokens": 200
+        }
+
+    def test_custom_gets_the_one_compatible_servers_understand(self):
+        # llama.cpp's server and older Ollama builds only know max_tokens, so this
+        # is what stands between the feature and failing on its first request.
+        assert ai_service._openai_token_kwargs("custom", "qwen3:1.7b", 10) == {
+            "max_tokens": 10
+        }
+
+    def test_custom_skips_openai_reasoning_headroom(self):
+        # The headroom keys off OpenAI model-name prefixes, which say nothing about
+        # a model served from someone's own machine — a local "gpt-5" clone would
+        # otherwise be handed 8k tokens it never asked for.
+        assert ai_service._openai_token_kwargs("custom", "gpt-5-local", 100) == {
+            "max_tokens": 100
+        }
+
+
+class TestCustomClient:
+    def test_client_is_built_without_a_stored_key(self, monkeypatch):
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        db = _db_returning(_FakeSettings("custom", "qwen3:1.7b", "http://localhost:11434/v1"))
+
+        client, provider, model = asyncio.run(ai_service.get_ai_client(1, "fast", db))
+        assert provider == "custom"
+        assert model == "qwen3:1.7b"
+        assert client is not None
+        assert str(client.base_url).rstrip("/") == "http://localhost:11434/v1"
+
+    def test_no_client_without_an_endpoint(self, monkeypatch):
+        # Custom's equivalent of a missing key: configured, but nowhere to call.
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        db = _db_returning(_FakeSettings("custom", "qwen3:1.7b", None))
+
+        assert asyncio.run(ai_service.get_ai_client(1, "fast", db)) == (None, None, None)
+
+    def test_hosted_provider_still_needs_its_key(self, monkeypatch):
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        db = _db_returning(_FakeSettings("openai", "gpt-4o"))
+
+        assert asyncio.run(ai_service.get_ai_client(1, "fast", db)) == (None, None, None)
+
+
+class TestScoringProbeEndpoint:
+    """The probe runs before the settings save that would store the endpoint, so it
+    has to use the one from the form or every first setup fails."""
+
+    def _run_probe(self, monkeypatch, base_url):
+        async def no_key(*args, **kwargs):
+            return None
+
+        seen = {}
+
+        def fake_make_client(provider, api_key, url=None):
+            seen["provider"] = provider
+            seen["base_url"] = url
+            return object()
+
+        async def fake_complete(*args, **kwargs):
+            return ai_service.Completion("1", 2, 1)
+
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", fake_make_client)
+        monkeypatch.setattr(ai_service, "_complete", fake_complete)
+
+        result = asyncio.run(
+            ai_service.scoring_model_rejection(
+                1, "custom", "qwen3:1.7b", _db_returning(None), base_url=base_url
+            )
+        )
+        return result, seen
+
+    def test_probe_uses_the_endpoint_it_was_given(self, monkeypatch):
+        rejection, seen = self._run_probe(monkeypatch, "http://localhost:11434/v1")
+        assert rejection is None
+        assert seen["base_url"] == "http://localhost:11434/v1"
+
+    def test_probe_runs_for_a_keyless_provider(self, monkeypatch):
+        # Without this it would bail out on the missing key and never ask the model
+        # whether it can answer in ten tokens, which is the check local models most
+        # need: thinking is on by default in the usual small ones.
+        _, seen = self._run_probe(monkeypatch, "http://localhost:11434/v1")
+        assert seen["provider"] == "custom"
+
+    def test_thinking_model_is_rejected(self, monkeypatch):
+        async def no_key(*args, **kwargs):
+            return None
+
+        async def empty_answer(*args, **kwargs):
+            raise ProviderEmptyResponse("custom returned no usable content")
+
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", lambda *a, **k: object())
+        monkeypatch.setattr(ai_service, "_complete", empty_answer)
+
+        rejection = asyncio.run(
+            ai_service.scoring_model_rejection(
+                1, "custom", "qwen3:1.7b", _db_returning(None),
+                base_url="http://localhost:11434/v1",
+            )
+        )
+        assert rejection is not None
+        assert "qwen3:1.7b" in rejection
+
+
+class TestOpenAiWireReasoningOff:
+    """Scoring gives a model ten tokens to answer in, so on a custom endpoint the
+    request asks it not to reason. Ollama, llama.cpp and vLLM all read
+    reasoning_effort on /v1/chat/completions; Ollama turns thinking on by itself
+    otherwise, which is what made local scoring come back empty."""
+
+    def _client(self, create):
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+    def test_scoring_sized_call_asks_the_endpoint_to_skip_reasoning(self):
+        create = AsyncMock(return_value=SimpleNamespace())
+        asyncio.run(ai_service._openai_wire_create(
+            self._client(create), "custom", True, model="qwen3:1.7b", max_tokens=10,
+        ))
+        assert create.await_args.kwargs["reasoning_effort"] == "none"
+
+    def test_roomy_calls_leave_reasoning_alone(self):
+        # Summaries and chat can afford it, and that is what lets one model serve
+        # both slots: quiet for scoring, thinking for everything else.
+        create = AsyncMock(return_value=SimpleNamespace())
+        asyncio.run(ai_service._openai_wire_create(
+            self._client(create), "custom", False, model="qwen3:32b", max_tokens=700,
+        ))
+        assert "reasoning_effort" not in create.await_args.kwargs
+
+    def test_openai_itself_is_never_sent_the_parameter(self):
+        # OpenAI pays for reasoning in headroom instead, and its reasoning models
+        # refuse "none" outright.
+        create = AsyncMock(return_value=SimpleNamespace())
+        asyncio.run(ai_service._openai_wire_create(
+            self._client(create), "openai", True, model="gpt-5.4", max_tokens=10,
+        ))
+        assert "reasoning_effort" not in create.await_args.kwargs
+
+    def test_a_server_that_does_not_know_it_is_retried_without_it(self):
+        # An older server rejecting the parameter says nothing about the model, so
+        # it gets its chance to answer rather than being turned down.
+        create = AsyncMock(side_effect=[
+            _ApiError(400, "unknown parameter: reasoning_effort"),
+            SimpleNamespace(),
+        ])
+        asyncio.run(ai_service._openai_wire_create(
+            self._client(create), "custom", True, model="qwen3:1.7b", max_tokens=10,
+        ))
+        assert create.await_count == 2
+        assert "reasoning_effort" not in create.await_args.kwargs
+
+    def test_other_errors_are_not_retried(self):
+        create = AsyncMock(side_effect=_ApiError(401, "invalid api key"))
+        with pytest.raises(_ApiError):
+            asyncio.run(ai_service._openai_wire_create(
+                self._client(create), "custom", True, model="qwen3:1.7b", max_tokens=10,
+            ))
+        assert create.await_count == 1
+
+    def test_a_400_about_something_else_is_not_retried(self):
+        create = AsyncMock(side_effect=_ApiError(400, "model 'qwen9' not found"))
+        with pytest.raises(_ApiError):
+            asyncio.run(ai_service._openai_wire_create(
+                self._client(create), "custom", True, model="qwen9", max_tokens=10,
+            ))
+        assert create.await_count == 1
+
+    def test_a_fastapi_server_rejecting_with_422_is_retried_too(self):
+        # vLLM and a LiteLLM proxy are FastAPI apps, and FastAPI answers an
+        # unrecognised field with 422 rather than 400. Accepting only 400 would
+        # skip the retry on exactly the servers that need it.
+        create = AsyncMock(side_effect=[
+            _ApiError(422, "unknown field: reasoning_effort"),
+            SimpleNamespace(),
+        ])
+        asyncio.run(ai_service._openai_wire_create(
+            self._client(create), "custom", True, model="qwen3:1.7b", max_tokens=10,
+        ))
+        assert create.await_count == 2
+        assert "reasoning_effort" not in create.await_args.kwargs
+
+    def test_a_422_about_something_else_is_not_retried(self):
+        create = AsyncMock(side_effect=_ApiError(422, "messages: field required"))
+        with pytest.raises(_ApiError):
+            asyncio.run(ai_service._openai_wire_create(
+                self._client(create), "custom", True, model="qwen3:1.7b", max_tokens=10,
+            ))
+        assert create.await_count == 1
+
+
+class TestCustomClientTimeout:
+    def test_read_budget_is_minutes_not_seconds(self):
+        # A local model writing a summary on CPU runs for minutes. Handing the SDK
+        # an http_client puts this in our hands, and httpx's own default (5s) would
+        # cut every generation short.
+        client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
+        assert client._client.timeout.read >= 600
+        assert client._client.timeout.connect == 5.0
+
+    def test_the_sdk_sends_that_budget_on_the_wire(self):
+        # The number on the client is only half of it: what matters is the timeout
+        # the SDK actually stamps on the request.
+        import httpx
+
+        seen = {}
+
+        async def fake(self, request):
+            seen["timeout"] = request.extensions.get("timeout")
+            return httpx.Response(200, json={
+                "choices": [{"message": {"content": "1"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            })
+
+        from app.config import settings as app_settings
+        with patch.object(app_settings, "ai_allow_private_endpoints", True), \
+             patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake):
+            client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
+            asyncio.run(client.chat.completions.create(
+                model="qwen3:1.7b",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=10,
+            ))
+        assert seen["timeout"]["read"] >= 600
