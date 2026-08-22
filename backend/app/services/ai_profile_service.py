@@ -21,7 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai import UserAiKey
 from app.models.article import AiUsageLog
 from app.models.user import UserSettings
-from app.services.ai_service import generate_preference_text, get_ai_client
+from app.services.ai_service import (
+    generate_preference_text,
+    get_ai_client,
+    provider_requires_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +163,25 @@ async def preference_auto_status(
     # for the stored row, not decrypting it, keeps a settings page render out of the
     # plaintext-key business (a key that exists but cannot be decrypted is an instance
     # fault, logged by get_api_key, not a state the user can fix here).
-    has_key = await db.scalar(
-        select(UserAiKey.provider).where(
-            UserAiKey.user_id == settings.user_id,
-            UserAiKey.provider == settings.ai_quality_provider,
+    #
+    # Asked only of providers that have keys at all. A local endpoint has none, so
+    # the same check there would report a missing key that can never arrive and
+    # hold automatic generation off for good.
+    if provider_requires_key(settings.ai_quality_provider):
+        has_key = await db.scalar(
+            select(UserAiKey.provider).where(
+                UserAiKey.user_id == settings.user_id,
+                UserAiKey.provider == settings.ai_quality_provider,
+            )
         )
-    )
-    if has_key is None:
-        return "no_api_key", {"provider": settings.ai_quality_provider}
+        if has_key is None:
+            return "no_api_key", {"provider": settings.ai_quality_provider}
+    elif not settings.ai_custom_base_url:
+        # The custom provider's equivalent of a missing key: nowhere to send the
+        # request. Its own state, because telling someone to add an API key is the
+        # one instruction that will not help here — the whole point of this
+        # provider is that a local model does not have one.
+        return "no_endpoint", {}
 
     strong, fresh = await signal_counts(settings.user_id, updated_at, db)
     if strong < MIN_STRONG_SIGNALS:

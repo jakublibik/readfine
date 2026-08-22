@@ -12,6 +12,7 @@ from app.models.ai import UserAiKey
 from app.models.user import UserSettings
 from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
+from app.utils.url_validator import async_validate_ai_endpoint_url
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _extract_text(provider: str, resp) -> str:
              if getattr(b, "type", None) == "text"),
             None,
         )
-    elif provider == "openai":
+    elif provider in _OPENAI_WIRE:
         choices = getattr(resp, "choices", None) or []
         if choices:
             text = getattr(choices[0].message, "content", None)
@@ -118,7 +119,7 @@ def _empty_response_detail(provider: str, resp) -> str:
                     "to this slot"
                 )
             return detail
-        if provider == "openai":
+        if provider in _OPENAI_WIRE:
             choices = getattr(resp, "choices", None) or []
             reason = getattr(choices[0], "finish_reason", None) if choices else None
             return f"finish_reason={reason}"
@@ -145,7 +146,7 @@ def _extract_truncated(provider: str, resp) -> bool:
     try:
         if provider == "anthropic":
             return getattr(resp, "stop_reason", None) == "max_tokens"
-        if provider == "openai":
+        if provider in _OPENAI_WIRE:
             choices = getattr(resp, "choices", None) or []
             return bool(choices) and getattr(choices[0], "finish_reason", None) == "length"
         if provider == "gemini":
@@ -161,11 +162,14 @@ def _extract_truncated(provider: str, resp) -> bool:
     return False
 
 
-# Docs URLs shown next to the model input field
+# Docs URLs shown next to the model input field. "custom" points at our own help
+# page instead: which models exist there is a question about the user's own
+# server, so the link that is worth offering is the setup guide.
 PROVIDER_DOCS_URLS: dict[str, str] = {
     "anthropic": "https://docs.anthropic.com/en/docs/about-claude/models",
     "openai": "https://platform.openai.com/docs/models",
     "gemini": "https://ai.google.dev/gemini-api/docs/models/gemini",
+    "custom": "/help#custom-endpoint",
 }
 
 SUPPORTED_PROVIDERS = list(PROVIDER_DOCS_URLS.keys())
@@ -176,7 +180,27 @@ PROVIDER_LABELS: dict[str, str] = {
     "anthropic": "Anthropic",
     "openai": "OpenAI",
     "gemini": "Gemini",
+    "custom": "Custom (OpenAI-compatible)",
 }
+
+# Providers that speak the OpenAI protocol on the wire. "custom" is any
+# OpenAI-compatible server (Ollama, llama.cpp, vLLM, LiteLLM, OpenRouter), so
+# every branch that shapes a request or reads a response treats it like OpenAI.
+# It is deliberately not the same thing as *being* OpenAI: the key, the price
+# list and the docs link all belong to the provider identity, not to the wire
+# format, which is why this is a separate tuple rather than a wider equality.
+_OPENAI_WIRE = ("openai", "custom")
+
+
+def provider_requires_key(provider: str | None) -> bool:
+    """Whether a missing API key means this provider is unusable.
+
+    A local model has no key to give, and treating "no key" as "not configured"
+    would make Ollama look broken everywhere at once: no client, Verify refusing
+    before it tries, and the interest profile reporting a missing key forever.
+    One function so the next place that asks this question gets the same answer.
+    """
+    return provider != "custom"
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
@@ -331,18 +355,105 @@ def _make_openai_client(api_key: str):
     return AsyncOpenAI(api_key=api_key)
 
 
+# Sent as the key when the endpoint does not want one. The OpenAI SDK refuses to
+# be constructed without a key at all, and a local server ignores whatever
+# arrives in the header, so the request needs *something* that is obviously not a
+# credential rather than an empty string that reads like a bug.
+_NO_KEY_PLACEHOLDER = "not-needed"
+
+
+# Spelled out because handing the SDK an http_client puts the timeout in our
+# hands, and a generated answer is slow: a local model writing a summary on CPU
+# runs for minutes, so the read budget has to be minutes too. The SDK's own
+# default happens to be these numbers, and it applies them only while the client
+# it is given still carries httpx's 5-second default — set that to anything else
+# and the SDK steps aside, so a well-meant `timeout=30` here would cut every
+# local summary short with nothing to point at why. Stating it leaves nothing to
+# infer. Connect stays short: reaching the server is either immediate or wrong.
+_CUSTOM_CLIENT_TIMEOUT = (5.0, 600.0)
+
+# What Verify is allowed to wait for instead of the budget above. That one is
+# sized for a summary being generated token by token; Verify asks for a greeting,
+# so the only thing it can legitimately wait on is a cold server loading the model
+# off disk — tens of seconds for a large one, ~4s for a 3B. Ten minutes of spinner
+# for that is not patience, it is an unanswered question, and the message on a
+# timeout says to try again, which after the load is what works.
+#
+# max_retries=0 goes with it. The SDK retries a timeout twice by default, so the
+# budget below would really be three minutes of spinner, and the two extra
+# attempts buy nothing here: a server still loading its model fails all three, and
+# the user is being told to try again anyway.
+_VERIFY_CLIENT_KWARGS = {"read_timeout": 60.0, "max_retries": 0}
+
+
+def _make_custom_client(
+    api_key: str | None,
+    base_url: str,
+    read_timeout: float | None = None,
+    max_retries: int | None = None,
+):
+    """Client for an OpenAI-compatible endpoint that is not OpenAI.
+
+    The transport re-validates and pins every request (see
+    :class:`PinnedAsyncTransport`). Validating the URL when it was saved cannot
+    cover a request made later — DNS can be repointed at a private address in
+    between — and the SDK opens its own connections, so the check has to live
+    where those connections are made.
+
+    *read_timeout* and *max_retries* override the defaults for a caller that
+    knows the answer is due right away (Verify). They belong together: the SDK
+    retries a timeout twice on its own, so a budget set without also saying how
+    many attempts may spend it is three times what it looks like.
+    """
+    from openai import AsyncOpenAI
+    import httpx
+
+    from app.utils.url_validator import PinnedAsyncTransport
+
+    connect, rest = _CUSTOM_CLIENT_TIMEOUT
+    if read_timeout is not None:
+        rest = read_timeout
+    extra = {} if max_retries is None else {"max_retries": max_retries}
+    return AsyncOpenAI(
+        api_key=api_key or _NO_KEY_PLACEHOLDER,
+        base_url=base_url,
+        http_client=httpx.AsyncClient(
+            transport=PinnedAsyncTransport(),
+            timeout=httpx.Timeout(connect=connect, read=rest, write=rest, pool=rest),
+        ),
+        **extra,
+    )
+
+
 def _make_gemini_client(api_key: str):
     from google import genai
     return genai.Client(api_key=api_key)
 
 
-def _make_client(provider: str, api_key: str):
+def _make_client(
+    provider: str,
+    api_key: str | None,
+    base_url: str | None = None,
+    read_timeout: float | None = None,
+    max_retries: int | None = None,
+):
+    """Build a provider client. *base_url* is required for (and only used by) custom.
+
+    *read_timeout* and *max_retries* are custom-only for the same reason the
+    default budget is: the other three SDKs carry timeouts of their own that we do
+    not set, and only the custom client is handed an http_client whose budget is
+    ours to name.
+    """
     if provider == "anthropic":
         return _make_anthropic_client(api_key)
     if provider == "openai":
         return _make_openai_client(api_key)
     if provider == "gemini":
         return _make_gemini_client(api_key)
+    if provider == "custom":
+        if not base_url:
+            return None
+        return _make_custom_client(api_key, base_url, read_timeout, max_retries)
     return None
 
 
@@ -364,18 +475,14 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
         return None, None, None
 
     api_key = await get_api_key(user_id, provider, db)
-    if not api_key:
+    if not api_key and provider_requires_key(provider):
         return None, None, None
 
     try:
-        if provider == "anthropic":
-            client = _make_anthropic_client(api_key)
-        elif provider == "openai":
-            client = _make_openai_client(api_key)
-        elif provider == "gemini":
-            client = _make_gemini_client(api_key)
-        else:
-            logger.warning("Unknown AI provider: %s", provider)
+        client = _make_client(provider, api_key, s.ai_custom_base_url)
+        if client is None:
+            # Either an unknown provider or custom without an endpoint to talk to.
+            logger.warning("No AI client for provider=%s", provider)
             return None, None, None
     except Exception as exc:
         logger.error("Failed to create AI client provider=%s: %s", provider, exc)
@@ -394,18 +501,69 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
 _VERIFY_MAX_TOKENS = 200
 
 
+def _is_timeout(exc: Exception) -> bool:
+    """True when nothing came back in time, whoever raised it.
+
+    Three spellings reach here: the SDK's own ``APITimeoutError``, httpx's
+    ``TimeoutException`` (when a call goes around the SDK), and the builtin
+    ``TimeoutError``, which is what ``asyncio.wait_for`` raises and which carries
+    no message at all.
+    """
+    import httpx
+    from openai import APITimeoutError
+
+    return isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True when the endpoint could not be reached in the first place.
+
+    Must be asked *after* :func:`_is_timeout`: the SDK models a timeout as a kind
+    of connection error (``APITimeoutError`` subclasses ``APIConnectionError``),
+    so asking this first would call every timeout an unreachable server.
+    """
+    import httpx
+    from openai import APIConnectionError
+
+    return isinstance(exc, (ConnectionError, httpx.TransportError, APIConnectionError))
+
+
 def _friendly_ai_error(exc: Exception) -> str:
+    """Turn a provider exception into a sentence the settings page can show.
+
+    Timeouts and connection failures are named because they are the two a
+    self-hoster actually hits, and the SDK's own wording ("Request timed out.")
+    does not say which of the two happened or what to do about it. A local server
+    loading a model off disk answers the second attempt, so the message says so;
+    an endpoint nothing is listening on never will, so that one points at the
+    server instead of inviting a retry that cannot work.
+    """
     raw = str(exc)
     low = raw.lower()
     if "not_found" in low or '"404"' in raw or " 404 " in raw:
-        return "Model not found — check the model name."
+        return "Model not found. Check the model name."
     if "401" in raw or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
         return "Invalid API key."
     if "429" in raw or "rate_limit" in low or "too many requests" in low:
-        return "Rate limit reached — try again later."
+        return "Rate limit reached. Try again later."
     if "403" in raw or "forbidden" in low:
-        return "Access denied — check your API key permissions."
-    return raw.splitlines()[0][:150]
+        return "Access denied. Check your API key permissions."
+    if _is_timeout(exc):
+        return (
+            "Timed out waiting for a reply. A local model can take a while to load "
+            "the first time it is used. Try again."
+        )
+    if _is_connection_error(exc):
+        return (
+            "Could not reach the endpoint. Check the URL and that the server is running."
+        )
+    # Some exceptions carry no message at all (a bare TimeoutError is the one this
+    # path used to crash on, via splitlines()[0] on an empty string). The class
+    # name is a poor message but it is a message, and a 500 here shows the user
+    # nothing whatsoever: htmx does not swap a failed response, so the Verify line
+    # is left holding "Verifying…" with no way to find out what happened.
+    first_line = raw.strip().splitlines()
+    return first_line[0][:150] if first_line else type(exc).__name__
 
 
 # How long the scoring probe below may hold up a settings save. The call itself is
@@ -416,7 +574,11 @@ _PROBE_TIMEOUT_SECONDS = 15
 
 
 async def scoring_model_rejection(
-    user_id: int, provider: str | None, model: str | None, db: AsyncSession
+    user_id: int,
+    provider: str | None,
+    model: str | None,
+    db: AsyncSession,
+    base_url: str | None = None,
 ) -> str | None:
     """Why *model* cannot be used for scoring, or None if it can (or we cannot tell).
 
@@ -431,14 +593,21 @@ async def scoring_model_rejection(
     about the model, so it returns None and the save goes through. Wrongly blocking
     someone's settings over a provider hiccup is a worse failure than letting a bad
     model through, which the job path still catches and reports.
+
+    *base_url* is the custom endpoint to probe. It is passed in rather than read
+    from the database because the settings form calls this *before* it stores
+    anything: on the save that first sets up a custom endpoint the stored value
+    is still empty, and probing that would fail every first attempt. The caller
+    is responsible for having validated it (see ``validate_ai_endpoint_url``) —
+    this sends a real request to it.
     """
     if not provider or not model:
         return None
     api_key = await get_api_key(user_id, provider, db)
-    if not api_key:
+    if not api_key and provider_requires_key(provider):
         return None
     try:
-        client = _make_client(provider, api_key)
+        client = _make_client(provider, api_key, base_url)
         if client is None:
             return None
         await asyncio.wait_for(
@@ -467,22 +636,44 @@ async def verify_ai_slot(
     user_id: int, slot: str, db: AsyncSession,
     provider_override: str | None = None,
     model_override: str | None = None,
+    base_url_override: str | None = None,
 ) -> dict:
     """
     Send a minimal test call to verify the key and model are valid.
     Returns {"ok": bool, "model": str | None, "error": str | None}.
-    provider_override/model_override allow verifying unsaved form values.
+    provider/model/base_url overrides allow verifying unsaved form values.
     """
     client, provider, model = await get_ai_client(user_id, slot, db)
     if provider_override:
         provider = provider_override
     if model_override:
         model = model_override
-    if provider_override or model_override:
+    if provider_override or model_override or base_url_override:
         api_key = await get_api_key(user_id, provider, db)
-        if not api_key:
+        if not api_key and provider_requires_key(provider):
             return {"ok": False, "model": None, "error": "No API key saved for this provider."}
-        client = _make_client(provider, api_key)
+        base_url = base_url_override
+        if provider == "custom" and not base_url:
+            s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+            base_url = s.ai_custom_base_url if s else None
+        if provider == "custom" and not base_url:
+            return {"ok": False, "model": None, "error": "Enter the endpoint URL first."}
+        if provider == "custom":
+            try:
+                await async_validate_ai_endpoint_url(base_url)
+            except ValueError as exc:
+                return {"ok": False, "model": None, "error": str(exc)}
+        client = _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
+    elif provider == "custom":
+        # No overrides, so the client above came from get_ai_client with the read
+        # budget a summary needs. Verify is not that call and must not hold the
+        # page for ten minutes, so it is rebuilt on its own timeout.
+        api_key = await get_api_key(user_id, provider, db)
+        s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+        client = _make_client(
+            provider, api_key, s.ai_custom_base_url if s else None,
+            **_VERIFY_CLIENT_KWARGS,
+        )
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 
@@ -494,11 +685,15 @@ async def verify_ai_slot(
                 max_tokens=_VERIFY_MAX_TOKENS,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-        elif provider == "openai":
-            resp = await client.chat.completions.create(
+        elif provider in _OPENAI_WIRE:
+            # Thinking off for the check itself: it asks for a greeting, and a
+            # local model that reasons first would spend the 200 tokens on that
+            # and report the whole slot as broken when nothing is wrong with it.
+            resp = await _openai_wire_create(
+                client, provider, True,
                 model=model,
-                max_completion_tokens=_openai_max_tokens(model, _VERIFY_MAX_TOKENS),
                 messages=[{"role": "user", "content": "Hi"}],
+                **_openai_token_kwargs(provider, model, _VERIFY_MAX_TOKENS),
             )
         elif provider == "gemini":
             resp = await client.aio.models.generate_content(
@@ -640,16 +835,16 @@ async def chat_with_article(
             resp.usage.output_tokens,
         )
 
-    elif provider == "openai":
+    elif provider in _OPENAI_WIRE:
         openai_msgs = []
         if system_prompt:
             openai_msgs.append({"role": "system", "content": system_prompt})
         openai_msgs += [{"role": m["role"], "content": m["content"]} for m in messages]
         resp = await client.chat.completions.create(
-            model=model, max_completion_tokens=_openai_max_tokens(model, 600),
-            messages=openai_msgs)
+            model=model, messages=openai_msgs,
+            **_openai_token_kwargs(provider, model, 600))
         return (
-            _extract_text("openai", resp),
+            _extract_text(provider, resp),
             resp.usage.prompt_tokens,
             resp.usage.completion_tokens,
         )
@@ -951,6 +1146,87 @@ def _openai_max_tokens(model: str, max_tokens: int) -> int:
     return max_tokens
 
 
+# What an OpenAI-compatible server understands as "do not reason on this one".
+# The three that matter all take it on /v1/chat/completions: Ollama (where it is
+# the only way — the native think:false is not read on that endpoint, and Ollama
+# turns thinking on by itself for models that can), llama.cpp's server, and vLLM,
+# which forwards it to the chat template as enable_thinking=false.
+#
+# Only sent where reasoning actually breaks the call. Scoring answers with one
+# number in ten tokens, so a model that reasons first spends all ten on that and
+# comes back empty; summaries and chat have room for it and are left alone.
+_OPENAI_REASONING_OFF = "none"
+
+
+# A rejected request parameter arrives as 400 from most servers, but the
+# OpenAI-compatible ones built on FastAPI (vLLM, a LiteLLM proxy) answer an
+# unrecognised field with 422 instead, which is FastAPI's own validation status.
+# Accepting only 400 would mean the retry never fires exactly where it is needed.
+_PARAM_REJECTED_STATUSES = (400, 422)
+
+
+def _rejects_reasoning_effort(exc: Exception) -> bool:
+    """True when the error is about reasoning_effort rather than the request itself.
+
+    Narrow on purpose, like _rejects_thinking_param: a server old enough not to
+    know the parameter should get one retry without it, while a bad key, an
+    unknown model or a rate limit stays the error it is. The status alone is not
+    enough for that — the message has to name the parameter.
+    """
+    if getattr(exc, "status_code", None) not in _PARAM_REJECTED_STATUSES:
+        return False
+    text = str(exc).lower()
+    return "reasoning_effort" in text or "reasoning effort" in text
+
+
+async def _openai_wire_create(client, provider: str, require_thinking_off: bool, **kwargs):
+    """chat.completions.create, asking a custom endpoint to skip reasoning.
+
+    Not sent to OpenAI itself: there reasoning is paid for in headroom instead
+    (see _openai_max_tokens), and its reasoning models refuse "none" outright.
+
+    A server that does not know the parameter is retried without it rather than
+    turned down. Unlike Anthropic, where refusing to disable thinking identifies a
+    model that always thinks, here the refusal usually means the *server* is older
+    than the parameter and says nothing about the model — which may well answer in
+    ten tokens quite happily. If it does not, the empty answer is caught where
+    every other empty answer is, and the scoring probe reports it when the model
+    is chosen.
+    """
+    if provider != "custom" or not require_thinking_off:
+        return await client.chat.completions.create(**kwargs)
+    try:
+        return await client.chat.completions.create(
+            reasoning_effort=_OPENAI_REASONING_OFF, **kwargs
+        )
+    except Exception as exc:
+        if not _rejects_reasoning_effort(exc):
+            raise
+        logger.info(
+            "Endpoint rejected reasoning_effort=none for %s; retrying without it",
+            kwargs.get("model"),
+        )
+        return await client.chat.completions.create(**kwargs)
+
+
+def _openai_token_kwargs(provider: str, model: str, max_tokens: int) -> dict[str, int]:
+    """How to spell the output cap for an OpenAI-protocol request.
+
+    ``max_completion_tokens`` is OpenAI's current name for it, and OpenAI itself
+    rejects the old ``max_tokens``. Compatible servers went the other way: the
+    llama.cpp server and older Ollama builds only know ``max_tokens``, so a
+    custom endpoint gets that spelling and would otherwise fail on its very first
+    request.
+
+    The reasoning headroom is OpenAI's too, and it is keyed on model-name
+    prefixes that say nothing about a model served from someone's own machine, so
+    custom asks for the budget it was given.
+    """
+    if provider == "custom":
+        return {"max_tokens": max_tokens}
+    return {"max_completion_tokens": _openai_max_tokens(model, max_tokens)}
+
+
 # Anthropic's newer models (Opus 5, Sonnet 5, Fable 5) think even when the request
 # says nothing about thinking, and those tokens come out of the same max_tokens as
 # the answer. Every budget here is sized for the answer alone — scoring asks for a
@@ -1020,10 +1296,12 @@ async def _complete(
 ) -> Completion:
     """Send a prompt to whichever provider the slot uses and return its answer.
 
-    reasoning_headroom and require_thinking_off are Anthropic-only and cover the
-    two ends of the same case, a model that refused to switch thinking off: the
-    first gives the answer room to survive alongside reasoning, the second declares
-    that no room would be enough. See _anthropic_create.
+    reasoning_headroom is Anthropic-only. require_thinking_off means "this budget
+    has no room to think in", and each provider honours it in the way it can:
+    Anthropic is told to disable thinking and declares defeat when it cannot (see
+    _anthropic_create), a custom endpoint is sent reasoning_effort=none (see
+    _openai_wire_create), and OpenAI is given headroom instead, since its
+    reasoning models have no off switch (see _openai_max_tokens).
     """
     if provider == "anthropic":
         resp = await _anthropic_create(
@@ -1040,17 +1318,18 @@ async def _complete(
             resp.usage.output_tokens,
             _extract_truncated("anthropic", resp),
         )
-    elif provider == "openai":
-        resp = await client.chat.completions.create(
+    elif provider in _OPENAI_WIRE:
+        resp = await _openai_wire_create(
+            client, provider, require_thinking_off,
             model=model,
-            max_completion_tokens=_openai_max_tokens(model, max_tokens),
             messages=[{"role": "user", "content": prompt}],
+            **_openai_token_kwargs(provider, model, max_tokens),
         )
         return Completion(
-            _extract_text("openai", resp),
+            _extract_text(provider, resp),
             resp.usage.prompt_tokens,
             resp.usage.completion_tokens,
-            _extract_truncated("openai", resp),
+            _extract_truncated(provider, resp),
         )
     elif provider == "gemini":
         from google.genai import types

@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # firewalled to Cloudflare IP ranges — otherwise the header is spoofable.
     trust_cloudflare: bool = False
 
+    # Let users point the custom AI provider at a private address (Ollama on
+    # localhost, an LLM container on the compose network). Off by default: the
+    # base_url is user input, so on a hosted instance it would be a way to make
+    # the server issue requests inside its own network. Turn this on when the
+    # instance is yours and the model runs next to it. Feed URLs are unaffected.
+    ai_allow_private_endpoints: bool = False
+
     # App
     debug: bool = False
     app_name: str = "Readfine"

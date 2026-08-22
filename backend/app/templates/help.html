@@ -67,7 +67,9 @@
             <div class="ml-8 space-y-1">
               <p>AI features are an optional layer. They use <strong>your own API key</strong> (Anthropic,
                 OpenAI or Google), which you add in <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>.
-                See <a href="#ai-key" class="text-blue-600 hover:underline dark:text-blue-400">Where do I get an AI key?</a></p>
+                See <a href="#ai-key" class="text-blue-600 hover:underline dark:text-blue-400">Where do I get an AI key?</a>
+                You can also run the models yourself, with no key at all, over
+                <a href="#custom-endpoint" class="text-blue-600 hover:underline dark:text-blue-400">your own endpoint</a>.</p>
               <p>Once enabled you get:</p>
               <ul class="list-disc ml-5 space-y-1">
                 <li><strong>Relevance scoring</strong>: each article gets a score based on your interests.
@@ -281,6 +283,37 @@
               <li>Anthropic: <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">console.anthropic.com</a></li>
               <li>OpenAI: <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">platform.openai.com</a></li>
               <li>Google: <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline dark:text-blue-400">aistudio.google.com</a></li>
+            </ul>
+            <p class="mt-1">Running a model yourself needs no key at all, see
+              <a href="#custom-endpoint" class="text-blue-600 hover:underline dark:text-blue-400">Can I use my own model?</a></p>
+          </div>
+
+          <div id="custom-endpoint" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I use my own model or another provider?</h3>
+            <p>Yes. Pick <strong>Custom (OpenAI-compatible)</strong> as the provider in
+              <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a> and fill in the
+              <strong>Endpoint</strong> field. Anything that speaks the OpenAI API works: Ollama, llama.cpp's server,
+              LM Studio, vLLM, a LiteLLM proxy, or a gateway like OpenRouter. Leave the API key blank for a local
+              server that doesn't ask for one.</p>
+            <ul class="list-disc ml-5 mt-1.5 space-y-1">
+              <li>Ollama's endpoint needs the <code class="font-mono text-[13px]">/v1</code> suffix
+                (<code class="font-mono text-[13px]">http://localhost:11434/v1</code>); llama.cpp's server does not.</li>
+              <li>One endpoint per account, shared by both slots. Each slot still picks its own model, so a small
+                model can score while a larger one writes summaries, as long as both live on the same server.</li>
+              <li>Self-hosting on a private address (localhost, a Docker network) needs
+                <code class="font-mono text-[13px]">AI_ALLOW_PRIVATE_ENDPOINTS=true</code> in the instance's
+                environment. Without it only public addresses are accepted, which is what keeps a hosted instance
+                from being talked into calling its own internal services.</li>
+              <li><strong>A thinking model is fine, including on both slots.</strong> Scoring answers with one number
+                in ten tokens, so a model that reasons first would spend all ten on that; Readfine therefore asks the
+                endpoint to skip reasoning for scoring, which Ollama, llama.cpp and vLLM all understand. Summaries and
+                chat have room to think and are left alone, so one capable model can serve both slots. If your server
+                is too old to know the request, saving the model says so instead of leaving articles unscored.</li>
+              <li>First <em>Verify</em> after a cold start can time out while the server loads the model into
+                memory. Try it once more.</li>
+              <li>Small models have small context windows. If yours is 4k or 8k tokens, lower
+                <strong>Article content limit</strong> in Settings → AI from its 20 000 character default.</li>
+              <li>Costs can't be shown for your own endpoint: the tokens are counted, the price column stays empty.</li>
             </ul>
           </div>
 

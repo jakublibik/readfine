@@ -230,12 +230,21 @@ async def htmx_ai_context_trigger(
             user_id=user.id,
             operation="context",
             status="success",
+            provider=provider,
+            model=model,
             input_tokens=in_tok,
             output_tokens=out_tok,
             processed_at=now,
         ).on_conflict_do_update(
             index_elements=["article_id", "user_id", "operation"],
-            set_={"status": "success", "input_tokens": in_tok, "output_tokens": out_tok, "processed_at": now},
+            set_={
+                "status": "success",
+                "provider": provider,
+                "model": model,
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                "processed_at": now,
+            },
         )
     )
     await db.commit()
@@ -248,12 +257,12 @@ def _ai_chat_error_message(exc: Exception) -> str:
     exc_str = str(exc)
     status = getattr(exc, "status_code", None)
     if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
-        return "AI provider is overloaded — please try again in a moment."
+        return "AI provider is overloaded. Please try again in a moment."
     if status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
-        return "Rate limit reached — please wait a moment and try again."
+        return "Rate limit reached. Please wait a moment and try again."
     if status and status >= 500:
-        return "AI provider returned a server error — please try again."
-    return "Chat failed — please try again."
+        return "AI provider returned a server error. Please try again."
+    return "Chat failed. Please try again."
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)

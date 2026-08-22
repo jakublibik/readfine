@@ -116,7 +116,7 @@ async def settings_feeds_test(
         except httpx.HTTPStatusError as e:
             sc = e.response.status_code
             if sc == 403:
-                return None, "HTTP 403: Access denied — the server is likely blocking requests from this host (geo-block or datacenter IP block)."
+                return None, "HTTP 403: Access denied. The server is likely blocking requests from this host (geo-block or datacenter IP block)."
             return None, f"HTTP {sc}: {e.response.reason_phrase}"
         except (httpx.RequestError, ValueError) as e:
             return None, f"Connection error: {e}"
@@ -229,7 +229,7 @@ async def settings_feeds_subscribe(
         if status == 404:
             error = "Feed not found (404). The URL may no longer exist."
         elif status == 403:
-            error = "Access denied (403) — the server is likely blocking requests from this host (geo-block or datacenter IP block)."
+            error = "Access denied (403). The server is likely blocking requests from this host (geo-block or datacenter IP block)."
         elif status == 401:
             error = "Authentication required (401). Try adding HTTP credentials."
         elif status == 429:

@@ -60,6 +60,7 @@ _Optional AI on your own provider key._
 - **Catch me up:** An on-demand digest of what happened in your feeds over a period and scope you choose.
 - **Scheduled briefings:** The same digest on a schedule, delivered to your inbox.
 - **Your choice of provider:** Anthropic, OpenAI, or Google Gemini. Keys are per-user, stored encrypted, and used only for your own requests.
+- **Your own model, your own endpoint:** Point Readfine at anything that speaks the OpenAI API: Ollama or llama.cpp on your own machine, vLLM, a LiteLLM proxy, a gateway like OpenRouter. A local server needs no key at all, and nothing leaves your network. One endpoint per account, with each slot free to run a different model on it.
 - **Custom prompts & models:** Set a small model for scoring and a main model for summaries, chat, and briefings, each on the provider you pick. The summary and context prompts are editable, and each briefing can carry its own prompt.
 
 ## Insights & stats

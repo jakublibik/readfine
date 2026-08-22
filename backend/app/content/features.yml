@@ -175,6 +175,13 @@ categories:
         desc: >-
           Anthropic, OpenAI, or Google Gemini. Keys are per-user, stored
           encrypted, and used only for your own requests.
+      - title: Your own model, your own endpoint
+        desc: >-
+          Point Readfine at anything that speaks the OpenAI API: Ollama or
+          llama.cpp on your own machine, vLLM, a LiteLLM proxy, a gateway like
+          OpenRouter. A local server needs no key at all, and nothing leaves your
+          network. One endpoint per account, with each slot free to run a
+          different model on it.
       - title: Custom prompts & models
         desc: >-
           Set a small model for scoring and a main model for summaries, chat,
