@@ -411,6 +411,36 @@ class TestVerifyAiSlot:
                           "error": "Invalid API key."}
 
     @pytest.mark.asyncio
+    async def test_a_custom_endpoint_is_verified_on_the_verify_budget(self, monkeypatch):
+        """Even with nothing overridden, the client get_ai_client handed over is
+        built for generating a summary. Verify must not inherit its ten minutes."""
+        seen = {}
+
+        def fake_make_client(provider, api_key, url=None, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(
+                chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=AsyncMock(return_value=_openai("Hi")),
+                ))
+            )
+
+        async def fake_get_ai_client(user_id, slot, db):
+            return object(), "custom", "llama3.2:3b"
+
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
+        monkeypatch.setattr(ai_service, "_make_client", fake_make_client)
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "scoring_model_rejection", AsyncMock(return_value=None))
+
+        db = _db_returning(_FakeSettings("custom", "llama3.2:3b", "http://localhost:11434/v1"))
+        result = await ai_service.verify_ai_slot(1, "fast", db)
+        assert result["ok"] is True
+        assert seen == ai_service._VERIFY_CLIENT_KWARGS
+
+    @pytest.mark.asyncio
     async def test_no_client_configured(self, monkeypatch):
         async def fake_get_ai_client(user_id, slot, db):
             return None, None, None
@@ -887,6 +917,47 @@ class TestOpenAiWireReasoningOff:
         assert create.await_count == 1
 
 
+class TestFriendlyAiError:
+    """The Verify line is the only place a self-hoster finds out why the endpoint
+    did not answer, and htmx leaves it untouched when the route 500s — so this has
+    to name the failure and must never raise on its way there."""
+
+    def test_a_timeout_says_the_model_may_still_be_loading(self):
+        import httpx
+
+        message = ai_service._friendly_ai_error(httpx.ReadTimeout("timed out"))
+        assert "Timed out" in message
+        assert "Try again" in message
+
+    def test_a_bare_timeout_error_carries_no_message_and_still_gets_one(self):
+        # asyncio.wait_for raises this, and str() on it is empty — which used to
+        # take splitlines()[0] out through an IndexError, 500 the route, and leave
+        # the page showing "Verifying…" forever.
+        assert "Timed out" in ai_service._friendly_ai_error(TimeoutError())
+
+    def test_an_unreachable_endpoint_points_at_the_server(self):
+        import httpx
+
+        message = ai_service._friendly_ai_error(httpx.ConnectError("nope"))
+        assert "Could not reach the endpoint" in message
+
+    def test_a_timeout_is_not_reported_as_an_unreachable_endpoint(self):
+        # The SDK models a timeout as a kind of connection error, so the order the
+        # two are asked in decides whether a loading model reads as a dead server.
+        from openai import APITimeoutError
+
+        exc = APITimeoutError(request=SimpleNamespace(url="http://localhost:11434/v1"))
+        assert "Timed out" in ai_service._friendly_ai_error(exc)
+
+    def test_an_http_status_still_wins_over_the_transport_branches(self):
+        assert ai_service._friendly_ai_error(_ApiError(404, "model not found")) == (
+            "Model not found. Check the model name."
+        )
+
+    def test_an_exception_with_no_message_falls_back_to_its_class(self):
+        assert ai_service._friendly_ai_error(ValueError()) == "ValueError"
+
+
 class TestCustomClientTimeout:
     def test_read_budget_is_minutes_not_seconds(self):
         # A local model writing a summary on CPU runs for minutes. Handing the SDK
@@ -895,6 +966,31 @@ class TestCustomClientTimeout:
         client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
         assert client._client.timeout.read >= 600
         assert client._client.timeout.connect == 5.0
+
+    def test_verify_gets_a_budget_it_can_answer_within(self):
+        # Verify asks for a greeting, so the only thing it waits on is a cold
+        # server loading its model. The ten-minute budget above belongs to a
+        # summary being generated and would leave the settings page spinning.
+        client = ai_service._make_custom_client(
+            None, "http://localhost:11434/v1", **ai_service._VERIFY_CLIENT_KWARGS
+        )
+        assert client._client.timeout.read == 60.0
+        assert client._client.timeout.connect == 5.0
+
+    def test_verify_does_not_let_the_sdk_triple_that_budget(self):
+        # The SDK retries a timeout twice by default, which would turn 60s of
+        # waiting into three minutes before the user is told to try again.
+        client = ai_service._make_custom_client(
+            None, "http://localhost:11434/v1", **ai_service._VERIFY_CLIENT_KWARGS
+        )
+        assert client.max_retries == 0
+
+    def test_real_calls_keep_the_sdk_defaults(self):
+        # Only Verify is impatient. A summary on CPU still gets its ten minutes,
+        # and its retries, because there the wait is the answer being written.
+        client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
+        assert client._client.timeout.read >= 600
+        assert client.max_retries > 0
 
     def test_the_sdk_sends_that_budget_on_the_wire(self):
         # The number on the client is only half of it: what matters is the timeout

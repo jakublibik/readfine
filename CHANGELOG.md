@@ -19,6 +19,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - The cost report tells you what it cannot price. A custom endpoint has no price list here, so its rows show tokens with an empty cost column and the total covers the paid models alone, which keeps a mixed setup (scoring at home, main model on a paid provider) adding up to something true. Two notes under the table say so, including that costs follow the model set for each slot now rather than the one that ran at the time. Worth knowing because compatible proxies often serve models under names like `gpt-4o`, and pricing a local run at OpenAI's rate would have looked exact while being invented.
 
+### Fixed
+
+- Verify in Settings → AI now tells you what went wrong when the endpoint does not answer. A timeout reported itself as "Request timed out.", which says nothing about whether a local model is still loading or the server is not running at all, and an error that carried no message left the line blank with the button still reading "Verifying…", so there was nothing on screen to go on. A timeout now says the model may still be loading and to try again, an unreachable endpoint points at the address and the server, and no failure can leave the line empty. Verify against a custom endpoint also gives up after a minute instead of ten: it only asks the model to say hello, whereas the ten minutes are there for a summary being written token by token, and the retries the OpenAI library adds by itself were stretching the real wait to three times that again.
+
 ## [0.16.0] - 2026-08-19
 
 ### Changed

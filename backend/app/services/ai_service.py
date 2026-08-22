@@ -372,8 +372,26 @@ _NO_KEY_PLACEHOLDER = "not-needed"
 # infer. Connect stays short: reaching the server is either immediate or wrong.
 _CUSTOM_CLIENT_TIMEOUT = (5.0, 600.0)
 
+# What Verify is allowed to wait for instead of the budget above. That one is
+# sized for a summary being generated token by token; Verify asks for a greeting,
+# so the only thing it can legitimately wait on is a cold server loading the model
+# off disk — tens of seconds for a large one, ~4s for a 3B. Ten minutes of spinner
+# for that is not patience, it is an unanswered question, and the message on a
+# timeout says to try again, which after the load is what works.
+#
+# max_retries=0 goes with it. The SDK retries a timeout twice by default, so the
+# budget below would really be three minutes of spinner, and the two extra
+# attempts buy nothing here: a server still loading its model fails all three, and
+# the user is being told to try again anyway.
+_VERIFY_CLIENT_KWARGS = {"read_timeout": 60.0, "max_retries": 0}
 
-def _make_custom_client(api_key: str | None, base_url: str):
+
+def _make_custom_client(
+    api_key: str | None,
+    base_url: str,
+    read_timeout: float | None = None,
+    max_retries: int | None = None,
+):
     """Client for an OpenAI-compatible endpoint that is not OpenAI.
 
     The transport re-validates and pins every request (see
@@ -381,6 +399,11 @@ def _make_custom_client(api_key: str | None, base_url: str):
     cover a request made later — DNS can be repointed at a private address in
     between — and the SDK opens its own connections, so the check has to live
     where those connections are made.
+
+    *read_timeout* and *max_retries* override the defaults for a caller that
+    knows the answer is due right away (Verify). They belong together: the SDK
+    retries a timeout twice on its own, so a budget set without also saying how
+    many attempts may spend it is three times what it looks like.
     """
     from openai import AsyncOpenAI
     import httpx
@@ -388,6 +411,9 @@ def _make_custom_client(api_key: str | None, base_url: str):
     from app.utils.url_validator import PinnedAsyncTransport
 
     connect, rest = _CUSTOM_CLIENT_TIMEOUT
+    if read_timeout is not None:
+        rest = read_timeout
+    extra = {} if max_retries is None else {"max_retries": max_retries}
     return AsyncOpenAI(
         api_key=api_key or _NO_KEY_PLACEHOLDER,
         base_url=base_url,
@@ -395,6 +421,7 @@ def _make_custom_client(api_key: str | None, base_url: str):
             transport=PinnedAsyncTransport(),
             timeout=httpx.Timeout(connect=connect, read=rest, write=rest, pool=rest),
         ),
+        **extra,
     )
 
 
@@ -403,8 +430,20 @@ def _make_gemini_client(api_key: str):
     return genai.Client(api_key=api_key)
 
 
-def _make_client(provider: str, api_key: str | None, base_url: str | None = None):
-    """Build a provider client. *base_url* is required for (and only used by) custom."""
+def _make_client(
+    provider: str,
+    api_key: str | None,
+    base_url: str | None = None,
+    read_timeout: float | None = None,
+    max_retries: int | None = None,
+):
+    """Build a provider client. *base_url* is required for (and only used by) custom.
+
+    *read_timeout* and *max_retries* are custom-only for the same reason the
+    default budget is: the other three SDKs carry timeouts of their own that we do
+    not set, and only the custom client is handed an http_client whose budget is
+    ours to name.
+    """
     if provider == "anthropic":
         return _make_anthropic_client(api_key)
     if provider == "openai":
@@ -414,7 +453,7 @@ def _make_client(provider: str, api_key: str | None, base_url: str | None = None
     if provider == "custom":
         if not base_url:
             return None
-        return _make_custom_client(api_key, base_url)
+        return _make_custom_client(api_key, base_url, read_timeout, max_retries)
     return None
 
 
@@ -462,18 +501,69 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
 _VERIFY_MAX_TOKENS = 200
 
 
+def _is_timeout(exc: Exception) -> bool:
+    """True when nothing came back in time, whoever raised it.
+
+    Three spellings reach here: the SDK's own ``APITimeoutError``, httpx's
+    ``TimeoutException`` (when a call goes around the SDK), and the builtin
+    ``TimeoutError``, which is what ``asyncio.wait_for`` raises and which carries
+    no message at all.
+    """
+    import httpx
+    from openai import APITimeoutError
+
+    return isinstance(exc, (TimeoutError, httpx.TimeoutException, APITimeoutError))
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    """True when the endpoint could not be reached in the first place.
+
+    Must be asked *after* :func:`_is_timeout`: the SDK models a timeout as a kind
+    of connection error (``APITimeoutError`` subclasses ``APIConnectionError``),
+    so asking this first would call every timeout an unreachable server.
+    """
+    import httpx
+    from openai import APIConnectionError
+
+    return isinstance(exc, (ConnectionError, httpx.TransportError, APIConnectionError))
+
+
 def _friendly_ai_error(exc: Exception) -> str:
+    """Turn a provider exception into a sentence the settings page can show.
+
+    Timeouts and connection failures are named because they are the two a
+    self-hoster actually hits, and the SDK's own wording ("Request timed out.")
+    does not say which of the two happened or what to do about it. A local server
+    loading a model off disk answers the second attempt, so the message says so;
+    an endpoint nothing is listening on never will, so that one points at the
+    server instead of inviting a retry that cannot work.
+    """
     raw = str(exc)
     low = raw.lower()
     if "not_found" in low or '"404"' in raw or " 404 " in raw:
-        return "Model not found — check the model name."
+        return "Model not found. Check the model name."
     if "401" in raw or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
         return "Invalid API key."
     if "429" in raw or "rate_limit" in low or "too many requests" in low:
-        return "Rate limit reached — try again later."
+        return "Rate limit reached. Try again later."
     if "403" in raw or "forbidden" in low:
-        return "Access denied — check your API key permissions."
-    return raw.splitlines()[0][:150]
+        return "Access denied. Check your API key permissions."
+    if _is_timeout(exc):
+        return (
+            "Timed out waiting for a reply. A local model can take a while to load "
+            "the first time it is used. Try again."
+        )
+    if _is_connection_error(exc):
+        return (
+            "Could not reach the endpoint. Check the URL and that the server is running."
+        )
+    # Some exceptions carry no message at all (a bare TimeoutError is the one this
+    # path used to crash on, via splitlines()[0] on an empty string). The class
+    # name is a poor message but it is a message, and a 500 here shows the user
+    # nothing whatsoever: htmx does not swap a failed response, so the Verify line
+    # is left holding "Verifying…" with no way to find out what happened.
+    first_line = raw.strip().splitlines()
+    return first_line[0][:150] if first_line else type(exc).__name__
 
 
 # How long the scoring probe below may hold up a settings save. The call itself is
@@ -573,7 +663,17 @@ async def verify_ai_slot(
                 await async_validate_ai_endpoint_url(base_url)
             except ValueError as exc:
                 return {"ok": False, "model": None, "error": str(exc)}
-        client = _make_client(provider, api_key, base_url)
+        client = _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
+    elif provider == "custom":
+        # No overrides, so the client above came from get_ai_client with the read
+        # budget a summary needs. Verify is not that call and must not hold the
+        # page for ten minutes, so it is rebuilt on its own timeout.
+        api_key = await get_api_key(user_id, provider, db)
+        s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+        client = _make_client(
+            provider, api_key, s.ai_custom_base_url if s else None,
+            **_VERIFY_CLIENT_KWARGS,
+        )
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 
