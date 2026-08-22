@@ -350,7 +350,7 @@ async def settings_ai_verify(
             result = {"ok": False, "model": result["model"], "error": rejection}
     if result["ok"]:
         html = (
-            f'<span class="text-green-600 text-sm">✓ Connected — {result["model"]}</span>'
+            f'<span class="text-green-600 text-sm">✓ Connected ({result["model"]})</span>'
         )
     else:
         html = (
