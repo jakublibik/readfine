@@ -59,7 +59,7 @@ PREFIXES = {
 
 # Splitting on the Czech conjunction "a" is deliberately left out: it collides
 # with the English article, and the profile is written in English by default.
-_TOPIC_SPLIT_RE = re.compile(r"[,;]|\band\b|\bnebo\b")
+_TOPIC_SEPARATOR_RE = re.compile(r"[,;]|\band\b|\bnebo\b")
 # The generator writes the profile as `label: topics` lines and asks for
 # "High relevance / Moderate relevance / Avoid" (`ai_profile_service.
 # normalize_preference_text`), but the model may translate or reword the labels,
@@ -227,7 +227,32 @@ def article_text(row: dict, variant: str) -> str:
     raise SystemExit(f"unknown input variant {variant}")
 
 
-def parse_profile(profile: str, mode: str, max_lines: int | None) -> tuple[list[str], list[str]]:
+def split_topics(line: str) -> list[str]:
+    """Split a topic list on separators that sit outside brackets.
+
+    The generator writes topics like "health science with mechanistic findings
+    (nutrition, exercise, longevity)". Splitting on every comma turns that into
+    bare "exercise" and "longevity)" — fragments that have lost the very context
+    that made them a topic, and that then match unrelated articles.
+    """
+    parts, depth, current = [], 0, []
+    tokens = _TOPIC_SEPARATOR_RE.split(line)
+    separators = _TOPIC_SEPARATOR_RE.findall(line)
+    for i, token in enumerate(tokens):
+        current.append(token)
+        depth += token.count("(") - token.count(")")
+        if i < len(separators):
+            if depth > 0:  # separator inside brackets: keep the topic together
+                current.append(separators[i])
+            else:
+                parts.append("".join(current))
+                current = []
+    parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def parse_profile(profile: str, mode: str, max_lines: int | None,
+                  max_topics: int | None = None) -> tuple[list[str], list[str]]:
     """Split the profile into positive and negative units.
 
     The split matters more than it looks. The profile carries an `Avoid:` line,
@@ -258,13 +283,17 @@ def parse_profile(profile: str, mode: str, max_lines: int | None) -> tuple[list[
             return []
         if mode == "a":
             return ["\n".join(group)]
-        out = [t.strip() for line in group for t in _TOPIC_SPLIT_RE.split(line)]
-        out = [t for t in out if len(t) >= 4]
+        out = [t for line in group for t in split_topics(line) if len(t) >= 4]
         return out or ["\n".join(group)]
 
     positive = units(positive_lines)
     if not positive:  # nothing recognised as positive: fall back to the raw text
         positive = [profile.strip()]
+    if max_topics:
+        # Cold-start ablation: a fresh account has a handful of interests, not a
+        # generated profile with thirty. Cutting whole lines would not do it —
+        # this profile has three, and dropping one only removes the avoid list.
+        positive = positive[:max_topics]
     return positive, units(negative_lines)
 
 
@@ -425,7 +454,9 @@ def main() -> None:
     ap.add_argument("--input", default="title300",
                     choices=["title", "title300", "full2000"])
     ap.add_argument("--profile-lines", type=int, default=None,
-                    help="keep only the first N profile lines (cold-start ablation)")
+                    help="keep only the first N profile lines")
+    ap.add_argument("--profile-topics", type=int, default=None,
+                    help="keep only the first N positive topics (cold-start ablation)")
     ap.add_argument("--ignore-negatives", action="store_true",
                     help="drop the avoid list instead of subtracting it "
                          "(ablation: how much the negative side is worth)")
@@ -496,6 +527,7 @@ def main() -> None:
             "input": args.input,
             "profile_mode": args.profile_mode,
             "profile_lines": args.profile_lines,
+            "profile_topics": args.profile_topics,
             "ignore_negatives": args.ignore_negatives,
             "prefix_family": args.prefix_family,
             # Input longer than the model's window is silently truncated, which is
@@ -519,7 +551,8 @@ def main() -> None:
     }
 
     def score_segment(name: str, seg_rows: list[dict], profile: str) -> dict:
-        positive, negative = parse_profile(profile, args.profile_mode, args.profile_lines)
+        positive, negative = parse_profile(profile, args.profile_mode,
+                                           args.profile_lines, args.profile_topics)
         if args.ignore_negatives:
             negative = []
         pos_vecs = embed(model, positive, query_prefix, args.batch_size)
