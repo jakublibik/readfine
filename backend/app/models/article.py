@@ -124,6 +124,12 @@ class ArticleAiJob(Base):
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_message: Mapped[str | None] = mapped_column(Text)
     job_params: Mapped[dict | None] = mapped_column(JSONB)
+    # Which model actually ran the job. Written per attempt, so on a retried job
+    # these describe the last attempt, i.e. the one whose output is stored.
+    # NULL on rows from before the columns existed and on jobs that never got
+    # as far as picking a client.
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

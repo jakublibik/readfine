@@ -86,6 +86,10 @@ async def _execute_summary_job(
         job.processed_at = now
         return
 
+    # Recorded before the call, so a failed attempt also says which model failed.
+    job.provider = provider
+    job.model = model
+
     try:
         answer = await summarize_article(
             content_text, client, provider, model, custom_prompt=s.ai_summary_prompt

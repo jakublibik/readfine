@@ -136,6 +136,10 @@ async def _execute_scoring_job(
         job.processed_at = now
         return
 
+    # Recorded before the call, so a failed attempt also says which model failed.
+    job.provider = provider
+    job.model = model
+
     try:
         score, in_tok, out_tok = await score_article(content_text, s.ai_preference_text, client, provider, model)
 

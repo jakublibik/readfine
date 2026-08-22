@@ -230,12 +230,21 @@ async def htmx_ai_context_trigger(
             user_id=user.id,
             operation="context",
             status="success",
+            provider=provider,
+            model=model,
             input_tokens=in_tok,
             output_tokens=out_tok,
             processed_at=now,
         ).on_conflict_do_update(
             index_elements=["article_id", "user_id", "operation"],
-            set_={"status": "success", "input_tokens": in_tok, "output_tokens": out_tok, "processed_at": now},
+            set_={
+                "status": "success",
+                "provider": provider,
+                "model": model,
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                "processed_at": now,
+            },
         )
     )
     await db.commit()

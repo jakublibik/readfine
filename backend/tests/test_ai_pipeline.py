@@ -66,6 +66,8 @@ def make_job(**kwargs):
         "error_message": None,
         "input_tokens": None,
         "output_tokens": None,
+        "provider": None,
+        "model": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -1253,6 +1255,75 @@ class TestSummaryTruncationFlag:
         await self._run(state, Completion("Now complete.", 500, 130, False))
         assert state.ai_summary == "Now complete."
         assert state.ai_summary_truncated is False
+
+
+class TestJobRecordsWhichModelRanIt:
+    """An ai_score with no record of the model behind it cannot be interpreted
+    later: two differently calibrated scorers land in the same column and nothing
+    tells them apart. The job row is where that provenance lives, and it is written
+    before the provider call, so a failed attempt also names the model that failed."""
+
+    @staticmethod
+    def _db_with_state(state):
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=state)
+        return db
+
+    async def _score(self, score_result):
+        from app.services.ai_scoring_service import _execute_scoring_job
+        job = make_job(operation="scoring")
+        with patch.multiple(
+            "app.services.ai_service",
+            get_ai_client=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-haiku-4-5")),
+            score_article=score_result,
+        ):
+            await _execute_scoring_job(
+                job, make_article(), make_settings(), self._db_with_state(make_state()),
+                datetime.now(timezone.utc),
+            )
+        return job
+
+    async def test_scoring_records_provider_and_model(self):
+        job = await self._score(AsyncMock(return_value=(0.7, 500, 4)))
+        assert job.status == "success"
+        assert (job.provider, job.model) == ("anthropic", "claude-haiku-4-5")
+
+    async def test_a_failed_attempt_still_names_the_model(self):
+        job = await self._score(AsyncMock(side_effect=RuntimeError("provider is down")))
+        assert job.status != "success"
+        assert (job.provider, job.model) == ("anthropic", "claude-haiku-4-5")
+
+    async def test_summary_records_them_too(self):
+        from app.services.ai_summary_service import _execute_summary_job
+        job = make_job(operation="summary")
+        with patch.multiple(
+            "app.services.ai_service",
+            get_ai_client=AsyncMock(return_value=(AsyncMock(), "openai", "gpt-5-mini")),
+            summarize_article=AsyncMock(return_value=Completion("A summary.", 500, 120, False)),
+        ):
+            await _execute_summary_job(
+                job, make_article(content="Some content " * 200), make_settings(),
+                self._db_with_state(make_state()), datetime.now(timezone.utc),
+            )
+        assert job.status == "success"
+        assert (job.provider, job.model) == ("openai", "gpt-5-mini")
+
+    async def test_a_job_that_never_picked_a_client_records_nothing(self):
+        """Skipped before the call: NULL is the honest answer, not a guess from
+        the settings, which may have changed since."""
+        from app.services.ai_scoring_service import _execute_scoring_job
+        job = make_job(operation="scoring")
+        with patch.multiple(
+            "app.services.ai_service",
+            get_ai_client=AsyncMock(return_value=(None, None, None)),
+            score_article=AsyncMock(),
+        ):
+            await _execute_scoring_job(
+                job, make_article(), make_settings(), self._db_with_state(make_state()),
+                datetime.now(timezone.utc),
+            )
+        assert job.status == "skipped"
+        assert (job.provider, job.model) == (None, None)
 
 
 class TestLastAiErrorArticleLink:
