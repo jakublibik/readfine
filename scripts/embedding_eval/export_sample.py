@@ -97,10 +97,18 @@ async def main() -> None:
               AND (CAST(:until AS timestamptz) IS NULL OR s.created_at < :until)
         """), {"uid": args.user_id, "since": since, "until": until})).one()
 
+        # T1: past this age, purge keeps starred/archived articles whole, trims
+        # merely-engaged ones (they drop out of this export, which filters on
+        # trimmed_at) and deletes the rest. Anything older than T1 in the sample
+        # is therefore a survivor, not a sample.
+        purge_after_days = await session.scalar(text(
+            "SELECT default_purge_after_days FROM app_settings WHERE id = 1"))
+
         meta = {
             "type": "meta",
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "user_id": args.user_id,
+            "purge_after_days": purge_after_days,
             "window": {"since": since.isoformat(), "until": iso(until)},
             "content_max_chars": CONTENT_MAX_CHARS,
             "profile": {
@@ -124,13 +132,25 @@ async def main() -> None:
         }
         print(json.dumps(meta, ensure_ascii=False), flush=True)
 
+        # The scoring job carries the time the score was actually written, which
+        # is not the same as the state's created_at: applying a filter
+        # retroactively enqueues scoring for older articles, and those would land
+        # in the wrong profile regime if the sample were split by created_at.
+        # `provider`/`model` exist only on jobs run after 2026-08-22 (migration
+        # 0094), so they are NULL for the historical part of the sample.
         result = await session.stream(text("""
             SELECT s.article_id, s.created_at, s.ai_score,
                    s.user_starred, s.dwell_seconds, s.link_opened, s.is_read,
-                   a.title, a.url, a.feed_id, a.published_at,
-                   a.readable_content, a.content
+                   a.title, a.url, a.feed_id, a.published_at, a.fetched_at,
+                   a.readable_content, a.content,
+                   j.processed_at AS scored_at, j.status AS job_status,
+                   j.provider AS job_provider, j.model AS job_model
             FROM user_article_states s
             JOIN articles a ON a.id = s.article_id
+            LEFT JOIN article_ai_jobs j
+                   ON j.article_id = s.article_id
+                  AND j.user_id = s.user_id
+                  AND j.operation = 'scoring'
             WHERE s.user_id = :uid AND s.ai_score IS NOT NULL
               AND a.trimmed_at IS NULL
               AND s.created_at >= :since
@@ -139,11 +159,20 @@ async def main() -> None:
         """), {"uid": args.user_id, "since": since, "until": until})
 
         written = 0
+        empty_body = 0
+        no_job = 0
         async for row in result:
             body = plain_body(row.readable_content or row.content, BODY_EXPORT_CHARS)
+            empty_body += not body
+            no_job += row.scored_at is None
             print(json.dumps({
                 "article_id": row.article_id,
                 "state_created_at": iso(row.created_at),
+                "fetched_at": iso(row.fetched_at),
+                "scored_at": iso(row.scored_at),
+                "job_status": row.job_status,
+                "job_provider": row.job_provider,
+                "job_model": row.job_model,
                 "published_at": iso(row.published_at),
                 "feed_id": row.feed_id,
                 "ai_score": float(row.ai_score),
@@ -162,7 +191,8 @@ async def main() -> None:
 
     await engine.dispose()
     print(f"exported {written} articles "
-          f"(scored={counts.scored} usable={counts.usable} engaged={counts.engaged})",
+          f"(scored={counts.scored} usable={counts.usable} engaged={counts.engaged}, "
+          f"empty body={empty_body}, no scoring job={no_job})",
           file=sys.stderr)
 
 
