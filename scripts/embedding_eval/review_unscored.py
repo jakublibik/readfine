@@ -41,8 +41,8 @@ Two steps:
 import argparse
 import csv
 import json
+import math
 import random
-import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -202,6 +202,50 @@ def prepare(args) -> None:
           file=sys.stderr)
 
 
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Interval for a rate measured on a handful of articles.
+
+    Printed next to every group because a review of this size cannot separate
+    20% from 15%, and a bare pair of percentages invites reading a difference
+    that is not there.
+    """
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    d = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / d
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+def fisher_two_sided(a: int, b: int, c: int, d: int) -> float:
+    """p for the 2x2 table [[a, b], [c, d]]; exact, the counts are tiny."""
+    total = a + b + c + d
+    if not total or not (a + b) or not (c + d):
+        return 1.0
+
+    def prob(x: int) -> float:
+        return (math.comb(a + b, x) * math.comb(c + d, a + c - x)
+                / math.comb(total, a + c))
+
+    observed = prob(a)
+    lo, hi = max(0, a + c - (c + d)), min(a + b, a + c)
+    return min(1.0, sum(prob(x) for x in range(lo, hi + 1)
+                        if prob(x) <= observed * (1 + 1e-9)))
+
+
+def needed_to_clear(control_k: int, control_n: int, n: int) -> int | None:
+    """Hits out of n that would make the difference from the control significant.
+
+    Reported so a null result is readable as either "the scorer does nothing" or
+    "this review was too small to tell", which are very different conclusions.
+    """
+    for k in range(control_k, n + 1):
+        if fisher_two_sided(k, n - k, control_k, control_n - control_k) < 0.05:
+            return k
+    return None
+
+
 YES = {"y", "yes", "1", "ano", "a"}
 # Blank is deliberately not a "no". A half-finished review would otherwise come
 # out as "the scorers found nothing", which is the one wrong answer this test
@@ -242,37 +286,60 @@ def score(args) -> None:
     base = (control["want"] / control["n"]) if control["n"] else None
     labels = {"embedding": "embedding", "bm25": "BM25", "random": "random",
               "same-feed": "same feed"}
-    print(f"\n{'group':<12}{'shown':>7}{'wanted':>8}{'rate':>8}{'vs control':>12}")
+    ck, cn = control["want"], control["n"]
+    print(f"\n{'group':<12}{'wanted':>10}{'rate':>7}{'95% CI':>16}"
+          f"{'vs control':>12}")
     for name in ("embedding", "bm25", "same-feed", "random"):
         g = groups.get(name)
         if not g or not g["n"]:
             continue
-        rate = g["want"] / g["n"]
-        lift = f"{rate / base:.2f}x" if base else "n/a"
-        print(f"{labels[name]:<12}{g['n']:>7}{g['want']:>8}{rate:>7.0%}{lift:>12}")
+        k, gn = g["want"], g["n"]
+        lo, hi = wilson(k, gn)
+        p = ("" if name == "random" or not cn
+             else f"p={fisher_two_sided(k, gn - k, ck, cn - ck):.2f}")
+        print(f"{labels[name]:<12}{f'{k}/{gn}':>10}{k/gn:>6.0%}"
+              f"{f'[{lo:.0%}, {hi:.0%}]':>16}{p:>12}")
 
     if base is None or base == 0:
         print("\nNo control articles were wanted, so any hit rate above zero is "
               "something, but the size of it cannot be read off this sample.")
-    else:
-        print(f"\nControl rate is {base:.0%}: that is what picking at random from "
-              f"the unscored pool gets you. A scorer has to beat it clearly to be "
-              f"worth the infrastructure.")
+        return
+
+    print(f"\nControl rate is {base:.0%}: that is what picking at random from the "
+          f"unscored pool gets you.")
+
+    # Say plainly when the review was too small to answer, instead of letting a
+    # point estimate read as a result. A group that beats the control by one
+    # article has shown nothing.
+    emb = groups.get("embedding") or {"n": 0, "want": 0}
+    if emb["n"]:
+        need = needed_to_clear(ck, cn, emb["n"])
+        significant = [labels[n] for n in ("embedding", "bm25")
+                       if groups.get(n) and groups[n]["n"]
+                       and fisher_two_sided(groups[n]["want"],
+                                            groups[n]["n"] - groups[n]["want"],
+                                            ck, cn - ck) < 0.05]
+        if significant:
+            print(f"Clears the control at p<0.05: {', '.join(significant)}.")
+        elif need is not None:
+            print(f"NOTHING here clears the control. A scorer would have needed "
+                  f"{need}/{emb['n']} ({need / emb['n']:.0%}) to do so, so this "
+                  f"review cannot tell a useless scorer from a decent one - only "
+                  f"rule out a spectacular one.")
+        else:
+            print("NOTHING here clears the control, and no result at this sample "
+                  "size could have; the review needs to be far larger.")
 
     same_feed = groups.get("same-feed")
-    emb = groups.get("embedding")
-    if same_feed and same_feed["n"] and emb and emb["n"]:
-        sf_rate = same_feed["want"] / same_feed["n"]
-        emb_rate = emb["want"] / emb["n"]
-        print(f"\nSame-feed control is {sf_rate:.0%}, drawn at random from the "
-              f"feeds the embedding picked from.")
-        if emb_rate > sf_rate:
-            print(f"  The embedding beats it ({emb_rate:.0%}), so it is choosing "
-                  f"articles, not just choosing a feed.")
-        else:
-            print(f"  The embedding does not beat it ({emb_rate:.0%}): its picks "
-                  f"are explained by which feeds they came from, and preferring a "
-                  f"feed needs a per-feed setting, not a model.")
+    if same_feed and same_feed["n"] and emb["n"]:
+        sk, sn = same_feed["want"], same_feed["n"]
+        p = fisher_two_sided(emb["want"], emb["n"] - emb["want"], sk, sn - sk)
+        print(f"\nSame-feed control {sk}/{sn} ({sk/sn:.0%}) against the "
+              f"embedding's {emb['want']}/{emb['n']} ({emb['want']/emb['n']:.0%}), "
+              f"p={p:.2f}.")
+        print("  This is the comparison that separates choosing an article from "
+              "choosing a feed" + (", and it is decided." if p < 0.05 else
+                                   ", and at this size it decides nothing."))
 
     both = [n for n in verdicts if set(by_n[n]["sources"]) >= {"embedding", "bm25"}]
     only_emb = [n for n in verdicts if by_n[n]["sources"] == ["embedding"]]
@@ -282,8 +349,13 @@ def score(args) -> None:
               f"only earns its keep on what word matching missed:")
     if only_emb:
         want = sum(verdicts[n] for n in only_emb)
-        print(f"  embedding alone: {len(only_emb)} articles, {want} wanted "
-              f"({want / len(only_emb):.0%})")
+        lo, hi = wilson(want, len(only_emb))
+        p = fisher_two_sided(want, len(only_emb) - want, ck, cn - ck)
+        print(f"  embedding alone: {want}/{len(only_emb)} wanted "
+              f"({want / len(only_emb):.0%}, [{lo:.0%}, {hi:.0%}], p={p:.2f} "
+              f"against the control)")
+        print("  This is the number the sidecar rests on: what the model finds "
+              "that word matching does not.")
     else:
         print("  the embedding picked nothing BM25 did not; on this pool the "
               "semantic model adds no selection of its own")
