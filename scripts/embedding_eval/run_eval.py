@@ -57,6 +57,22 @@ PREFIXES = {
     "none": ("", ""),
 }
 
+
+def default_prefix_family(model: str) -> str:
+    """Pick the prefix convention from the model name.
+
+    This used to default to "e5" for every model, which silently prepended
+    "query: " / "passage: " to models that were never trained with them and made
+    the result look like a property of the model. Derive it instead, and let
+    `--prefix-family` override when a new model needs a different call.
+    """
+    name = model.lower()
+    if "bge-m3" in name:
+        return "bge-m3"
+    if "e5" in name:
+        return "e5"
+    return "none"
+
 # Splitting on the Czech conjunction "a" is deliberately left out: it collides
 # with the English article, and the profile is written in English by default.
 _TOPIC_SEPARATOR_RE = re.compile(r"[,;]|\band\b|\bnebo\b")
@@ -67,6 +83,12 @@ _TOPIC_SEPARATOR_RE = re.compile(r"[,;]|\band\b|\bnebo\b")
 _NEGATIVE_LABEL_RE = re.compile(
     r"avoid|exclude|not interested|no interest|dislike|skip|irrelevant|"
     r"nezajím|vyhýb|vynech|nechci", re.IGNORECASE)
+# "Moderate relevance" topics used to count exactly as much as "High relevance"
+# ones, because both landed in the same list and the score was a plain max. The
+# LLM reads those labels and tells them apart, so the flat max was a handicap the
+# embedding put on itself. Matched loosely, for the same reason as the negatives.
+_MODERATE_LABEL_RE = re.compile(
+    r"moderate|medium|secondary|occasional|lower|střední|občas", re.IGNORECASE)
 
 
 # ── sample loading ────────────────────────────────────────────────────────────
@@ -252,8 +274,12 @@ def split_topics(line: str) -> list[str]:
 
 
 def parse_profile(profile: str, mode: str, max_lines: int | None,
-                  max_topics: int | None = None) -> tuple[list[str], list[str]]:
+                  max_topics: int | None = None,
+                  ) -> tuple[list[str], list[bool], list[str]]:
     """Split the profile into positive and negative units.
+
+    Returns the positive units, a mask marking which of them came from a
+    "Moderate relevance" line, and the negative units.
 
     The split matters more than it looks. The profile carries an `Avoid:` line,
     and a plain max-cosine over every line would score a sports article *high*
@@ -262,21 +288,31 @@ def parse_profile(profile: str, mode: str, max_lines: int | None,
     understands the label. Negative units are therefore scored separately and
     subtracted.
 
+    The same argument applies one level down, which the first version missed:
+    High and Moderate are two different labels and the LLM honours the
+    difference. The mask lets the caller discount the moderate units instead of
+    treating every positive line as equally wanted.
+
     Mode A keeps each side as one block, mode B splits the topic lists into
-    individual topics ("X, Y and Z" are three directions, not one).
+    individual topics ("X, Y and Z" are three directions, not one). The mask is
+    only meaningful in mode B: mode A merges the lines before they can be told
+    apart.
     """
     lines = [ln.strip(" -•\t") for ln in profile.strip().splitlines() if ln.strip()]
     if max_lines:
         lines = lines[:max_lines]
 
-    positive_lines, negative_lines = [], []
+    high_lines, moderate_lines, negative_lines = [], [], []
     for line in lines:
         label, _, topics = line.partition(":")
         # A line without a label is a plain sentence: keep it whole and positive.
         body = topics.strip() if topics.strip() else line
-        target = (negative_lines if topics.strip() and _NEGATIVE_LABEL_RE.search(label)
-                  else positive_lines)
-        target.append(body)
+        if topics.strip() and _NEGATIVE_LABEL_RE.search(label):
+            negative_lines.append(body)
+        elif topics.strip() and _MODERATE_LABEL_RE.search(label):
+            moderate_lines.append(body)
+        else:
+            high_lines.append(body)
 
     def units(group: list[str]) -> list[str]:
         if not group:
@@ -286,15 +322,25 @@ def parse_profile(profile: str, mode: str, max_lines: int | None,
         out = [t for line in group for t in split_topics(line) if len(t) >= 4]
         return out or ["\n".join(group)]
 
-    positive = units(positive_lines)
+    if mode == "a":
+        # One block per side, as before: high and moderate stay merged, so the
+        # published mode-A numbers keep reproducing exactly.
+        positive = units(high_lines + moderate_lines)
+        moderate_mask = [False] * len(positive)
+    else:
+        high_units, moderate_units = units(high_lines), units(moderate_lines)
+        positive = high_units + moderate_units
+        moderate_mask = [False] * len(high_units) + [True] * len(moderate_units)
+
     if not positive:  # nothing recognised as positive: fall back to the raw text
-        positive = [profile.strip()]
+        positive, moderate_mask = [profile.strip()], [False]
     if max_topics:
         # Cold-start ablation: a fresh account has a handful of interests, not a
         # generated profile with thirty. Cutting whole lines would not do it —
         # this profile has three, and dropping one only removes the avoid list.
-        positive = positive[:max_topics]
-    return positive, units(negative_lines)
+        # High units come first, so a fresh account keeps what it cares about most.
+        positive, moderate_mask = positive[:max_topics], moderate_mask[:max_topics]
+    return positive, moderate_mask, units(negative_lines)
 
 
 # ── scoring ───────────────────────────────────────────────────────────────────
@@ -311,23 +357,61 @@ def max_cosine(article_vecs: np.ndarray, profile_vecs: np.ndarray) -> np.ndarray
     return (article_vecs @ profile_vecs.T).max(axis=1)
 
 
+def aggregate_positive(sims: np.ndarray, moderate_mask: list[bool],
+                       moderate_penalty: float, aggregate: str, top_k: int,
+                       ) -> np.ndarray:
+    """Reduce per-topic similarities to one score per article.
+
+    Two knobs the first version did not have, both of them corrections rather
+    than tuning:
+
+    - `moderate_penalty` discounts topics that came from the "Moderate
+      relevance" line. It is expressed in standard deviations of *this* scorer's
+      own similarity distribution, because embedding cosines sit in a narrow band
+      around 0.8 while TF-IDF cosines sit near 0.05 — a penalty in raw points
+      would mean something completely different to each of them, and the whole
+      point of the TF-IDF baseline is that only the text representation differs.
+    - `aggregate="topk"` averages the k best-matching topics instead of taking
+      the single best. A plain max grows mechanically with the number of topics,
+      so a long generated profile and a fresh account's three sentences end up on
+      different scales — harmless for AUC inside one profile, but it is exactly
+      what the calibration step has to map onto a fixed 0..1 range.
+    """
+    if moderate_penalty and any(moderate_mask):
+        step = float(sims.std()) or 1.0
+        sims = sims - np.where(np.asarray(moderate_mask), moderate_penalty * step, 0.0)
+    if aggregate == "max" or sims.shape[1] <= 1:
+        return sims.max(axis=1)
+    k = min(top_k, sims.shape[1])
+    return np.partition(sims, -k, axis=1)[:, -k:].mean(axis=1)
+
+
 def profile_score(article_vecs: np.ndarray, positive: np.ndarray,
-                  negative: np.ndarray | None) -> np.ndarray:
-    """Closeness to the best-matching interest, minus closeness to the avoid list."""
-    score = max_cosine(article_vecs, positive)
+                  negative: np.ndarray | None, moderate_mask: list[bool],
+                  moderate_penalty: float, aggregate: str, top_k: int,
+                  ) -> np.ndarray:
+    """Closeness to the wanted interests, minus closeness to the avoid list.
+
+    The negative side keeps a plain max: matching *any* avoided topic is the
+    signal, and the avoid list is three items long.
+    """
+    score = aggregate_positive(article_vecs @ positive.T, moderate_mask,
+                               moderate_penalty, aggregate, top_k)
     if negative is not None and len(negative):
         score = score - max_cosine(article_vecs, negative)
     return score
 
 
 def tfidf_scores(article_texts: list[str], positive: list[str],
-                 negative: list[str]) -> np.ndarray:
+                 negative: list[str], moderate_mask: list[bool],
+                 moderate_penalty: float, aggregate: str, top_k: int,
+                 ) -> np.ndarray:
     """Lexical baseline: if embeddings cannot beat this, the sidecar is pointless.
 
     Fitted on the articles only. A profile word the corpus never uses then drops
     out, which is the honest behaviour: lexical matching cannot score what it has
-    never seen. Negatives are subtracted the same way as for embeddings, so the
-    two baselines differ only in how they represent text.
+    never seen. Negatives are subtracted and positives aggregated exactly as for
+    embeddings, so the two baselines differ only in how they represent text.
     """
     from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.metrics.pairwise import cosine_similarity
@@ -336,7 +420,9 @@ def tfidf_scores(article_texts: list[str], positive: list[str],
                           strip_accents="unicode", ngram_range=(1, 2),
                           min_df=2, max_features=200_000)
     articles = vec.fit_transform(article_texts)
-    score = cosine_similarity(articles, vec.transform(positive)).max(axis=1)
+    score = aggregate_positive(
+        cosine_similarity(articles, vec.transform(positive)),
+        moderate_mask, moderate_penalty, aggregate, top_k)
     if negative:
         score = score - cosine_similarity(articles, vec.transform(negative)).max(axis=1)
     return score
@@ -448,9 +534,26 @@ def main() -> None:
     ap.add_argument("--sample", required=True, type=Path)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--model", default="intfloat/multilingual-e5-small")
-    ap.add_argument("--prefix-family", default="e5", choices=sorted(PREFIXES))
+    ap.add_argument("--prefix-family", default=None, choices=sorted(PREFIXES),
+                    help="input prefix convention; derived from the model name "
+                         "when omitted")
     ap.add_argument("--profile-mode", default="b", choices=["a", "b"],
                     help="a = one vector per side, b = one vector per topic")
+    ap.add_argument("--moderate-penalty", type=float, default=0.0,
+                    help="discount topics from the 'Moderate relevance' line, in "
+                         "standard deviations of the scorer's own similarities "
+                         "(0 = treat them like High, which is what the first "
+                         "round of runs did)")
+    ap.add_argument("--aggregate", default="max", choices=["max", "topk"],
+                    help="reduce per-topic similarities by the single best match "
+                         "or by the mean of the k best")
+    ap.add_argument("--top-k", type=int, default=3,
+                    help="k for --aggregate topk")
+    ap.add_argument("--exposure-floor", type=float, default=None,
+                    help="LLM score below which a filter acted on the article "
+                         "(mark_read/archive), making its engagement label an "
+                         "effect of the score being evaluated; adds a second set "
+                         "of metrics computed without that band")
     ap.add_argument("--input", default="title300",
                     choices=["title", "title300", "full2000"])
     ap.add_argument("--profile-lines", type=int, default=None,
@@ -491,9 +594,17 @@ def main() -> None:
     segments = assign_segments(meta, rows)
     older = segments.pop("_older")
 
+    prefix_family = args.prefix_family or default_prefix_family(args.model)
+    if args.prefix_family is None:
+        print(f"prefix family: {prefix_family} (derived from {args.model})",
+              file=sys.stderr)
+    if args.moderate_penalty and args.profile_mode == "a":
+        print("WARNING: --moderate-penalty does nothing in profile mode a, which "
+              "merges the profile lines into one block", file=sys.stderr)
+
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer(args.model)
-    query_prefix, passage_prefix = PREFIXES[args.prefix_family]
+    query_prefix, passage_prefix = PREFIXES[prefix_family]
 
     # Article vectors are shared by every segment, so encode once for the whole
     # sample and slice afterwards.
@@ -529,7 +640,12 @@ def main() -> None:
             "profile_lines": args.profile_lines,
             "profile_topics": args.profile_topics,
             "ignore_negatives": args.ignore_negatives,
-            "prefix_family": args.prefix_family,
+            "moderate_penalty": args.moderate_penalty,
+            "aggregate": args.aggregate,
+            "top_k": args.top_k if args.aggregate == "topk" else None,
+            "exposure_floor": args.exposure_floor,
+            "prefix_family": prefix_family,
+            "prefix_family_derived": args.prefix_family is None,
             # Input longer than the model's window is silently truncated, which is
             # the whole question behind the `full2000` variant.
             "max_seq_length": getattr(model, "max_seq_length", None),
@@ -551,26 +667,47 @@ def main() -> None:
     }
 
     def score_segment(name: str, seg_rows: list[dict], profile: str) -> dict:
-        positive, negative = parse_profile(profile, args.profile_mode,
-                                           args.profile_lines, args.profile_topics)
+        positive, moderate_mask, negative = parse_profile(
+            profile, args.profile_mode, args.profile_lines, args.profile_topics)
         if args.ignore_negatives:
             negative = []
         pos_vecs = embed(model, positive, query_prefix, args.batch_size)
         neg_vecs = (embed(model, negative, query_prefix, args.batch_size)
                     if negative else None)
         idx = [r["_index"] for r in seg_rows]
+        agg = (args.moderate_penalty, args.aggregate, args.top_k)
         return {
             "name": name,
             "scores": {
-                "embedding": profile_score(vectors[idx], pos_vecs, neg_vecs).tolist(),
+                "embedding": profile_score(vectors[idx], pos_vecs, neg_vecs,
+                                           moderate_mask, *agg).tolist(),
                 "llm": [r["ai_score"] for r in seg_rows],
-                "tfidf": tfidf_scores([texts[i] for i in idx], positive, negative).tolist(),
+                "tfidf": tfidf_scores([texts[i] for i in idx], positive, negative,
+                                      moderate_mask, *agg).tolist(),
             },
             "engaged": [bool(r["engaged"]) for r in seg_rows],
             "rows": seg_rows,
             "profile_chars": len(profile),
             "profile_positive_units": positive,
+            "profile_moderate_units": [u for u, m in zip(positive, moderate_mask) if m],
             "profile_negative_units": negative,
+        }
+
+    def restrict_to_exposed(scored: dict, floor: float) -> dict:
+        """Drop the band where an ai_score filter decided what the user could see.
+
+        With `ai_score < X -> mark_read` in place, those articles never reached
+        the unread list, so their engaged=0 is an effect of the LLM score rather
+        than evidence about it — and the embedding never had that lever. Metrics
+        on the remaining band are not "the truth" either (cutting on the LLM's own
+        scale restricts its range and pushes its AUC down), but the two views
+        bracket the answer instead of quietly reporting the flattering end.
+        """
+        keep = [i for i, s in enumerate(scored["scores"]["llm"]) if s >= floor]
+        return scored | {
+            "scores": {k: [v[i] for i in keep] for k, v in scored["scores"].items()},
+            "engaged": [scored["engaged"][i] for i in keep],
+            "rows": [scored["rows"][i] for i in keep],
         }
 
     def segment_report(scored: dict) -> dict:
@@ -586,6 +723,7 @@ def main() -> None:
             # nonsense (a label matched as negative, a topic list split at the
             # wrong comma) is the first thing to suspect in a bad result.
             "profile_positive_units": scored["profile_positive_units"],
+            "profile_moderate_units": scored.get("profile_moderate_units", []),
             "profile_negative_units": scored["profile_negative_units"],
             "n": len(engaged),
             "engaged": n_pos,
@@ -633,14 +771,36 @@ def main() -> None:
     if not scored_segments:
         raise SystemExit("no segment held any rows")
 
-    run["pooled"] = {
-        "auc_diff_embedding_minus_llm": pooled_auc_diff(scored_segments, "embedding", "llm"),
-        "auc_diff_embedding_minus_tfidf": pooled_auc_diff(scored_segments, "embedding", "tfidf"),
-        "bootstrap_embedding_minus_llm": paired_bootstrap(
-            scored_segments, "embedding", "llm", args.bootstrap, args.seed),
-        "bootstrap_embedding_minus_tfidf": paired_bootstrap(
-            scored_segments, "embedding", "tfidf", args.bootstrap, args.seed + 1),
-    }
+    def pooled_block(segs: list[dict], seed: int) -> dict:
+        return {
+            "auc_diff_embedding_minus_llm": pooled_auc_diff(segs, "embedding", "llm"),
+            "auc_diff_embedding_minus_tfidf": pooled_auc_diff(segs, "embedding", "tfidf"),
+            "bootstrap_embedding_minus_llm": paired_bootstrap(
+                segs, "embedding", "llm", args.bootstrap, seed),
+            "bootstrap_embedding_minus_tfidf": paired_bootstrap(
+                segs, "embedding", "tfidf", args.bootstrap, seed + 1),
+        }
+
+    run["pooled"] = pooled_block(scored_segments, args.seed)
+
+    # Second view without the band a filter acted on. Reported alongside the
+    # first, never instead of it: one is inflated by the filter having
+    # manufactured a guaranteed-negative tail, the other deflated by the range
+    # restriction, and the honest reading is the pair.
+    if args.exposure_floor is not None:
+        exposed = [restrict_to_exposed(s, args.exposure_floor) for s in scored_segments]
+        exposed = [s for s in exposed if len(set(s["engaged"])) > 1]
+        if exposed:
+            run["exposed"] = {
+                "floor": args.exposure_floor,
+                "dropped": sum(len(s["engaged"]) for s in scored_segments)
+                           - sum(len(s["engaged"]) for s in exposed),
+                "segments": {s["name"]: segment_report(s) for s in exposed},
+                "pooled": pooled_block(exposed, args.seed + 2),
+            }
+        else:
+            print("WARNING: the exposure floor leaves no segment with both classes",
+                  file=sys.stderr)
 
     # Control run: the whole exported window against today's profile, including
     # the rows older than P2 whose profile text is gone. Circular in a way the
@@ -707,6 +867,21 @@ def main() -> None:
     print(f"pooled AUC(emb) - AUC(tfidf) = "
           f"{run['pooled']['auc_diff_embedding_minus_tfidf']:+.3f} "
           f"[{boot_t['ci_low']:+.3f}, {boot_t['ci_high']:+.3f}]")
+    if "exposed" in run:
+        exp = run["exposed"]
+        print(f"\n--- without the band below llm={exp['floor']} "
+              f"({exp['dropped']} articles a filter acted on) ---")
+        for name, rep in exp["segments"].items():
+            print(f"{name}: n={rep['n']} engaged={rep['engaged']} "
+                  f"({rep['engaged_rate']:.1%})  AUC llm={rep['auc']['llm']:.3f} "
+                  f"emb={rep['auc']['embedding']:.3f} "
+                  f"tfidf={rep['auc']['tfidf']:.3f}")
+        for other, key in (("llm", "bootstrap_embedding_minus_llm"),
+                           ("tfidf", "bootstrap_embedding_minus_tfidf")):
+            b = exp["pooled"][key]
+            diff = exp["pooled"][f"auc_diff_embedding_minus_{other}"]
+            print(f"pooled AUC(emb) - AUC({other}) = {diff:+.3f} "
+                  f"[{b['ci_low']:+.3f}, {b['ci_high']:+.3f}]")
     if "control" in run:
         ctl = run["control"]
         print(f"control (whole window, current profile): n={ctl['n']} "
