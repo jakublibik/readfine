@@ -44,7 +44,7 @@ import json
 import random
 import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +54,7 @@ from run_eval import (  # noqa: E402
     BM25_K1,
     BM25_B,
     _bm25_weighted_matrix,
+    aggregate_positive,
     article_text,
     default_prefix_family,
     parse_profile,
@@ -111,7 +112,10 @@ def prepare(args) -> None:
                             normalize_embeddings=True)
     neg_vecs = (model.encode([query_prefix + t for t in negative],
                              normalize_embeddings=True) if negative else None)
-    emb = (art_vecs @ pos_vecs.T).max(axis=1)
+    # Same aggregation the eval run uses, so this is the configuration that was
+    # actually measured rather than a third variant invented for the review.
+    agg = (args.moderate_penalty, "max", 3)
+    emb = aggregate_positive(art_vecs @ pos_vecs.T, moderate_mask, *agg)
     if neg_vecs is not None and len(neg_vecs):
         emb = emb - (art_vecs @ neg_vecs.T).max(axis=1)
 
@@ -123,7 +127,7 @@ def prepare(args) -> None:
         q = (vec.transform(units) > 0).astype(np.float64)
         return np.asarray((weighted @ q.T).todense())
 
-    bm25 = bm25_against(positive).max(axis=1)
+    bm25 = aggregate_positive(bm25_against(positive), moderate_mask, *agg)
     if negative:
         bm25 = bm25 - bm25_against(negative).max(axis=1)
 
@@ -138,6 +142,25 @@ def prepare(args) -> None:
     for i in rng.sample(remaining, min(args.control, len(remaining))):
         picks[i].append("random")
 
+    # Feed-matched control. A scorer whose picks come mostly from one feed may be
+    # doing nothing more than preferring that feed, which the app can already do
+    # per feed without any model. Drawing one random article from the same feed
+    # for each pick holds the feed mix fixed, so what is left is the choice made
+    # inside a feed.
+    if args.feed_matched:
+        by_feed = defaultdict(list)
+        for i, row in enumerate(rows):
+            if i not in picks:
+                by_feed[row.get("feed_id")].append(i)
+        wanted = [rows[i].get("feed_id") for i, s in picks.items()
+                  if "embedding" in s]
+        rng.shuffle(wanted)
+        for feed in wanted[:args.feed_matched]:
+            candidates = by_feed.get(feed) or []
+            if candidates:
+                j = candidates.pop(rng.randrange(len(candidates)))
+                picks[j].append("same-feed")
+
     order = list(picks)
     rng.shuffle(order)
     with args.out.open("w", encoding="utf-8", newline="") as fh:
@@ -148,10 +171,12 @@ def prepare(args) -> None:
     args.key.write_text(json.dumps({
         "seed": args.seed, "model": args.model, "input": args.input,
         "top": args.top, "control": args.control,
+        "moderate_penalty": args.moderate_penalty,
         "pool_size": len(rows),
+        "selectivity": args.top / len(rows),
         "profile_positive_units": positive,
         "rows": [{"n": n, "article_id": rows[i]["article_id"],
-                  "sources": picks[i],
+                  "sources": picks[i], "feed_id": rows[i].get("feed_id"),
                   "embedding": float(emb[i]), "bm25": float(bm25[i])}
                  for n, i in enumerate(order, 1)],
     }, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -159,8 +184,20 @@ def prepare(args) -> None:
     overlap = sum(1 for s in picks.values() if "embedding" in s and "bm25" in s)
     print(f"pool: {len(rows)} unscored articles", file=sys.stderr)
     print(f"candidates: {len(order)} rows in {args.out} "
-          f"({args.top} per scorer, {overlap} picked by both, "
-          f"{args.control} random controls)", file=sys.stderr)
+          f"({args.top} per scorer = top {args.top / len(rows):.1%} of the pool, "
+          f"{overlap} picked by both, {args.control} random controls)",
+          file=sys.stderr)
+    # A pick list drawn from one feed would say the feed is on topic, not that
+    # the scorer can choose; the pool itself is concentrated, so report both.
+    pool_feeds = Counter(r.get("feed_id") for r in rows)
+    for name in ("embedding", "bm25"):
+        chosen = Counter(rows[i].get("feed_id") for i, s in picks.items()
+                         if name in s)
+        top_feed, count = chosen.most_common(1)[0]
+        print(f"{name}: picks span {len(chosen)} feeds, biggest is "
+              f"{count}/{sum(chosen.values())} from feed {top_feed} "
+              f"(that feed is {pool_feeds[top_feed] / len(rows):.0%} of the pool)",
+              file=sys.stderr)
     print(f"key written to {args.key} - do not open it before judging",
           file=sys.stderr)
 
@@ -203,14 +240,16 @@ def score(args) -> None:
 
     control = groups.get("random", {"n": 0, "want": 0})
     base = (control["want"] / control["n"]) if control["n"] else None
+    labels = {"embedding": "embedding", "bm25": "BM25", "random": "random",
+              "same-feed": "same feed"}
     print(f"\n{'group':<12}{'shown':>7}{'wanted':>8}{'rate':>8}{'vs control':>12}")
-    for name in ("embedding", "bm25", "random"):
+    for name in ("embedding", "bm25", "same-feed", "random"):
         g = groups.get(name)
         if not g or not g["n"]:
             continue
         rate = g["want"] / g["n"]
         lift = f"{rate / base:.2f}x" if base else "n/a"
-        print(f"{name:<12}{g['n']:>7}{g['want']:>8}{rate:>7.0%}{lift:>12}")
+        print(f"{labels[name]:<12}{g['n']:>7}{g['want']:>8}{rate:>7.0%}{lift:>12}")
 
     if base is None or base == 0:
         print("\nNo control articles were wanted, so any hit rate above zero is "
@@ -219,6 +258,21 @@ def score(args) -> None:
         print(f"\nControl rate is {base:.0%}: that is what picking at random from "
               f"the unscored pool gets you. A scorer has to beat it clearly to be "
               f"worth the infrastructure.")
+
+    same_feed = groups.get("same-feed")
+    emb = groups.get("embedding")
+    if same_feed and same_feed["n"] and emb and emb["n"]:
+        sf_rate = same_feed["want"] / same_feed["n"]
+        emb_rate = emb["want"] / emb["n"]
+        print(f"\nSame-feed control is {sf_rate:.0%}, drawn at random from the "
+              f"feeds the embedding picked from.")
+        if emb_rate > sf_rate:
+            print(f"  The embedding beats it ({emb_rate:.0%}), so it is choosing "
+                  f"articles, not just choosing a feed.")
+        else:
+            print(f"  The embedding does not beat it ({emb_rate:.0%}): its picks "
+                  f"are explained by which feeds they came from, and preferring a "
+                  f"feed needs a per-feed setting, not a model.")
 
     both = [n for n in verdicts if set(by_n[n]["sources"]) >= {"embedding", "bm25"}]
     only_emb = [n for n in verdicts if by_n[n]["sources"] == ["embedding"]]
@@ -255,6 +309,15 @@ def main() -> None:
     p.add_argument("--control", type=int, default=20,
                    help="random articles mixed in; without these the result is "
                         "unreadable, so this is not a knob to turn to zero")
+    p.add_argument("--feed-matched", type=int, default=18,
+                   help="random articles drawn from the same feeds the embedding "
+                        "picked from, to tell choosing an article apart from "
+                        "choosing a feed")
+    p.add_argument("--moderate-penalty", type=float, default=1.0,
+                   help="discount for topics from the 'Moderate relevance' line, "
+                        "in standard deviations of the scorer's own similarities. "
+                        "Defaults to the value that measured best on the scored "
+                        "sample, so the review sees the embedding at its best")
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--seed", type=int, default=20260824)
     p.set_defaults(func=prepare)
