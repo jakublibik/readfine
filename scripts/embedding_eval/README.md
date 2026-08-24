@@ -65,6 +65,15 @@ Notes on what the run does, because they are decisions and not details:
 - **AUC lives inside a segment.** The profile regimes have different base rates,
   so only the difference is pooled (weighted by pair count) and the bootstrap
   resamples within segments.
+- **BM25 is the baseline that decides the sidecar, not TF-IDF.** TF-IDF cosine
+  is the weaker standard lexical ranker: no term-frequency saturation, and it
+  normalises by vector length rather than document length, both of which hurt on
+  queries as short as a profile topic. BM25 is what a search engine would use, so
+  it is the honest thing to beat: a model container has to earn its RAM against
+  the ranker you would otherwise get for free. Both share the tokenizer
+  (lowercasing, accent stripping, 1-2 grams, `min_df=2`), so what separates them
+  is the weighting scheme and nothing else. The run also reports BM25 against
+  TF-IDF, since which of the two is "the lexical baseline" matters.
 - **High and Moderate are two labels, not one.** The profile splits topics into
   "High relevance" and "Moderate relevance" lines, and the LLM honours the
   difference. The first round of runs did not: every positive topic went into one

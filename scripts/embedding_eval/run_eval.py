@@ -428,6 +428,73 @@ def tfidf_scores(article_texts: list[str], positive: list[str],
     return score
 
 
+BM25_K1 = 1.5
+BM25_B = 0.75
+
+
+def _bm25_weighted_matrix(counts, k1: float, b: float):
+    """Turn a term-count matrix into BM25 document weights.
+
+    `W[d,t] = idf[t] * f(t,d)*(k1+1) / (f(t,d) + k1*(1 - b + b*|d|/avgdl))`, so a
+    query score is then a plain dot product with the query's term indicator.
+    Only the stored non-zeros are touched, because the dense form of a corpus
+    this size would be tens of gigabytes.
+    """
+    import numpy as _np
+
+    n_docs = counts.shape[0]
+    doc_len = _np.asarray(counts.sum(axis=1)).ravel()
+    avgdl = doc_len.mean() or 1.0
+    df = _np.asarray((counts > 0).sum(axis=0)).ravel()
+    # BM25's idf, not TF-IDF's: it can go negative for terms in over half the
+    # corpus, which is the intended "this word says nothing" behaviour.
+    idf = _np.log(1.0 + (n_docs - df + 0.5) / (df + 0.5))
+
+    weighted = counts.tocsr(copy=True).astype(_np.float64)
+    rows = _np.repeat(_np.arange(n_docs), _np.diff(weighted.indptr))
+    norm = k1 * (1.0 - b + b * doc_len[rows] / avgdl)
+    weighted.data = (idf[weighted.indices] * weighted.data * (k1 + 1.0)
+                     / (weighted.data + norm))
+    return weighted
+
+
+def bm25_scores(article_texts: list[str], positive: list[str],
+                negative: list[str], moderate_mask: list[bool],
+                moderate_penalty: float, aggregate: str, top_k: int,
+                ) -> np.ndarray:
+    """The lexical baseline done properly, as the thing to actually beat.
+
+    TF-IDF cosine is the weaker of the two standard lexical rankers: it has no
+    term-frequency saturation and normalises by vector length rather than
+    document length, both of which hurt on short queries like a profile topic.
+    BM25 is what a search engine would use, so if the embedding cannot beat it
+    there is no case for shipping a model container to do the same job.
+
+    Deliberately shares the tokenizer with `tfidf_scores` (same lowercasing,
+    accent stripping, n-grams and `min_df`), so the difference measured between
+    the two is the weighting scheme and nothing else.
+    """
+    import numpy as _np
+    from sklearn.feature_extraction.text import CountVectorizer
+
+    vec = CountVectorizer(lowercase=True, strip_accents="unicode",
+                          ngram_range=(1, 2), min_df=2, max_features=200_000)
+    weighted = _bm25_weighted_matrix(vec.fit_transform(article_texts),
+                                     BM25_K1, BM25_B)
+
+    def against(units: list[str]) -> _np.ndarray:
+        # Query terms count once each: BM25's k3 term-frequency component is
+        # pointless on queries this short.
+        q = (vec.transform(units) > 0).astype(_np.float64)
+        return _np.asarray((weighted @ q.T).todense())
+
+    score = aggregate_positive(against(positive), moderate_mask,
+                               moderate_penalty, aggregate, top_k)
+    if negative:
+        score = score - against(negative).max(axis=1)
+    return score
+
+
 # ── metrics ───────────────────────────────────────────────────────────────────
 
 def paired_bootstrap(segments: list[dict], key_a: str, key_b: str,
@@ -684,6 +751,8 @@ def main() -> None:
                 "llm": [r["ai_score"] for r in seg_rows],
                 "tfidf": tfidf_scores([texts[i] for i in idx], positive, negative,
                                       moderate_mask, *agg).tolist(),
+                "bm25": bm25_scores([texts[i] for i in idx], positive, negative,
+                                    moderate_mask, *agg).tolist(),
             },
             "engaged": [bool(r["engaged"]) for r in seg_rows],
             "rows": seg_rows,
@@ -714,6 +783,7 @@ def main() -> None:
         emb = scored["scores"]["embedding"]
         llm = scored["scores"]["llm"]
         tfidf = scored["scores"]["tfidf"]
+        bm25 = scored["scores"]["bm25"]
         engaged = scored["engaged"]
         n_pos = sum(engaged)
         llm_labels, median, share = binarize(llm)
@@ -732,12 +802,14 @@ def main() -> None:
                 "llm": compute_auc(list(zip(llm, engaged))),
                 "embedding": compute_auc(list(zip(emb, engaged))),
                 "tfidf": compute_auc(list(zip(tfidf, engaged))),
+                "bm25": compute_auc(list(zip(bm25, engaged))),
             },
             "agreement_auc_vs_llm": {
                 "llm_median": median,
                 "share_above_median": share,
                 "embedding": compute_auc(list(zip(emb, llm_labels))),
                 "tfidf": compute_auc(list(zip(tfidf, llm_labels))),
+                "bm25": compute_auc(list(zip(bm25, llm_labels))),
             },
             "operating_points": {},
             "llm_calibration": calibration_buckets(list(zip(llm, engaged))),
@@ -753,6 +825,7 @@ def main() -> None:
                 "llm": operating_point(llm, engaged, keep),
                 "embedding": operating_point(emb, engaged, keep),
                 "tfidf": operating_point(tfidf, engaged, keep),
+                "bm25": operating_point(bm25, engaged, keep),
             }
         return report
 
@@ -771,15 +844,24 @@ def main() -> None:
     if not scored_segments:
         raise SystemExit("no segment held any rows")
 
+    # bm25 is the one that decides whether a model container earns its place, so
+    # it gets the same paired treatment as the LLM comparison rather than being
+    # a number printed on the side.
+    COMPARISONS = ("llm", "tfidf", "bm25")
+
     def pooled_block(segs: list[dict], seed: int) -> dict:
-        return {
-            "auc_diff_embedding_minus_llm": pooled_auc_diff(segs, "embedding", "llm"),
-            "auc_diff_embedding_minus_tfidf": pooled_auc_diff(segs, "embedding", "tfidf"),
-            "bootstrap_embedding_minus_llm": paired_bootstrap(
-                segs, "embedding", "llm", args.bootstrap, seed),
-            "bootstrap_embedding_minus_tfidf": paired_bootstrap(
-                segs, "embedding", "tfidf", args.bootstrap, seed + 1),
-        }
+        block = {}
+        for offset, other in enumerate(COMPARISONS):
+            block[f"auc_diff_embedding_minus_{other}"] = pooled_auc_diff(
+                segs, "embedding", other)
+            block[f"bootstrap_embedding_minus_{other}"] = paired_bootstrap(
+                segs, "embedding", other, args.bootstrap, seed + offset)
+        # tfidf against bm25 too: if the cheap ranker is already the better one,
+        # that changes what "the lexical baseline" even means.
+        block["auc_diff_bm25_minus_tfidf"] = pooled_auc_diff(segs, "bm25", "tfidf")
+        block["bootstrap_bm25_minus_tfidf"] = paired_bootstrap(
+            segs, "bm25", "tfidf", args.bootstrap, seed + len(COMPARISONS))
+        return block
 
     run["pooled"] = pooled_block(scored_segments, args.seed)
 
@@ -796,7 +878,8 @@ def main() -> None:
                 "dropped": sum(len(s["engaged"]) for s in scored_segments)
                            - sum(len(s["engaged"]) for s in exposed),
                 "segments": {s["name"]: segment_report(s) for s in exposed},
-                "pooled": pooled_block(exposed, args.seed + 2),
+                # offset well clear of the seeds pooled_block uses above
+                "pooled": pooled_block(exposed, args.seed + 100),
             }
         else:
             print("WARNING: the exposure floor leaves no segment with both classes",
@@ -842,51 +925,47 @@ def main() -> None:
         with args.dump_scores.open("w", encoding="utf-8", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["segment", "article_id", "scored_at", "llm", "embedding",
-                             "tfidf", "engaged", "title"])
+                             "tfidf", "bm25", "engaged", "title"])
             for seg in scored_segments:
                 for i, row in enumerate(seg["rows"]):
                     writer.writerow([
                         seg["name"], row["article_id"], row.get("scored_at"),
                         seg["scores"]["llm"][i], f"{seg['scores']['embedding'][i]:.6f}",
-                        f"{seg['scores']['tfidf'][i]:.6f}", int(seg["engaged"][i]),
+                        f"{seg['scores']['tfidf'][i]:.6f}",
+                        f"{seg['scores']['bm25'][i]:.6f}", int(seg["engaged"][i]),
                         row["title"],
                     ])
         print(f"per-article scores written to {args.dump_scores}", file=sys.stderr)
 
     # Console summary, so a run is readable without opening the JSON.
+    def print_view(segments: dict, pooled: dict) -> None:
+        for name, rep in segments.items():
+            print(f"{name}: n={rep['n']} engaged={rep['engaged']} "
+                  f"({rep['engaged_rate']:.1%})  AUC llm={rep['auc']['llm']:.3f} "
+                  f"emb={rep['auc']['embedding']:.3f} "
+                  f"bm25={rep['auc']['bm25']:.3f} "
+                  f"tfidf={rep['auc']['tfidf']:.3f}")
+        for a, b_key in (("embedding", "llm"), ("embedding", "bm25"),
+                         ("embedding", "tfidf"), ("bm25", "tfidf")):
+            boot = pooled[f"bootstrap_{a}_minus_{b_key}"]
+            diff = pooled[f"auc_diff_{a}_minus_{b_key}"]
+            label = f"AUC({'emb' if a == 'embedding' else a}) - AUC({b_key})"
+            print(f"pooled {label:<26} = {diff:+.3f} "
+                  f"[{boot['ci_low']:+.3f}, {boot['ci_high']:+.3f}]")
+
     print(f"\n=== {run['run']['label']} ===")
-    for name, rep in run["segments"].items():
-        print(f"{name}: n={rep['n']} engaged={rep['engaged']} "
-              f"({rep['engaged_rate']:.1%})  AUC llm={rep['auc']['llm']:.3f} "
-              f"emb={rep['auc']['embedding']:.3f} tfidf={rep['auc']['tfidf']:.3f}")
-    boot = run["pooled"]["bootstrap_embedding_minus_llm"]
-    print(f"pooled AUC(emb) - AUC(llm) = "
-          f"{run['pooled']['auc_diff_embedding_minus_llm']:+.3f} "
-          f"[{boot['ci_low']:+.3f}, {boot['ci_high']:+.3f}]")
-    boot_t = run["pooled"]["bootstrap_embedding_minus_tfidf"]
-    print(f"pooled AUC(emb) - AUC(tfidf) = "
-          f"{run['pooled']['auc_diff_embedding_minus_tfidf']:+.3f} "
-          f"[{boot_t['ci_low']:+.3f}, {boot_t['ci_high']:+.3f}]")
+    print_view(run["segments"], run["pooled"])
     if "exposed" in run:
         exp = run["exposed"]
         print(f"\n--- without the band below llm={exp['floor']} "
               f"({exp['dropped']} articles a filter acted on) ---")
-        for name, rep in exp["segments"].items():
-            print(f"{name}: n={rep['n']} engaged={rep['engaged']} "
-                  f"({rep['engaged_rate']:.1%})  AUC llm={rep['auc']['llm']:.3f} "
-                  f"emb={rep['auc']['embedding']:.3f} "
-                  f"tfidf={rep['auc']['tfidf']:.3f}")
-        for other, key in (("llm", "bootstrap_embedding_minus_llm"),
-                           ("tfidf", "bootstrap_embedding_minus_tfidf")):
-            b = exp["pooled"][key]
-            diff = exp["pooled"][f"auc_diff_embedding_minus_{other}"]
-            print(f"pooled AUC(emb) - AUC({other}) = {diff:+.3f} "
-                  f"[{b['ci_low']:+.3f}, {b['ci_high']:+.3f}]")
+        print_view(exp["segments"], exp["pooled"])
     if "control" in run:
         ctl = run["control"]
         print(f"control (whole window, current profile): n={ctl['n']} "
               f"engaged={ctl['engaged']}  AUC llm={ctl['auc']['llm']:.3f} "
-              f"emb={ctl['auc']['embedding']:.3f} tfidf={ctl['auc']['tfidf']:.3f}")
+              f"emb={ctl['auc']['embedding']:.3f} bm25={ctl['auc']['bm25']:.3f} "
+              f"tfidf={ctl['auc']['tfidf']:.3f}")
     print(f"written to {args.out}")
 
 
