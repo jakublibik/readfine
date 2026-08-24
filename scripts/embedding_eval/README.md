@@ -50,7 +50,46 @@ carried the LLM's AUC from 0.69 to 0.85. The flag adds a second set of metrics
 without that band; report both, since the first is inflated by the manufactured
 negative tail and the second deflated by the range restriction.
 
-Notes on what the run does, because they are decisions and not details:
+## 3. Scenario C: the articles nobody scored
+
+Scoring is enqueued only when a non-AI filter applies a `label` action
+(`filter_service.py:581`), so the set that gets an LLM score is the one keyword
+and feed rules picked out, and roughly two thirds of what arrives gets nothing.
+Whether a score would surface anything worth reading in there is a separate
+question, and **it cannot be answered with an AUC**: the user is only ever shown
+labeled articles, so engagement on the rest is zero by construction no matter how
+good they are. It is decided by reading titles.
+
+```bash
+# on the server
+docker exec readfine-app-1 python /tmp/export_sample.py --user-id 1 \
+    --since 2026-07-01 --unscored --limit 1500 > ~/unscored.jsonl
+
+# on the dev machine
+uv run --script review_unscored.py prepare --sample unscored.jsonl \
+    --out review.csv --key review_key.json
+# fill the `want` column with y/n, without opening the key file
+uv run --script review_unscored.py score --review review.csv --key review_key.json
+```
+
+The review list is built so that reading titles proves something:
+
+- **Blind.** Which scorer picked which article lives in the key file, not in the
+  list, so "the embedding's picks look good" cannot be wishful reading.
+- **With a control.** Random articles from the same pool are mixed in. Without
+  them "9 of 20 look interesting" means nothing, because nobody knows what 20
+  random ones would have scored. Do not set `--control 0`.
+- **Against BM25.** If word matching surfaces the same articles, the semantic
+  model is not what found them, and the summary reports the embedding's
+  hit rate on the picks BM25 missed separately for that reason.
+
+A blank verdict is an error rather than a "no": a half-finished review would
+otherwise read as "the scorers found nothing", which is the one wrong answer this
+test could produce unnoticed.
+
+## Notes
+
+Notes on what the runs do, because they are decisions and not details:
 
 - **The sample is split by when the score was written**, not when the article
   arrived: a retroactively applied filter scores old articles against a newer

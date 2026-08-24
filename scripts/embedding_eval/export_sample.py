@@ -46,12 +46,69 @@ def iso(value) -> str | None:
     return value.isoformat() if value else None
 
 
+async def export_unscored(session, args, since, until) -> tuple[int, int]:
+    """Articles in the user's feeds that never got a score (scenario C).
+
+    Scoring is enqueued only when a non-AI filter applies a `label` action
+    (`filter_service.py:581`), so the scored set is the one keyword and feed
+    rules picked out. This exports the complement: what word matching missed,
+    which is where a semantic score would have to earn its place.
+
+    There is no engagement to measure against here and there never will be. The
+    user is only shown labeled articles, so engagement on the rest is zero by
+    construction regardless of how good they are. That is the exposure trap
+    written down in the plan, and it is why scenario C is decided by reading a
+    sample rather than by an AUC.
+
+    Sampled at random rather than newest-first: the newest N would be whatever
+    the last few fetch cycles brought in, which skews by feed and by topic.
+    """
+    result = await session.stream(text("""
+        SELECT a.id AS article_id, a.title, a.url, a.feed_id,
+               a.published_at, a.fetched_at, a.readable_content, a.content
+        FROM articles a
+        JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
+        LEFT JOIN user_article_states s
+               ON s.article_id = a.id AND s.user_id = :uid
+        WHERE s.ai_score IS NULL
+          AND a.trimmed_at IS NULL
+          AND a.fetched_at >= :since
+          AND (CAST(:until AS timestamptz) IS NULL OR a.fetched_at < :until)
+        ORDER BY random()
+        LIMIT :limit
+    """), {"uid": args.user_id, "since": since, "until": until,
+           "limit": args.limit})
+
+    written = empty_body = 0
+    async for row in result:
+        body = plain_body(row.readable_content or row.content, BODY_EXPORT_CHARS)
+        empty_body += not body
+        print(json.dumps({
+            "article_id": row.article_id,
+            "fetched_at": iso(row.fetched_at),
+            "published_at": iso(row.published_at),
+            "feed_id": row.feed_id,
+            "title": row.title,
+            "body": body,
+            "has_readable": row.readable_content is not None,
+            "url": row.url,
+        }, ensure_ascii=False), flush=False)
+        written += 1
+    return written, empty_body
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--user-id", type=int, required=True)
     ap.add_argument("--since", required=True,
                     help="ISO date; start of the sample window (state created_at)")
     ap.add_argument("--until", default=None, help="ISO date; optional upper bound")
+    ap.add_argument("--unscored", action="store_true",
+                    help="export articles that never got a score instead (scenario "
+                         "C: what the label-driven scope leaves out). Carries no "
+                         "engagement to measure against, by construction")
+    ap.add_argument("--limit", type=int, default=1500,
+                    help="cap for --unscored, sampled at random across the window")
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding="utf-8")  # article text is not ASCII
 
@@ -108,6 +165,7 @@ async def main() -> None:
             "type": "meta",
             "exported_at": datetime.now(timezone.utc).isoformat(),
             "user_id": args.user_id,
+            "kind": "unscored" if args.unscored else "scored",
             "purge_after_days": purge_after_days,
             "window": {"since": since.isoformat(), "until": iso(until)},
             "content_max_chars": CONTENT_MAX_CHARS,
@@ -131,6 +189,15 @@ async def main() -> None:
             },
         }
         print(json.dumps(meta, ensure_ascii=False), flush=True)
+
+        if args.unscored:
+            written, empty_body = await export_unscored(session, args, since, until)
+            await engine.dispose()
+            print(f"exported {written} unscored articles "
+                  f"(empty body={empty_body}); no engagement in this sample, "
+                  f"scenario C is decided by reading the titles",
+                  file=sys.stderr)
+            return
 
         # The scoring job carries the time the score was actually written, which
         # is not the same as the state's created_at: applying a filter
