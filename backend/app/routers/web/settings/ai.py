@@ -348,7 +348,6 @@ async def settings_ai_preferences_save(
     ctx = await _ai_page_context(user, db)
     ctx["prefs_saved"] = True
     ctx["limit_resets"] = limit_resets
-    ctx["summary_banner_html"] = ""
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
@@ -397,43 +396,6 @@ async def settings_ai_verify(
             f'<span class="text-red-600 text-sm">✗ {html_module.escape(result["error"])}</span>'
         )
     return HTMLResponse(html)
-
-
-@router.post("/ai/bulk-summary", response_class=HTMLResponse)
-@limiter.limit("5/minute")
-async def settings_ai_bulk_summary(
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-    _ai: None = Depends(require_ai_enabled),
-):
-    """Enqueue summary jobs for all starred articles without a summary."""
-    from app.models.article import Article as _Article, UserArticleState as _UAS
-    from app.services.ai_summary_service import enqueue_summary_job
-
-    article_ids = (await db.scalars(
-        select(_UAS.article_id).where(
-            _UAS.user_id == user.id,
-            _UAS.is_starred == True,
-            _UAS.ai_summary == None,
-        )
-    )).all()
-
-    count = 0
-    for aid in article_ids:
-        article = await db.scalar(select(_Article).where(_Article.id == aid))
-        if article:
-            created = await enqueue_summary_job(article, user.id, db)
-            if created:
-                count += 1
-
-    await db.commit()
-    return HTMLResponse(
-        f'<div id="ai-summary-banner" class="mt-3 p-3 bg-green-50 border border-green-200 rounded text-sm text-green-800">'
-        f'Summary jobs queued for <strong>{count}</strong> article{"s" if count != 1 else ""}. '
-        f'They will be processed in the background within a few minutes.'
-        f'</div>'
-    )
 
 
 @router.post("/ai/generate-preference", response_class=HTMLResponse)

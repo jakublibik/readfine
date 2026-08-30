@@ -362,11 +362,6 @@
                 class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono">{{ s.ai_context_prompt or '' }}</textarea>
       <p class="text-xs text-gray-400 mt-1">Users can add a per-article focus when generating context.</p>
     </div>
-    {% if summary_banner_html is defined %}
-    {{ summary_banner_html | safe }}
-    {% else %}
-    <div id="ai-summary-banner"></div>
-    {% endif %}
   </div>
 </section>
 
