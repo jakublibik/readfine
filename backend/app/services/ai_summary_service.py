@@ -9,20 +9,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.user import UserSettings
 from app.services.ai_jobs import (
-    ai_enabled_globally, apply_job_failure, clear_last_ai_error, normalize_content,
+    ON_DEMAND_MIN_CHARS, ai_enabled_globally, apply_job_failure, clear_last_ai_error,
+    normalize_text,
 )
 
 logger = logging.getLogger(__name__)
 
 _BATCH_SIZE = 5
-_MIN_CONTENT_CHARS = 1500
-_DEFAULT_CONTENT_LIMIT = 20_000
 
 
-async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) -> bool:
+async def enqueue_summary_job(
+    article: Article, user_id: int, db: AsyncSession, *, min_chars: int | None = None
+) -> bool:
     """
     Create a pending summary job for the given article + user if eligible.
     Returns True if a job was created.
+
+    *min_chars* defaults to the user's minimum length, which is what gates the
+    automatic pipeline. On-demand runs pass ``ON_DEMAND_MIN_CHARS`` instead: the
+    setting is there to stop automation spending on articles too short to be
+    worth it, not to overrule someone pressing the button on one of them.
     """
     if not await ai_enabled_globally(db):
         return False
@@ -43,10 +49,12 @@ async def enqueue_summary_job(article: Article, user_id: int, db: AsyncSession) 
         if uf is not None and uf.ai_summary_enabled is False:
             return False
 
-    content_text = normalize_content(
-        article.title, article.readable_content or article.content, _DEFAULT_CONTENT_LIMIT
-    )
-    if len(content_text) < _MIN_CONTENT_CHARS:
+    # Measured on the full text, not the copy truncated to the content limit, so
+    # the answer does not change with a limit that has nothing to do with it.
+    # Nothing is sent to a model here, so there is nothing to truncate either.
+    threshold = s.ai_min_content_chars if min_chars is None else min_chars
+    full_text = normalize_text(article.title, article.readable_content or article.content)
+    if len(full_text) < threshold:
         return False
 
     result = await db.execute(
@@ -71,13 +79,16 @@ async def _execute_summary_job(
         job.processed_at = now
         return
 
-    content_text = normalize_content(
-        article.title, article.readable_content or article.content, s.ai_content_limit
-    )
-    if len(content_text) < _MIN_CONTENT_CHARS:
-        job.status = "skipped"
-        job.processed_at = now
-        return
+    # No length check here on purpose. Whether an article is worth summarizing is
+    # settled when the job is created, by whoever created it: the pipeline against
+    # the user's minimum, a button press against the on-demand floor. Re-deciding
+    # it at execution time would have to guess which of the two this job came from
+    # (and would quietly drop a hand-requested summary that came back for a retry),
+    # and it would let a settings change cancel work already queued, which is not
+    # what "applies from now on" promises.
+    content_text = normalize_text(
+        article.title, article.readable_content or article.content
+    )[:s.ai_content_limit]
 
     from app.services.ai_service import get_ai_client, summarize_article
     client, provider, model = await get_ai_client(job.user_id, "quality", db)
@@ -142,7 +153,7 @@ async def run_summary_on_demand(
     On success: (text, bool, None). On failure: (None, False, error).
     On ineligible: (None, False, None).
     """
-    await enqueue_summary_job(article, user_id, db)
+    await enqueue_summary_job(article, user_id, db, min_chars=ON_DEMAND_MIN_CHARS)
     await db.flush()
     job = await db.scalar(
         select(ArticleAiJob).where(
@@ -152,7 +163,7 @@ async def run_summary_on_demand(
         )
     )
     if job is None:
-        return None, False, "Summary could not be started. Check that a quality AI model is configured."
+        return None, False, "Summary could not be started. Check that a main AI model is configured."
     if job.status == "success":
         summary, truncated = await _stored_summary(user_id, article.id, db)
         return summary, truncated, None
@@ -170,7 +181,10 @@ async def run_summary_on_demand(
         summary, truncated = await _stored_summary(user_id, article.id, db)
         return summary, truncated, None
     if job.status == "skipped":
-        return None, False, "Article content is too short or AI model not available."
+        # Length cannot land here: the guard and enqueue both measure against the
+        # on-demand floor, and execution does not measure at all. What is left is
+        # the model disappearing between the guard and the run.
+        return None, False, "Summary was skipped. Check that a main AI model is configured."
     # failed
     error = (job.error_message or "Unknown error")[:200]
     return None, False, error

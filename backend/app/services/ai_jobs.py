@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import ArticleAiJob
 from app.models.settings import AppSettings
-from app.models.user import UserSettings
+from app.models.user import AI_MIN_CHARS_MIN, UserSettings
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +29,36 @@ BACKOFF_MINUTES = [5, 30, 120]
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# The floor for AI a reader asked for by hand (the Summarize and Context buttons).
+# Their own minimum length setting governs the automatic pipeline, where the cost
+# multiplies by every article starred; a button someone presses on one article is
+# a statement that this one is worth it, and refusing it leaves no way through
+# except editing settings and coming back. All this floor rules out is a headline
+# with no body behind it, which is nothing for a model to work from.
+#
+# Tied to the lowest value the setting can take rather than repeated as its own
+# number: a floor above that lowest value would invert the whole arrangement, with
+# the button refusing an article the automatic run summarizes on its own.
+ON_DEMAND_MIN_CHARS = AI_MIN_CHARS_MIN
 
-def normalize_content(title: str, content: str | None, limit: int) -> str:
-    """Strip HTML, collapse whitespace, prepend the title, truncate to *limit* chars."""
+
+def normalize_text(title: str, content: str | None) -> str:
+    """Strip HTML, collapse whitespace, prepend the title. Not truncated.
+
+    Kept separate from ``normalize_content`` because "is this article long
+    enough?" must not depend on the content limit: measuring the truncated text
+    makes the same article pass one gate and fail another, and a threshold above
+    the limit would reject everything.
+    """
     plain = nh3.clean(content or "", tags=set())
     plain = _html.unescape(plain)
     plain = _WHITESPACE_RE.sub(" ", plain).strip()
-    combined = f"{title}\n\n{plain}" if plain else title
-    return combined[:limit]
+    return f"{title}\n\n{plain}" if plain else title
+
+
+def normalize_content(title: str, content: str | None, limit: int) -> str:
+    """``normalize_text`` truncated to *limit* chars — what gets sent to a model."""
+    return normalize_text(title, content)[:limit]
 
 
 async def ai_enabled_globally(db: AsyncSession) -> bool:

@@ -13,7 +13,7 @@ from app.utils.datetime_format import (
     timezone_groups,
     is_common_timezone,
 )
-from app.utils.formats import format_number, format_number_g, format_choices
+from app.utils.formats import format_number, format_number_g, format_choices, format_thousands
 from app.utils.form_guard import HONEYPOT_FIELD, issue_form_ts
 from app.fetcher.failure import BLOCK_BADGE_THRESHOLD, BLOCK_DISABLE_THRESHOLD
 
@@ -44,6 +44,7 @@ templates.env.filters["num"] = lambda value, decimals=None: format_number(
 templates.env.filters["numg"] = lambda value: format_number_g(
     None if isinstance(value, Undefined) else value
 )
+templates.env.filters["thousands"] = format_thousands
 
 
 def _catchup_config_json(cfg) -> str:

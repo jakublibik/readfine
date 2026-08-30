@@ -33,6 +33,7 @@ def make_settings(**kwargs):
         "ai_quality_provider": "anthropic",
         "ai_quality_model": "claude-sonnet-4-6",
         "ai_content_limit": 20_000,
+        "ai_min_content_chars": 1_700,
         "ai_summary_prompt": None,
         "last_ai_error": None,
         "last_ai_error_at": None,
@@ -257,6 +258,90 @@ class TestEnqueueSummaryJob:
         ])
         db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
         assert await enqueue_summary_job(make_article(content=long_content), user_id=1, db=db) is True
+
+
+# ── minimum article length ────────────────────────────────────────────────────
+
+class TestMinContentThreshold:
+    """The threshold gates the automatic pipeline and is measured on the full
+    normalized text.
+
+    Measuring the truncated copy instead is what made the same article pass one
+    gate and fail the next, which surfaced as a spinner that ended in nothing.
+    """
+
+    LONG = "word " * 500  # 2 500 characters, over the 1 700 default
+
+    async def test_raised_threshold_blocks_an_article_that_would_pass_the_default(self):
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_min_content_chars=5_000),
+            make_user_feed(),
+        ])
+        assert await enqueue_summary_job(make_article(content=self.LONG), user_id=1, db=db) is False
+
+    async def test_threshold_above_content_limit_still_enqueues(self):
+        """A threshold over ai_content_limit must not reject everything.
+
+        Truncating first would cap the measured length at the limit, so no article
+        could ever clear a higher threshold and summaries would quietly stop.
+        """
+        from app.services.ai_summary_service import enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_content_limit=1_000, ai_min_content_chars=1_700),
+            make_user_feed(),
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        assert await enqueue_summary_job(make_article(content=self.LONG), user_id=1, db=db) is True
+
+    async def test_on_demand_runs_below_the_users_threshold(self):
+        """A button press is the reader saying this one is worth it. The setting
+        exists to stop automation spending, not to overrule that."""
+        from app.services.ai_summary_service import ON_DEMAND_MIN_CHARS, enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[
+            True,
+            make_settings(ai_min_content_chars=5_000),
+            make_user_feed(),
+        ])
+        db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+        created = await enqueue_summary_job(
+            make_article(content=self.LONG), user_id=1, db=db, min_chars=ON_DEMAND_MIN_CHARS,
+        )
+        assert created is True
+
+    async def test_on_demand_floor_still_turns_away_a_bare_headline(self):
+        from app.services.ai_summary_service import ON_DEMAND_MIN_CHARS, enqueue_summary_job
+        db = make_mock_db()
+        db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed()])
+        created = await enqueue_summary_job(
+            make_article(content=""), user_id=1, db=db, min_chars=ON_DEMAND_MIN_CHARS,
+        )
+        assert created is False
+
+    async def test_execute_does_not_re_decide_length(self):
+        """Queued work runs. Execution cannot tell which gate created the job, and
+        re-measuring here would drop a hand-requested summary that came back for a
+        retry, as well as cancel work queued before a settings change."""
+        from app.services.ai_summary_service import _execute_summary_job
+        job = make_job(operation="summary")
+        db = make_mock_db()
+        db.scalar = AsyncMock(return_value=make_state())
+        with patch.multiple(
+            "app.services.ai_service",
+            get_ai_client=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6")),
+            summarize_article=AsyncMock(return_value=Completion("A summary.", 300, 60, False)),
+        ):
+            await _execute_summary_job(
+                job, make_article(content="word " * 40),          # ~200 characters
+                make_settings(ai_content_limit=1_000, ai_min_content_chars=9_000), db,
+                datetime.now(timezone.utc),
+            )
+        assert job.status == "success"
 
 
 # ── run_article_pipeline ──────────────────────────────────────────────────────
@@ -639,8 +724,13 @@ class TestRunSummaryOnDemand:
         assert summary is None
         assert error == "Rate limit exceeded: too many requests"
 
-    async def test_returns_skipped_message_when_content_rejected(self):
-        """Execution sets status='skipped' → returns (None, descriptive message)."""
+    async def test_returns_skipped_message_when_model_is_gone(self):
+        """Execution sets status='skipped' → returns (None, descriptive message).
+
+        The message names the model and not the article length on purpose: the
+        on-demand guard, enqueue and execute all measure the same untruncated
+        text against the same threshold, so a short article never gets this far.
+        """
         from app.services.ai_summary_service import run_summary_on_demand
         job = make_job(operation="summary", status="pending")
         settings = make_settings()
@@ -659,7 +749,7 @@ class TestRunSummaryOnDemand:
 
         assert summary is None
         assert error is not None
-        assert "too short" in error or "not available" in error
+        assert "main AI model" in error
 
 
 # ── run_pipeline_for_article_all_users ───────────────────────────────────────
@@ -1227,7 +1317,7 @@ class TestSummaryTruncationFlag:
     async def _run(self, state, summarize_result):
         from app.services.ai_summary_service import _execute_summary_job
         job = make_job(operation="summary")
-        # Comfortably over _MIN_CONTENT_CHARS, so the job reaches the provider call.
+        # Comfortably over the minimum length, so the job reaches the provider call.
         article = make_article(content="Some content " * 200)
         with self._patched(summarize_result):
             await _execute_summary_job(

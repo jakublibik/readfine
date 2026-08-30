@@ -13,7 +13,16 @@ from app.auth.dependencies import get_current_user, require_ai_enabled
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.article import Article
-from app.models.user import User, UserSettings
+from app.models.user import (
+    AI_CONTENT_LIMIT_DEFAULT,
+    AI_CONTENT_LIMIT_MAX,
+    AI_CONTENT_LIMIT_MIN,
+    AI_MIN_CHARS_DEFAULT,
+    AI_MIN_CHARS_MAX,
+    AI_MIN_CHARS_MIN,
+    User,
+    UserSettings,
+)
 from app.rate_limit import limiter
 from app.services.ai_service import (
     PROVIDER_DOCS_URLS,
@@ -30,6 +39,7 @@ from app.services.ai_service import (
 )
 from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
 from app.services.stats_service import get_ai_cost_stats
+from app.utils.formats import format_thousands
 from app.templating import templates
 from app.utils.url_validator import async_validate_ai_endpoint_url
 
@@ -74,6 +84,10 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "pref_auto_intervals": AUTO_INTERVALS,
         "default_summary_prompt": _DEFAULT_SUMMARY_PROMPT,
         "default_context_prompt": _DEFAULT_CONTEXT_PROMPT,
+        # So the field descriptions quote the same defaults the form validates
+        # against instead of carrying their own copies.
+        "ai_content_limit_default": AI_CONTENT_LIMIT_DEFAULT,
+        "ai_min_chars_default": AI_MIN_CHARS_DEFAULT,
     }
 
 
@@ -289,16 +303,43 @@ async def settings_ai_preferences_save(
 
     if s.ai_scoring_enabled_default:
         s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
-    _raw_limit = re.sub(r"\s", "", form.get("ai_content_limit") or "")
-    _content_limit_reset = False
-    try:
-        _parsed_limit = int(_raw_limit) if _raw_limit else 20_000
-        if not (1_000 <= _parsed_limit <= 100_000):
-            raise ValueError
-        s.ai_content_limit = _parsed_limit
-    except (ValueError, TypeError):
-        s.ai_content_limit = 20_000
-        _content_limit_reset = True
+    # Numeric limits. A rejected value falls back to its default and says so;
+    # the notes are collected rather than flagged one by one, so submitting two
+    # bad numbers reports both instead of hiding one behind the other.
+    limit_resets: list[str] = []
+
+    def _parse_limit(
+        field: str, label: str, current: int, default: int, low: int, high: int
+    ) -> int:
+        raw = re.sub(r"\s", "", form.get(field) or "")
+        # An emptied field keeps what was there. Clearing it is how someone says
+        # "no limit", and answering that with the default would be a number they
+        # never asked for; the re-rendered field shows the old one instead.
+        if not raw:
+            return current
+        try:
+            value = int(raw)
+            if not (low <= value <= high):
+                raise ValueError
+            return value
+        except (ValueError, TypeError):
+            limit_resets.append(
+                f"{label} was invalid, reset to {format_thousands(default)}. "
+                f"Must be between {format_thousands(low)} and {format_thousands(high)}."
+            )
+            return default
+
+    s.ai_content_limit = _parse_limit(
+        "ai_content_limit", "Content limit", s.ai_content_limit,
+        AI_CONTENT_LIMIT_DEFAULT, AI_CONTENT_LIMIT_MIN, AI_CONTENT_LIMIT_MAX,
+    )
+    # Disabled while auto-summary is off, and a disabled control submits nothing,
+    # so an absent field means "leave it alone" rather than "reset it".
+    if "ai_min_content_chars" in form:
+        s.ai_min_content_chars = _parse_limit(
+            "ai_min_content_chars", "Minimum article length", s.ai_min_content_chars,
+            AI_MIN_CHARS_DEFAULT, AI_MIN_CHARS_MIN, AI_MIN_CHARS_MAX,
+        )
     s.ai_summary_prompt = (form.get("ai_summary_prompt") or "").strip() or None
     s.ai_context_prompt = (form.get("ai_context_prompt") or "").strip() or None
 
@@ -306,8 +347,7 @@ async def settings_ai_preferences_save(
 
     ctx = await _ai_page_context(user, db)
     ctx["prefs_saved"] = True
-    if _content_limit_reset:
-        ctx["content_limit_reset"] = True
+    ctx["limit_resets"] = limit_resets
     ctx["summary_banner_html"] = ""
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 

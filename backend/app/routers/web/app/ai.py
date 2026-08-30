@@ -15,7 +15,9 @@ from app.database import get_db
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.ai_jobs import ai_enabled_globally, normalize_content
+from app.services.ai_jobs import (
+    ON_DEMAND_MIN_CHARS, ai_enabled_globally, normalize_content, normalize_text,
+)
 from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
 
@@ -76,11 +78,14 @@ async def _require_quality_ai_for_article(
     """Shared guard for on-demand AI (summary / context): AI enabled globally, a
     quality model configured, the article accessible, and its content long enough.
 
+    Both buttons gate on ``ON_DEMAND_MIN_CHARS``, not on the user's minimum
+    length: that setting is aimed at the automatic pipeline. Context would be the
+    worse fit of the two anyway, since it supplies what an article leaves out and
+    so earns its keep on exactly the short pieces the setting turns away.
+
     Returns an error ``HTMLResponse`` (rendered into ``target_id``) on any failed
     check, or ``(article, settings, content_text)`` on success.
     """
-    from app.services.ai_summary_service import _MIN_CONTENT_CHARS
-
     def _note(text: str) -> HTMLResponse:
         return HTMLResponse(f'<div id="{target_id}" class="text-xs text-gray-400 py-1">{text}</div>')
 
@@ -95,13 +100,16 @@ async def _require_quality_ai_for_article(
     if not article:
         return HTMLResponse("", status_code=404)
 
-    content_text = normalize_content(
-        article.title, article.readable_content or article.content, settings.ai_content_limit
-    )
-    if len(content_text) < _MIN_CONTENT_CHARS:
-        return _note(f"Article is too short for {too_short_label} (minimum {_MIN_CONTENT_CHARS} characters).")
+    # Measured on the full text, truncated only on the way to the model, so this
+    # gate agrees with enqueue whatever the content limit is.
+    full_text = normalize_text(article.title, article.readable_content or article.content)
+    if len(full_text) < ON_DEMAND_MIN_CHARS:
+        return _note(
+            f"Article is too short for {too_short_label} "
+            f"(minimum {ON_DEMAND_MIN_CHARS} characters)."
+        )
 
-    return article, settings, content_text
+    return article, settings, full_text[:settings.ai_content_limit]
 
 
 @router.post("/htmx/articles/{article_id}/ai-summary", response_class=HTMLResponse)
@@ -159,6 +167,16 @@ async def htmx_ai_summary_poll(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
 
+    if job.status == "skipped":
+        # Without this the spinner would be replaced by an empty div: the branch
+        # below finds no stored summary and says nothing about why. Length is not
+        # among the reasons a queued job is skipped, only a model that is no
+        # longer there when its turn comes.
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">'
+            f'Summary was skipped. Check that a main AI model is configured.</div>'
+        )
+
     state = await db.scalar(
         select(UserArticleState).where(
             UserArticleState.user_id == user.id,
@@ -183,7 +201,8 @@ async def htmx_ai_context_trigger(
 ):
     """On-demand: call AI directly and return context block (synchronous, may take several seconds)."""
     guard = await _require_quality_ai_for_article(
-        user, article_id, db, target_id=f"ai-context-{article_id}", too_short_label="context generation"
+        user, article_id, db, target_id=f"ai-context-{article_id}",
+        too_short_label="context generation",
     )
     if isinstance(guard, HTMLResponse):
         return guard
