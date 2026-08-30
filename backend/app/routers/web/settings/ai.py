@@ -28,9 +28,9 @@ from app.services.ai_service import (
     PROVIDER_DOCS_URLS,
     PROVIDER_LABELS,
     SUPPORTED_PROVIDERS,
+    ai_client,
     delete_api_key,
     generate_preference_text,
-    get_ai_client,
     get_preference_strong_count,
     list_api_keys,
     save_api_key,
@@ -406,18 +406,18 @@ async def settings_ai_generate_preference(
     db: AsyncSession = Depends(get_db),
     _ai: None = Depends(require_ai_enabled),
 ):
-    client, provider, model = await get_ai_client(user.id, "quality", db)
-    if client is None:
-        return HTMLResponse(
-            '<span class="text-red-600 text-sm">Main model not configured.</span>'
-        )
-    try:
-        text_result, in_tok, out_tok = await generate_preference_text(user.id, db, client, provider, model)
-    except Exception as exc:
-        logger.warning("generate_preference_text failed for user=%s: %s", user.id, exc)
-        return HTMLResponse(
-            f'<span class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:150])}</span>'
-        )
+    async with ai_client(user.id, "quality", db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                '<span class="text-red-600 text-sm">Main model not configured.</span>'
+            )
+        try:
+            text_result, in_tok, out_tok = await generate_preference_text(user.id, db, client, provider, model)
+        except Exception as exc:
+            logger.warning("generate_preference_text failed for user=%s: %s", user.id, exc)
+            return HTMLResponse(
+                f'<span class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:150])}</span>'
+            )
 
     # Log token usage
     from app.models.article import AiUsageLog  # noqa: PLC0415

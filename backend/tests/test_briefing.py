@@ -317,7 +317,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -344,7 +344,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -380,7 +380,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client", new_callable=AsyncMock,
-                       return_value=(MagicMock(), "anthropic", "claude-3")) as mock_client:
+                       return_value=(AsyncMock(), "anthropic", "claude-3")) as mock_client:
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -410,7 +410,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -446,7 +446,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -485,7 +485,7 @@ class TestSendBriefing:
                                        new_callable=AsyncMock, return_value=[mock_article]))
                 es.enter_context(patch("app.services.ai_service.get_ai_client",
                                        new_callable=AsyncMock,
-                                       return_value=(MagicMock(), "anthropic", "claude-3")))
+                                       return_value=(AsyncMock(), "anthropic", "claude-3")))
                 es.enter_context(patch("app.services.briefing_service.apply_catchup_limit",
                                        return_value=[mock_article]))
                 es.enter_context(patch("app.services.briefing_service.build_articles_meta",
@@ -529,7 +529,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",
@@ -568,7 +568,7 @@ class TestSendBriefing:
         with patch("app.services.briefing_service.fetch_catchup_articles",
                    new_callable=AsyncMock, return_value=[mock_article]):
             with patch("app.services.ai_service.get_ai_client",
-                       new_callable=AsyncMock, return_value=(MagicMock(), "anthropic", "claude-3")):
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
                 with patch("app.services.briefing_service.apply_catchup_limit",
                            return_value=[mock_article]):
                     with patch("app.services.briefing_service.build_articles_meta",

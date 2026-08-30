@@ -23,8 +23,8 @@ from app.models.article import AiUsageLog
 from app.models.user import UserSettings
 from app.utils.url_validator import find_blocked_address
 from app.services.ai_service import (
+    ai_client,
     generate_preference_text,
-    get_ai_client,
     provider_requires_key,
 )
 
@@ -160,7 +160,7 @@ async def preference_auto_status(
         return "no_quality_model", {}
 
     # A configured model the job cannot use is still a reason it will not run:
-    # get_ai_client returns nothing without a key, and the job skips. Checking only
+    # the slot resolves to nothing without a key, and the job skips. Checking only
     # for the stored row, not decrypting it, keeps a settings page render out of the
     # plaintext-key business (a key that exists but cannot be decrypted is an instance
     # fault, logged by get_api_key, not a state the user can fix here).
@@ -227,23 +227,23 @@ async def run_auto_generation(user_id: int, db: AsyncSession) -> str:
     if status != "due":
         return f"skipped:{status}"
 
-    client, provider, model = await get_ai_client(user_id, "quality", db)
-    if client is None:
-        # Provider/model are set but the key is missing: configuration, not failure.
-        return "skipped:no_quality_model"
+    async with ai_client(user_id, "quality", db) as (client, provider, model):
+        if client is None:
+            # Provider/model are set but the key is missing: configuration, not failure.
+            return "skipped:no_quality_model"
 
-    try:
-        raw, in_tok, out_tok = await generate_preference_text(user_id, db, client, provider, model)
-    except Exception as exc:
-        # The SDK reports a refused address as a bare "Connection error.", which
-        # would leave the banner saying nothing about a problem only the operator
-        # can fix.
-        reason = str(find_blocked_address(exc) or exc)
-        logger.warning("Auto profile generation failed for user=%s: %s", user_id, reason)
-        settings.ai_preference_last_attempt_at = now
-        _apply_failure(settings, reason, now)
-        await db.commit()
-        return "failed:error"
+        try:
+            raw, in_tok, out_tok = await generate_preference_text(user_id, db, client, provider, model)
+        except Exception as exc:
+            # The SDK reports a refused address as a bare "Connection error.", which
+            # would leave the banner saying nothing about a problem only the operator
+            # can fix.
+            reason = str(find_blocked_address(exc) or exc)
+            logger.warning("Auto profile generation failed for user=%s: %s", user_id, reason)
+            settings.ai_preference_last_attempt_at = now
+            _apply_failure(settings, reason, now)
+            await db.commit()
+            return "failed:error"
 
     # Tokens are spent whether or not the output survives validation.
     settings.ai_preference_last_attempt_at = now

@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
 
@@ -414,6 +415,11 @@ def _make_custom_client(
     if read_timeout is not None:
         rest = read_timeout
     extra = {} if max_retries is None else {"max_retries": max_retries}
+    # The SDK owns this once it accepts it, and closes it along with itself (see
+    # close_ai_client). Should the constructor below refuse instead, the client
+    # here is dropped without being closed, which costs nothing: it has not
+    # connected to anything yet, so its pool is empty and there is no socket to
+    # get back.
     return AsyncOpenAI(
         api_key=api_key or _NO_KEY_PLACEHOLDER,
         base_url=base_url,
@@ -457,14 +463,18 @@ def _make_client(
     return None
 
 
-async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
-    """
-    Return (client, provider, model) for the given slot ("fast" | "quality"),
-    or (None, None, None) if not configured.
+async def _resolve_slot(
+    user_id: int, slot: str, db: AsyncSession
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """(provider, model, base_url, api_key), or four Nones when the slot cannot run.
+
+    The key comes back with the rest because the only caller that builds a client
+    needs it, and fetching it separately would be a second query on the path that
+    runs once per article.
     """
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     if s is None:
-        return None, None, None
+        return None, None, None, None
 
     if slot == "fast":
         provider, model = s.ai_fast_provider, s.ai_fast_model
@@ -472,14 +482,49 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
         provider, model = s.ai_quality_provider, s.ai_quality_model
 
     if not provider or not model:
-        return None, None, None
+        return None, None, None, None
 
     api_key = await get_api_key(user_id, provider, db)
     if not api_key and provider_requires_key(provider):
+        return None, None, None, None
+
+    return provider, model, s.ai_custom_base_url, api_key
+
+
+async def get_slot_config(
+    user_id: int, slot: str, db: AsyncSession
+) -> tuple[str | None, str | None, str | None]:
+    """What the slot is set to, as (provider, model, base_url).
+
+    Returns ``(None, None, None)`` when the slot cannot run at all: nothing
+    configured, or a provider whose key is missing. That is the same question
+    :func:`get_ai_client` answers, minus the client, which is the point. A caller
+    that only needs to name the model (the cost estimate under the Catch me up
+    form) was building a whole SDK client and throwing it away to read two strings
+    off it, and building one is not free (see :func:`_make_client`).
+    """
+    provider, model, base_url, _key = await _resolve_slot(user_id, slot, db)
+    return provider, model, base_url
+
+
+async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
+    """
+    Return (client, provider, model) for the given slot ("fast" | "quality"),
+    or (None, None, None) if not configured.
+
+    **Prefer :func:`ai_client`**, which closes what this hands out. A client holds
+    a connection pool that nothing collects on its own, so a caller that takes one
+    from here owes it a :func:`close_ai_client`. This stays public because it is
+    the factory the context manager is built on (and what the tests replace);
+    ``tests/test_ai_client_lifecycle.py`` checks that nothing outside this module
+    calls it.
+    """
+    provider, model, base_url, api_key = await _resolve_slot(user_id, slot, db)
+    if not provider:
         return None, None, None
 
     try:
-        client = _make_client(provider, api_key, s.ai_custom_base_url)
+        client = _make_client(provider, api_key, base_url)
         if client is None:
             # Either an unknown provider or custom without an endpoint to talk to.
             logger.warning("No AI client for provider=%s", provider)
@@ -489,6 +534,47 @@ async def get_ai_client(user_id: int, slot: str, db: AsyncSession):
         return None, None, None
 
     return client, provider, model
+
+
+async def close_ai_client(client, provider: str | None) -> None:
+    """Release the connection pool an SDK client holds.
+
+    Every provider client owns an httpx pool that lives until something closes it,
+    and we build one per call, so without this the sockets pile up for as long as
+    the process runs. Gemini needs both halves: ``genai.Client`` builds a sync and
+    an async httpx client in its constructor whether or not either is used, and
+    each has its own closer.
+
+    Deliberately swallows everything. A failure here is a socket we did not get
+    back, which is a smaller problem than turning a finished answer into a 500 on
+    the way out of the ``finally`` that called it. ``CancelledError`` is not an
+    ``Exception``, so a cancelled task still unwinds.
+    """
+    if client is None:
+        return
+    try:
+        if provider == "gemini":
+            await client.aio.aclose()
+            client.close()
+        else:
+            await client.close()
+    except Exception as exc:
+        logger.warning("Closing the %s client failed: %s", provider, exc)
+
+
+@asynccontextmanager
+async def ai_client(user_id: int, slot: str, db: AsyncSession):
+    """The slot's client for the length of a block, closed on the way out.
+
+    Yields the same ``(client, provider, model)`` triple as :func:`get_ai_client`,
+    including ``(None, None, None)`` when the slot is not configured, so the check
+    every caller already makes stays where it was.
+    """
+    triple = await get_ai_client(user_id, slot, db)
+    try:
+        yield triple
+    finally:
+        await close_ai_client(triple[0], triple[1])
 
 
 # ── verification ──────────────────────────────────────────────────────────────
@@ -618,6 +704,7 @@ async def scoring_model_rejection(
     api_key = await get_api_key(user_id, provider, db)
     if not api_key and provider_requires_key(provider):
         return None
+    client = None
     try:
         client = _make_client(provider, api_key, base_url)
         if client is None:
@@ -641,6 +728,9 @@ async def scoring_model_rejection(
         )
     except Exception as exc:
         logger.info("Scoring probe for %s/%s was inconclusive: %s", provider, model, exc)
+    finally:
+        # Also on the timeout above, where the request is cancelled mid-flight.
+        await close_ai_client(client, provider)
     return None
 
 
@@ -654,18 +744,26 @@ async def verify_ai_slot(
     Send a minimal test call to verify the key and model are valid.
     Returns {"ok": bool, "model": str | None, "error": str | None}.
     provider/model/base_url overrides allow verifying unsaved form values.
+
+    The client is built here rather than taken from :func:`get_ai_client`, and
+    built exactly once. Verify runs on a budget of its own (``_VERIFY_CLIENT_KWARGS``,
+    seconds rather than the ten minutes a generated summary may need), so a client
+    made for the slot is the wrong one, and asking for one only to replace it left
+    the first one open with nobody to close it.
     """
-    client, provider, model = await get_ai_client(user_id, slot, db)
-    if provider_override:
-        provider = provider_override
-    if model_override:
-        model = model_override
+    stored_provider, stored_model, stored_base_url = await get_slot_config(user_id, slot, db)
+    provider = provider_override or stored_provider
+    model = model_override or stored_model
+    base_url = base_url_override or stored_base_url
+
     if provider_override or model_override or base_url_override:
         api_key = await get_api_key(user_id, provider, db)
         if not api_key and provider_requires_key(provider):
             return {"ok": False, "model": None, "error": "No API key saved for this provider."}
-        base_url = base_url_override
         if provider == "custom" and not base_url:
+            # The slot may not resolve at all yet (a model typed into the form but
+            # not saved), and the stored endpoint is still the one to verify
+            # against, so this asks for it directly rather than through the slot.
             s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
             base_url = s.ai_custom_base_url if s else None
         if provider == "custom" and not base_url:
@@ -675,17 +773,18 @@ async def verify_ai_slot(
                 await async_validate_ai_endpoint_url(base_url)
             except ValueError as exc:
                 return {"ok": False, "model": None, "error": str(exc)}
-        client = _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
-    elif provider == "custom":
-        # No overrides, so the client above came from get_ai_client with the read
-        # budget a summary needs. Verify is not that call and must not hold the
-        # page for ten minutes, so it is rebuilt on its own timeout.
+    elif provider:
         api_key = await get_api_key(user_id, provider, db)
-        s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
-        client = _make_client(
-            provider, api_key, s.ai_custom_base_url if s else None,
-            **_VERIFY_CLIENT_KWARGS,
-        )
+    else:
+        api_key = None
+
+    # The timeout and retry overrides are custom-only inside _make_client, so
+    # passing them for every provider costs nothing and keeps one call here.
+    client = (
+        _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
+        if provider and model
+        else None
+    )
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 
@@ -719,6 +818,8 @@ async def verify_ai_slot(
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
         return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
+    finally:
+        await close_ai_client(client, provider)
 
 
 # ── AI calls ──────────────────────────────────────────────────────────────────

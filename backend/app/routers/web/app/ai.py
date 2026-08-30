@@ -212,26 +212,26 @@ async def htmx_ai_context_trigger(
     form = await request.form()
     focus = (form.get("focus") or "").strip() or None
 
-    from app.services.ai_service import get_ai_client, get_article_context
-    client, provider, model = await get_ai_client(user.id, "quality", db)
-    if client is None:
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Main AI model not configured.</div>'
-        )
+    from app.services.ai_service import ai_client, get_article_context
+    async with ai_client(user.id, "quality", db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Main AI model not configured.</div>'
+            )
 
-    try:
-        result, in_tok, out_tok = await get_article_context(
-            content_text, client, provider, model,
-            base_prompt=settings.ai_context_prompt,
-            focus=focus,
-        )
-    except Exception as exc:
-        # A refused address reaches here as the SDK's bare "Connection error.",
-        # so ask what really happened before quoting it.
-        msg = html_module.escape(str(find_blocked_address(exc) or exc)[:120])
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
-        )
+        try:
+            result, in_tok, out_tok = await get_article_context(
+                content_text, client, provider, model,
+                base_prompt=settings.ai_context_prompt,
+                focus=focus,
+            )
+        except Exception as exc:
+            # A refused address reaches here as the SDK's bare "Connection error.",
+            # so ask what really happened before quoting it.
+            msg = html_module.escape(str(find_blocked_address(exc) or exc)[:120])
+            return HTMLResponse(
+                f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
+            )
 
     now = datetime.now(timezone.utc)
     state = await db.scalar(
@@ -351,22 +351,22 @@ async def htmx_general_ai_chat(
                 settings.ai_content_limit,
             )
 
-    from app.services.ai_service import get_ai_client, chat_with_article
-    client, provider, model = await get_ai_client(user.id, tier, db)
-    if client is None:
-        return HTMLResponse(
-            _render_general_chat_area(
-                current_messages[:-1],
-                error="Main AI model not configured.",
+    from app.services.ai_service import ai_client, chat_with_article
+    async with ai_client(user.id, tier, db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                _render_general_chat_area(
+                    current_messages[:-1],
+                    error="Main AI model not configured.",
+                )
             )
-        )
 
-    try:
-        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
-    except Exception as exc:
-        return HTMLResponse(
-            _render_general_chat_area(current_messages[:-1], error=_ai_chat_error_message(exc))
-        )
+        try:
+            response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        except Exception as exc:
+            return HTMLResponse(
+                _render_general_chat_area(current_messages[:-1], error=_ai_chat_error_message(exc))
+            )
 
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
@@ -462,23 +462,23 @@ async def htmx_ai_chat(
     if use_article:
         article_ctx = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
 
-    from app.services.ai_service import get_ai_client, chat_with_article
-    client, provider, model = await get_ai_client(user.id, tier, db)
+    from app.services.ai_service import ai_client, chat_with_article
     title = article.title or ""
-    if client is None:
-        return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], use_article,
-            error="Main AI model not configured.",
-            article_title=title,
-        ))
+    async with ai_client(user.id, tier, db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(_render_chat_area(
+                article_id, current_messages[:-1], use_article,
+                error="Main AI model not configured.",
+                article_title=title,
+            ))
 
-    try:
-        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
-    except Exception as exc:
-        return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], use_article,
-            error=_ai_chat_error_message(exc), article_title=title,
-        ))
+        try:
+            response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        except Exception as exc:
+            return HTMLResponse(_render_chat_area(
+                article_id, current_messages[:-1], use_article,
+                error=_ai_chat_error_message(exc), article_title=title,
+            ))
 
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:

@@ -129,43 +129,43 @@ async def _execute_scoring_job(
         article.title, article.readable_content or article.content, _CONTENT_MAX_CHARS
     )
 
-    from app.services.ai_service import get_ai_client, score_article
-    client, provider, model = await get_ai_client(job.user_id, "fast", db)
-    if client is None:
-        job.status = "skipped"
-        job.processed_at = now
-        return
+    from app.services.ai_service import ai_client, score_article
+    async with ai_client(job.user_id, "fast", db) as (client, provider, model):
+        if client is None:
+            job.status = "skipped"
+            job.processed_at = now
+            return
 
-    # Recorded before the call, so a failed attempt also says which model failed.
-    job.provider = provider
-    job.model = model
+        # Recorded before the call, so a failed attempt also says which model failed.
+        job.provider = provider
+        job.model = model
 
-    try:
-        score, in_tok, out_tok = await score_article(content_text, s.ai_preference_text, client, provider, model)
+        try:
+            score, in_tok, out_tok = await score_article(content_text, s.ai_preference_text, client, provider, model)
 
-        job.input_tokens = in_tok
-        job.output_tokens = out_tok
+            job.input_tokens = in_tok
+            job.output_tokens = out_tok
 
-        state = await db.scalar(
-            select(UserArticleState).where(
-                UserArticleState.user_id == job.user_id,
-                UserArticleState.article_id == job.article_id,
+            state = await db.scalar(
+                select(UserArticleState).where(
+                    UserArticleState.user_id == job.user_id,
+                    UserArticleState.article_id == job.article_id,
+                )
             )
-        )
-        if state is None:
-            state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
-            db.add(state)
-        state.ai_score = score
-        state.ai_filters_applied = False
+            if state is None:
+                state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
+                db.add(state)
+            state.ai_score = score
+            state.ai_filters_applied = False
 
-        job.status = "success"
-        job.processed_at = now
-        job.error_message = None
-        if s.last_ai_error:
-            clear_last_ai_error(s)
+            job.status = "success"
+            job.processed_at = now
+            job.error_message = None
+            if s.last_ai_error:
+                clear_last_ai_error(s)
 
-    except Exception as exc:
-        apply_job_failure(job, exc, now, operation="scoring", settings=s)
+        except Exception as exc:
+            apply_job_failure(job, exc, now, operation="scoring", settings=s)
 
 
 async def process_pending_scoring(db: AsyncSession) -> int:

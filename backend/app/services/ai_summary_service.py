@@ -90,45 +90,45 @@ async def _execute_summary_job(
         article.title, article.readable_content or article.content
     )[:s.ai_content_limit]
 
-    from app.services.ai_service import get_ai_client, summarize_article
-    client, provider, model = await get_ai_client(job.user_id, "quality", db)
-    if client is None:
-        job.status = "skipped"
-        job.processed_at = now
-        return
+    from app.services.ai_service import ai_client, summarize_article
+    async with ai_client(job.user_id, "quality", db) as (client, provider, model):
+        if client is None:
+            job.status = "skipped"
+            job.processed_at = now
+            return
 
-    # Recorded before the call, so a failed attempt also says which model failed.
-    job.provider = provider
-    job.model = model
+        # Recorded before the call, so a failed attempt also says which model failed.
+        job.provider = provider
+        job.model = model
 
-    try:
-        answer = await summarize_article(
-            content_text, client, provider, model, custom_prompt=s.ai_summary_prompt
-        )
-
-        state = await db.scalar(
-            select(UserArticleState).where(
-                UserArticleState.user_id == job.user_id,
-                UserArticleState.article_id == job.article_id,
+        try:
+            answer = await summarize_article(
+                content_text, client, provider, model, custom_prompt=s.ai_summary_prompt
             )
-        )
-        if state is None:
-            state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
-            db.add(state)
-        state.ai_summary = answer.text
-        # Always assigned, not only when true: regenerating clears a stale flag.
-        state.ai_summary_truncated = answer.truncated
 
-        job.status = "success"
-        job.processed_at = now
-        job.error_message = None
-        job.input_tokens = answer.input_tokens
-        job.output_tokens = answer.output_tokens
-        if s.last_ai_error:
-            clear_last_ai_error(s)
+            state = await db.scalar(
+                select(UserArticleState).where(
+                    UserArticleState.user_id == job.user_id,
+                    UserArticleState.article_id == job.article_id,
+                )
+            )
+            if state is None:
+                state = UserArticleState(user_id=job.user_id, article_id=job.article_id)
+                db.add(state)
+            state.ai_summary = answer.text
+            # Always assigned, not only when true: regenerating clears a stale flag.
+            state.ai_summary_truncated = answer.truncated
 
-    except Exception as exc:
-        apply_job_failure(job, exc, now, operation="summary", settings=s)
+            job.status = "success"
+            job.processed_at = now
+            job.error_message = None
+            job.input_tokens = answer.input_tokens
+            job.output_tokens = answer.output_tokens
+            if s.last_ai_error:
+                clear_last_ai_error(s)
+
+        except Exception as exc:
+            apply_job_failure(job, exc, now, operation="summary", settings=s)
 
 
 async def _stored_summary(user_id: int, article_id: int, db: AsyncSession) -> tuple[str | None, bool]:

@@ -206,35 +206,35 @@ async def send_briefing(
         await db.commit()
         return
 
-    from app.services.ai_service import catch_me_up, get_ai_client  # noqa: PLC0415
+    from app.services.ai_service import ai_client, catch_me_up  # noqa: PLC0415
 
     # Always the main model: the scoring slot holds a deliberately small model,
     # picked for one number per article, not for writing a digest.
-    # get_ai_client returns a triple, (None, None, None) when the slot has no
-    # model or no usable API key. Checking the return value itself would never
-    # be true and the run would fail deeper in, with an AttributeError as the
-    # error the user gets to see.
-    client, provider, model = await get_ai_client(user.id, "quality", db)
-    if client is None:
-        raise RuntimeError("No main model configured — set one up in Settings → AI")
+    # ai_client yields a triple, (None, None, None) when the slot has no model or
+    # no usable API key. Checking the return value itself would never be true and
+    # the run would fail deeper in, with an AttributeError as the error the user
+    # gets to see.
+    async with ai_client(user.id, "quality", db) as (client, provider, model):
+        if client is None:
+            raise RuntimeError("No main model configured — set one up in Settings → AI")
 
-    scoring_available = bool(
-        user.settings and user.settings.ai_scoring_enabled_default
-    ) if user.settings else False
+        scoring_available = bool(
+            user.settings and user.settings.ai_scoring_enabled_default
+        ) if user.settings else False
 
-    sampled = apply_catchup_limit(articles, config.article_limit, scoring_available)
-    if config.include_snippet:
-        await populate_snippet_sources(sampled, user.id, db)
-    articles_meta = build_articles_meta(sampled, include_snippet=config.include_snippet)
+        sampled = apply_catchup_limit(articles, config.article_limit, scoring_available)
+        if config.include_snippet:
+            await populate_snippet_sources(sampled, user.id, db)
+        articles_meta = build_articles_meta(sampled, include_snippet=config.include_snippet)
 
-    text, input_tokens, output_tokens = await catch_me_up(
-        articles_meta=articles_meta,
-        period=config.period,
-        client=client,
-        provider=provider,
-        model=model,
-        custom_prompt=config.custom_prompt or None,
-    )
+        text, input_tokens, output_tokens = await catch_me_up(
+            articles_meta=articles_meta,
+            period=config.period,
+            client=client,
+            provider=provider,
+            model=model,
+            custom_prompt=config.custom_prompt or None,
+        )
 
     # Date shown in the subject and email footer, in the recipient's timezone and
     # format profile (background render: pass profile explicitly, no request context).
