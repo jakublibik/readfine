@@ -425,7 +425,7 @@ The recommended dev setup: run only PostgreSQL in Docker and run FastAPI locally
 via uv, so the app reloads instantly on code changes.
 
 ```bash
-# 1. Create your local env file (DATABASE_URL already points at localhost:5432)
+# 1. Create your local env file (DATABASE_URL already points at 127.0.0.1:5432)
 cp .env.example .env
 
 # 2. Start only the database
