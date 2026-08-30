@@ -1459,3 +1459,80 @@ class TestLastAiErrorArticleLink:
         _apply_failure(s, "no API key", datetime.now(timezone.utc))
         assert s.last_ai_error.startswith("Interest profile:")
         assert s.last_ai_error_article_id is None
+
+
+class TestRefusedAddressIsTerminal:
+    """A custom endpoint the instance is not allowed to reach fails differently
+    from a network problem: it is an answer, not an outage. The SDK hides that
+    (everything a request raises comes back as "Connection error."), so the retry
+    policy has to look past it or the reader watches a spinner for the length of
+    the whole backoff before being told something only a human can fix."""
+
+    def _wrapped(self, message="URL resolves to a disallowed address (::1): nope"):
+        """A blocked address as it really arrives: buried under the SDK's wrapper."""
+        from app.utils.url_validator import BlockedAddressError
+
+        try:
+            try:
+                raise BlockedAddressError(message)
+            except BlockedAddressError as inner:
+                raise RuntimeError("Connection error.") from inner
+        except RuntimeError as outer:
+            return outer
+
+    @pytest.mark.parametrize("operation", ["summary", "scoring"])
+    def test_it_fails_on_the_first_attempt_instead_of_backing_off(self, operation):
+        # Both pipelines share this policy, and scoring reaches the same endpoint,
+        # so a refusal has to be terminal for both or one of them keeps retrying
+        # an address that will not be allowed on the third attempt either.
+        from app.services.ai_jobs import apply_job_failure
+        job = make_job(article_id=42)
+        apply_job_failure(
+            job, self._wrapped(), datetime.now(timezone.utc),
+            operation=operation, settings=make_settings(),
+        )
+        assert job.status == "failed"
+        assert job.next_retry_at is None
+
+    def test_the_reason_replaces_the_sdk_s_empty_message(self):
+        from app.services.ai_jobs import apply_job_failure
+        s = make_settings()
+        job = make_job(article_id=42)
+        apply_job_failure(
+            job, self._wrapped(), datetime.now(timezone.utc),
+            operation="summary", settings=s,
+        )
+        assert "disallowed address" in job.error_message
+        assert "Connection error" not in job.error_message
+        assert "disallowed address" in s.last_ai_error
+
+    def test_an_ordinary_connection_error_still_gets_its_retries(self):
+        # The point is to tell a refusal from an outage, not to stop retrying.
+        from app.services.ai_jobs import apply_job_failure
+        job = make_job(article_id=42)
+        apply_job_failure(
+            job, RuntimeError("Connection error."), datetime.now(timezone.utc),
+            operation="summary", settings=make_settings(),
+        )
+        assert job.status == "pending"
+        assert job.next_retry_at is not None
+
+    def test_an_unresolvable_hostname_is_not_treated_as_a_refusal(self):
+        # DNS that is down comes back; a private address does not become public.
+        from app.services.ai_jobs import apply_job_failure
+        job = make_job(article_id=42)
+        apply_job_failure(
+            job, ValueError("Cannot resolve hostname 'ollama': [Errno -2]"),
+            datetime.now(timezone.utc), operation="summary", settings=make_settings(),
+        )
+        assert job.status == "pending"
+
+    def test_a_chain_that_never_blocked_is_left_alone(self):
+        from app.services.ai_jobs import find_blocked_address
+        try:
+            try:
+                raise ValueError("inner")
+            except ValueError as inner:
+                raise RuntimeError("outer") from inner
+        except RuntimeError as outer:
+            assert find_blocked_address(outer) is None

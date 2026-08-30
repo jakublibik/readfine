@@ -771,7 +771,11 @@ async def _send_due_briefings() -> None:
                             app_settings_row,
                             user.email,
                             f"Briefing failed: {config.name}",
-                            f"Your briefing '{config.name}' could not be sent after 2 attempts.\n\nError: {exc}\n\nYou can check and re-enable it in Catch me up & Briefings.",
+                            # briefing_last_error, not exc: apply_briefing_failure
+                            # has just resolved what actually went wrong, and the
+                            # raw exception can be the SDK's empty "Connection
+                            # error." where that says a refused address.
+                            f"Your briefing '{config.name}' could not be sent after 2 attempts.\n\nError: {config.briefing_last_error}\n\nYou can check and re-enable it in Catch me up & Briefings.",
                         )
                     except Exception:
                         pass

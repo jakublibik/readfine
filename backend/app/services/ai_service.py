@@ -12,7 +12,7 @@ from app.models.ai import UserAiKey
 from app.models.user import UserSettings
 from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
-from app.utils.url_validator import async_validate_ai_endpoint_url
+from app.utils.url_validator import async_validate_ai_endpoint_url, find_blocked_address
 
 logger = logging.getLogger(__name__)
 
@@ -538,6 +538,18 @@ def _friendly_ai_error(exc: Exception) -> str:
     an endpoint nothing is listening on never will, so that one points at the
     server instead of inviting a retry that cannot work.
     """
+    blocked = find_blocked_address(exc)
+    if blocked is not None:
+        # Asked before anything else, because this arrives dressed as a connection
+        # failure and the answer for one is the opposite of the answer for the
+        # other: the server may be running perfectly well and we refused to call
+        # it. "Check that the server is running" would send the reader to the one
+        # place where nothing is wrong.
+        return (
+            f"{blocked}. A model on a private address has to be listed in "
+            "AI_ALLOWED_PRIVATE_HOSTS in the instance's environment."
+        )
+
     raw = str(exc)
     low = raw.lower()
     if "not_found" in low or '"404"' in raw or " 404 " in raw:

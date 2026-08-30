@@ -21,6 +21,7 @@ from app.templating import templates
 from app.utils.datetime_format import format_local
 from app.utils.markdown import md_render
 from app.utils.smtp import send_html_email
+from app.utils.url_validator import find_blocked_address
 
 _inliner = css_inline.CSSInliner(keep_style_tags=True)
 
@@ -86,7 +87,11 @@ def apply_briefing_failure(
     - Second failure: give up this cycle, reschedule the next normal slot, and
       return True so the caller notifies the user.
     """
-    msg = str(exc)
+    # A refused AI endpoint arrives as the SDK's bare "Connection error.", which
+    # would leave the user's error line saying nothing. Retry policy is left as it
+    # is: unlike an article job there is no spinner waiting on this, and one retry
+    # in thirty minutes costs nobody anything.
+    msg = str(find_blocked_address(exc) or exc)
     if is_smtp:
         config.briefing_enabled = False
         config.briefing_last_error = f"SMTP error: {msg}"

@@ -19,6 +19,7 @@ from app.services.ai_jobs import ai_enabled_globally
 from app.services.label_service import list_labels
 from app.templating import templates
 from app.utils.markdown import md_render as _md_render
+from app.utils.url_validator import find_blocked_address
 
 from .common import _catchup_available
 
@@ -263,7 +264,10 @@ async def htmx_catchup_generate(
         )
     except Exception as exc:
         logger.exception("catchup: AI generation failed for user %d", user.id)
-        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(str(exc)[:200])}</div>')
+        # The SDK reports a refused address as a bare "Connection error.", so ask
+        # what really happened before quoting it back.
+        reason = str(find_blocked_address(exc) or exc)
+        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
 
     # Log the run
     log = CatchupLog(
@@ -643,8 +647,11 @@ async def htmx_briefing_test_send(
             f'<p class="text-red-600 text-sm">SMTP error: {html_module.escape(str(exc)[:200])}</p>'
         )
     except Exception as exc:
+        # Test briefings generate the digest too, so this catches the AI call as
+        # well as the send, and a refused address arrives here saying nothing.
+        reason = str(find_blocked_address(exc) or exc)
         return HTMLResponse(
-            f'<p class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:200])}</p>'
+            f'<p class="text-red-600 text-sm">Error: {html_module.escape(reason[:200])}</p>'
         )
 
     return HTMLResponse(

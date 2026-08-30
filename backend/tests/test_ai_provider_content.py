@@ -917,6 +917,26 @@ class TestOpenAiWireReasoningOff:
         assert create.await_count == 1
 
 
+def _blocked_as_the_sdk_reports_it(
+    message="URL resolves to a disallowed address (::1): not permitted",
+):
+    """A refused address the way it actually arrives, under the SDK's wrapper.
+
+    Reproducing the shape matters more than the exact classes: the provider
+    libraries catch everything a request raises and re-raise their own error with
+    a fixed message, so the only trace of the real reason is the __cause__ link.
+    """
+    from app.utils.url_validator import BlockedAddressError
+
+    try:
+        try:
+            raise BlockedAddressError(message)
+        except BlockedAddressError as inner:
+            raise RuntimeError("Connection error.") from inner
+    except RuntimeError as outer:
+        return outer
+
+
 class TestFriendlyAiError:
     """The Verify line is the only place a self-hoster finds out why the endpoint
     did not answer, and htmx leaves it untouched when the route 500s — so this has
@@ -956,6 +976,34 @@ class TestFriendlyAiError:
 
     def test_an_exception_with_no_message_falls_back_to_its_class(self):
         assert ai_service._friendly_ai_error(ValueError()) == "ValueError"
+
+    def test_a_refused_address_is_not_reported_as_an_unreachable_server(self):
+        # The worst wording of the lot before this: the server may be running
+        # perfectly well and we refused to call it, so "check that the server is
+        # running" sends the reader to the one place where nothing is wrong.
+        message = ai_service._friendly_ai_error(_blocked_as_the_sdk_reports_it())
+        assert "disallowed address" in message
+        assert "AI_ALLOWED_PRIVATE_HOSTS" in message
+        assert "Could not reach the endpoint" not in message
+
+
+class TestChatErrorMessage:
+    """Chat says "try again" for everything it does not recognise, which is right
+    for an overloaded provider and wrong for a refused address: that answer does
+    not change however many times it is asked."""
+
+    def _message(self, exc):
+        from app.routers.web.app.ai import _ai_chat_error_message
+
+        return _ai_chat_error_message(exc)
+
+    def test_a_refused_address_does_not_invite_a_pointless_retry(self):
+        message = self._message(_blocked_as_the_sdk_reports_it())
+        assert "not allowed to reach" in message
+        assert "try again" not in message.lower()
+
+    def test_an_overloaded_provider_still_says_try_again(self):
+        assert "try again" in self._message(RuntimeError("529 overloaded")).lower()
 
 
 class TestCustomClientTimeout:

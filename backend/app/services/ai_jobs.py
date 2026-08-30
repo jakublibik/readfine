@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import ArticleAiJob
 from app.models.settings import AppSettings
 from app.models.user import AI_MIN_CHARS_MIN, UserSettings
+from app.utils.url_validator import find_blocked_address
 
 logger = logging.getLogger(__name__)
 
@@ -88,16 +89,26 @@ def apply_job_failure(
     and surface the error on the job and the user's ``last_ai_error`` banner.
 
     A permanent 4xx (client error other than 429) is terminal immediately; so is
-    exhausting MAX_RETRIES; otherwise the job is rescheduled with a BACKOFF_MINUTES
-    delay. *operation* ("scoring" / "summary") is used in the log line and the
-    banner prefix.
+    a refused address, and so is exhausting MAX_RETRIES; otherwise the job is
+    rescheduled with a BACKOFF_MINUTES delay. *operation* ("scoring" / "summary")
+    is used in the log line and the banner prefix.
+
+    A refused address is terminal for the same reason a 4xx is: no amount of
+    waiting turns an endpoint the instance is not allowed to reach into one it
+    is. Retrying it would leave the reader watching a spinner for the length of
+    the whole backoff before being told something a human has to fix. Its message
+    replaces the provider's, which at that point is only "Connection error."
     """
-    msg = str(exc)[:300]
+    blocked = find_blocked_address(exc)
+    msg = str(blocked or exc)[:300]
     http_status = extract_http_status(exc)
     retries = job.retry_count + 1
     job.retry_count = retries
 
-    if http_status is not None and 400 <= http_status < 500 and http_status != 429:
+    if blocked is not None:
+        job.status = "failed"
+        job.processed_at = now
+    elif http_status is not None and 400 <= http_status < 500 and http_status != 429:
         job.status = "failed"
         job.processed_at = now
     elif retries >= MAX_RETRIES:

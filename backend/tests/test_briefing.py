@@ -83,6 +83,26 @@ class TestApplyBriefingFailure:
         assert config.briefing_next_send_at is None
         assert "SMTP error" in config.briefing_last_error
 
+    def test_a_refused_ai_endpoint_is_named_rather_than_left_blank(self):
+        # The SDK reports it as a bare "Connection error.", which would leave the
+        # error line under the briefing saying nothing about a problem only the
+        # operator can fix. The retry policy is deliberately unchanged: nobody is
+        # watching a spinner here, so one more attempt costs nothing.
+        from app.utils.url_validator import BlockedAddressError
+
+        try:
+            try:
+                raise BlockedAddressError("URL resolves to a disallowed address (::1)")
+            except BlockedAddressError as inner:
+                raise RuntimeError("Connection error.") from inner
+        except RuntimeError as outer:
+            exc = outer
+
+        config = make_config(briefing_retry_count=0)
+        apply_briefing_failure(config, exc, is_smtp=False, tz_str="UTC")
+        assert "disallowed address" in config.briefing_last_error
+        assert config.briefing_retry_count == 1
+
     def test_first_failure_retries_in_30_min(self):
         config = make_config(briefing_retry_count=0)
         before = datetime.now(timezone.utc)
