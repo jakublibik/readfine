@@ -232,6 +232,19 @@ class TestSharedTlsContext:
         ai_service._make_openai_client("sk-test")
         assert seen == [ai_service._ssl_context(), ai_service._ssl_context()]
 
+    def test_gemini_gets_it_through_its_client_args(self):
+        """genai takes a context rather than a finished client on purpose: given
+        client_args it still builds and owns its two httpx clients, so it goes on
+        closing them, while skipping the context it would otherwise build for
+        each. Checked all the way down to the connection pools, because the args
+        travel through a pydantic model that could have copied it."""
+        client = ai_service._make_gemini_client("test-key")
+        api = client._api_client
+        shared = ai_service._ssl_context()
+        assert api._http_options.client_args["verify"] is shared
+        assert api._httpx_client._transport._pool._ssl_context is shared
+        assert api._async_httpx_client._transport._pool._ssl_context is shared
+
     def test_a_custom_endpoint_gets_it_too(self, monkeypatch):
         from app.utils import url_validator
 

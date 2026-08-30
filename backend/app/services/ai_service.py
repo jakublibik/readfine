@@ -476,17 +476,30 @@ def _make_custom_client(
 
 
 def _make_gemini_client(api_key: str):
-    """Left on the SDK's own TLS setup, unlike the other three.
+    """Gemini takes the shared context through its own client args.
 
-    genai builds a sync *and* an async httpx client in its constructor, so it pays
-    for two contexts and is the most expensive client we make (~30ms). Handing it
-    ours would fix that, but it also flips who closes them: the SDK closes only
-    the clients it built itself (``if not self._http_options.httpx_client``), so
-    passing them in moves that job to close_ai_client. Not worth trading a sure
-    close for 30ms on the least-used provider.
+    genai builds a sync *and* an async httpx client in its constructor, so left
+    alone it pays for two contexts and is the most expensive client we make.
+    Handing it finished httpx clients (``HttpOptions.httpx_client``) would fix
+    that but also flip who closes them, since the SDK closes only the ones it
+    built itself. ``client_args`` avoids the trade: the SDK still builds and owns
+    both clients, and skips creating a context of its own when one is already in
+    the args (``_api_client._ensure_httpx_ssl_ctx``).
+
+    Safe to share for the same reason as the others: genai never asks for HTTP/2,
+    so it agrees with them about ALPN (see the context's own comment).
     """
     from google import genai
-    return genai.Client(api_key=api_key)
+    from google.genai.types import HttpOptions
+
+    ctx = _ssl_context()
+    return genai.Client(
+        api_key=api_key,
+        http_options=HttpOptions(
+            client_args={"verify": ctx},
+            async_client_args={"verify": ctx},
+        ),
+    )
 
 
 def _make_client(
