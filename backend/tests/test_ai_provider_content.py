@@ -518,9 +518,16 @@ class TestVerifyAiSlot:
         async def no_key(*args, **kwargs):
             return None
 
+        async def accept_any_address(url):
+            """Which address Verify ends up with is the subject here, not whether
+            the address rules allow it. Without this the test passes or fails on
+            whether the machine running it happens to list localhost in
+            AI_ALLOWED_PRIVATE_HOSTS."""
+
         monkeypatch.setattr(ai_service, "get_slot_config", unresolved_slot)
         monkeypatch.setattr(ai_service, "get_api_key", no_key)
         monkeypatch.setattr(ai_service, "_make_client", fake_make_client)
+        monkeypatch.setattr(ai_service, "async_validate_ai_endpoint_url", accept_any_address)
 
         db = _db_returning(_FakeSettings("custom", None, "http://localhost:11434/v1"))
         result = await ai_service.verify_ai_slot(
