@@ -646,6 +646,10 @@ class AiClientPool:
     resolved address, so a hostname that starts answering with a different one
     lands on a different origin and opens a new connection rather than riding the
     old one.
+
+    Used by the scoring and summary runners. The readable runner also reaches the
+    pipeline once per article and deliberately does without one; the reasoning is
+    on ``ai_pipeline_service.run_pipeline_for_article_all_users``.
     """
 
     def __init__(self):
