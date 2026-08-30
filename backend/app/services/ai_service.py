@@ -346,14 +346,58 @@ async def list_api_keys(user_id: int, db: AsyncSession) -> dict[str, str | None]
 
 # ── client factory ────────────────────────────────────────────────────────────
 
+# One TLS context for every AI client, built once and kept.
+#
+# Building one costs 9ms of CPU on the event loop, all of it reading and parsing
+# the CA bundle, and an httpx client builds its own unless it is handed one. That
+# was most of the ~15ms each client cost to construct (Anthropic 15.0, OpenAI
+# 14.4, a custom endpoint 8.9, measured 2026-08-30), and clients are built one
+# per article. It is CPU rather than I/O, so it does not overlap with anything:
+# while it runs, nothing else on the loop is served, including the web UI. Shared,
+# the same construction costs about 0.1ms.
+#
+# **Do not share this with the feed fetcher.** httpcore calls set_alpn_protocols
+# on whatever context it is given, at connect time, from that connection's own
+# http2 flag (httpcore/_async/connection.py). Feeds run on HTTP/2 and AI clients
+# on HTTP/1.1, so one context between them would have two writers with different
+# answers. Every writer here agrees, which is what makes sharing safe, and that
+# stops being true the day an AI client turns HTTP/2 on.
+_ai_ssl_context = None
+
+
+def _ssl_context():
+    """The shared TLS context, built on first use rather than at import."""
+    global _ai_ssl_context
+    if _ai_ssl_context is None:
+        import ssl
+
+        import certifi
+
+        _ai_ssl_context = ssl.create_default_context(cafile=certifi.where())
+    return _ai_ssl_context
+
+
+def _shared_tls_http_client():
+    """An httpx client on the shared context, for an SDK that builds its own.
+
+    Deliberately without a timeout. An SDK handed an http_client applies its own
+    timeouts only while that client still carries httpx's default, so naming one
+    here would silently replace the SDK's (see ``_CUSTOM_CLIENT_TIMEOUT``, where
+    that is the whole point).
+    """
+    import httpx
+
+    return httpx.AsyncClient(verify=_ssl_context())
+
+
 def _make_anthropic_client(api_key: str):
     from anthropic import AsyncAnthropic
-    return AsyncAnthropic(api_key=api_key)
+    return AsyncAnthropic(api_key=api_key, http_client=_shared_tls_http_client())
 
 
 def _make_openai_client(api_key: str):
     from openai import AsyncOpenAI
-    return AsyncOpenAI(api_key=api_key)
+    return AsyncOpenAI(api_key=api_key, http_client=_shared_tls_http_client())
 
 
 # Sent as the key when the endpoint does not want one. The OpenAI SDK refuses to
@@ -424,7 +468,7 @@ def _make_custom_client(
         api_key=api_key or _NO_KEY_PLACEHOLDER,
         base_url=base_url,
         http_client=httpx.AsyncClient(
-            transport=PinnedAsyncTransport(),
+            transport=PinnedAsyncTransport(verify=_ssl_context()),
             timeout=httpx.Timeout(connect=connect, read=rest, write=rest, pool=rest),
         ),
         **extra,
@@ -432,6 +476,15 @@ def _make_custom_client(
 
 
 def _make_gemini_client(api_key: str):
+    """Left on the SDK's own TLS setup, unlike the other three.
+
+    genai builds a sync *and* an async httpx client in its constructor, so it pays
+    for two contexts and is the most expensive client we make (~30ms). Handing it
+    ours would fix that, but it also flips who closes them: the SDK closes only
+    the clients it built itself (``if not self._http_options.httpx_client``), so
+    passing them in moves that job to close_ai_client. Not worth trading a sure
+    close for 30ms on the least-used provider.
+    """
     from google import genai
     return genai.Client(api_key=api_key)
 
