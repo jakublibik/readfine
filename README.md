@@ -169,10 +169,11 @@ Open your browser at the URL shown at the end of setup and log in with the admin
 > **Running the models yourself.** The **Custom (OpenAI-compatible)** provider points
 > Readfine at any OpenAI-API server: Ollama, llama.cpp, vLLM, a LiteLLM proxy, or a
 > gateway like OpenRouter. A local server needs no API key. If it listens on a private
-> address (localhost, the Docker network), set `AI_ALLOW_PRIVATE_ENDPOINTS=true` in
-> `.env` — otherwise only public addresses are accepted, which is what keeps a
-> multi-user instance from being pointed at its own internal services. The in-app help
-> page has the setup details.
+> address (localhost, the Docker network), name it in `AI_ALLOWED_PRIVATE_HOSTS` in
+> `.env` as `host:port` (`AI_ALLOWED_PRIVATE_HOSTS=ollama:11434`, comma-separated for
+> more than one). Everything not on that list has to be a public address, which is what
+> keeps a multi-user instance from being pointed at its own internal services. The
+> in-app help page has the setup details.
 
 ---
 

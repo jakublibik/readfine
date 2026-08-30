@@ -46,6 +46,47 @@ class ResponseTooLarge(Exception):
     """
 
 
+class BlockedAddressError(ValueError):
+    """This address is one we refuse to connect to, and waiting will not change it.
+
+    A ``ValueError`` so that every ``except ValueError`` already treating a
+    refused address as a validation error keeps working unchanged. The separate
+    class exists for the callers that retry: a connection that failed because the
+    address is not permitted is a configuration answer, not a network one, and
+    retrying it in five, thirty and a hundred and twenty minutes only delays
+    telling the user what is wrong (see ``ai_jobs.apply_job_failure``).
+
+    Deliberately *not* raised when a hostname fails to resolve. That really is a
+    transient condition and deserves the backoff.
+    """
+
+
+def find_blocked_address(exc: BaseException | None) -> BlockedAddressError | None:
+    """The refused-address error behind *exc*, if that is what really happened.
+
+    Provider SDKs do not let ours through: the OpenAI client wraps anything a
+    request raises in ``APIConnectionError``, whose message is the fixed string
+    "Connection error." So a custom endpoint pointing somewhere these rules
+    refuse arrives at the caller saying nothing at all, while the sentence
+    explaining it sits one link down the ``__cause__`` chain.
+
+    Every place that turns an AI exception into something a person reads should
+    ask this first, or it will report a refusal as an outage and send them to
+    check a server that is running perfectly well.
+
+    The chain is walked with a depth cap rather than trusted to be short, and
+    ``__context__`` is ignored on purpose: an exception raised while handling
+    another one says nothing about the cause.
+    """
+    seen = 0
+    while exc is not None and seen < 10:
+        if isinstance(exc, BlockedAddressError):
+            return exc
+        exc = exc.__cause__
+        seen += 1
+    return None
+
+
 def is_bot_block(status_code: int | None, headers) -> bool:
     """True when a failure looks like the host refusing automation, not a broken feed.
 
@@ -393,7 +434,7 @@ def _resolve_and_pin(hostname: str) -> str:
         except ValueError:
             continue
         if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            raise ValueError(
+            raise BlockedAddressError(
                 f"URL resolves to a disallowed address ({ip}): "
                 "localhost, private, and link-local addresses are not permitted"
             )
@@ -474,22 +515,50 @@ async def async_validate_feed_url(url: str) -> None:
     await loop.run_in_executor(None, validate_feed_url, url)
 
 
+def _is_allowed_private_endpoint(hostname: str, port: int | None, scheme: str) -> bool:
+    """Is this exact socket named in ``AI_ALLOWED_PRIVATE_HOSTS``?
+
+    The hostname is compared as text and never resolved. That is the point: a
+    Docker service name resolves inside the container network rather than
+    through us, and on an address the operator has written down there is nothing
+    a lookup could change.
+
+    The port is part of the comparison because it is part of every entry, so
+    allowing an Ollama does not also allow the Postgres beside it. A URL without
+    one is matched on the scheme's default, so ``http://ollama`` and the entry
+    ``ollama:80`` mean the same thing rather than disagreeing.
+
+    Note that "private" names the intent, not the mechanism: an entry exempts
+    that host from the address rules *and* from pinning, and nothing stops an
+    operator from listing a public one.
+    """
+    from app.config import settings
+
+    allowed = settings.allowed_private_endpoints
+    if not allowed:
+        return False
+    effective_port = port or (443 if scheme == "https" else 80)
+    return (hostname.lower().rstrip("."), effective_port) in allowed
+
+
 def validate_ai_endpoint_url(url: str) -> None:
     """Validate a user-supplied AI endpoint (the custom provider's ``base_url``).
 
     Same job as :func:`validate_feed_url`, with one difference that has to exist:
     a self-hoster's whole reason for this feature is usually an Ollama on
     localhost or a container on the compose network, both of which the feed rules
-    reject on purpose. ``AI_ALLOW_PRIVATE_ENDPOINTS`` unlocks exactly that, and
-    only for this URL — feeds keep their rules whatever it is set to.
+    reject on purpose. ``AI_ALLOWED_PRIVATE_HOSTS`` names the sockets that are
+    exempt, and only for this URL — feeds keep their rules whatever it holds.
 
-    With the switch on, the address is not resolved at all. Resolving it would
-    only produce an answer nothing is allowed to act on, and it would turn a
-    typo'd hostname into a settings error at save time on an instance that has
-    deliberately opted out of the check.
+    This check is the settings form's, so that a bad endpoint is a message under
+    the field rather than a failed job hours later. It is not what makes the
+    feature safe: every request goes out through :class:`PinnedAsyncTransport`,
+    which asks the same question again at the moment it matters.
+
+    An allowlisted address is not resolved at all. Resolving it would only
+    produce an answer nothing is allowed to act on, and it would turn a hostname
+    only Docker can resolve into a settings error at save time.
     """
-    from app.config import settings
-
     parsed = urlparse(url)
 
     if parsed.scheme not in _ALLOWED_SCHEMES:
@@ -499,7 +568,7 @@ def validate_ai_endpoint_url(url: str) -> None:
     if not hostname:
         raise ValueError("URL has no hostname")
 
-    if settings.ai_allow_private_endpoints:
+    if _is_allowed_private_endpoint(hostname, parsed.port, parsed.scheme):
         return
 
     _resolve_and_pin(hostname)
@@ -522,16 +591,23 @@ class PinnedAsyncTransport(httpx.AsyncHTTPTransport):
     reaches the network through the provider SDK rather than through our own
     fetch code.
 
-    ``AI_ALLOW_PRIVATE_ENDPOINTS`` passes the request through untouched. On such
-    an instance the private address is the point, so there is nothing to pin
+    This is where the feature is actually bounded, rather than in the settings
+    form: everything reaching a custom endpoint is built by ``_make_custom_client``
+    and therefore carried here, including calls made outside that form, and a
+    redirect arrives as another request through the same check.
+
+    A host named in ``AI_ALLOWED_PRIVATE_HOSTS`` passes through untouched. For
+    that one address the private answer is the point, so there is nothing to pin
     against and rewriting the URL would only break Docker's own service names,
-    which resolve inside the container network rather than through us.
+    which resolve inside the container network rather than through us. Every
+    other host is still pinned, so listing an Ollama no longer costs the
+    protection on a public endpoint the same account may also use.
     """
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        from app.config import settings
-
-        if settings.ai_allow_private_endpoints:
+        if _is_allowed_private_endpoint(
+            request.url.host, request.url.port, request.url.scheme
+        ):
             return await super().handle_async_request(request)
 
         loop = asyncio.get_running_loop()

@@ -1,4 +1,6 @@
+from functools import cached_property
 from pathlib import Path
+from urllib.parse import urlparse
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import EmailStr, field_validator, model_validator
 
@@ -10,6 +12,46 @@ _ROOT = Path(__file__).parent.parent.parent  # readfine/
 _INSECURE_SECRET_KEYS = {"change-me", "changeme", ""}
 _INSECURE_ENCRYPTION_KEYS = {"changemechangemechangemechangeme", "change-me", ""}
 _MIN_SECRET_KEY_LEN = 32
+
+# Anything in an AI_ALLOWED_PRIVATE_HOSTS entry that means it is a URL rather
+# than the bare host:port the list wants. urlparse("//http://ollama:11434")
+# quietly hands back the hostname "http", so an entry copied straight out of the
+# Endpoint field has to be refused rather than half-read.
+_HOST_ENTRY_REJECTED = ("://", "/", "@", "?", "#")
+
+
+def _parse_private_host(entry: str) -> tuple[str, int]:
+    """Parse one ``host:port`` entry of AI_ALLOWED_PRIVATE_HOSTS.
+
+    Parsed with urlparse so that bracketed IPv6 and hostname casing follow the
+    same rules as the URLs it will be compared against, rather than a second,
+    slightly different implementation of the same thing.
+
+    A malformed entry raises, which stops the boot: an instance that believes it
+    allowed its Ollama and did not is worse than an instance that says so.
+    """
+    for bad in _HOST_ENTRY_REJECTED:
+        if bad in entry:
+            raise ValueError(
+                f"'{entry}' is not a host:port pair (it contains '{bad}'). "
+                "Write the address on its own, as ollama:11434, not as a URL."
+            )
+    try:
+        parsed = urlparse(f"//{entry}")
+        hostname, port = parsed.hostname, parsed.port
+    except ValueError as exc:
+        raise ValueError(f"'{entry}' is not a valid host:port pair ({exc})") from exc
+    if not hostname:
+        raise ValueError(f"'{entry}' has no hostname")
+    if port is None:
+        raise ValueError(
+            f"'{entry}' has no port. Every entry names one socket, so that "
+            "allowing a host does not also allow every other service running on "
+            "it: write ollama:11434 rather than ollama."
+        )
+    # A trailing dot is the same host (http://ollama./v1 is legal), and without
+    # this the FQDN form would silently fail to match its own entry.
+    return hostname.rstrip("."), port
 
 
 class Settings(BaseSettings):
@@ -37,11 +79,22 @@ class Settings(BaseSettings):
     # firewalled to Cloudflare IP ranges — otherwise the header is spoofable.
     trust_cloudflare: bool = False
 
-    # Let users point the custom AI provider at a private address (Ollama on
-    # localhost, an LLM container on the compose network). Off by default: the
-    # base_url is user input, so on a hosted instance it would be a way to make
-    # the server issue requests inside its own network. Turn this on when the
-    # instance is yours and the model runs next to it. Feed URLs are unaffected.
+    # Addresses the custom AI provider may reach that the SSRF rules would
+    # otherwise refuse (Ollama on localhost, an LLM container on the compose
+    # network): a comma-separated list of host:port entries, e.g.
+    # "ollama:11434,127.0.0.1:11434". Empty by default. The endpoint is user
+    # input, so on an instance with other people's accounts this list is what
+    # keeps it from reaching services inside the network. The port belongs to
+    # every entry on purpose: allowing "localhost" whole would hand out Postgres
+    # and everything else on the machine. Feed URLs are unaffected either way.
+    ai_allowed_private_hosts: str = ""
+
+    # Removed setting, kept declared only so a line left behind in an existing
+    # .env still parses: pydantic-settings runs with extra="forbid" and reads the
+    # whole dotenv file, so an unknown key there stops the boot whatever its
+    # value — and .env.example shipped this one as false, so nearly every
+    # existing .env carries it. Nothing reads it; a true value is refused at
+    # startup with a pointer to the list above (see _check_ai_endpoint_config).
     ai_allow_private_endpoints: bool = False
 
     # App
@@ -133,6 +186,49 @@ class Settings(BaseSettings):
     def _normalise_fetch_offset(cls, v: int) -> int:
         """Fold the offset into the 0–14 range; the schedule repeats every 15 min."""
         return v % 15
+
+    @cached_property
+    def allowed_private_endpoints(self) -> frozenset[tuple[str, int]]:
+        """AI_ALLOWED_PRIVATE_HOSTS as lowercased ``(hostname, port)`` pairs.
+
+        A plain string field rather than ``list[str]`` because pydantic-settings
+        reads a list-typed field from the environment as JSON, in the source and
+        so before any validator runs — the reason ALLOWED_HOSTS has to be written
+        as a JSON array. Splitting it here keeps .env readable.
+
+        Empty segments are tolerated ("a:1, b:2," is a typo without
+        consequence); anything else malformed raises, see _parse_private_host.
+        """
+        pairs: set[tuple[str, int]] = set()
+        for entry in self.ai_allowed_private_hosts.split(","):
+            entry = entry.strip().lower()
+            if entry:
+                pairs.add(_parse_private_host(entry))
+        return frozenset(pairs)
+
+    @model_validator(mode="after")
+    def _check_ai_endpoint_config(self) -> "Settings":
+        """Settle the AI endpoint allowlist at startup rather than at the first AI call.
+
+        Also refuses AI_ALLOW_PRIVATE_ENDPOINTS, the boolean this list replaced.
+        Only when it is true: it shipped in .env.example as false, so refusing it
+        outright would stop instances that never used the feature and have
+        nothing to change.
+        """
+        if self.ai_allow_private_endpoints:
+            raise ValueError(
+                "AI_ALLOW_PRIVATE_ENDPOINTS has been replaced by "
+                "AI_ALLOWED_PRIVATE_HOSTS, which names the addresses that are "
+                "allowed instead of opening all of them at once. Set "
+                "AI_ALLOWED_PRIVATE_HOSTS to the host:port your model runs on "
+                "(for example ollama:11434) and remove AI_ALLOW_PRIVATE_ENDPOINTS "
+                "from your .env."
+            )
+        try:
+            _ = self.allowed_private_endpoints
+        except ValueError as exc:
+            raise ValueError(f"AI_ALLOWED_PRIVATE_HOSTS: {exc}") from exc
+        return self
 
     @model_validator(mode="after")
     def _reject_insecure_secrets(self) -> "Settings":

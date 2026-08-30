@@ -1006,8 +1006,8 @@ class TestCustomClientTimeout:
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
             })
 
-        from app.config import settings as app_settings
-        with patch.object(app_settings, "ai_allow_private_endpoints", True), \
+        from tests.conftest import allowed_private_ai_hosts
+        with allowed_private_ai_hosts("localhost:11434"), \
              patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake):
             client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
             asyncio.run(client.chat.completions.create(
