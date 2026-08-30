@@ -215,16 +215,20 @@ class TestRunAutoGeneration:
         db.commit = AsyncMock()
         return db
 
-    def _patch(self, monkeypatch, *, status="due", generate=None, client=_Closable()):
+    def _patch(self, monkeypatch, *, status="due", generate=None, client=True):
         async def fake_status(settings, db, now=None):
             return status, {}
         monkeypatch.setattr(svc, "preference_auto_status", fake_status)
+
+        # A client per call rather than one default argument shared by every test
+        # in the class: it records that it was closed, so it is state.
+        stub = _Closable() if client else None
 
         # The service takes its client through ai_service.ai_client, which looks
         # get_ai_client up in its own module when it runs, so that is where this
         # has to land.
         async def fake_client(user_id, slot, db):
-            return (client, "anthropic", "claude-sonnet-5") if client else (None, None, None)
+            return (stub, "anthropic", "claude-sonnet-5") if stub else (None, None, None)
         monkeypatch.setattr(ai_service, "get_ai_client", fake_client)
 
         async def fake_generate(user_id, db, client, provider, model):

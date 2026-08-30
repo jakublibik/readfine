@@ -366,14 +366,25 @@ _ai_ssl_context = None
 
 
 def _ssl_context():
-    """The shared TLS context, built on first use rather than at import."""
+    """The shared TLS context, built on first use rather than at import.
+
+    ``SSL_CERT_FILE`` and ``SSL_CERT_DIR`` are read here because building the
+    context ourselves takes that job over: httpx reads them when it builds its
+    own (``httpx/_config.py``, ``trust_env``) and so does genai, so ignoring them
+    would quietly stop an instance behind a TLS-inspecting proxy or a private CA
+    from reaching its provider at all, while feeds carried on working.
+    """
     global _ai_ssl_context
     if _ai_ssl_context is None:
+        import os
         import ssl
 
         import certifi
 
-        _ai_ssl_context = ssl.create_default_context(cafile=certifi.where())
+        _ai_ssl_context = ssl.create_default_context(
+            cafile=os.environ.get("SSL_CERT_FILE") or certifi.where(),
+            capath=os.environ.get("SSL_CERT_DIR"),
+        )
     return _ai_ssl_context
 
 
@@ -620,8 +631,13 @@ async def close_ai_client(client, provider: str | None) -> None:
         return
     try:
         if provider == "gemini":
-            await client.aio.aclose()
-            client.close()
+            # Two closers, two attempts: the whole point here is that there are
+            # two clients, so a failure on one must not leave the other holding
+            # a pool.
+            try:
+                await client.aio.aclose()
+            finally:
+                client.close()
         else:
             await client.close()
     except Exception as exc:
@@ -904,11 +920,14 @@ async def verify_ai_slot(
 
     # The timeout and retry overrides are custom-only inside _make_client, so
     # passing them for every provider costs nothing and keeps one call here.
-    client = (
-        _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
-        if provider and model
-        else None
-    )
+    client = None
+    if provider and model:
+        try:
+            client = _make_client(provider, api_key, base_url, **_VERIFY_CLIENT_KWARGS)
+        except Exception as exc:
+            # A client that cannot even be built is a configuration answer, not a
+            # traceback: this runs behind a button on the settings page.
+            logger.error("Failed to create AI client provider=%s: %s", provider, exc)
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 

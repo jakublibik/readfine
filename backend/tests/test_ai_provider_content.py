@@ -475,6 +475,28 @@ class TestVerifyAiSlot:
         assert result["model"] is None
 
     @pytest.mark.asyncio
+    async def test_a_client_that_cannot_be_built_reads_as_configuration(self, monkeypatch):
+        """This runs behind a button on the settings page, so a client the SDK
+        refuses to construct has to come back as an answer rather than a 500."""
+
+        def refuses(*args, **kwargs):
+            raise ValueError("Invalid base_url")
+
+        async def fake_slot_config(user_id, slot, db):
+            return "custom", "llama3.2:3b", "http://localhost:11434/v1"
+
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_slot_config", fake_slot_config)
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", refuses)
+
+        result = await ai_service.verify_ai_slot(1, "fast", db=None)
+        assert result["ok"] is False
+        assert result["error"]
+
+    @pytest.mark.asyncio
     async def test_the_stored_endpoint_is_used_when_the_slot_does_not_resolve(self, monkeypatch):
         """First-time custom setup: the model is typed into the form and not saved
         yet, so the slot resolves to nothing, while the endpoint is already stored.

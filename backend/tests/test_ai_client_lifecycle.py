@@ -35,6 +35,11 @@ class _Aio:
         self._parent.calls.append("aio.aclose")
 
 
+class _RaisingAio:
+    async def aclose(self):
+        raise RuntimeError("the async half is unhappy")
+
+
 class _SyncCloseRecorder(_Recorder):
     """Gemini: the async closer is on .aio, and .close() is the *sync* one that
     releases the second httpx client its constructor builds."""
@@ -74,6 +79,20 @@ class TestCloseAiClient:
     @pytest.mark.asyncio
     async def test_no_client_is_not_an_error(self):
         await ai_service.close_ai_client(None, None)
+
+    @pytest.mark.asyncio
+    async def test_gemini_closes_the_second_client_when_the_first_fails(self):
+        """The whole reason Gemini takes two calls is that it holds two clients,
+        so a failure on one must not leave the other holding a pool."""
+
+        class HalfBroken(_SyncCloseRecorder):
+            def __init__(self):
+                super().__init__()
+                self.aio = _RaisingAio()
+
+        client = HalfBroken()
+        await ai_service.close_ai_client(client, "gemini")
+        assert client.calls == ["close"]
 
 
 class TestAiClientContextManager:
@@ -214,6 +233,46 @@ class TestSharedTlsContext:
 
     def test_the_context_is_built_once(self):
         assert ai_service._ssl_context() is ai_service._ssl_context()
+
+    def test_a_custom_ca_from_the_environment_is_honoured(self, monkeypatch):
+        """Building the context ourselves takes this job over from httpx and genai,
+        both of which read these. Ignoring them would stop an instance behind a
+        TLS-inspecting proxy or a private CA from reaching its provider, while
+        feeds carried on working."""
+        import ssl
+
+        seen = {}
+
+        def fake_create(cafile=None, capath=None, **kwargs):
+            seen.update(cafile=cafile, capath=capath)
+            return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+        monkeypatch.setattr(ai_service, "_ai_ssl_context", None)
+        monkeypatch.setattr(ssl, "create_default_context", fake_create)
+        monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/company-ca.pem")
+        monkeypatch.setenv("SSL_CERT_DIR", "/etc/ssl/certs")
+
+        ai_service._ssl_context()
+        assert seen == {"cafile": "/etc/ssl/company-ca.pem", "capath": "/etc/ssl/certs"}
+
+    def test_without_those_it_falls_back_to_the_bundled_roots(self, monkeypatch):
+        import ssl
+
+        import certifi
+
+        seen = {}
+
+        def fake_create(cafile=None, capath=None, **kwargs):
+            seen.update(cafile=cafile, capath=capath)
+            return ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+
+        monkeypatch.setattr(ai_service, "_ai_ssl_context", None)
+        monkeypatch.setattr(ssl, "create_default_context", fake_create)
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+
+        ai_service._ssl_context()
+        assert seen == {"cafile": certifi.where(), "capath": None}
 
     def test_hosted_clients_get_the_shared_context(self, monkeypatch):
         import anthropic  # noqa: F401  imported first: both SDKs subclass
