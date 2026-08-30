@@ -615,14 +615,68 @@ async def close_ai_client(client, provider: str | None) -> None:
         logger.warning("Closing the %s client failed: %s", provider, exc)
 
 
+class AiClientPool:
+    """One client per (user, slot) for as long as a batch runs.
+
+    The scoring runner works through thirty jobs in a row, most of them the same
+    user's, and a client per job means a connection set up and torn down per
+    article. Held across the batch, the first job pays for the connection and the
+    rest reuse it.
+
+    Scoped to one batch rather than kept around, because a client outliving the
+    work it was made for has to be invalidated when the user changes a key, a
+    model or an endpoint, and a stale one would go on talking to the address it
+    was built with. Nothing here lives long enough for that.
+
+    Reuse does not weaken the custom endpoint's protection: PinnedAsyncTransport
+    re-checks and re-pins per request, and it pins by rewriting the URL to the
+    resolved address, so a hostname that starts answering with a different one
+    lands on a different origin and opens a new connection rather than riding the
+    old one.
+    """
+
+    def __init__(self):
+        self._clients: dict[tuple[int, str], tuple] = {}
+
+    async def get(self, user_id: int, slot: str, db: AsyncSession) -> tuple:
+        key = (user_id, slot)
+        if key not in self._clients:
+            # An unconfigured slot is cached as well: without that, a user with no
+            # AI set up is looked up once per job for nothing.
+            self._clients[key] = await get_ai_client(user_id, slot, db)
+        return self._clients[key]
+
+    async def aclose(self) -> None:
+        clients, self._clients = self._clients, {}
+        for client, provider, _model in clients.values():
+            await close_ai_client(client, provider)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        await self.aclose()
+
+
 @asynccontextmanager
-async def ai_client(user_id: int, slot: str, db: AsyncSession):
+async def ai_client(
+    user_id: int, slot: str, db: AsyncSession, pool: AiClientPool | None = None
+):
     """The slot's client for the length of a block, closed on the way out.
 
     Yields the same ``(client, provider, model)`` triple as :func:`get_ai_client`,
     including ``(None, None, None)`` when the slot is not configured, so the check
     every caller already makes stays where it was.
+
+    With a *pool*, the client is the batch's and is left open for the next job in
+    it; the pool closes it when the batch ends. Callers that run both ways (a job
+    executed inside a batch, or on its own for one article) pass whatever they
+    were given and read the same either way.
     """
+    if pool is not None:
+        yield await pool.get(user_id, slot, db)
+        return
+
     triple = await get_ai_client(user_id, slot, db)
     try:
         yield triple

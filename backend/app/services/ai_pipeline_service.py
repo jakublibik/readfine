@@ -79,8 +79,12 @@ async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) 
     await _apply_ai_filters_for_state(state, article, uf, ai_filters, db)
 
 
-async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> None:
-    """Find and immediately process the pending summary job for this article+user."""
+async def _run_summary_now(article: Article, user_id: int, db: AsyncSession, pool=None) -> None:
+    """Find and immediately process the pending summary job for this article+user.
+
+    *pool* is passed on when this is reached from inside a batch, so the summary
+    that follows a score shares the batch's clients rather than opening its own.
+    """
     from app.services.ai_summary_service import _execute_summary_job
 
     job = await db.scalar(
@@ -98,7 +102,7 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> 
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     if s is None:
         return
-    await _execute_summary_job(job, article, s, db, datetime.now(timezone.utc))
+    await _execute_summary_job(job, article, s, db, datetime.now(timezone.utc), pool)
 
 
 async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession) -> None:

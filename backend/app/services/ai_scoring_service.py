@@ -117,9 +117,16 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
 
 
 async def _execute_scoring_job(
-    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime
+    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime,
+    pool=None,
 ) -> None:
-    """Process a single scoring job — AI call + result write. Does not commit."""
+    """Process a single scoring job — AI call + result write. Does not commit.
+
+    *pool* is the batch's client pool when this runs as part of one, so a run of
+    jobs shares a connection instead of opening one each. Without it the client
+    is built and closed for this job alone, which is what the single-article path
+    does.
+    """
     if not s.ai_preference_text or not s.ai_fast_provider or not s.ai_fast_model:
         job.status = "skipped"
         job.processed_at = now
@@ -130,7 +137,7 @@ async def _execute_scoring_job(
     )
 
     from app.services.ai_service import ai_client, score_article
-    async with ai_client(job.user_id, "fast", db) as (client, provider, model):
+    async with ai_client(job.user_id, "fast", db, pool) as (client, provider, model):
         if client is None:
             job.status = "skipped"
             job.processed_at = now
@@ -219,31 +226,37 @@ async def process_pending_scoring(db: AsyncSession) -> int:
         )).all()
     }
 
+    from app.services.ai_service import AiClientPool
+
     processed = 0
-    for job in jobs:
-        article = articles_map.get(job.article_id)
-        s = settings_map.get(job.user_id)
+    # One pool for the whole run: the jobs are mostly one user's, and the summary
+    # that follows a score runs on the same account, so both slots are set up once
+    # rather than once per article.
+    async with AiClientPool() as pool:
+        for job in jobs:
+            article = articles_map.get(job.article_id)
+            s = settings_map.get(job.user_id)
 
-        if article is None or s is None:
-            job.status = "skipped"
-            job.processed_at = now
+            if article is None or s is None:
+                job.status = "skipped"
+                job.processed_at = now
+                processed += 1
+                continue
+
+            await _execute_scoring_job(job, article, s, db, now, pool)
+
+            if job.status == "success":
+                from app.services.ai_pipeline_service import _run_ai_filters_now, _run_summary_now
+                from app.services.ai_summary_service import enqueue_summary_job
+                await _run_ai_filters_now(article, job.user_id, db)
+                if s.ai_summary_enabled_default:
+                    state = states_map.get((job.user_id, job.article_id))
+                    if state and state.is_starred:
+                        if await enqueue_summary_job(article, job.user_id, db):
+                            await _run_summary_now(article, job.user_id, db, pool)
+                logger.info("pipeline: article=%d user=%d done (scoring path)", article.id, job.user_id)
+
             processed += 1
-            continue
-
-        await _execute_scoring_job(job, article, s, db, now)
-
-        if job.status == "success":
-            from app.services.ai_pipeline_service import _run_ai_filters_now, _run_summary_now
-            from app.services.ai_summary_service import enqueue_summary_job
-            await _run_ai_filters_now(article, job.user_id, db)
-            if s.ai_summary_enabled_default:
-                state = states_map.get((job.user_id, job.article_id))
-                if state and state.is_starred:
-                    if await enqueue_summary_job(article, job.user_id, db):
-                        await _run_summary_now(article, job.user_id, db)
-            logger.info("pipeline: article=%d user=%d done (scoring path)", article.id, job.user_id)
-
-        processed += 1
 
     await db.commit()
     logger.info("ai_scoring: processed %d jobs", processed)

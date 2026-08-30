@@ -120,6 +120,93 @@ class TestAiClientContextManager:
             assert triple == (None, None, None)
 
 
+class TestAiClientPool:
+    """A batch works through jobs that are mostly one user's. Without a pool each
+    one sets up and tears down its own connection to the same provider."""
+
+    @pytest.mark.asyncio
+    async def test_one_client_serves_the_whole_batch(self, monkeypatch):
+        built = []
+
+        async def fake_get(user_id, slot, db):
+            client = _Recorder()
+            built.append(client)
+            return client, "anthropic", "claude-sonnet-5"
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get)
+        async with ai_service.AiClientPool() as pool:
+            for _ in range(5):
+                async with ai_service.ai_client(1, "fast", None, pool) as (c, _p, _m):
+                    assert c is built[0]
+        assert len(built) == 1
+        assert built[0].calls == ["close"]
+
+    @pytest.mark.asyncio
+    async def test_each_user_and_slot_gets_its_own(self, monkeypatch):
+        async def fake_get(user_id, slot, db):
+            return _Recorder(), "anthropic", f"{user_id}-{slot}"
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get)
+        async with ai_service.AiClientPool() as pool:
+            first = await pool.get(1, "fast", None)
+            second = await pool.get(1, "quality", None)
+            third = await pool.get(2, "fast", None)
+            assert first[0] is not second[0] is not third[0]
+        for client, _provider, _model in (first, second, third):
+            assert client.calls == ["close"]
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_slot_is_not_looked_up_every_time(self, monkeypatch):
+        """Otherwise a user with no AI set up costs a settings query per job, for
+        an answer that cannot change during the batch."""
+        lookups = []
+
+        async def fake_get(user_id, slot, db):
+            lookups.append(user_id)
+            return None, None, None
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get)
+        async with ai_service.AiClientPool() as pool:
+            for _ in range(4):
+                assert await pool.get(1, "fast", None) == (None, None, None)
+        assert lookups == [1]
+
+    @pytest.mark.asyncio
+    async def test_one_stubborn_client_does_not_strand_the_others(self, monkeypatch):
+        clients = [_Recorder(), _Recorder()]
+
+        class Stubborn:
+            async def close(self):
+                raise RuntimeError("nope")
+
+        order = [(clients[0], "anthropic"), (Stubborn(), "anthropic"), (clients[1], "anthropic")]
+
+        async def fake_get(user_id, slot, db):
+            client, provider = order[user_id]
+            return client, provider, "m"
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get)
+        pool = ai_service.AiClientPool()
+        for user_id in range(3):
+            await pool.get(user_id, "fast", None)
+        await pool.aclose()
+        assert [c.calls for c in clients] == [["close"], ["close"]]
+
+    @pytest.mark.asyncio
+    async def test_a_job_run_on_its_own_still_closes_its_client(self, monkeypatch):
+        """The same executors run inside a batch and for a single article, and the
+        single-article path passes no pool, so it owns what it opens."""
+        client = _Recorder()
+
+        async def fake_get(user_id, slot, db):
+            return client, "anthropic", "claude-sonnet-5"
+
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_get)
+        async with ai_service.ai_client(1, "fast", None, None) as (c, _p, _m):
+            assert c is client
+        assert client.calls == ["close"]
+
+
 class TestSharedTlsContext:
     """Building a TLS context reads and parses the CA bundle, ~9ms of CPU on the
     event loop, and an httpx client builds its own unless handed one. That was

@@ -71,9 +71,14 @@ async def enqueue_summary_job(
 
 
 async def _execute_summary_job(
-    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime
+    job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime,
+    pool=None,
 ) -> None:
-    """Process a single summary job — AI call + result write. Does not commit."""
+    """Process a single summary job — AI call + result write. Does not commit.
+
+    *pool* is the batch's client pool when this runs as part of one; see
+    :func:`ai_scoring_service._execute_scoring_job`.
+    """
     if s is None or not s.ai_quality_provider or not s.ai_quality_model:
         job.status = "skipped"
         job.processed_at = now
@@ -91,7 +96,7 @@ async def _execute_summary_job(
     )[:s.ai_content_limit]
 
     from app.services.ai_service import ai_client, summarize_article
-    async with ai_client(job.user_id, "quality", db) as (client, provider, model):
+    async with ai_client(job.user_id, "quality", db, pool) as (client, provider, model):
         if client is None:
             job.status = "skipped"
             job.processed_at = now
@@ -224,19 +229,22 @@ async def process_pending_summaries(db: AsyncSession) -> int:
         s.user_id: s for s in (await db.scalars(select(UserSettings).where(UserSettings.user_id.in_(user_ids)))).all()
     }
 
+    from app.services.ai_service import AiClientPool
+
     processed = 0
-    for job in jobs:
-        article = articles_map.get(job.article_id)
-        s = settings_map.get(job.user_id)
+    async with AiClientPool() as pool:
+        for job in jobs:
+            article = articles_map.get(job.article_id)
+            s = settings_map.get(job.user_id)
 
-        if article is None or s is None:
-            job.status = "skipped"
-            job.processed_at = now
+            if article is None or s is None:
+                job.status = "skipped"
+                job.processed_at = now
+                processed += 1
+                continue
+
+            await _execute_summary_job(job, article, s, db, now, pool)
             processed += 1
-            continue
-
-        await _execute_summary_job(job, article, s, db, now)
-        processed += 1
 
     await db.commit()
     logger.info("ai_summary: processed %d jobs", processed)

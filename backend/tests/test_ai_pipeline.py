@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.ai_service import Completion
+from app.services.ai_service import AiClientPool, Completion
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -482,7 +482,7 @@ class TestProcessPendingScoringContinuation:
         settings = make_settings()
         db = make_mock_db()
 
-        async def fake_execute_scoring(j, a, s, d, now):
+        async def fake_execute_scoring(j, a, s, d, now, pool=None):
             j.status = "success"
 
         # Mock db.scalars so pre-load maps return our objects (articles, settings, states)
@@ -519,7 +519,7 @@ class TestProcessPendingScoringContinuation:
         article = make_article()
         settings = make_settings(ai_summary_enabled_default=False)
 
-        async def fake_execute_scoring(j, a, s, d, now):
+        async def fake_execute_scoring(j, a, s, d, now, pool=None):
             j.status = "success"
 
         db = make_mock_db()
@@ -556,7 +556,7 @@ class TestProcessPendingScoringContinuation:
         article = make_article()
         settings = make_settings()
 
-        async def fake_execute_scoring_fail(j, a, s, d, now):
+        async def fake_execute_scoring_fail(j, a, s, d, now, pool=None):
             j.status = "failed"
 
         db = make_mock_db()
@@ -608,7 +608,7 @@ class TestRunSummaryOnDemand:
         ])
         db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
 
-        async def fake_execute(j, a, s, d, now):
+        async def fake_execute(j, a, s, d, now, pool=None):
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
@@ -664,7 +664,7 @@ class TestRunSummaryOnDemand:
 
         executed = []
 
-        async def fake_execute(j, a, s, d, now):
+        async def fake_execute(j, a, s, d, now, pool=None):
             executed.append(True)
             j.status = "success"
 
@@ -692,7 +692,7 @@ class TestRunSummaryOnDemand:
             state_after,
         ])
 
-        async def fake_execute(j, a, s, d, now):
+        async def fake_execute(j, a, s, d, now, pool=None):
             j.status = "success"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
@@ -714,7 +714,7 @@ class TestRunSummaryOnDemand:
             settings,
         ])
 
-        async def fake_execute_fail(j, a, s, d, now):
+        async def fake_execute_fail(j, a, s, d, now, pool=None):
             j.status = "failed"
             j.error_message = "Rate limit exceeded: too many requests"
 
@@ -741,7 +741,7 @@ class TestRunSummaryOnDemand:
             settings,
         ])
 
-        async def fake_execute_skip(j, a, s, d, now):
+        async def fake_execute_skip(j, a, s, d, now, pool=None):
             j.status = "skipped"
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute_skip):
@@ -1087,7 +1087,7 @@ class TestProcessPendingScoringStarringRequirement:
         state = make_state(is_starred=False)
         db = self._make_batch_db(job, article, settings, state)
 
-        async def fake_execute_scoring(j, a, s, d, now):
+        async def fake_execute_scoring(j, a, s, d, now, pool=None):
             j.status = "success"
 
         with (
@@ -1110,7 +1110,7 @@ class TestProcessPendingScoringStarringRequirement:
         state = make_state(is_starred=True)
         db = self._make_batch_db(job, article, settings, state)
 
-        async def fake_execute_scoring(j, a, s, d, now):
+        async def fake_execute_scoring(j, a, s, d, now, pool=None):
             j.status = "success"
 
         with (
@@ -1122,7 +1122,11 @@ class TestProcessPendingScoringStarringRequirement:
             from app.services.ai_scoring_service import process_pending_scoring
             await process_pending_scoring(db)
 
-        mock_summary.assert_called_once_with(article, job.user_id, db)
+        # The batch's client pool rides along, so the summary that follows a score
+        # reuses the connection the score just opened.
+        (called_article, called_user, called_db, called_pool) = mock_summary.call_args.args
+        assert (called_article, called_user, called_db) == (article, job.user_id, db)
+        assert isinstance(called_pool, AiClientPool)
 
     async def test_no_auto_summary_when_state_missing(self):
         """Batch: no UserArticleState row (brand-new article) → summary not triggered."""
@@ -1143,7 +1147,7 @@ class TestProcessPendingScoringStarringRequirement:
 
         db.execute = AsyncMock(side_effect=smart_execute)
 
-        async def fake_execute_scoring(j, a, s, d, now):
+        async def fake_execute_scoring(j, a, s, d, now, pool=None):
             j.status = "success"
 
         with (
@@ -1205,7 +1209,7 @@ class TestProcessPendingSummaries:
 
         executed = []
 
-        async def fake_execute(j, a, s, d, now):
+        async def fake_execute(j, a, s, d, now, pool=None):
             executed.append(j)
             j.status = "success"
 
@@ -1283,7 +1287,7 @@ class TestProcessPendingSummaries:
 
         executed = []
 
-        async def fake_execute(j, a, s, d, now):
+        async def fake_execute(j, a, s, d, now, pool=None):
             executed.append(j.id)
 
         with patch("app.services.ai_summary_service._execute_summary_job", side_effect=fake_execute):
