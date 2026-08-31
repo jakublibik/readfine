@@ -1,0 +1,43 @@
+{#- The address about to be saved, and the button that saves it.
+
+    Rendered twice: on the page itself, and again by the POST when the address was
+    refused, so a correction is possible without going back.
+
+    With auto_save the form sends itself on load and stays out of sight, which is what
+    makes sharing one step. It is still a real POST from this page, so the CSRF token
+    and the rate limit apply exactly as they do to a press. -#}
+{% if auto_save %}
+  <p class="text-sm text-gray-500">Saving…</p>
+{% endif %}
+
+<form hx-post="/share-target" hx-target="#share-target-body" hx-swap="innerHTML"
+      hx-disabled-elt="find button"
+      {% if auto_save %}hx-trigger="load, submit"{% endif %}
+      class="flex flex-col gap-3{% if auto_save %} hidden{% endif %}">
+
+  {% if error %}
+    <p class="text-sm text-red-600 break-words">{{ error }}</p>
+  {% endif %}
+
+  <label for="share-target-url" class="text-sm font-medium text-gray-700">Address</label>
+  {#- Into value only. An address from another app in an href would run a
+      javascript: URL, which escaping does not prevent. -#}
+  <input type="url" name="url" id="share-target-url" required
+         value="{{ shared_url }}"
+         {% if not shared_url %}placeholder="https://"{% endif %}
+         class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+
+  {% if not shared_url %}
+    <p class="text-sm text-gray-500">
+      No web address came through with that share, so paste the one you meant.
+    </p>
+  {% elif ambiguous %}
+    <p class="text-sm text-gray-500">
+      More than one link came through, so check this is the one you meant.
+    </p>
+  {% endif %}
+
+  <button type="submit"
+          class="self-start bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium
+                 rounded px-4 py-2 disabled:opacity-60">Save</button>
+</form>
