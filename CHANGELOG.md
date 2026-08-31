@@ -25,6 +25,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Article titles are smaller when you read on a phone. They were set at a size meant for a desktop and then scaled up again by the phone's larger base text, which left a headline bigger on a narrow screen than on a wide one. A long one could take four lines before the article itself started.
+
 - The minimum length for an automatic summary starts at 1 700 characters instead of 1 500, which is roughly 280 words. The old figure let through pieces that were barely longer than the summary they produced. Existing accounts move to the new number too, so if you liked where it was, or want it somewhere else entirely, it is now a field in Settings → AI.
 
 ### Fixed

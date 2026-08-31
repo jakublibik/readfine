@@ -128,6 +128,14 @@
       html[data-bucket="small"] { font-size: 106.25%; }
       html[data-bucket="small"] #article-list [data-article-title] { font-size: 0.9375rem; }
       html[data-bucket="small"] #article-list .text-xs { font-size: 0.8125rem; }
+      /* The detail title is text-2xl, which the 106.25% root above turns into 25.5px:
+         bigger on a phone than the 24px it gets on a desktop, on a third of the width.
+         A long headline then took three or four lines before the article even started.
+         Both branches of the title row are covered (a link when the article has a URL,
+         the h1 from the article_title macro when it does not), and leading-snug is
+         unitless, so the line height follows the smaller size on its own. */
+      html[data-bucket="small"] .article-detail-title-row a,
+      html[data-bucket="small"] .article-detail-title-row h1 { font-size: 1.25rem; }
       html[data-bucket="small"] #article-detail article { padding-left: 0.75rem; padding-right: 0.75rem; }
       html[data-bucket="small"] #inline-article-detail-content article { padding-left: 0.75rem; padding-right: 0.75rem; }
       html[data-bucket="small"] #article-list-resizer { display: none; }
