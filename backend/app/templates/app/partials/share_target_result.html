@@ -1,0 +1,11 @@
+{#- Outcome of a save from the share sheet. The only link here points at our own app
+    with the new article's id; the address that was shared is never made clickable. -#}
+{% if error %}
+  <p class="text-sm text-red-600 break-words">{{ error }}</p>
+{% else %}
+  <p class="text-sm text-gray-700">
+    {% if already_known %}Already in Saved.{% else %}Saved.{% endif %}
+  </p>
+  <a href="/app?open_article_id={{ article_id }}"
+     class="inline-block mt-2 text-sm text-blue-500 hover:text-blue-700">Read it now →</a>
+{% endif %}

@@ -79,6 +79,24 @@
       #sidebar-full { width: 15rem; }
       #sidebar-rail { width: 3rem; }
       html[data-layout="2"] #article-detail { display: none; }
+
+      /* 2-panel on a touch device: let the list have the whole width and drop the
+         resizer. The handle is 4px wide and mouse-only (see app.js), so a finger can
+         neither grab it nor even find it, which left the list stuck at whatever width
+         it happened to be given and a strip of empty background beside it. Nothing is
+         lost by removing it here: it is the control for a width that cannot be set on
+         this device anyway.
+
+         Scoped to layout 2 because it is the only one with space going spare. In
+         layout 3 the detail panel takes the remainder and the resizer is a real
+         divider; layout 1 exists only in the small bucket, which already sets these.
+         Both conditions on purpose, so a laptop with a touchscreen (primary pointer
+         still fine) keeps the handle. */
+      @media (hover: none) and (pointer: coarse) {
+        html[data-layout="2"] #article-list { flex: 1 !important; width: auto !important; }
+        html[data-layout="2"] #article-list-resizer { display: none; }
+      }
+
       .article-row .expand-indicator { visibility: hidden; }
       .article-row.inline-expanded .expand-indicator { visibility: visible; }
       .article-row.inline-expanded { box-shadow: inset 0 6px 8px -6px rgba(0,0,0,0.10); }
@@ -110,6 +128,14 @@
       html[data-bucket="small"] { font-size: 106.25%; }
       html[data-bucket="small"] #article-list [data-article-title] { font-size: 0.9375rem; }
       html[data-bucket="small"] #article-list .text-xs { font-size: 0.8125rem; }
+      /* The detail title is text-2xl, which the 106.25% root above turns into 25.5px:
+         bigger on a phone than the 24px it gets on a desktop, on a third of the width.
+         A long headline then took three or four lines before the article even started.
+         Both branches of the title row are covered (a link when the article has a URL,
+         the h1 from the article_title macro when it does not), and leading-snug is
+         unitless, so the line height follows the smaller size on its own. */
+      html[data-bucket="small"] .article-detail-title-row a,
+      html[data-bucket="small"] .article-detail-title-row h1 { font-size: 1.25rem; }
       html[data-bucket="small"] #article-detail article { padding-left: 0.75rem; padding-right: 0.75rem; }
       html[data-bucket="small"] #inline-article-detail-content article { padding-left: 0.75rem; padding-right: 0.75rem; }
       html[data-bucket="small"] #article-list-resizer { display: none; }

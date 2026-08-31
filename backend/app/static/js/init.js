@@ -47,4 +47,17 @@
     }
   };
   window.syncThemeColor();
+
+  // Keep the install prompt so Settings can offer it on a button. Chrome decides on
+  // its own when a page has earned the prompt, and fires this once when it does;
+  // preventDefault() stops the browser showing its own banner and hands us the event
+  // to raise later. It is single-use, so whoever calls prompt() clears it.
+  //
+  // Here rather than in app.js because the event can arrive before a deferred script
+  // has run, and it is not replayed: this file is the first script in the head and
+  // runs synchronously, so it cannot miss it. Nothing else in init.js touches paint.
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    window._installPrompt = e;
+  });
 })();
