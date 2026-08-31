@@ -3474,3 +3474,18 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     scan();
   }
 })();
+
+// ── Service worker registration ───────────────────────────────────────────
+// Always "/sw.js", never static_url(): the registration URL is the worker's identity,
+// so a cache-busting query would leave a second worker behind on every deploy. The
+// worker caches nothing; it is there so the browser will offer to install the app.
+// (Absent on http:// origins, hence the capability check rather than a try/catch alone.)
+(function () {
+  if (!('serviceWorker' in navigator)) return;
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('/sw.js').catch(function () {
+      // Registration failing costs the install prompt and nothing else, so it stays
+      // silent rather than logging on every page load of an unsupported setup.
+    });
+  });
+})();

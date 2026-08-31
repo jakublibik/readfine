@@ -1,8 +1,10 @@
-"""PWA plumbing: the web app manifest, served from the site root.
+"""PWA plumbing: the web app manifest and the service worker, served from the site root.
 
 Root, not /static, because a manifest's `scope` and (later) `share_target.action` are
 resolved relative to the manifest's own URL, so serving it from a subdirectory invites
-paths that quietly mean something else than they read.
+paths that quietly mean something else than they read. The worker has a harder
+requirement: a worker's scope cannot reach above the directory it is served from, so one
+fetched from /static/js/ could only ever control /static/js/.
 
 Unauthenticated on purpose: the manifest is fetched outside normal navigation, and a
 manifest behind the session cookie would need `<link rel="manifest"
@@ -29,5 +31,21 @@ async def web_app_manifest() -> FileResponse:
     return FileResponse(
         _STATIC_DIR / "manifest.webmanifest",
         media_type="application/manifest+json",
+        headers=_NO_CACHE,
+    )
+
+
+@router.get("/sw.js", include_in_schema=False)
+async def service_worker() -> FileResponse:
+    """The service worker, at a fixed URL.
+
+    Registered as plain "/sw.js", never through static_url(): a worker is identified by
+    the URL it was registered with, so a cache-busting ?v= would register a new worker
+    on every deploy that touched the file and leave the previous one running beside it.
+    Updates are the browser's job, and it byte-compares the script itself.
+    """
+    return FileResponse(
+        _STATIC_DIR / "js" / "sw.js",
+        media_type="text/javascript",
         headers=_NO_CACHE,
     )

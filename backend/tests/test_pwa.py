@@ -21,6 +21,24 @@ def test_manifest_start_url_is_inside_scope(unauth_client):
     assert m["display"] == "standalone"
 
 
+def test_service_worker_is_served_from_the_root(unauth_client):
+    """A worker's scope cannot reach above its own directory, so /static/js/sw.js would
+    control nothing. The URL is also the worker's identity: keep it stable and uncached."""
+    resp = unauth_client.get("/sw.js")
+    assert resp.status_code == 200
+    assert "javascript" in resp.headers["content-type"]
+    assert resp.headers.get("cache-control") == "no-cache"
+
+
+def test_service_worker_has_a_fetch_handler_and_caches_nothing(unauth_client):
+    """Chrome fires beforeinstallprompt only with a fetch handler present, so the
+    Install button depends on this line existing. Caching would outlive logout."""
+    body = unauth_client.get("/sw.js").text
+    assert "addEventListener('fetch'" in body
+    # The Cache Storage API, not the word "cache" — the file explains itself in prose.
+    assert "caches." not in body
+
+
 def test_manifest_icons_exist(unauth_client):
     """Every icon must resolve; a 404 here silently drops installability."""
     m = json.loads(unauth_client.get("/manifest.webmanifest").content)
