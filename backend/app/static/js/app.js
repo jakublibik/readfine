@@ -623,8 +623,8 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   var row = list && list.querySelector('[data-article-id="' + id + '"]');
   if (!row) {
     // Older than everything on the first page, so there is no row to point at. Stay
-    // quiet if the server already sent a toast ("Already saved…"): two of them land
-    // on the same spot and the reader gets neither.
+    // quiet if the server already sent a toast (the one for an article Readfine
+    // already had): two of them land on the same spot and the reader gets neither.
     if (!document.querySelector('[id^="app-toast-"]')) {
       showToast('Saved, further down the list', 'info');
     }

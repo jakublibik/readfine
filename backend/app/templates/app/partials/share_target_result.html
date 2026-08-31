@@ -3,8 +3,11 @@
 {% if error %}
   <p class="text-sm text-red-600 break-words">{{ error }}</p>
 {% else %}
+  {#- already_known means the article was already in the database, which is true of
+      anything that ever arrived through a feed. It is not a statement about Saved,
+      so the wording must not make one. -#}
   <p class="text-sm text-gray-700">
-    {% if already_known %}Already in Saved.{% else %}Saved.{% endif %}
+    Saved.{% if already_known %} Readfine already had this article.{% endif %}
   </p>
   <a href="/app?open_article_id={{ article_id }}"
      class="inline-block mt-2 text-sm text-blue-500 hover:text-blue-700">Read it now →</a>

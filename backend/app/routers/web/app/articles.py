@@ -1158,7 +1158,12 @@ async def htmx_save_url(
     else:
         saved_id = article.id
         if already_known:
-            toast = {"msg": "Already saved — added to Saved.", "type": "info"}
+            # already_known says the article was already in the database, which is true
+            # of anything that ever came in through a feed — including someone else's.
+            # It says nothing about Saved, so neither does this: reading it as "you had
+            # already saved this" is wrong for the common case of pasting a link to an
+            # article from a feed you subscribe to.
+            toast = {"msg": "Saved. Readfine already had this article.", "type": "info"}
 
     response = await render_list(request, user=user, db=db, saved_only=True)
     events: dict = {}
