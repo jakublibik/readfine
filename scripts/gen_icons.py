@@ -55,7 +55,7 @@ PLAIN_INK_WIDTH = 0.60 * SIZE
 # A maskable one is cropped by the launcher, so the same width reads much bigger: the
 # corners of the square are gone and the word ends up against the edge of the circle.
 # This is picked by eye against a launcher-style crop, not derived.
-MASKABLE_INK_WIDTH = 0.48 * SIZE
+MASKABLE_INK_WIDTH = 0.55 * SIZE
 # The hard limit behind that choice: a launcher may crop to the circle inscribed in the
 # middle 80%, and past it the word is cut off rather than merely tight.
 SAFE_RADIUS = 0.40 * SIZE * 0.94
