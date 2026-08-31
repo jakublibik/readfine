@@ -41,10 +41,19 @@
          until you scrolled. 100dvh tracks the visible area; the 100vh line stays as
          the fallback for browsers without dvh. Side insets live here rather than on
          the panels because the in-flow children inherit them; the fixed ones
-         (sidebar, bars, detail overlay) carry their own below. */
+         (sidebar, bars, detail overlay) carry their own below.
+
+         The top inset belongs here for the same reason. It used to be added only by
+         the hideable-up rule further down, which covers the default mobile layout and
+         nothing else: in collapsible mode, and in the medium and large buckets, there
+         is no title bar to carry it, so the first rows of the list ran under the status
+         bar wherever the inset is real (an installed app drawn edge to edge). The
+         hideable-up rule overrides this with its own calc(), so the bar height and the
+         inset are still counted once. Everywhere the inset is 0 this changes nothing. */
       .app-shell {
         height: 100vh;
         height: 100dvh;
+        padding-top: var(--sat);
         padding-left: var(--sal);
         padding-right: var(--sar);
       }
