@@ -88,6 +88,12 @@ categories:
         desc: >-
           A real small-screen layout with a collapsible sidebar and inline or
           full-screen article view, not a squeezed-down desktop.
+      - title: Install it as an app
+        desc: >-
+          Put Readfine on a phone's home screen or a desktop, where it opens in its
+          own window with no address bar. On Android it also joins the share sheet,
+          so a link shared from any other app lands in Saved. Needs HTTPS, which
+          browsers require before offering to install anything.
       - title: Search
         desc: >-
           Full-text search across your articles, scoped by feed, folder, status,

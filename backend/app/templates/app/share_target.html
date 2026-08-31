@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Save to Readfine{% endblock %}
+
+{#- Everything here came from another app on the phone, so it is rendered into text
+    nodes and into value="" only. Never into href: Jinja escapes the quotes, but
+    href="javascript:…" survives escaping intact and runs. -#}
+
+{% block content %}
+<div class="min-h-screen bg-gray-50 flex flex-col">
+
+  <header class="flex-shrink-0 border-b border-gray-200">
+    <div class="max-w-[32rem] mx-auto px-4 py-3 flex items-center justify-between text-sm">
+      <span class="font-semibold text-gray-600">Readfine</span>
+      <a href="/app" class="text-blue-500 hover:text-blue-700">Open app →</a>
+    </div>
+  </header>
+
+  <main class="flex-1">
+    <div class="max-w-[32rem] mx-auto px-4 py-6">
+
+      <h1 class="text-xl font-bold text-gray-900 leading-snug mb-1">Save to Readfine</h1>
+      <p class="text-sm text-gray-500 mb-5">The article is added to Saved and its text fetched for reading.</p>
+
+      {% if shared_title %}
+        <p class="text-sm font-medium text-gray-700 mb-4 break-words">{{ shared_title }}</p>
+      {% endif %}
+
+      <form hx-post="/share-target" hx-target="#share-target-result" hx-swap="innerHTML"
+            hx-disabled-elt="find button" class="flex flex-col gap-3">
+        <label for="share-target-url" class="text-sm font-medium text-gray-700">Address</label>
+        <input type="url" name="url" id="share-target-url" required
+               value="{{ shared_url }}"
+               {% if not shared_url %}placeholder="https://"{% endif %}
+               class="w-full border border-gray-300 rounded px-3 py-2 text-sm">
+
+        {% if not shared_url %}
+          <p class="text-sm text-gray-500">
+            No web address came through with that share, so paste the one you meant.
+          </p>
+        {% endif %}
+
+        <button type="submit"
+                class="self-start bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium
+                       rounded px-4 py-2 disabled:opacity-60">Save</button>
+      </form>
+
+      <div id="share-target-result" class="mt-5"></div>
+
+    </div>
+  </main>
+
+</div>
+{% endblock %}

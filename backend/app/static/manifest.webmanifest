@@ -8,6 +8,15 @@
   "display": "standalone",
   "background_color": "#141414",
   "theme_color": "#141414",
+  "share_target": {
+    "action": "/share-target",
+    "method": "GET",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
   "icons": [
     {
       "src": "/static/icons/icon-192.png",

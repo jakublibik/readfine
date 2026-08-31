@@ -27,6 +27,7 @@ _A clean reader that adapts to your screen._
 - **Videos play in the reader:** A YouTube or Vimeo link is saved as the video, with its full description under it. Playing it starts the player in place, and no player is loaded until you press play. The thumbnail is served from your own server, so opening an article never tells the video service your address.
 - **Adaptive layout:** Choose a 2- or 3-panel view per screen size, with breakpoints you set yourself.
 - **Dedicated mobile layout:** A real small-screen layout with a collapsible sidebar and inline or full-screen article view, not a squeezed-down desktop.
+- **Install it as an app:** Put Readfine on a phone's home screen or a desktop, where it opens in its own window with no address bar. On Android it also joins the share sheet, so a link shared from any other app lands in Saved. Needs HTTPS, which browsers require before offering to install anything.
 - **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
 - **Dark mode:** Light, dark, or follow your system preference.
 - **Reading typography:** Choose the font family and text size for the reading view.
