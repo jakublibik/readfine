@@ -290,6 +290,27 @@
       </select>
     </div>
 
+    {#- Hidden until the browser says installing is possible, so it never offers
+        something that cannot happen. The toggled element carries no display class of
+        its own: .hidden and .flex are both display utilities, and on the same element
+        the stylesheet order decides which wins rather than the code. -#}
+    <div id="install-app-row" class="hidden">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <span class="text-sm font-medium text-gray-700">Install as an app</span>
+          <p id="install-app-hint" class="text-xs text-gray-500 mt-0.5">
+            Opens in its own window, with no address bar.
+          </p>
+        </div>
+        {#- type="button" is load-bearing: this sits inside the preferences form, and a
+            button with no type submits it, saving and re-rendering the page out from
+            under the prompt. -#}
+        <button type="button" id="install-app-btn"
+                class="shrink-0 border border-gray-300 rounded px-3 py-1.5 text-sm
+                       text-gray-700 hover:bg-gray-50 disabled:opacity-60">Install</button>
+      </div>
+    </div>
+
   </div>
 </section>
 
@@ -329,5 +350,75 @@ function applyColorScheme(scheme) {
 document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(el) {
   el.addEventListener('change', function() { applyColorScheme(this.value); });
 });
+
+// Install as an app. The event this hangs on is caught in init.js, which runs before
+// any deferred script and so cannot miss it; here we only decide what to show.
+(function () {
+  var row = document.getElementById('install-app-row');
+  var btn = document.getElementById('install-app-btn');
+  var hint = document.getElementById('install-app-hint');
+  if (!row || !btn || !hint) return;
+
+  function isInstalled() {
+    return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+      || navigator.standalone === true;
+  }
+
+  // iPadOS 13+ calls itself a Mac, so the touch points are what tell the two apart.
+  function isIos() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  function show(text, withButton) {
+    hint.textContent = text;
+    btn.hidden = !withButton;
+    row.classList.remove('hidden');
+  }
+
+  if (isInstalled()) {
+    show('Installed on this device.', false);
+  } else if (isIos()) {
+    // No prompt exists on iOS and installing cannot be triggered from a page, so the
+    // steps are all we can offer. The warning about signing in is not padding: iOS
+    // gives an installed app its own storage, so the session does not come across and
+    // the first launch looks like a login that failed.
+    show('Open the Share menu, then Add to Home Screen. You will be asked to sign in '
+       + 'again there: iOS keeps an installed app’s data separate from the browser.', false);
+  } else if (window._installPrompt) {
+    row.classList.remove('hidden');
+  }
+
+  // Late arrival: the event can land after this page has rendered.
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    window._installPrompt = e;
+    if (!isInstalled()) { btn.hidden = false; row.classList.remove('hidden'); }
+  });
+
+  window.addEventListener('appinstalled', function () {
+    window._installPrompt = null;
+    show('Installed on this device.', false);
+  });
+
+  btn.addEventListener('click', function () {
+    var evt = window._installPrompt;
+    if (!evt) { row.classList.add('hidden'); return; }
+    // Single use, whatever the answer: a spent event cannot be raised again.
+    window._installPrompt = null;
+    btn.disabled = true;
+    evt.prompt();
+    evt.userChoice.then(function (choice) {
+      btn.disabled = false;
+      // Accepted: appinstalled arrives and rewrites the row. Dismissed: the event is
+      // gone, so take the button away rather than leave one that does nothing. Chrome
+      // may offer another later, and the listener above puts it back.
+      if (!choice || choice.outcome !== 'accepted') row.classList.add('hidden');
+    }, function () {
+      btn.disabled = false;
+      row.classList.add('hidden');
+    });
+  });
+})();
 </script>
 {% endblock %}

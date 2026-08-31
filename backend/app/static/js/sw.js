@@ -22,4 +22,9 @@ self.addEventListener('activate', function (event) {
 // equivalent but is worse on both counts: it defeats the browser's ability to skip a
 // no-op fetch handler entirely, and routing every request through the worker can break
 // range requests, which is how the video players in article bodies fetch.
+//
+// Chrome's console says so out loud: "Fetch event handler is recognized as no-op …
+// Consider removing the handler if possible." Do not. That message means the skip
+// optimization above is working, and taking the handler away removes
+// beforeinstallprompt with it, and with that the Install button in Settings.
 self.addEventListener('fetch', function () {});
