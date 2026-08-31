@@ -7,18 +7,46 @@
 <p class="text-sm text-gray-500 mb-4">
   Does <code>ai_score</code> predict real engagement? Engaged =
   <code>starred OR dwell ≥ 60s OR link opened</code> (<code>is_read</code> excluded -
-  it is set even for unseen articles). Observational, not randomized; the label is
-  affected by exposure bias, so treat AUC as a lower bound.
+  it is set even for unseen articles). Observational, not randomized.
 </p>
+{% if eval.exposure and not eval.exposure.aggregate_only %}
+<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+  <strong>This user's own filters shape the answer.</strong>
+  <em>{{ eval.exposure.filter_name }}</em> applies
+  <code>{{ eval.exposure.action }}</code> to articles scoring under
+  {{ eval.exposure.threshold|num }}, so they never reach the unread list and
+  nobody can engage with them. That covers
+  {{ (eval.exposure.dropped_share * 100)|num(1) }}% of the scored articles here,
+  where the engagement rate is
+  {{ (eval.exposure.dropped_engaged_rate * 100)|num(2) }}% - which the score
+  caused rather than predicted. Both AUC figures below are shown for that reason.
+</p>
+{% elif eval.exposure and eval.exposure.aggregate_only %}
+<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+  <strong>Read the aggregate with care.</strong>
+  {{ eval.exposure.users_affected }} user(s) have an active filter that marks or
+  archives low-scoring articles, so for them the score decided what could be
+  engaged with in the first place and its AUC is flattered. Each threshold is
+  their own, so there is no single band to leave out here - pick a single user to
+  see the honest range.
+</p>
+{% endif %}
 
 <div class="flex flex-wrap items-center gap-3 mb-6 text-sm">
   <span class="text-gray-500">Window:</span>
-  {% for d in [30, 90, 180, 365] %}
+  {% for d in eval.presets %}
   <a href="/admin/scoring-eval?days={{ d }}{% if eval.user_id %}&user_id={{ eval.user_id }}{% endif %}"
      class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if eval.days == d else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">
     {{ d }}d
   </a>
   {% endfor %}
+  {% if eval.retention.purge_after_days %}
+  <span class="text-gray-500">
+    stops at {{ eval.retention.effective_days }}d: past retention
+    ({{ eval.retention.purge_after_days }}d) only starred and archived articles
+    survive, which would flatter every metric
+  </span>
+  {% endif %}
 
   <form method="get" action="/admin/scoring-eval" class="flex items-center gap-2 ml-auto">
     <input type="hidden" name="days" value="{{ eval.days }}">
@@ -55,6 +83,40 @@
     <div class="text-sm text-gray-500 mt-1">AUC <span class="text-gray-400">(0.5 = random)</span></div>
   </div>
 </div>
+
+{# .get, not .auc: the aggregate view has no per-user floor and so no restricted
+   AUC, and `Undefined is not none` is true in jinja, which would let it through #}
+{% if eval.exposure and eval.exposure.get('auc') is not none %}
+<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8">
+  <h2 class="text-sm font-semibold text-gray-700 mb-2">The AUC is somewhere between these two</h2>
+  <div class="flex flex-wrap items-baseline gap-x-8 gap-y-2 mb-3">
+    <div>
+      <span class="text-2xl font-bold text-gray-900">{{ eval.exposure.auc|num(3) }}</span>
+      <span class="text-sm text-gray-500 ml-2">
+        above {{ eval.exposure.threshold|num }} only ({{ eval.exposure.n|num }} articles,
+        {{ (eval.exposure.engaged_rate * 100)|num(1) }}% engaged)
+      </span>
+    </div>
+    <div>
+      <span class="text-2xl font-bold text-gray-900">{{ eval.auc|num(3) }}</span>
+      <span class="text-sm text-gray-500 ml-2">
+        everything ({{ eval.n|num }} articles)
+      </span>
+    </div>
+  </div>
+  <p class="text-sm text-gray-500">
+    Neither number is the answer, and the truth is not the midpoint either.
+    <strong>Everything</strong> is too high: the filter manufactured a tail of
+    articles that could not be engaged with, and the score gets credit for
+    ranking them low. <strong>Above {{ eval.exposure.threshold|num }}</strong> is
+    too low: leaving that band out cuts the score's own range, and a narrower
+    range makes any ranking look worse than it is. Read them as bounds. To
+    actually measure it, drop <code>{{ eval.exposure.action }}</code> from the
+    filter, leave the label, and come back once a few weeks of articles have been
+    scored without it.
+  </p>
+</div>
+{% endif %}
 
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Calibration <span class="font-normal text-gray-400">(engagement rate should rise with score)</span></h2>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">

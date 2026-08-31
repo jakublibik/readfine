@@ -42,6 +42,21 @@ class _ApiError(Exception):
         self.status_code = status_code
 
 
+class _Closable(SimpleNamespace):
+    """A stand-in client that can be closed, and remembers that it was.
+
+    Everything handing out a client now closes it, so a stub that cannot be
+    closed would only prove that close_ai_client swallows the failure.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
+
+
 def _anthropic(text, *, leading_thinking=False):
     """An Anthropic response. Real content blocks always carry ``type``, and the
     extraction keys off it, so the stub has to as well."""
@@ -378,12 +393,17 @@ class TestVerifyAiSlot:
 
     @staticmethod
     def _verify(monkeypatch, create):
-        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        client = _Closable(messages=SimpleNamespace(create=create))
 
-        async def fake_get_ai_client(user_id, slot, db):
-            return client, "anthropic", "claude-sonnet-5"
+        async def fake_slot_config(user_id, slot, db):
+            return "anthropic", "claude-sonnet-5", None
 
-        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
+        async def no_key(*args, **kwargs):
+            return "sk-ant-test"
+
+        monkeypatch.setattr(ai_service, "get_slot_config", fake_slot_config)
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", lambda *a, **k: client)
         return ai_service.verify_ai_slot(1, "fast", db=None)
 
     @pytest.mark.asyncio
@@ -412,25 +432,24 @@ class TestVerifyAiSlot:
 
     @pytest.mark.asyncio
     async def test_a_custom_endpoint_is_verified_on_the_verify_budget(self, monkeypatch):
-        """Even with nothing overridden, the client get_ai_client handed over is
-        built for generating a summary. Verify must not inherit its ten minutes."""
+        """A client built for the slot is built for generating a summary. Verify
+        must not inherit its ten minutes, so it builds its own."""
         seen = {}
+        built = []
 
         def fake_make_client(provider, api_key, url=None, **kwargs):
             seen.update(kwargs)
-            return SimpleNamespace(
+            client = _Closable(
                 chat=SimpleNamespace(completions=SimpleNamespace(
                     create=AsyncMock(return_value=_openai("Hi")),
                 ))
             )
-
-        async def fake_get_ai_client(user_id, slot, db):
-            return object(), "custom", "llama3.2:3b"
+            built.append(client)
+            return client
 
         async def no_key(*args, **kwargs):
             return None
 
-        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
         monkeypatch.setattr(ai_service, "_make_client", fake_make_client)
         monkeypatch.setattr(ai_service, "get_api_key", no_key)
         monkeypatch.setattr(ai_service, "scoring_model_rejection", AsyncMock(return_value=None))
@@ -439,16 +458,83 @@ class TestVerifyAiSlot:
         result = await ai_service.verify_ai_slot(1, "fast", db)
         assert result["ok"] is True
         assert seen == ai_service._VERIFY_CLIENT_KWARGS
+        # Exactly one client, and it was closed. Verify used to take one from the
+        # slot and then build a second, leaving the first open with nobody to
+        # close it.
+        assert len(built) == 1
+        assert built[0].closed == 1
 
     @pytest.mark.asyncio
     async def test_no_client_configured(self, monkeypatch):
-        async def fake_get_ai_client(user_id, slot, db):
+        async def fake_slot_config(user_id, slot, db):
             return None, None, None
 
-        monkeypatch.setattr(ai_service, "get_ai_client", fake_get_ai_client)
+        monkeypatch.setattr(ai_service, "get_slot_config", fake_slot_config)
         result = await ai_service.verify_ai_slot(1, "fast", db=None)
         assert result["ok"] is False
         assert result["model"] is None
+
+    @pytest.mark.asyncio
+    async def test_a_client_that_cannot_be_built_reads_as_configuration(self, monkeypatch):
+        """This runs behind a button on the settings page, so a client the SDK
+        refuses to construct has to come back as an answer rather than a 500."""
+
+        def refuses(*args, **kwargs):
+            raise ValueError("Invalid base_url")
+
+        async def fake_slot_config(user_id, slot, db):
+            return "custom", "llama3.2:3b", "http://localhost:11434/v1"
+
+        async def no_key(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr(ai_service, "get_slot_config", fake_slot_config)
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", refuses)
+
+        result = await ai_service.verify_ai_slot(1, "fast", db=None)
+        assert result["ok"] is False
+        assert result["error"]
+
+    @pytest.mark.asyncio
+    async def test_the_stored_endpoint_is_used_when_the_slot_does_not_resolve(self, monkeypatch):
+        """First-time custom setup: the model is typed into the form and not saved
+        yet, so the slot resolves to nothing, while the endpoint is already stored.
+        Verify has to fall back to it instead of asking for an address the user can
+        see in the field in front of them."""
+        seen = {}
+
+        def fake_make_client(provider, api_key, url=None, **kwargs):
+            seen["base_url"] = url
+            return _Closable(
+                chat=SimpleNamespace(completions=SimpleNamespace(
+                    create=AsyncMock(return_value=_openai("Hi")),
+                ))
+            )
+
+        async def unresolved_slot(user_id, slot, db):
+            return None, None, None
+
+        async def no_key(*args, **kwargs):
+            return None
+
+        async def accept_any_address(url):
+            """Which address Verify ends up with is the subject here, not whether
+            the address rules allow it. Without this the test passes or fails on
+            whether the machine running it happens to list localhost in
+            AI_ALLOWED_PRIVATE_HOSTS."""
+
+        monkeypatch.setattr(ai_service, "get_slot_config", unresolved_slot)
+        monkeypatch.setattr(ai_service, "get_api_key", no_key)
+        monkeypatch.setattr(ai_service, "_make_client", fake_make_client)
+        monkeypatch.setattr(ai_service, "async_validate_ai_endpoint_url", accept_any_address)
+
+        db = _db_returning(_FakeSettings("custom", None, "http://localhost:11434/v1"))
+        result = await ai_service.verify_ai_slot(
+            1, "fast", db, provider_override="custom", model_override="qwen3:1.7b",
+        )
+        assert result["ok"] is True
+        assert seen["base_url"] == "http://localhost:11434/v1"
 
 
 class TestScoringRefusesAnAlwaysThinkingModel:
@@ -782,7 +868,8 @@ class TestScoringProbeEndpoint:
         def fake_make_client(provider, api_key, url=None):
             seen["provider"] = provider
             seen["base_url"] = url
-            return object()
+            seen["client"] = _Closable()
+            return seen["client"]
 
         async def fake_complete(*args, **kwargs):
             return ai_service.Completion("1", 2, 1)
@@ -802,6 +889,8 @@ class TestScoringProbeEndpoint:
         rejection, seen = self._run_probe(monkeypatch, "http://localhost:11434/v1")
         assert rejection is None
         assert seen["base_url"] == "http://localhost:11434/v1"
+        # The probe opens a client of its own, so it also has to close it.
+        assert seen["client"].closed == 1
 
     def test_probe_runs_for_a_keyless_provider(self, monkeypatch):
         # Without this it would bail out on the missing key and never ask the model
@@ -818,7 +907,7 @@ class TestScoringProbeEndpoint:
             raise ProviderEmptyResponse("custom returned no usable content")
 
         monkeypatch.setattr(ai_service, "get_api_key", no_key)
-        monkeypatch.setattr(ai_service, "_make_client", lambda *a, **k: object())
+        monkeypatch.setattr(ai_service, "_make_client", lambda *a, **k: _Closable())
         monkeypatch.setattr(ai_service, "_complete", empty_answer)
 
         rejection = asyncio.run(
@@ -917,6 +1006,26 @@ class TestOpenAiWireReasoningOff:
         assert create.await_count == 1
 
 
+def _blocked_as_the_sdk_reports_it(
+    message="URL resolves to a disallowed address (::1): not permitted",
+):
+    """A refused address the way it actually arrives, under the SDK's wrapper.
+
+    Reproducing the shape matters more than the exact classes: the provider
+    libraries catch everything a request raises and re-raise their own error with
+    a fixed message, so the only trace of the real reason is the __cause__ link.
+    """
+    from app.utils.url_validator import BlockedAddressError
+
+    try:
+        try:
+            raise BlockedAddressError(message)
+        except BlockedAddressError as inner:
+            raise RuntimeError("Connection error.") from inner
+    except RuntimeError as outer:
+        return outer
+
+
 class TestFriendlyAiError:
     """The Verify line is the only place a self-hoster finds out why the endpoint
     did not answer, and htmx leaves it untouched when the route 500s — so this has
@@ -956,6 +1065,34 @@ class TestFriendlyAiError:
 
     def test_an_exception_with_no_message_falls_back_to_its_class(self):
         assert ai_service._friendly_ai_error(ValueError()) == "ValueError"
+
+    def test_a_refused_address_is_not_reported_as_an_unreachable_server(self):
+        # The worst wording of the lot before this: the server may be running
+        # perfectly well and we refused to call it, so "check that the server is
+        # running" sends the reader to the one place where nothing is wrong.
+        message = ai_service._friendly_ai_error(_blocked_as_the_sdk_reports_it())
+        assert "disallowed address" in message
+        assert "AI_ALLOWED_PRIVATE_HOSTS" in message
+        assert "Could not reach the endpoint" not in message
+
+
+class TestChatErrorMessage:
+    """Chat says "try again" for everything it does not recognise, which is right
+    for an overloaded provider and wrong for a refused address: that answer does
+    not change however many times it is asked."""
+
+    def _message(self, exc):
+        from app.routers.web.app.ai import _ai_chat_error_message
+
+        return _ai_chat_error_message(exc)
+
+    def test_a_refused_address_does_not_invite_a_pointless_retry(self):
+        message = self._message(_blocked_as_the_sdk_reports_it())
+        assert "not allowed to reach" in message
+        assert "try again" not in message.lower()
+
+    def test_an_overloaded_provider_still_says_try_again(self):
+        assert "try again" in self._message(RuntimeError("529 overloaded")).lower()
 
 
 class TestCustomClientTimeout:
@@ -1006,8 +1143,8 @@ class TestCustomClientTimeout:
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1},
             })
 
-        from app.config import settings as app_settings
-        with patch.object(app_settings, "ai_allow_private_endpoints", True), \
+        from tests.conftest import allowed_private_ai_hosts
+        with allowed_private_ai_hosts("localhost:11434"), \
              patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake):
             client = ai_service._make_custom_client(None, "http://localhost:11434/v1")
             asyncio.run(client.chat.completions.create(

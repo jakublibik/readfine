@@ -7,11 +7,13 @@ import httpx
 import pytest
 from unittest.mock import patch
 
+from tests.conftest import allowed_private_ai_hosts
 from tests.conftest import mock_httpx_client as _mock_httpx_client
 from app.config import settings as app_settings
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
+    BlockedAddressError,
     PinnedAsyncTransport,
     ResponseTooLarge,
     _pin_connection,
@@ -1017,60 +1019,173 @@ class TestResponseSizeCap:
 
 class TestValidateAiEndpointUrl:
     """The custom AI provider's base_url is user input on a hosted instance, so it
-    goes through the same address rules as a feed — unless the operator has said
-    otherwise, which is the one thing this validator does differently."""
+    goes through the same address rules as a feed — unless the operator has named
+    that exact socket, which is the one thing this validator does differently.
+
+    This is the settings form's check, so a bad endpoint is a message under the
+    field rather than a failed job hours later. What actually bounds the feature
+    is TestPinnedAsyncTransport below."""
 
     def _dns(self, ip: str):
         family = 10 if ":" in ip else 2
         sockaddr = (ip, 0, 0, 0) if ":" in ip else (ip, 0)
         return patch("socket.getaddrinfo", return_value=[(family, 1, 6, "", sockaddr)])
 
-    def _allow_private(self, allowed: bool):
-        return patch.object(app_settings, "ai_allow_private_endpoints", allowed)
-
-    def test_public_address_allowed_either_way(self):
-        for allowed in (False, True):
-            with self._dns("1.2.3.4"), self._allow_private(allowed):
+    def test_public_address_allowed_with_or_without_a_list(self):
+        for entries in ("", "ollama:11434"):
+            with self._dns("1.2.3.4"), allowed_private_ai_hosts(entries):
                 validate_ai_endpoint_url("https://api.openrouter.ai/v1")
 
     def test_loopback_rejected_by_default(self):
-        with self._dns("127.0.0.1"), self._allow_private(False):
+        with self._dns("127.0.0.1"), allowed_private_ai_hosts(""):
             with pytest.raises(ValueError, match="disallowed"):
                 validate_ai_endpoint_url("http://localhost:11434/v1")
 
     def test_private_range_rejected_by_default(self):
-        with self._dns("172.17.0.2"), self._allow_private(False):
+        with self._dns("172.17.0.2"), allowed_private_ai_hosts(""):
             with pytest.raises(ValueError, match="disallowed"):
                 validate_ai_endpoint_url("http://ollama:11434/v1")
 
     def test_cloud_metadata_address_rejected_by_default(self):
-        with self._dns("169.254.169.254"), self._allow_private(False):
+        with self._dns("169.254.169.254"), allowed_private_ai_hosts(""):
             with pytest.raises(ValueError, match="disallowed"):
                 validate_ai_endpoint_url("http://metadata.internal/v1")
 
-    def test_private_allowed_when_operator_opts_in(self):
-        # And without a lookup at all: on such an instance nothing could act on the
-        # answer, and a hostname only Docker can resolve must not fail at save time.
+    def test_listed_socket_allowed_without_a_lookup(self):
+        # Not resolved at all: nothing would be allowed to act on the answer, and a
+        # hostname only Docker can resolve must not fail at save time.
         with patch("socket.getaddrinfo", side_effect=AssertionError("must not resolve")):
-            with self._allow_private(True):
+            with allowed_private_ai_hosts("ollama:11434"):
                 validate_ai_endpoint_url("http://ollama:11434/v1")
 
-    def test_non_http_scheme_rejected_in_both_modes(self):
-        for allowed in (False, True):
-            with self._allow_private(allowed):
+    def test_same_host_on_another_port_is_not_covered(self):
+        # The entry names one socket, so allowing a model server does not also
+        # allow the database next to it.
+        with self._dns("172.17.0.2"), allowed_private_ai_hosts("ollama:11434"):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_ai_endpoint_url("http://ollama:5432/v1")
+
+    def test_default_port_matches_the_entry_that_spells_it_out(self):
+        # http://ollama and ollama:80 are the same address, so they must not
+        # disagree about whether it is allowed.
+        with patch("socket.getaddrinfo", side_effect=AssertionError("must not resolve")):
+            with allowed_private_ai_hosts("ollama:80"):
+                validate_ai_endpoint_url("http://ollama/v1")
+
+    def test_ipv6_literal_matches_its_bracketed_entry(self):
+        with patch("socket.getaddrinfo", side_effect=AssertionError("must not resolve")):
+            with allowed_private_ai_hosts("[::1]:11434"):
+                validate_ai_endpoint_url("http://[::1]:11434/v1")
+
+    def test_host_not_on_the_list_stays_rejected(self):
+        with self._dns("127.0.0.1"), allowed_private_ai_hosts("ollama:11434"):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_ai_endpoint_url("http://localhost:11434/v1")
+
+    def test_non_http_scheme_rejected_whatever_the_list_says(self):
+        for entries in ("", "ollama:11434"):
+            with allowed_private_ai_hosts(entries):
                 with pytest.raises(ValueError, match="scheme"):
                     validate_ai_endpoint_url("file:///etc/passwd")
 
     def test_missing_hostname_rejected(self):
-        with self._allow_private(False):
+        with allowed_private_ai_hosts(""):
             with pytest.raises(ValueError, match="hostname"):
                 validate_ai_endpoint_url("http:///v1")
+
+    def test_a_refusal_is_marked_as_one_so_callers_stop_retrying(self):
+        # Still a ValueError, so nothing that catches one has to change; the class
+        # is what lets the AI job layer tell a refusal from an outage.
+        with self._dns("127.0.0.1"), allowed_private_ai_hosts(""):
+            with pytest.raises(BlockedAddressError):
+                validate_ai_endpoint_url("http://localhost:11434/v1")
+
+    def test_a_hostname_that_will_not_resolve_is_not_marked_as_a_refusal(self):
+        # DNS that is down comes back on its own and deserves the retry.
+        import socket as _socket
+
+        with patch("socket.getaddrinfo", side_effect=_socket.gaierror("nope")):
+            with allowed_private_ai_hosts(""):
+                with pytest.raises(ValueError) as caught:
+                    validate_ai_endpoint_url("http://ollama:11434/v1")
+        assert not isinstance(caught.value, BlockedAddressError)
+
+
+class TestAllowedPrivateHostsSetting:
+    """A list that quietly allows nothing is worse than one that stops the boot:
+    the operator would believe their Ollama was reachable and it would not be."""
+
+    def _parse(self, entries: str) -> frozenset:
+        with allowed_private_ai_hosts(entries):
+            return app_settings.allowed_private_endpoints
+
+    def test_entries_are_split_lowercased_and_stripped(self):
+        assert self._parse(" Ollama:11434 , 127.0.0.1:11434 ") == frozenset(
+            {("ollama", 11434), ("127.0.0.1", 11434)}
+        )
+
+    def test_empty_segments_are_tolerated(self):
+        # A trailing comma is a typo without consequence.
+        assert self._parse("ollama:11434,") == frozenset({("ollama", 11434)})
+
+    def test_trailing_dot_is_the_same_host(self):
+        assert self._parse("ollama.:11434") == frozenset({("ollama", 11434)})
+
+    @pytest.mark.parametrize("entry, message", [
+        ("ollama", "has no port"),
+        ("ollama:abc", "not a valid host:port"),
+        ("ollama:99999", "not a valid host:port"),
+        # The likely mistake: the Endpoint field's value pasted in whole. urlparse
+        # would read the hostname as "http" and allow nothing anyone meant.
+        ("http://ollama:11434", "not a host:port pair"),
+        ("ollama:11434/v1", "not a host:port pair"),
+        ("user@ollama:11434", "not a host:port pair"),
+        (":11434", "has no hostname"),
+    ])
+    def test_malformed_entry_raises_rather_than_being_dropped(self, entry, message):
+        with pytest.raises(ValueError, match=message):
+            self._parse(entry)
+
+
+class TestRemovedPrivateEndpointsFlag:
+    """AI_ALLOW_PRIVATE_ENDPOINTS is gone, but the line is still sitting in every
+    .env copied from the example, and pydantic-settings refuses a dotenv key with
+    no field behind it whatever its value."""
+
+    def _settings(self, **kwargs):
+        from app.config import Settings
+
+        return Settings(
+            _env_file=None,
+            database_url="postgresql+asyncpg://u:p@localhost:5432/d",
+            secret_key="a" * 64,
+            encryption_key="b" * 32,
+            debug=True,
+            **kwargs,
+        )
+
+    def test_the_old_default_still_boots(self):
+        # false is what .env.example shipped, so refusing it would stop instances
+        # that never used the feature and have nothing to change.
+        assert self._settings(ai_allow_private_endpoints=False).allowed_private_endpoints == frozenset()
+
+    def test_switching_it_on_is_refused_with_the_replacement_named(self):
+        with pytest.raises(ValueError, match="AI_ALLOWED_PRIVATE_HOSTS"):
+            self._settings(ai_allow_private_endpoints=True)
+
+    def test_a_bad_list_stops_the_boot_too(self):
+        with pytest.raises(ValueError, match="AI_ALLOWED_PRIVATE_HOSTS"):
+            self._settings(ai_allowed_private_hosts="ollama")
 
 
 class TestPinnedAsyncTransport:
     """Validating the endpoint when it was saved says nothing about the request made
     weeks later: the same hostname can start answering 127.0.0.1 in between. Every
-    request re-checks and connects to the address it just checked."""
+    request re-checks and connects to the address it just checked.
+
+    This is the boundary, not the settings form: everything reaching a custom
+    endpoint is carried here, including calls made outside that form and every
+    redirect hop."""
 
     def _dns(self, ip: str):
         return patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", (ip, 0))])
@@ -1081,9 +1196,7 @@ class TestPinnedAsyncTransport:
     @pytest.mark.asyncio
     async def test_rebound_hostname_is_refused_at_request_time(self):
         transport = PinnedAsyncTransport()
-        with self._dns("127.0.0.1"), patch.object(
-            app_settings, "ai_allow_private_endpoints", False
-        ):
+        with self._dns("127.0.0.1"), allowed_private_ai_hosts(""):
             with pytest.raises(ValueError, match="disallowed"):
                 await transport.handle_async_request(self._request())
 
@@ -1098,9 +1211,9 @@ class TestPinnedAsyncTransport:
             sent["sni"] = request.extensions.get("sni_hostname")
             return httpx.Response(200)
 
-        with self._dns("93.184.216.34"), patch.object(
-            app_settings, "ai_allow_private_endpoints", False
-        ), patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send):
+        with self._dns("93.184.216.34"), allowed_private_ai_hosts(""), patch.object(
+            httpx.AsyncHTTPTransport, "handle_async_request", fake_send
+        ):
             await transport.handle_async_request(self._request())
 
         # Connect to the checked IP, but keep the name for virtual hosting and TLS,
@@ -1110,7 +1223,30 @@ class TestPinnedAsyncTransport:
         assert sent["sni"] == "ai.example.com"
 
     @pytest.mark.asyncio
-    async def test_opt_in_instance_passes_the_request_through(self):
+    async def test_listed_socket_passes_the_request_through(self):
+        transport = PinnedAsyncTransport()
+        sent = {}
+
+        async def fake_send(self, request):
+            sent["url"] = str(request.url)
+            sent["host"] = request.headers.get("host")
+            return httpx.Response(200)
+
+        # No rewrite at all: a Docker service name resolves inside the container
+        # network, and pinning it to an IP we refuse to look up would break it.
+        with allowed_private_ai_hosts("ollama:11434"), patch.object(
+            httpx.AsyncHTTPTransport, "handle_async_request", fake_send
+        ):
+            await transport.handle_async_request(
+                httpx.Request("POST", "http://ollama:11434/v1/chat/completions")
+            )
+        assert sent["url"] == "http://ollama:11434/v1/chat/completions"
+        assert sent["host"] == "ollama:11434"
+
+    @pytest.mark.asyncio
+    async def test_a_public_endpoint_is_still_pinned_alongside_a_listed_one(self):
+        # The old boolean unpinned every custom endpoint at once, so an operator who
+        # allowed their Ollama also lost the check on a gateway like OpenRouter.
         transport = PinnedAsyncTransport()
         sent = {}
 
@@ -1118,12 +1254,19 @@ class TestPinnedAsyncTransport:
             sent["url"] = str(request.url)
             return httpx.Response(200)
 
-        # No rewrite: a Docker service name resolves inside the container network,
-        # and pinning it to an IP we refuse to look up would break it.
-        with patch.object(app_settings, "ai_allow_private_endpoints", True), patch.object(
+        with self._dns("93.184.216.34"), allowed_private_ai_hosts("ollama:11434"), patch.object(
             httpx.AsyncHTTPTransport, "handle_async_request", fake_send
         ):
-            await transport.handle_async_request(
-                httpx.Request("POST", "http://ollama:11434/v1/chat/completions")
-            )
-        assert sent["url"] == "http://ollama:11434/v1/chat/completions"
+            await transport.handle_async_request(self._request())
+        assert sent["url"] == "https://93.184.216.34/v1/chat/completions"
+
+    @pytest.mark.asyncio
+    async def test_a_redirect_off_the_list_is_refused(self):
+        # Whether the SDK follows redirects is the SDK's business; if it does, the
+        # hop arrives here as its own request and gets the same answer.
+        transport = PinnedAsyncTransport()
+        with self._dns("169.254.169.254"), allowed_private_ai_hosts("ollama:11434"):
+            with pytest.raises(ValueError, match="disallowed"):
+                await transport.handle_async_request(
+                    httpx.Request("GET", "http://metadata.internal/latest/meta-data/")
+                )

@@ -42,6 +42,13 @@ class User(Base):
     catchup_logs: Mapped[list["CatchupLog"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
+# How much normalized article text is sent to a model, and how little an article
+# may have before a summary is not worth making. See the comment above the AI
+# columns below.
+AI_CONTENT_LIMIT_DEFAULT, AI_CONTENT_LIMIT_MIN, AI_CONTENT_LIMIT_MAX = 20_000, 1_000, 100_000
+AI_MIN_CHARS_DEFAULT, AI_MIN_CHARS_MIN, AI_MIN_CHARS_MAX = 1_700, 500, 10_000
+
+
 class UserSettings(Base):
     __tablename__ = "user_settings"
 
@@ -65,6 +72,11 @@ class UserSettings(Base):
     reading_font_family: Mapped[str] = mapped_column(String(10), nullable=False, default="sans")
 
     # AI settings
+    #
+    # Bounds for the two numeric AI limits live next to the columns they belong
+    # to, so the model default, the form validation and the wording shown to the
+    # user cannot drift apart. Alembic's server_default stays a literal: a
+    # migration describes what happened then, not what the constant says today.
     ai_fast_provider: Mapped[str | None] = mapped_column(String(30))
     ai_fast_model: Mapped[str | None] = mapped_column(String(100))
     ai_quality_provider: Mapped[str | None] = mapped_column(String(30))
@@ -94,7 +106,13 @@ class UserSettings(Base):
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)
     ai_score_show_in_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_chat_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    ai_content_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=20_000)
+    ai_content_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=AI_CONTENT_LIMIT_DEFAULT)
+    # Articles below this are not summarized. Measured on the full normalized
+    # text, never on the copy truncated to ai_content_limit, so the answer does
+    # not depend on which gate is asking.
+    ai_min_content_chars: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=AI_MIN_CHARS_DEFAULT)
     last_ai_error: Mapped[str | None] = mapped_column(Text)
     last_ai_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # The article the failed job was working on, so the error panel can link to it.

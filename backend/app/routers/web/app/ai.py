@@ -15,9 +15,12 @@ from app.database import get_db
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.ai_jobs import ai_enabled_globally, normalize_content
+from app.services.ai_jobs import (
+    ON_DEMAND_MIN_CHARS, ai_enabled_globally, normalize_content, normalize_text,
+)
 from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
+from app.utils.url_validator import find_blocked_address
 
 router = APIRouter(tags=["web-app"])
 
@@ -76,11 +79,14 @@ async def _require_quality_ai_for_article(
     """Shared guard for on-demand AI (summary / context): AI enabled globally, a
     quality model configured, the article accessible, and its content long enough.
 
+    Both buttons gate on ``ON_DEMAND_MIN_CHARS``, not on the user's minimum
+    length: that setting is aimed at the automatic pipeline. Context would be the
+    worse fit of the two anyway, since it supplies what an article leaves out and
+    so earns its keep on exactly the short pieces the setting turns away.
+
     Returns an error ``HTMLResponse`` (rendered into ``target_id``) on any failed
     check, or ``(article, settings, content_text)`` on success.
     """
-    from app.services.ai_summary_service import _MIN_CONTENT_CHARS
-
     def _note(text: str) -> HTMLResponse:
         return HTMLResponse(f'<div id="{target_id}" class="text-xs text-gray-400 py-1">{text}</div>')
 
@@ -95,13 +101,16 @@ async def _require_quality_ai_for_article(
     if not article:
         return HTMLResponse("", status_code=404)
 
-    content_text = normalize_content(
-        article.title, article.readable_content or article.content, settings.ai_content_limit
-    )
-    if len(content_text) < _MIN_CONTENT_CHARS:
-        return _note(f"Article is too short for {too_short_label} (minimum {_MIN_CONTENT_CHARS} characters).")
+    # Measured on the full text, truncated only on the way to the model, so this
+    # gate agrees with enqueue whatever the content limit is.
+    full_text = normalize_text(article.title, article.readable_content or article.content)
+    if len(full_text) < ON_DEMAND_MIN_CHARS:
+        return _note(
+            f"Article is too short for {too_short_label} "
+            f"(minimum {ON_DEMAND_MIN_CHARS} characters)."
+        )
 
-    return article, settings, content_text
+    return article, settings, full_text[:settings.ai_content_limit]
 
 
 @router.post("/htmx/articles/{article_id}/ai-summary", response_class=HTMLResponse)
@@ -159,6 +168,16 @@ async def htmx_ai_summary_poll(
             f'<div id="ai-summary-{article_id}" class="text-xs text-red-500 py-1">Summary failed: {msg}</div>'
         )
 
+    if job.status == "skipped":
+        # Without this the spinner would be replaced by an empty div: the branch
+        # below finds no stored summary and says nothing about why. Length is not
+        # among the reasons a queued job is skipped, only a model that is no
+        # longer there when its turn comes.
+        return HTMLResponse(
+            f'<div id="ai-summary-{article_id}" class="text-xs text-gray-400 py-1">'
+            f'Summary was skipped. Check that a main AI model is configured.</div>'
+        )
+
     state = await db.scalar(
         select(UserArticleState).where(
             UserArticleState.user_id == user.id,
@@ -183,7 +202,8 @@ async def htmx_ai_context_trigger(
 ):
     """On-demand: call AI directly and return context block (synchronous, may take several seconds)."""
     guard = await _require_quality_ai_for_article(
-        user, article_id, db, target_id=f"ai-context-{article_id}", too_short_label="context generation"
+        user, article_id, db, target_id=f"ai-context-{article_id}",
+        too_short_label="context generation",
     )
     if isinstance(guard, HTMLResponse):
         return guard
@@ -192,24 +212,26 @@ async def htmx_ai_context_trigger(
     form = await request.form()
     focus = (form.get("focus") or "").strip() or None
 
-    from app.services.ai_service import get_ai_client, get_article_context
-    client, provider, model = await get_ai_client(user.id, "quality", db)
-    if client is None:
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Main AI model not configured.</div>'
-        )
+    from app.services.ai_service import ai_client, get_article_context
+    async with ai_client(user.id, "quality", db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                f'<div id="ai-context-{article_id}" class="text-xs text-gray-400 py-1">Main AI model not configured.</div>'
+            )
 
-    try:
-        result, in_tok, out_tok = await get_article_context(
-            content_text, client, provider, model,
-            base_prompt=settings.ai_context_prompt,
-            focus=focus,
-        )
-    except Exception as exc:
-        msg = html_module.escape(str(exc)[:120])
-        return HTMLResponse(
-            f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
-        )
+        try:
+            result, in_tok, out_tok = await get_article_context(
+                content_text, client, provider, model,
+                base_prompt=settings.ai_context_prompt,
+                focus=focus,
+            )
+        except Exception as exc:
+            # A refused address reaches here as the SDK's bare "Connection error.",
+            # so ask what really happened before quoting it.
+            msg = html_module.escape(str(find_blocked_address(exc) or exc)[:120])
+            return HTMLResponse(
+                f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
+            )
 
     now = datetime.now(timezone.utc)
     state = await db.scalar(
@@ -254,6 +276,10 @@ async def htmx_ai_context_trigger(
 
 def _ai_chat_error_message(exc: Exception) -> str:
     """Map an AI-provider exception to a user-facing chat error line."""
+    if find_blocked_address(exc) is not None:
+        # The one failure here that "try again" cannot fix: it is a decision about
+        # the address, not a hiccup, and the same answer comes back every time.
+        return "The AI endpoint is at an address this instance is not allowed to reach."
     exc_str = str(exc)
     status = getattr(exc, "status_code", None)
     if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
@@ -325,22 +351,22 @@ async def htmx_general_ai_chat(
                 settings.ai_content_limit,
             )
 
-    from app.services.ai_service import get_ai_client, chat_with_article
-    client, provider, model = await get_ai_client(user.id, tier, db)
-    if client is None:
-        return HTMLResponse(
-            _render_general_chat_area(
-                current_messages[:-1],
-                error="Main AI model not configured.",
+    from app.services.ai_service import ai_client, chat_with_article
+    async with ai_client(user.id, tier, db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                _render_general_chat_area(
+                    current_messages[:-1],
+                    error="Main AI model not configured.",
+                )
             )
-        )
 
-    try:
-        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
-    except Exception as exc:
-        return HTMLResponse(
-            _render_general_chat_area(current_messages[:-1], error=_ai_chat_error_message(exc))
-        )
+        try:
+            response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        except Exception as exc:
+            return HTMLResponse(
+                _render_general_chat_area(current_messages[:-1], error=_ai_chat_error_message(exc))
+            )
 
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
@@ -436,23 +462,23 @@ async def htmx_ai_chat(
     if use_article:
         article_ctx = normalize_content(article.title, article.readable_content or article.content, settings.ai_content_limit)
 
-    from app.services.ai_service import get_ai_client, chat_with_article
-    client, provider, model = await get_ai_client(user.id, tier, db)
+    from app.services.ai_service import ai_client, chat_with_article
     title = article.title or ""
-    if client is None:
-        return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], use_article,
-            error="Main AI model not configured.",
-            article_title=title,
-        ))
+    async with ai_client(user.id, tier, db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(_render_chat_area(
+                article_id, current_messages[:-1], use_article,
+                error="Main AI model not configured.",
+                article_title=title,
+            ))
 
-    try:
-        response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
-    except Exception as exc:
-        return HTMLResponse(_render_chat_area(
-            article_id, current_messages[:-1], use_article,
-            error=_ai_chat_error_message(exc), article_title=title,
-        ))
+        try:
+            response_text, in_tok, out_tok = await chat_with_article(current_messages, article_ctx, client, provider, model)
+        except Exception as exc:
+            return HTMLResponse(_render_chat_area(
+                article_id, current_messages[:-1], use_article,
+                error=_ai_chat_error_message(exc), article_title=title,
+            ))
 
     current_messages.append({"role": "assistant", "content": response_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:

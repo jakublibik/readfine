@@ -86,6 +86,20 @@ def format_number_g(value, profile: str | None = None) -> str:
     return f"{num:g}".replace(".", p.decimal)
 
 
+def format_thousands(value) -> str:
+    """Integer grouped with a space, regardless of the viewer's profile.
+
+    For the numeric settings inputs and the sentences that quote their bounds.
+    Deliberately not ``format_number``: those values sit in text fields that
+    ai-settings.js regroups with spaces as you type, so a profile grouping with
+    "," or "." would make the field jump on the first keystroke.
+    """
+    try:
+        return f"{int(value):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        return ""
+
+
 def format_date_parts(dt: date | datetime, profile: Profile, with_year: bool = True) -> str:
     """Assemble a zero-padded numeric date in the profile's field order/separator.
 

@@ -300,10 +300,11 @@
                 (<code class="font-mono text-[13px]">http://localhost:11434/v1</code>); llama.cpp's server does not.</li>
               <li>One endpoint per account, shared by both slots. Each slot still picks its own model, so a small
                 model can score while a larger one writes summaries, as long as both live on the same server.</li>
-              <li>Self-hosting on a private address (localhost, a Docker network) needs
-                <code class="font-mono text-[13px]">AI_ALLOW_PRIVATE_ENDPOINTS=true</code> in the instance's
-                environment. Without it only public addresses are accepted, which is what keeps a hosted instance
-                from being talked into calling its own internal services.</li>
+              <li>Self-hosting on a private address (localhost, a Docker network) means naming that address in
+                <code class="font-mono text-[13px]">AI_ALLOWED_PRIVATE_HOSTS</code> in the instance's environment,
+                as host and port: <code class="font-mono text-[13px]">AI_ALLOWED_PRIVATE_HOSTS=ollama:11434</code>,
+                comma-separated for more than one. Anything not on that list has to be a public address, which is
+                what keeps a hosted instance from being talked into calling its own internal services.</li>
               <li><strong>A thinking model is fine, including on both slots.</strong> Scoring answers with one number
                 in ten tokens, so a model that reasons first would spend all ten on that; Readfine therefore asks the
                 endpoint to skip reasoning for scoring, which Ollama, llama.cpp and vLLM all understand. Summaries and

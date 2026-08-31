@@ -279,7 +279,7 @@ class TestHtmxAiChatEndpoint:
             scalars=[True, make_settings(), None],
             article=make_article())
         with (
-            patch("app.services.ai_jobs.normalize_content",
+            patch("app.routers.web.app.ai.normalize_content",
                   return_value="normalized content"),
             patch("app.services.ai_service.get_ai_client",
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
@@ -349,7 +349,7 @@ class TestHtmxAiChatEndpoint:
                   new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6"))),
             patch("app.services.ai_service.chat_with_article",
                   new=AsyncMock(side_effect=Exception("API error"))),
-            patch("app.services.ai_jobs.normalize_content",
+            patch("app.routers.web.app.ai.normalize_content",
                   return_value="content"),
         ):
             resp = client.post(

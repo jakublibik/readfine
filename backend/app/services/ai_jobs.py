@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import ArticleAiJob
 from app.models.settings import AppSettings
-from app.models.user import UserSettings
+from app.models.user import AI_MIN_CHARS_MIN, UserSettings
+from app.utils.url_validator import find_blocked_address
 
 logger = logging.getLogger(__name__)
 
@@ -29,14 +30,36 @@ BACKOFF_MINUTES = [5, 30, 120]
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# The floor for AI a reader asked for by hand (the Summarize and Context buttons).
+# Their own minimum length setting governs the automatic pipeline, where the cost
+# multiplies by every article starred; a button someone presses on one article is
+# a statement that this one is worth it, and refusing it leaves no way through
+# except editing settings and coming back. All this floor rules out is a headline
+# with no body behind it, which is nothing for a model to work from.
+#
+# Tied to the lowest value the setting can take rather than repeated as its own
+# number: a floor above that lowest value would invert the whole arrangement, with
+# the button refusing an article the automatic run summarizes on its own.
+ON_DEMAND_MIN_CHARS = AI_MIN_CHARS_MIN
 
-def normalize_content(title: str, content: str | None, limit: int) -> str:
-    """Strip HTML, collapse whitespace, prepend the title, truncate to *limit* chars."""
+
+def normalize_text(title: str, content: str | None) -> str:
+    """Strip HTML, collapse whitespace, prepend the title. Not truncated.
+
+    Kept separate from ``normalize_content`` because "is this article long
+    enough?" must not depend on the content limit: measuring the truncated text
+    makes the same article pass one gate and fail another, and a threshold above
+    the limit would reject everything.
+    """
     plain = nh3.clean(content or "", tags=set())
     plain = _html.unescape(plain)
     plain = _WHITESPACE_RE.sub(" ", plain).strip()
-    combined = f"{title}\n\n{plain}" if plain else title
-    return combined[:limit]
+    return f"{title}\n\n{plain}" if plain else title
+
+
+def normalize_content(title: str, content: str | None, limit: int) -> str:
+    """``normalize_text`` truncated to *limit* chars — what gets sent to a model."""
+    return normalize_text(title, content)[:limit]
 
 
 async def ai_enabled_globally(db: AsyncSession) -> bool:
@@ -66,16 +89,26 @@ def apply_job_failure(
     and surface the error on the job and the user's ``last_ai_error`` banner.
 
     A permanent 4xx (client error other than 429) is terminal immediately; so is
-    exhausting MAX_RETRIES; otherwise the job is rescheduled with a BACKOFF_MINUTES
-    delay. *operation* ("scoring" / "summary") is used in the log line and the
-    banner prefix.
+    a refused address, and so is exhausting MAX_RETRIES; otherwise the job is
+    rescheduled with a BACKOFF_MINUTES delay. *operation* ("scoring" / "summary")
+    is used in the log line and the banner prefix.
+
+    A refused address is terminal for the same reason a 4xx is: no amount of
+    waiting turns an endpoint the instance is not allowed to reach into one it
+    is. Retrying it would leave the reader watching a spinner for the length of
+    the whole backoff before being told something a human has to fix. Its message
+    replaces the provider's, which at that point is only "Connection error."
     """
-    msg = str(exc)[:300]
+    blocked = find_blocked_address(exc)
+    msg = str(blocked or exc)[:300]
     http_status = extract_http_status(exc)
     retries = job.retry_count + 1
     job.retry_count = retries
 
-    if http_status is not None and 400 <= http_status < 500 and http_status != 429:
+    if blocked is not None:
+        job.status = "failed"
+        job.processed_at = now
+    elif http_status is not None and 400 <= http_status < 500 and http_status != 429:
         job.status = "failed"
         job.processed_at = now
     elif retries >= MAX_RETRIES:

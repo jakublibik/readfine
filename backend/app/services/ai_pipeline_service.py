@@ -79,8 +79,12 @@ async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) 
     await _apply_ai_filters_for_state(state, article, uf, ai_filters, db)
 
 
-async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> None:
-    """Find and immediately process the pending summary job for this article+user."""
+async def _run_summary_now(article: Article, user_id: int, db: AsyncSession, pool=None) -> None:
+    """Find and immediately process the pending summary job for this article+user.
+
+    *pool* is passed on when this is reached from inside a batch, so the summary
+    that follows a score shares the batch's clients rather than opening its own.
+    """
     from app.services.ai_summary_service import _execute_summary_job
 
     job = await db.scalar(
@@ -98,7 +102,7 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession) -> 
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     if s is None:
         return
-    await _execute_summary_job(job, article, s, db, datetime.now(timezone.utc))
+    await _execute_summary_job(job, article, s, db, datetime.now(timezone.utc), pool)
 
 
 async def run_article_pipeline(article: Article, user_id: int, db: AsyncSession) -> None:
@@ -157,7 +161,26 @@ async def maybe_enqueue_starred_summary(
 
 
 async def run_pipeline_for_article_all_users(article: Article, db: AsyncSession) -> None:
-    """Run the full pipeline for all users who have labeled this article (readable path)."""
+    """Run the full pipeline for all users who have labeled this article (readable path).
+
+    **No client pool here, on purpose** (decided 2026-08-30). The readable runner
+    calls this once per article in a batch of 20, so the same user's client gets
+    built once per article rather than once for the run, the way the scoring and
+    summary batches do it (see ``ai_service.AiClientPool``).
+
+    It was measured before it was left alone. Since the TLS context is shared,
+    building a client costs about 0.1ms, so twenty of them is 2ms inside a batch
+    that spends tens of seconds fetching twenty web pages. Gemini is the one
+    exception at ~9ms, the rest of its constructor being its own object graph
+    rather than TLS, which puts a readable run at roughly 0.18s of CPU.
+
+    Getting a pool down here means threading it through this function,
+    run_article_pipeline, _run_scoring_now and maybe_enqueue_starred_summary,
+    none of which is a batch, one of which is shared with the save-by-URL path,
+    and all of which sit in readable's call chain rather than AI's. Not worth
+    0.17s for one provider. Worth revisiting if Gemini becomes the common case,
+    or if the readable batch grows a lot.
+    """
     from app.models.label import ArticleLabel
 
     user_ids = (await db.scalars(

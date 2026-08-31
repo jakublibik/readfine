@@ -22,6 +22,19 @@ document.addEventListener('change', function (e) {
   });
 });
 
+// Auto-summarize checkbox → the minimum length below it only governs those runs,
+// so it dims and locks with the checkbox. Same delegation reason as above.
+document.addEventListener('change', function (e) {
+  if (!e.target || e.target.id !== 'ai_summary_enabled_default') return;
+  var dependent = document.getElementById('auto-summary-dependent');
+  if (!dependent) return;
+  var off = !e.target.checked;
+  dependent.classList.toggle('opacity-50', off);
+  dependent.querySelectorAll('input, textarea, select, button').forEach(function (el) {
+    el.disabled = off;
+  });
+});
+
 // The endpoint field only means anything while a slot is on the custom provider.
 // Asks every slot rather than the one that changed, so switching one away leaves
 // the field up while the other still needs it.
@@ -69,6 +82,40 @@ document.addEventListener('change', function (e) {
   }
 });
 
+// Thousands grouping for the numeric limit inputs (Limits section). Delegated
+// for the same reason as the provider select above: saving swaps the whole page
+// in through hx-boost, and a listener bound to the input itself would be gone
+// the moment the settings are saved once.
+function fmtThousands(digits) {
+  return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+document.addEventListener('input', function (e) {
+  var inp = e.target;
+  if (!inp || !inp.matches || !inp.matches('[data-thousands]')) return;
+  var pos = inp.selectionStart;
+  var digitsBeforeCursor = inp.value.slice(0, pos).replace(/[^\d]/g, '').length;
+  inp.value = fmtThousands(inp.value.replace(/[^\d]/g, ''));
+  var newPos = 0, count = 0;
+  for (var i = 0; i < inp.value.length; i++) {
+    if (inp.value[i] !== ' ') count++;
+    if (count === digitsBeforeCursor) { newPos = i + 1; break; }
+  }
+  inp.setSelectionRange(newPos, newPos);
+});
+
+// Strip the separators before the request is built. Capture phase, not bubbling:
+// hx-boost binds its own submit handler on the form, and a listener on document
+// would only see the event on the way back up, after htmx already read the
+// values. (The server strips whitespace too, so this is belt and braces.)
+document.addEventListener('submit', function (e) {
+  var form = e.target;
+  if (!form || !form.querySelectorAll) return;
+  form.querySelectorAll('[data-thousands]').forEach(function (inp) {
+    inp.value = inp.value.replace(/[^\d]/g, '');
+  });
+}, true);
+
 document.addEventListener('DOMContentLoaded', function () {
   // Remove API key button → clear password input before submit
   document.querySelectorAll('button[data-clear-key]').forEach(function (btn) {
@@ -77,29 +124,6 @@ document.addEventListener('DOMContentLoaded', function () {
       if (inp) inp.value = '';
     });
   });
-
-  // Content limit input — format with space as thousands separator
-  var limitInput = document.getElementById('ai_content_limit');
-  if (limitInput) {
-    function fmtLimit(digits) {
-      return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-    }
-    limitInput.addEventListener('input', function () {
-      var pos = limitInput.selectionStart;
-      var digitsBeforeCursor = limitInput.value.slice(0, pos).replace(/[^\d]/g, '').length;
-      var digits = limitInput.value.replace(/[^\d]/g, '');
-      limitInput.value = fmtLimit(digits);
-      var newPos = 0, count = 0;
-      for (var i = 0; i < limitInput.value.length; i++) {
-        if (limitInput.value[i] !== ' ') count++;
-        if (count === digitsBeforeCursor) { newPos = i + 1; break; }
-      }
-      limitInput.setSelectionRange(newPos, newPos);
-    });
-    limitInput.closest('form').addEventListener('submit', function () {
-      limitInput.value = limitInput.value.replace(/[^\d]/g, '');
-    });
-  }
 
   // Preference text character counter. Delegated, because generating or
   // reverting the profile swaps the textarea node out from under us.

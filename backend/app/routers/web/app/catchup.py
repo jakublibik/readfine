@@ -19,6 +19,7 @@ from app.services.ai_jobs import ai_enabled_globally
 from app.services.label_service import list_labels
 from app.templating import templates
 from app.utils.markdown import md_render as _md_render
+from app.utils.url_validator import find_blocked_address
 
 from .common import _catchup_available
 
@@ -159,15 +160,18 @@ async def _cost_line(
 ) -> str:
     """Cost estimate for `effective_count` articles, or a hint / empty string when
     there is no price to show. The article count above it renders either way."""
-    from app.services.ai_service import get_ai_client
+    from app.services.ai_service import get_slot_config
     from app.services.catchup_service import estimate_catchup_tokens
     from app.services.stats_service import _calc_cost
 
+    # Only the model's name is needed to price a run, so this asks what the slot
+    # is set to rather than building a client. This runs on every change to the
+    # form above it, and building a client is not free.
     try:
-        client, provider, model = await get_ai_client(user.id, "quality", db)
+        provider, model, _base_url = await get_slot_config(user.id, "quality", db)
     except Exception:
-        client = None
-    if client is None:
+        provider = model = None
+    if not model:
         return '<span class="text-gray-400">Configure AI model in settings to see cost estimate</span>'
 
     input_tokens, output_tokens = estimate_catchup_tokens(effective_count, include_snippet == "true")
@@ -202,7 +206,7 @@ async def htmx_catchup_generate(
     include_snippet_bool = include_snippet == 'true'
     article_limit = max(1, min(article_limit, 500))
     from app.models.user import CatchupLog
-    from app.services.ai_service import catch_me_up, get_ai_client
+    from app.services.ai_service import ai_client, catch_me_up
     from app.services.catchup_service import (
         apply_catchup_limit, build_articles_meta, fetch_catchup_articles,
         populate_snippet_sources, validate_scope,
@@ -239,31 +243,34 @@ async def htmx_catchup_generate(
 
     # The digest always runs on the main model; the scoring slot is reserved for
     # article scoring, where the model is picked to be small.
-    client, provider, model = await get_ai_client(user.id, "quality", db)
-    if client is None:
-        return HTMLResponse(
-            '<div class="text-red-600 text-sm p-4">No main model configured. '
-            'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
-        )
+    async with ai_client(user.id, "quality", db) as (client, provider, model):
+        if client is None:
+            return HTMLResponse(
+                '<div class="text-red-600 text-sm p-4">No main model configured. '
+                'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
+            )
 
-    sampled = apply_catchup_limit(articles, article_limit, scoring_available)
-    if include_snippet_bool:
-        await populate_snippet_sources(sampled, user.id, db)
-    articles_meta = build_articles_meta(sampled, include_snippet_bool)
+        sampled = apply_catchup_limit(articles, article_limit, scoring_available)
+        if include_snippet_bool:
+            await populate_snippet_sources(sampled, user.id, db)
+        articles_meta = build_articles_meta(sampled, include_snippet_bool)
 
-    try:
-        prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else None
-        text, input_tokens, output_tokens = await catch_me_up(
-            articles_meta=articles_meta,
-            period=period,
-            client=client,
-            provider=provider,
-            model=model,
-            custom_prompt=prompt,
-        )
-    except Exception as exc:
-        logger.exception("catchup: AI generation failed for user %d", user.id)
-        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(str(exc)[:200])}</div>')
+        try:
+            prompt = custom_prompt.strip() if custom_prompt and custom_prompt.strip() else None
+            text, input_tokens, output_tokens = await catch_me_up(
+                articles_meta=articles_meta,
+                period=period,
+                client=client,
+                provider=provider,
+                model=model,
+                custom_prompt=prompt,
+            )
+        except Exception as exc:
+            logger.exception("catchup: AI generation failed for user %d", user.id)
+            # The SDK reports a refused address as a bare "Connection error.", so ask
+            # what really happened before quoting it back.
+            reason = str(find_blocked_address(exc) or exc)
+            return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
 
     # Log the run
     log = CatchupLog(
@@ -643,8 +650,11 @@ async def htmx_briefing_test_send(
             f'<p class="text-red-600 text-sm">SMTP error: {html_module.escape(str(exc)[:200])}</p>'
         )
     except Exception as exc:
+        # Test briefings generate the digest too, so this catches the AI call as
+        # well as the send, and a refused address arrives here saying nothing.
+        reason = str(find_blocked_address(exc) or exc)
         return HTMLResponse(
-            f'<p class="text-red-600 text-sm">Error: {html_module.escape(str(exc)[:200])}</p>'
+            f'<p class="text-red-600 text-sm">Error: {html_module.escape(reason[:200])}</p>'
         )
 
     return HTMLResponse(

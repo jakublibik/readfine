@@ -11,8 +11,19 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.services import ai_profile_service as svc
+from app.services import ai_service
 
 NOW = datetime(2026, 7, 26, 4, 20, tzinfo=timezone.utc)
+
+
+class _Closable:
+    """A client stub that can be closed, which everything now does."""
+
+    def __init__(self):
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
 
 VALID = (
     "High relevance: distributed systems, Postgres internals, EU tech policy\n"
@@ -204,14 +215,21 @@ class TestRunAutoGeneration:
         db.commit = AsyncMock()
         return db
 
-    def _patch(self, monkeypatch, *, status="due", generate=None, client=object()):
+    def _patch(self, monkeypatch, *, status="due", generate=None, client=True):
         async def fake_status(settings, db, now=None):
             return status, {}
         monkeypatch.setattr(svc, "preference_auto_status", fake_status)
 
+        # A client per call rather than one default argument shared by every test
+        # in the class: it records that it was closed, so it is state.
+        stub = _Closable() if client else None
+
+        # The service takes its client through ai_service.ai_client, which looks
+        # get_ai_client up in its own module when it runs, so that is where this
+        # has to land.
         async def fake_client(user_id, slot, db):
-            return (client, "anthropic", "claude-sonnet-5") if client else (None, None, None)
-        monkeypatch.setattr(svc, "get_ai_client", fake_client)
+            return (stub, "anthropic", "claude-sonnet-5") if stub else (None, None, None)
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_client)
 
         async def fake_generate(user_id, db, client, provider, model):
             if isinstance(generate, Exception):
@@ -229,7 +247,7 @@ class TestRunAutoGeneration:
             return None, None, None
 
         self._patch(monkeypatch, status="not_enough_new")
-        monkeypatch.setattr(svc, "get_ai_client", fake_client)
+        monkeypatch.setattr(ai_service, "get_ai_client", fake_client)
         outcome = await svc.run_auto_generation(1, self._db(settings))
         assert outcome == "skipped:not_enough_new"
         assert called is False

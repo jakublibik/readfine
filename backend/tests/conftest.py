@@ -48,6 +48,28 @@ def mock_httpx_client(handler):
         yield
 
 
+@contextmanager
+def allowed_private_ai_hosts(entries: str):
+    """Set AI_ALLOWED_PRIVATE_HOSTS to *entries* for the duration of the block.
+
+    Not a plain patch.object on the parsed set: that is a cached_property, so it
+    lives in the instance dict and setting it would go through pydantic's
+    __setattr__, which knows no such field. Setting the string the property is
+    built from and dropping the cache is both simpler and closer to what an
+    operator actually changes.
+    """
+    from app.config import settings
+
+    previous = settings.ai_allowed_private_hosts
+    settings.ai_allowed_private_hosts = entries
+    settings.__dict__.pop("allowed_private_endpoints", None)
+    try:
+        yield
+    finally:
+        settings.ai_allowed_private_hosts = previous
+        settings.__dict__.pop("allowed_private_endpoints", None)
+
+
 # ── Mock objects ──────────────────────────────────────────────────────────────
 
 def db_unreachable(exc: Exception) -> None:

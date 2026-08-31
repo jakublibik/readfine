@@ -31,6 +31,7 @@ def make_settings(**kwargs):
         "ai_quality_provider": "anthropic",
         "ai_quality_model": "claude-sonnet-4-6",
         "ai_content_limit": 20000,
+        "ai_min_content_chars": 1_700,
         "ai_summary_prompt": None,
         "ai_context_prompt": None,
     }
@@ -103,6 +104,22 @@ class TestHtmxAiSummaryTrigger:
         assert "too short" in resp.text
         assert 'id="ai-summary-10"' in resp.text
 
+    def test_button_ignores_the_users_minimum_length(self, client, mock_db):
+        """The setting gates the automatic runs. Refusing the button as well left
+        no way through short of editing settings and coming back."""
+        setup_db(
+            mock_db,
+            scalars=[True, make_settings(ai_min_content_chars=9_000)],
+            article=make_article(),  # 2 500 characters, far below that
+        )
+        with patch(
+            "app.services.ai_summary_service.run_summary_on_demand",
+            new=AsyncMock(return_value=("This is the summary.", False, None)),
+        ):
+            resp = client.post("/htmx/articles/10/ai-summary")
+        assert resp.status_code == 200
+        assert "This is the summary." in resp.text
+
     def test_successful_summary_returns_block(self, client, mock_db):
         setup_db(mock_db, scalars=[True, make_settings()], article=make_article())
         with patch(
@@ -169,6 +186,18 @@ class TestHtmxAiSummaryPoll:
         assert resp.status_code == 200
         assert 'id="ai-summary-10"' in resp.text
 
+    def test_skipped_job_says_so_instead_of_going_blank(self, client, mock_db):
+        """A skipped job used to fall through to the no-summary branch and swap the
+        spinner for an empty div, so the summary just stopped arriving with nothing
+        said about why."""
+        mock_db.scalar = AsyncMock(side_effect=[make_job(status="skipped"), None])
+        resp = client.get("/htmx/articles/10/ai-summary/poll")
+        assert resp.status_code == 200
+        assert "skipped" in resp.text
+        assert "main AI model" in resp.text
+        assert "hx-get" not in resp.text
+        assert 'id="ai-summary-10"' in resp.text
+
 
 # ── POST /htmx/articles/{id}/ai-context ──────────────────────────────────────
 
@@ -198,6 +227,41 @@ class TestHtmxAiContextTrigger:
         assert resp.status_code == 200
         assert "too short" in resp.text
         assert 'id="ai-context-10"' in resp.text
+
+    def test_summary_threshold_does_not_gate_context(self, client, mock_db):
+        """Context supplies what the article leaves out, so it is most useful on a
+        short piece. Raising the summary threshold must not switch it off there."""
+        state = make_state()
+        setup_db(
+            mock_db,
+            scalars=[True, make_settings(ai_min_content_chars=9_000), state],
+            article=make_article(),  # 2 500 characters: far below that threshold
+        )
+        with (
+            patch(
+                "app.services.ai_service.get_ai_client",
+                new=AsyncMock(return_value=(AsyncMock(), "anthropic", "claude-sonnet-4-6")),
+            ),
+            patch(
+                "app.services.ai_service.get_article_context",
+                new=AsyncMock(return_value=("Broader context text.", 10, 5)),
+            ),
+        ):
+            resp = client.post("/htmx/articles/10/ai-context")
+        assert resp.status_code == 200
+        assert "Broader context text." in resp.text
+
+    def test_context_still_refuses_a_bare_headline(self, client, mock_db):
+        """The floor is low, not absent: a headline with no body is nothing to work
+        from, whatever the summary threshold says."""
+        setup_db(
+            mock_db,
+            scalars=[True, make_settings(ai_min_content_chars=500)],
+            article=make_article(content="", title="A headline and nothing else"),
+        )
+        resp = client.post("/htmx/articles/10/ai-context")
+        assert resp.status_code == 200
+        assert "too short" in resp.text
 
     def test_successful_context_returns_block(self, client, mock_db):
         state = make_state()
