@@ -10,6 +10,13 @@
     <title>{% block title %}Readfine{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+    {# Installable web app. The manifest is served from the root, not /static, because
+       its scope is resolved relative to its own URL. Both capability metas stay next to
+       it: iOS honours only the apple-prefixed one for "Add to Home Screen". #}
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Readfine">
     <link rel="stylesheet" href="{{ static_url('css/tailwind.css') }}">
     <style>
       /* Safe-area insets, aliased once so the rules below stay readable. They are
