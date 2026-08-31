@@ -12,8 +12,14 @@
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     {# Installable web app. The manifest is served from the root, not /static, because
        its scope is resolved relative to its own URL. Both capability metas stay next to
-       it: iOS honours only the apple-prefixed one for "Add to Home Screen". #}
-    <link rel="manifest" href="/manifest.webmanifest">
+       it: iOS honours only the apple-prefixed one for "Add to Home Screen".
+
+       use-credentials because a manifest is otherwise fetched without cookies. Behind an
+       authenticating proxy (Cloudflare Access, Authelia, a basic-auth vhost) that fetch
+       is answered with a redirect to the proxy's login page, which our own CSP then
+       blocks as a foreign origin, and the app silently stops being installable. Sending
+       the cookies costs nothing on an instance with no proxy in front of it. #}
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Readfine">
