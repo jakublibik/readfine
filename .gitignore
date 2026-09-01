@@ -69,3 +69,6 @@ backend/app/templates/landing.html
 
 # Personal Claude Code notes (symlinked to a synced location); not part of the public repo
 CLAUDE.local.md
+
+# Downloaded extraction benchmark corpus (scripts/benchmark_extraction.py)
+.benchmark/
