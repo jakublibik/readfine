@@ -62,6 +62,108 @@ html.dark { color-scheme: dark; }
   overflow-x: auto;
 }
 
+/* The `overflow-wrap: anywhere` above is a last-resort wrap for long URLs, and it was
+   also what made every data table unreadable. Unlike `break-word`, `anywhere` counts
+   its break points when the browser works out a min-content width, so a 14-column
+   climate table reported that it could fit in about a character per column, shrank to
+   the width of the article, and wrapped every cell after a digit or two. It never
+   overflowed, so the scroll container above never had anything to scroll. `break-word`
+   still breaks a long word that has nowhere else to break, but it does not pretend the
+   cell can be one character wide, so the table takes its natural width and scrolls. */
+.article-body th,
+.article-body td { overflow-wrap: break-word; }
+
+/* Scrolling sideways through a wide table loses you the row you are reading, and on a
+   phone that happens within two columns. MediaWiki labels each row with a
+   th[scope=row], so pinning that column keeps "Mean daily maximum" on screen while the
+   months move under it. It needs an opaque background of its own or the cells scroll
+   visibly underneath, and the max-width keeps a long label from eating the screen it
+   is meant to be helping. */
+.article-body table:has(th) th[scope="row"] {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  max-width: 9rem;
+  background: #fff;
+}
+.dark .article-body table:has(th) th[scope="row"] { background: #1e1e1e; }
+
+/* None of that belongs in an infobox: it is two columns, it never scrolls far enough
+   to lose its labels, and the cap is what would squeeze them ("Venerated by",
+   "Attributes"). The background matters most — a pinned cell has to be opaque or the
+   table scrolls visibly under it, and white on the box's own grey painted the label
+   column as a stripe down the side. */
+.article-body details[data-infobox] th[scope="row"] {
+  position: static;
+  max-width: none;
+  background: transparent;
+}
+
+/* Numeric tables fit noticeably more per screen a step down, and their cells are short
+   enough to stay legible. Written as a range so it is the exact complement of the
+   float threshold below rather than overlapping it by a pixel. */
+@container (width < 34rem) {
+  .article-body table:has(th) { font-size: 0.8125em; }
+  .article-body table:has(th) th[scope="row"] { max-width: 7rem; }
+}
+
+/* MediaWiki infoboxes, lifted out of the page by readable_service and put back as
+   <details data-infobox>. On the wiki they sit in the margin, and there is room to do
+   the same here: the reading column is max-w-[52rem], so a 20rem box still leaves the
+   text some 29rem.
+
+   The threshold is a container query, not a media query, on purpose — how wide this
+   column is depends on which panel layout is showing, not on the viewport, so a
+   viewport rule would float the box in a narrow panel on a wide screen. Below the
+   threshold (every phone) the box is a full-width block instead, and a long one
+   arrives already collapsed so it is one line rather than three screens of table
+   between the reader and the lede. */
+.article-body { container-type: inline-size; }
+
+.article-body details[data-infobox] {
+  margin: 0 0 1.25rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  background: #f9fafb;
+  font-size: 0.875em;
+}
+.dark .article-body details[data-infobox] {
+  border-color: #374151;
+  background: #111827;
+}
+
+.article-body details[data-infobox] > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #374151;
+}
+.dark .article-body details[data-infobox] > summary { color: #d1d5db; }
+
+/* The typography plugin gives every image 2em above and below. That is right for a
+   photo in the prose and wrong inside a box that is mostly icons: Battle of Waterloo
+   carries 54 unit flags, and 4em of margin apiece turns the infobox into a tower. */
+.article-body details[data-infobox] img { margin: 0; }
+
+.article-body details[data-infobox] table {
+  margin: 0.5rem 0 0;
+  font-size: 1em;
+}
+
+@container (min-width: 34rem) {
+  /* clear:right stacks the boxes down the margin instead of letting them sit side
+     by side. An article with two of them (Prague has the city and the UNESCO site)
+     put the second one alongside the first whenever the first was short enough to
+     leave room, and two 20rem boxes on one line left the text about 9rem to live in. */
+  .article-body details[data-infobox] {
+    float: right;
+    clear: right;
+    width: 20rem;
+    max-width: 45%;
+    margin: 0 0 1rem 1.25rem;
+  }
+}
+
 /* Video facade. Scoped to .prose rather than .article-body, which the reader has but
    a shared article page does not.
 
