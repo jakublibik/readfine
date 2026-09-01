@@ -33,6 +33,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- A share that does not save says so. Nothing did: the page either sat on "Saving…" for good or looked as though the button had not been pressed, and either way there was no telling whether the article had made it to Saved. It now says the save did not go through and gives you the button back, and if you shared enough links in a row to hit the limit, it says to wait a minute rather than to try again.
+
 - An article shared from another app keeps the headline that came with it. The share sheet hands over a title alongside the address and Readfine was throwing it away, so an article whose page could not be read, a 404, something behind a paywall, a page built entirely in JavaScript, landed in Saved named after its own web address. The shared title is now what names it in that case. A page Readfine can read still names itself, and an article you already had keeps the title it has, since that one is shared with everyone else who saved it. If the address is refused and you get the field back to correct it, the title comes back with it, and so does the note saying more than one link came through.
 
 - The privacy policy and the terms have a link back to the reader. Reaching either from the help page left the browser's Back button as the only way home. Signed-in readers get the link; a visitor who is not signed in does not, because it would only have led to the sign-in form, which is also why help and the feature list stopped showing it to everyone.

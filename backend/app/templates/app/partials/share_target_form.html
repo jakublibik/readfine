@@ -7,7 +7,10 @@
     makes sharing one step. It is still a real POST from this page, so the CSRF token
     and the rate limit apply exactly as they do to a press. -#}
 {% if auto_save %}
-  <p class="text-sm text-gray-500">Saving…</p>
+  {#- Removed by share-target.js when the save fails, which is also when the form
+      below is revealed: without both, a failed auto-save leaves the page saying
+      "Saving…" with nothing to press. -#}
+  <p id="share-target-saving" class="text-sm text-gray-500">Saving…</p>
 {% endif %}
 
 <form hx-post="/share-target" hx-target="#share-target-body" hx-swap="innerHTML"
