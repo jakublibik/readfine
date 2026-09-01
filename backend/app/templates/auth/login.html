@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/public_footer.html" import public_footer %}
 {% block title %}Sign in – Readfine{% endblock %}
 
 {% block content %}
@@ -59,15 +60,9 @@
         </p>
         {% endif %}
 
-        {% if registration_open %}
-        <p class="text-center text-xs text-gray-400 mt-6">
-            <a href="/terms" target="_blank" rel="noopener noreferrer" class="hover:underline">Terms of Service</a>
-            &nbsp;·&nbsp;
-            <a href="/privacy" target="_blank" rel="noopener noreferrer" class="hover:underline">Privacy Policy</a>
-            &nbsp;·&nbsp;
-            <a href="/help" class="hover:underline">Help</a>
-        </p>
-        {% endif %}
+        {# Not gated on registration_open: the terms and the privacy policy have
+           to be reachable on an instance that has registration closed too. #}
+        {{ public_footer(request, "login", new_tab=true) }}
     </div>
 </div>
 {% endblock %}

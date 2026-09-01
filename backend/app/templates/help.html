@@ -1,16 +1,13 @@
 {% extends "base.html" %}
+{% from "partials/back_to_reader.html" import back_to_reader %}
+{% from "partials/public_footer.html" import public_footer %}
 {% block title %}Help – Readfine{% endblock %}
 
 {% block content %}
 <div class="min-h-screen pt-6 pb-12 px-4 dark:bg-gray-950">
   <div class="max-w-3xl mx-auto">
 
-    <div class="mb-4">
-      <a href="/app" class="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-        Back to reader
-      </a>
-    </div>
+    {{ back_to_reader(request) }}
 
     <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
 
@@ -380,13 +377,7 @@
 
     </div>
 
-    <div class="text-center mt-6 text-xs text-gray-400 space-x-3">
-      <a href="/features" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Features</a>
-      <span>·</span>
-      <a href="/terms" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Terms of Service</a>
-      <span>·</span>
-      <a href="/privacy" class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">Privacy Policy</a>
-    </div>
+    {{ public_footer(request, "help") }}
 
   </div>
 </div>

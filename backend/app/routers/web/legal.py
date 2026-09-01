@@ -21,9 +21,11 @@ async def _legal_ctx(db: AsyncSession) -> dict:
 
 @router.get("/terms", response_class=HTMLResponse)
 async def terms_of_service(request: Request, db: AsyncSession = Depends(get_db)):
-    return templates.TemplateResponse(request, "legal/terms.html", await _legal_ctx(db))
+    ctx = await _legal_ctx(db) | {"footer_current": "terms"}
+    return templates.TemplateResponse(request, "legal/terms.html", ctx)
 
 
 @router.get("/privacy", response_class=HTMLResponse)
 async def privacy_policy(request: Request, db: AsyncSession = Depends(get_db)):
-    return templates.TemplateResponse(request, "legal/privacy.html", await _legal_ctx(db))
+    ctx = await _legal_ctx(db) | {"footer_current": "privacy"}
+    return templates.TemplateResponse(request, "legal/privacy.html", ctx)

@@ -1,0 +1,23 @@
+{# Return link for the public pages (help, features, legal). Only signed-in
+   visitors get it: /app answers a logged-out request with a redirect to the
+   login page, so the link would lead nowhere useful for them. The session is
+   read straight from the cookie, no DB lookup; a stale session just means the
+   link redirects to /login. All HTML is served no-store + Vary: Cookie, so
+   the two variants can't be cached across viewers.
+
+   wrapper_class positions the link: block above the card on help/features, in
+   the wordmark row on the legal pages. The chevron is an inline element rather
+   than a flex item on purpose. An inline-flex link takes its baseline from its
+   first flex item, so an icon-first link reports the icon's bottom edge as its
+   baseline and lands a couple of pixels high wherever it is baseline-aligned
+   against other text. As plain inline content the link's baseline is its own
+   text baseline. #}
+{% macro back_to_reader(request, wrapper_class="mb-4") %}
+{% if request.session.get('user_id') %}
+<div class="{{ wrapper_class }}">
+  <a href="/app" class="text-sm text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200">
+    <svg class="w-4 h-4 inline-block align-[-0.2em] mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>Back to reader
+  </a>
+</div>
+{% endif %}
+{% endmacro %}
