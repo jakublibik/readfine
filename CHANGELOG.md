@@ -33,6 +33,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Pages outside the reading view keep clear of the rounded corners and the home indicator on an iPhone. Settings, help, the legal pages and the sign-in forms are ordinary scrolling pages with none of the reading view's own edges, so nothing had been keeping them out of the way: in landscape a line of text could run into the curve of the screen, and the bottom of a page sat under the bar at the very bottom. This is most obvious once Readfine is installed, where every page is drawn right to the edges, but it was there in the browser too.
+
 - Saving a link no longer claims you had already saved it when you had not. Pasting the address of an article that reached you through one of your feeds answered "Already saved", which reads as though the save did nothing. It did: the article was in Readfine, from the feed, and saving added it to Saved as asked. The message now says that instead.
 
 - The article list fills the screen on a tablet, and on a phone held sideways. Those widths use the two-panel layout, where the list is a fixed width with a drag handle beside it for changing it, and that handle only ever worked with a mouse. On a touch screen it was four pixels of nothing: impossible to grab, and leaving the list narrow with a band of empty background next to it. The list now takes the full width there and the handle is gone, since it set a width that could not be set on that device anyway. A laptop with a touchscreen keeps its handle, and the three-panel layout is unaffected.
