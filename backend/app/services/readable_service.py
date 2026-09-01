@@ -494,6 +494,52 @@ def _dedupe_images(html: str) -> str:
     return str(soup)
 
 
+def _is_tracking_pixel(img) -> bool:
+    """A 1x1 (or 0x0) image, which feeds carry for counting reads, not for looking at."""
+    return all((img.get(dim) or "").strip().rstrip("px") in ("0", "1")
+               for dim in ("width", "height"))
+
+
+def _carry_over_feed_media(article, content: str) -> str:
+    """Put back pictures the feed delivered and the extraction did not.
+
+    A webcomic is the case that shows why. xkcd's feed hands over the strip itself,
+    one ``<img>`` carrying the picture, the alt text and the hover joke, and nothing
+    else at all; the comic *is* the article. Extraction of the page finds none of it
+    and returns the site's footer gag about Netscape Navigator, and since a successful
+    extraction takes precedence over feed content when the article is rendered, an
+    xkcd subscriber would have been shown the footer instead of the comic.
+
+    Carrying the pictures over rather than rejecting the extraction outright is the
+    deliberate choice here, and the first design was the other one. Rejecting needs a
+    rule for when the feed's version is the better of the two, and there is no good
+    one: a news item whose teaser carries the lead photo would match a
+    "feed has pictures, extraction has none" test just as squarely as the comic does,
+    and answering it by keeping the teaser would throw away the whole article to save
+    one photograph. Merging has no such threshold to get wrong. Nothing is discarded,
+    the comic reappears, and a news article keeps every word *and* regains its lead
+    photo.
+
+    Only ever runs when the extraction came back with no media whatsoever, so an
+    article that kept its own pictures is left exactly as it was.
+    """
+    feed_html = getattr(article, "content", None)
+    if not feed_html or not feed_html.strip():
+        return content
+    if BeautifulSoup(content, "html.parser").find(_MEDIA_TAGS):
+        return content
+    feed_soup = BeautifulSoup(feed_html, "html.parser")
+    carried = [str(img) for img in feed_soup.find_all("img")
+               if img.get("src") and not _is_tracking_pixel(img)]
+    if not carried:
+        return content
+    logger.info("readable: carried %d image(s) from feed content for article %s",
+                len(carried), getattr(article, "id", "?"))
+    # Feed content was sanitized on the way in, but with the fetcher's allowlist
+    # rather than this module's, and readable_content is rendered unescaped.
+    return _sanitize("".join(carried)) + content
+
+
 def _drop_empty_blocks(html: str) -> str:
     """Remove block elements with no text and no media, left empty by sanitization."""
     soup = BeautifulSoup(html, "html.parser")
@@ -861,6 +907,7 @@ def apply_readable_result(
     # Whitespace-only content is treated as no content: storing it would mark the
     # article "success" yet render blank, hiding the (often fuller) feed content.
     if content and content.strip():
+        content = _carry_over_feed_media(article, content)
         article.readable_content = content
         article.readable_status = "success"
         article.readable_error = None

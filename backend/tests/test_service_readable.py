@@ -1277,3 +1277,70 @@ class TestPreferReadability:
     def test_needs_more_than_a_stray_nav_heading(self):
         assert _prefer_readability("<p>flat</p>", self._page(3)) is False
         assert _prefer_readability("<p>flat</p>", self._page(4)) is True
+
+
+class TestCarryOverFeedMedia:
+    def _article(self, feed_html):
+        a = _make_article()
+        a.content = feed_html
+        return a
+
+    def test_comic_from_the_feed_survives_a_useless_extraction(self):
+        # xkcd: the feed hands over the strip and nothing else, while the page
+        # extracts to the site's footer gag. Without this the subscriber saw the gag.
+        article = self._article(
+            '<img src="https://imgs.xkcd.com/comics/dependency.png" alt="Dependency"'
+            ' title="Someday ImageMagick will finally break">'
+        )
+        apply_readable_result(article, "<p>xkcd.com is best viewed with Netscape</p>",
+                              None, None)
+        assert article.readable_status == "success"
+        assert "dependency.png" in article.readable_content
+        assert "Netscape" in article.readable_content
+        # The picture leads, because on a page that is a picture it is the article.
+        assert article.readable_content.index("dependency.png") < \
+               article.readable_content.index("Netscape")
+
+    def test_leaves_an_extraction_that_kept_its_own_pictures_alone(self):
+        article = self._article('<img src="https://cdn.example.com/lead.jpg">')
+        body = '<p>story</p><img src="https://cdn.example.com/inline.jpg">'
+        apply_readable_result(article, body, None, None)
+        assert article.readable_content == body
+
+    def test_a_full_article_is_never_traded_away_for_a_photo(self):
+        # The rejected design would have kept the teaser and dropped the article.
+        feed = '<img src="https://cdn.example.com/lead.jpg"><p>A short teaser.</p>'
+        body = "<p>" + " ".join(["word"] * 800) + "</p>"
+        article = self._article(feed)
+        apply_readable_result(article, body, None, None)
+        assert article.readable_content.endswith(body)
+        assert "lead.jpg" in article.readable_content
+        assert article.word_count >= 800
+
+    def test_tracking_pixels_are_not_carried(self):
+        article = self._article(
+            '<img src="https://track.example.com/p.gif" width="1" height="1">'
+        )
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert "track.example.com" not in article.readable_content
+
+    def test_srcless_image_is_not_carried(self):
+        article = self._article('<img alt="broken">')
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert article.readable_content == "<p>story</p>"
+
+    def test_saved_article_with_no_feed_content_is_untouched(self):
+        article = _make_article()
+        article.content = None
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert article.readable_content == "<p>story</p>"
+
+    def test_carried_markup_goes_through_this_module_sanitizer(self):
+        # Feed content was cleaned with the fetcher's allowlist, not this one, and
+        # readable_content is rendered unescaped.
+        article = self._article(
+            '<img src="https://cdn.example.com/a.jpg" onerror="alert(1)">'
+        )
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert "onerror" not in article.readable_content
+        assert "a.jpg" in article.readable_content
