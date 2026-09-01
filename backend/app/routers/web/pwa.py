@@ -200,14 +200,27 @@ async def share_target_form(
 async def share_target_save(
     request: Request,
     url: str = Form(...),
+    title: str | None = Form(None),
+    ambiguous: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save the shared address, through the same service the app's own Saved box uses."""
+    """Save the shared address, through the same service the app's own Saved box uses.
+
+    *title* is what the sharing app said the page was called, carried over from the
+    GET. It is only ever a fallback for a page that cannot be fetched or parsed, so
+    it being editable in the DOM buys nothing: the worst it can do is name one row in
+    the sharer's own Saved. *ambiguous* is the same journey for the note explaining
+    why the address is worth a look, which the POST cannot work out for itself
+    because the text the share arrived in is not sent with the form.
+    """
     from app.services.saved_article_service import save_article_by_url
 
+    shared_title = (title or "").strip()[:_TITLE_MAX]
     try:
-        article, already_known = await save_article_by_url(url.strip(), user, db)
+        article, already_known = await save_article_by_url(
+            url.strip(), user, db, fallback_title=shared_title or None,
+        )
     except ValueError as exc:
         # Validation-time rejections: a scheme that is not http(s), no host, or an
         # address inside the server's own network. Anything that can only fail once
@@ -217,9 +230,20 @@ async def share_target_save(
         # been sent without anyone pressing anything, and a bare message would leave no
         # way to correct the address it refused. auto_save is off on the way back, so
         # the retry is a press.
+        #
+        # The title and the ambiguity note come back with it. Dropping them would have
+        # cost the retry its title and, where several links came through, taken away
+        # the one line saying the address is worth checking, which is when it is most
+        # worth saying.
         return templates.TemplateResponse(
             request, "app/partials/share_target_form.html",
-            {"error": str(exc), "shared_url": url.strip(), "auto_save": False},
+            {
+                "error": str(exc),
+                "shared_url": url.strip(),
+                "auto_save": False,
+                "shared_title": shared_title,
+                "ambiguous": bool(ambiguous),
+            },
         )
 
     return templates.TemplateResponse(request, "app/partials/share_target_result.html", {

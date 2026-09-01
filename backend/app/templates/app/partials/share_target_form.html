@@ -19,6 +19,13 @@
     <p class="text-sm text-red-600 break-words">{{ error }}</p>
   {% endif %}
 
+  {#- Carried to the POST, which otherwise knows only the address. The title is the
+      one the sharing app supplied, used as a name for the article when the page
+      itself cannot be fetched or parsed; ambiguous keeps the note below alive
+      through a refused address. Into value only, like the address. -#}
+  {% if shared_title %}<input type="hidden" name="title" value="{{ shared_title }}">{% endif %}
+  {% if ambiguous %}<input type="hidden" name="ambiguous" value="1">{% endif %}
+
   <label for="share-target-url" class="text-sm font-medium text-gray-700">Address</label>
   {#- Into value only. An address from another app in an href would run a
       javascript: URL, which escaping does not prevent. -#}

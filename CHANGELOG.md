@@ -33,6 +33,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- An article shared from another app keeps the headline that came with it. The share sheet hands over a title alongside the address and Readfine was throwing it away, so an article whose page could not be read, a 404, something behind a paywall, a page built entirely in JavaScript, landed in Saved named after its own web address. The shared title is now what names it in that case. A page Readfine can read still names itself, and an article you already had keeps the title it has, since that one is shared with everyone else who saved it. If the address is refused and you get the field back to correct it, the title comes back with it, and so does the note saying more than one link came through.
+
 - The privacy policy and the terms have a link back to the reader. Reaching either from the help page left the browser's Back button as the only way home. Signed-in readers get the link; a visitor who is not signed in does not, because it would only have led to the sign-in form, which is also why help and the feature list stopped showing it to everyone.
 
 - Pages outside the reading view keep clear of the rounded corners and the home indicator on an iPhone. Settings, help, the legal pages and the sign-in forms are ordinary scrolling pages with none of the reading view's own edges, so nothing had been keeping them out of the way: in landscape a line of text could run into the curve of the screen, and the bottom of a page sat under the bar at the very bottom. This is most obvious once Readfine is installed, where every page is drawn right to the edges, but it was there in the browser too.

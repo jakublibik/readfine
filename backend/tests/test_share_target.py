@@ -183,7 +183,7 @@ class TestShareTargetSave:
     def test_the_form_is_not_a_way_round_url_validation(self, client, monkeypatch):
         """The field is editable, so the address it posts gets the same checks as any
         other saved URL rather than being trusted for having come from the share sheet."""
-        async def refuse(url, user, db):
+        async def refuse(url, user, db, fallback_title=None):
             raise ValueError("Only http and https addresses can be saved")
 
         monkeypatch.setattr(
@@ -197,7 +197,7 @@ class TestShareTargetSave:
     def test_a_refusal_comes_back_with_a_way_to_fix_it(self, client, monkeypatch):
         """The save may have run without anyone pressing anything, so an error alone
         would leave no field to correct the address in, and no button to retry with."""
-        async def refuse(url, user, db):
+        async def refuse(url, user, db, fallback_title=None):
             raise ValueError("That address could not be reached")
 
         monkeypatch.setattr(
@@ -207,6 +207,57 @@ class TestShareTargetSave:
         assert 'value="https://example.com/typo"' in resp.text
         # Not with the trigger that sent it, or the failure would repeat on its own.
         assert 'hx-trigger="load, submit"' not in resp.text
+
+    def test_a_refusal_keeps_the_title_and_the_note_about_several_links(
+        self, client, monkeypatch
+    ):
+        """Both came from the share and neither can be worked out again on a retry:
+        the POST is sent the address alone, and the text they were derived from is
+        long gone."""
+        async def refuse(url, user, db, fallback_title=None):
+            raise ValueError("That address could not be reached")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", refuse
+        )
+        resp = client.post("/share-target", data={
+            "url": "https://example.com/typo", "title": "Some headline", "ambiguous": "1",
+        })
+        assert 'name="title" value="Some headline"' in resp.text
+        assert 'name="ambiguous"' in resp.text
+        assert "More than one link came through" in resp.text
+
+    def test_the_shared_title_reaches_the_service_as_a_fallback(self, client, monkeypatch):
+        """It names the article when the page cannot be fetched or parsed, which is
+        the only case where nothing else can."""
+        seen = {}
+
+        async def capture(url, user, db, fallback_title=None):
+            seen["title"] = fallback_title
+            raise ValueError("stop here, the save itself is not what this tests")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", capture
+        )
+        client.post("/share-target", data={
+            "url": "https://example.com/story", "title": "  Some\n headline  ",
+        })
+        assert seen["title"] == "Some\n headline"
+
+    def test_no_title_shared_means_no_fallback(self, client, monkeypatch):
+        """An empty field must not become an empty title: the service would then have
+        to guess whether "" means "no title" or "call it that"."""
+        seen = {}
+
+        async def capture(url, user, db, fallback_title=None):
+            seen["title"] = fallback_title
+            raise ValueError("stop here")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", capture
+        )
+        client.post("/share-target", data={"url": "https://example.com/story", "title": "   "})
+        assert seen["title"] is None
 
 
 def test_the_manifest_advertises_the_share_target(unauth_client):
