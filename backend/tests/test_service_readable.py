@@ -20,6 +20,7 @@ from app.services.readable_service import (
     _restore_wiki_tables,
     _meta_refresh_target,
     _prefer_readability,
+    _repair_headings,
     _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
@@ -1277,6 +1278,42 @@ class TestPreferReadability:
     def test_needs_more_than_a_stray_nav_heading(self):
         assert _prefer_readability("<p>flat</p>", self._page(3)) is False
         assert _prefer_readability("<p>flat</p>", self._page(4)) is True
+
+
+class TestRepairHeadings:
+    # GitHub's README markup: the permalink is a sibling of the heading, inside a
+    # wrapper div, and holds an SVG icon and no text. It costs astral-sh/uv all 18
+    # of its headings.
+    GITHUB = ('<div class="markdown-heading"><h2 class="heading-element">Highlights'
+              '</h2><a id="user-content-highlights" class="anchor" href="#highlights">'
+              '<svg viewBox="0 0 16 16"><path d="m7 3"></path></svg></a></div>')
+
+    def test_removes_the_permalink_beside_a_heading(self):
+        out = _repair_headings(self.GITHUB)
+        assert "<h2" in out and "Highlights" in out
+        assert "anchor" not in out
+
+    def test_removes_a_permalink_inside_a_heading(self):
+        out = _repair_headings('<h3>Install<a class="headerlink" href="#install">'
+                               '<svg></svg></a></h3>')
+        assert "headerlink" not in out
+        assert "Install" in out
+
+    def test_keeps_a_link_that_says_something(self):
+        out = _repair_headings('<h2><a href="/spec">The specification</a></h2>')
+        assert 'href="/spec"' in out
+        assert "The specification" in out
+
+    def test_leaves_anchors_that_are_nowhere_near_a_heading(self):
+        # A named anchor in the body of an article is not this problem, and removing
+        # it would break in-page links for the sake of nothing.
+        out = _repair_headings('<p>text</p><a id="footnote-1"></a><p>more</p>')
+        assert 'id="footnote-1"' in out
+
+    def test_leaves_an_ordinary_page_alone(self):
+        html = "<html><body><h1>Title</h1><p>Body text.</p></body></html>"
+        assert "Title" in _repair_headings(html)
+        assert "Body text." in _repair_headings(html)
 
 
 class TestCarryOverFeedMedia:

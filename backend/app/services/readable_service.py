@@ -411,6 +411,39 @@ def _prefer_readability(content: str, page_html: str) -> bool:
     return _heading_count(content) == 0 and _heading_count(page_html) >= _MIN_FALLBACK_HEADINGS
 
 
+_HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
+
+
+def _repair_headings(html: str) -> str:
+    """Give trafilatura a second look at a page whose headings it threw away.
+
+    Two things in here, both of which turn a heading trafilatura discards into one it
+    keeps, and neither of which changes what the page says.
+
+    The permalink anchor is the one that prompted this. GitHub hangs an
+    ``<a class="anchor">`` holding nothing but an SVG link icon beside every heading in
+    a README, and that is enough for trafilatura to drop the heading: astral-sh/uv came
+    back with 0 of its 18, so the README arrived as one wall of text. It is the same
+    shape as MediaWiki's ``[edit]`` link, which ``_lift_mediawiki_chrome`` removes for
+    exactly this reason. Only anchors with no text of their own go, and only next to or
+    inside a heading, so an ordinary link in a title is left alone.
+
+    Reserializing through BeautifulSoup is the second, and it is why the whole document
+    goes through here rather than only the anchors. Some pages are simply malformed:
+    danluu.com loses all 6 of its headings to trafilatura and gets them back from a
+    parse-and-print round trip alone, no anchors involved.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for heading in soup.find_all(_HEADING_TAGS):
+        for anchor in heading.find_all("a"):
+            if not anchor.get_text(strip=True):
+                anchor.decompose()
+        for sibling in (heading.find_previous_sibling(), heading.find_next_sibling()):
+            if sibling is not None and sibling.name == "a" and not sibling.get_text(strip=True):
+                sibling.decompose()
+    return str(soup)
+
+
 def _extract_with_readability(html: str) -> Optional[str]:
     try:
         doc = Document(html)
@@ -1040,13 +1073,22 @@ def extract_readable_with_title(
     if not content:
         content = _extract_with_readability(html)
     elif _prefer_readability(content, html):
-        # Gated on the cheap heading counts first, so readability is only built for
-        # the pages that might need it rather than for every article.
-        alternative = _extract_with_readability(html)
-        if _heading_count(alternative) >= _MIN_FALLBACK_HEADINGS:
-            logger.info("readable: using readability for %s (trafilatura returned no"
-                        " headings on a structured page)", url)
-            content = alternative
+        # Gated on the cheap heading counts first, so neither the repair nor readability
+        # is built for pages that do not need them rather than for every article.
+        # Trafilatura gets the first of the two: it is the better extractor of the pair
+        # everywhere else, so where repairing the page is enough to bring the headings
+        # back there is no reason to hand the article to readability instead.
+        retry = _extract_with_trafilatura(_repair_headings(html), url)
+        if _heading_count(retry) >= _MIN_FALLBACK_HEADINGS:
+            logger.info("readable: re-read %s with its heading permalinks removed"
+                        " (trafilatura returned no headings on a structured page)", url)
+            content = retry
+        else:
+            alternative = _extract_with_readability(html)
+            if _heading_count(alternative) >= _MIN_FALLBACK_HEADINGS:
+                logger.info("readable: using readability for %s (trafilatura returned no"
+                            " headings on a structured page)", url)
+                content = alternative
     if not content:
         # An infobox on its own is not an article, so a page that yielded nothing else
         # fails here as it always did rather than being stored as a lone table.

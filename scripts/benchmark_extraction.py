@@ -78,11 +78,17 @@ def headings(html: str | None) -> int:
 _GT: dict = {}
 
 
-def _extract(key: str) -> tuple[str, str, str]:
+def _extract(key: str) -> tuple[str, str, str, str]:
     url = _GT[key]["url"]
     path = BENCH_DIR / "html" / f"{key}.html.gz"
     html = gzip.open(path, "rt", encoding="utf8", errors="replace").read()
-    return key, rs._extract_with_trafilatura(html, url) or "", rs._extract_with_readability(html) or ""
+    traf = rs._extract_with_trafilatura(html, url) or ""
+    read = rs._extract_with_readability(html) or ""
+    # Only where the app would ask for it, so the cost here matches the cost there.
+    retry = ""
+    if traf and rs._prefer_readability(traf, html):
+        retry = rs._extract_with_trafilatura(rs._repair_headings(html), url) or ""
+    return key, traf, read, retry
 
 
 def _init(ground_truth: dict) -> None:
@@ -101,14 +107,17 @@ def main() -> int:
     sys.path.insert(0, str(bench))
     from evaluate import metrics_from_tp_fp_fns, string_shingle_matching  # noqa: E402
 
-    ground_truth = json.loads((bench / "ground-truth.json").read_text())
+    # encoding is explicit because the default is the locale's, which on a Windows
+    # console is cp1250 and cannot read this file at all.
+    ground_truth = json.loads((bench / "ground-truth.json").read_text(encoding="utf8"))
     keys = list(ground_truth)[: args.limit] if args.limit else list(ground_truth)
 
     with ProcessPoolExecutor(max_workers=args.workers,
                              initializer=_init, initargs=(ground_truth,)) as pool:
         rows = list(pool.map(_extract, keys))
-    traf = {k: t for k, t, _ in rows}
-    read = {k: r for k, _, r in rows}
+    traf = {k: t for k, t, _, _ in rows}
+    read = {k: r for k, _, r, _ in rows}
+    retry = {k: q for k, _, _, q in rows}
 
     def score(name: str, chosen: dict[str, str]) -> None:
         pairs = [
@@ -131,7 +140,22 @@ def main() -> int:
     fires = [k for k in keys if headings(traf[k]) == 0 and headings(read[k]) >= 4]
     score("headings gate",
           {k: (read[k] if k in fires else (traf[k] or read[k])) for k in keys})
+    # Behind the gate, trafilatura gets a second go at a page whose heading permalinks
+    # have been stripped, and readability is only reached if that still finds none.
+    # GitHub is the page this was written for; it is not in this corpus, so what the
+    # row is here to show is that the extra step costs the corpus nothing.
+    repaired = [k for k in keys if retry[k] and headings(retry[k]) >= 4]
+
+    def resolved(k: str) -> str:
+        if retry[k] and headings(retry[k]) >= 4:
+            return retry[k]
+        if k in fires:
+            return read[k]
+        return traf[k] or read[k]
+
+    score("headings gate + permalink repair", {k: resolved(k) for k in keys})
     print(f"\n  headings gate fires on {len(fires)}/{len(keys)} pages of this corpus")
+    print(f"  permalink repair rescues {len(repaired)}/{len(keys)} of them")
     return 0
 
 
