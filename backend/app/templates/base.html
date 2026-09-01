@@ -3,6 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {# Article images are hotlinked straight from the publisher, and the browser default
+       (strict-origin-when-cross-origin) tells every one of those hosts that the reader
+       is on Readfine. Some of them refuse on that basis: maps.wikimedia.org answers 403
+       to a foreign referrer, so every Wikipedia locator map arrived broken, and because
+       the <img> keeps its width/height the hole it left was several hundred pixels tall.
+       Sending nothing cross-origin fixes those and leaks less besides.
+
+       same-origin, not no-referrer, so our own requests keep a full referrer. Nothing
+       else on the page loses one: outbound links already carry rel="noopener noreferrer",
+       and the video player sets referrerpolicy on the iframe itself (app.js), which wins
+       over this. #}
+    <meta name="referrer" content="same-origin">
     {# Kept in step with the shell background by syncThemeColor() in init.js — the
        colour scheme is a stored preference, so a media-query pair would show the
        wrong bar to anyone who overrode their device setting. #}

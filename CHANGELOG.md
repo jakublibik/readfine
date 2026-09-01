@@ -71,6 +71,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - Verify in Settings → AI now tells you what went wrong when the endpoint does not answer. A timeout reported itself as "Request timed out.", which says nothing about whether a local model is still loading or the server is not running at all, and an error that carried no message left the line blank with the button still reading "Verifying…", so there was nothing on screen to go on. A timeout now says the model may still be loading and to try again, an unreachable endpoint points at the address and the server, and no failure can leave the line empty.
 
+- Pictures that the site will not serve to anyone but itself now load. Readfine was telling every image host that the reader was on Readfine, and some of them refuse on exactly that basis: the little locator maps on Wikipedia were the visible case, and they did not just go missing, they left a hole several hundred pixels tall in the middle of the article, because the space had been reserved before the refusal came back. Nothing is said about where you are reading now, which is also one less thing leaking to a publisher's servers while you read. Links out to the original article never carried it in the first place, and video players are unaffected.
+
 - The label column in a Wikipedia infobox is no longer a gray stripe in dark mode. Those labels get an opaque background in ordinary data tables, where the row stays readable while the columns scroll under it, and an infobox is meant to be exempt from all of that. The exemption was working in the light theme only.
 
 ## [0.16.0] - 2026-08-19
