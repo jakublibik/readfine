@@ -4,7 +4,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Optional
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urljoin, urlsplit
 
 import httpx
 import nh3
@@ -129,17 +129,286 @@ def _strip_pre_extraction_noise(html: str) -> str:
     return str(soup)
 
 
+_MEDIAWIKI_RE = re.compile(
+    r"""<meta[^>]+name\s*=\s*["']generator["'][^>]*\bcontent\s*=\s*["']MediaWiki""",
+    re.IGNORECASE,
+)
+
+# Inside a lifted box or table: navigation, print-only variants and rows the page
+# itself hides. The hidden ones matter because our sanitizer strips `style`, so
+# anything MediaWiki had set to display:none (a second copy of the coordinates,
+# "Show map of Europe") would come back visible.
+_MEDIAWIKI_NOISE = (
+    '.mw-editsection, .noprint, .nomobile, .mw-empty-elt, style, [style*="display:none"]'
+)
+
+# Where a lifted table is put back. It has to be something trafilatura keeps verbatim
+# and in place: a bare <p> of text does both (checked over 14 tables on 5 articles),
+# while a <div> is dropped outright.
+_TABLE_MARKER = "RFDATATABLE"
+_TABLE_MARKER_P_RE = re.compile(rf"<p>\s*{_TABLE_MARKER}(\d+)\s*</p>")
+_TABLE_MARKER_BARE_RE = re.compile(rf"{_TABLE_MARKER}(\d+)(?!\d)")
+# Where the box names itself. Templates differ on which of these they use, and a good
+# third of them use none, hence the fall back to the leading header cell.
+_INFOBOX_TITLE_SELECTOR = "caption, .infobox-above, .infobox-title"
+
+# Above this, an infobox is a screenful of table standing between the reader and the
+# article's first sentence, which on a phone is worse than not having it, so it starts
+# collapsed. Measured across a spread of articles: Coffee 44 words, Ucchusma 141, Brno
+# 211, Karel Čapek 227, Python 270, Prague 366, Waterloo 383. The line falls between the
+# boxes that read as a caption and the ones that read as a second article. Rows are
+# counted too because a box can be long without being wordy (Brno: 211 words, 39 rows).
+_INFOBOX_OPEN_MAX_WORDS = 150
+_INFOBOX_OPEN_MAX_ROWS = 20
+
+_INFOBOX_FALLBACK_TITLE = "Infobox"
+
+
+def _infobox_title(box) -> str:
+    """What to put on the box's summary line, taken off the box itself.
+
+    Removes the element it took the title from, so an expanded box does not show its
+    own name twice. Falls back to a plain label rather than to the article title: this
+    runs on stored content, which no template gets to re-render per reader, so there is
+    nothing here to translate and nothing that changes if the article is renamed.
+    """
+    el = box.select_one(_INFOBOX_TITLE_SELECTOR)
+    if el is None:
+        first = box.find(["th", "td"])
+        # Only a full-width header cell names the box. A plain first cell is the label
+        # of a data row ("Latte and black filtered coffee"), not a title.
+        if first is not None and first.name == "th" and first.get("colspan"):
+            el = first
+    if el is None:
+        return _INFOBOX_FALLBACK_TITLE
+    title = re.sub(r"\s+", " ", el.get_text(" ", strip=True)).strip()
+    # Take the whole row when the title was all of it, or the table keeps an empty
+    # <tr> where the header used to be and renders a blank band above the first field.
+    row = el.find_parent("tr")
+    el.decompose()
+    if row is not None and not row.find(["th", "td"]):
+        row.decompose()
+    return title[:200] or _INFOBOX_FALLBACK_TITLE
+
+
+class MediaWikiChrome(NamedTuple):
+    """A MediaWiki page taken apart: what to extract, and what to put back after."""
+    html: str
+    infoboxes: list[str] = []
+    tables: list[str] = []
+
+
+def _lift_mediawiki_chrome(html: str) -> MediaWikiChrome:
+    """Take a MediaWiki page apart before extraction, keeping what is worth keeping.
+
+    trafilatura is not to be trusted with a table on a page this size. On the Prague
+    article it closes the climate table right after the first header cell and drops
+    every remaining value into the body as its own paragraph, which is how a weather
+    table came to read as a column of bare numbers. It is not the table's complexity:
+    handed that same table on its own, trafilatura returns all 12 rows and 142 cells.
+    So each one is lifted out here and put back afterwards, and only the page's prose
+    is handed to the extractor.
+
+    Four things happen, and everything but the navboxes is kept:
+
+    **``[edit]`` links** are dropped. Every section heading on a MediaWiki page carries
+    one, and trafilatura's precision pass prunes a heading that contains a link, so the
+    whole article arrived as one unbroken wall of text. This is the larger half of the
+    fix and it costs nothing: on the article this was reported for, dropping them takes
+    it from zero headings to eleven, and nobody wants ``[edit]`` in a reader.
+
+    **The infobox** is lifted whole and comes back wrapped in ``<details>``, so a long
+    one is a single line on a phone rather than three screens of table before the lede.
+    The caller puts it at the top, where the page had it.
+
+    **Data tables** (``.wikitable``) are lifted the same way, but they belong where
+    they stood, so each leaves a marker paragraph behind for the caller to swap back.
+
+    **Navboxes** are dropped outright. They are the navigation footers ("Districts of
+    Prague", "Capitals of Europe"), they are worth nothing to a reader, and trafilatura
+    was leaking pieces of them into the article as mangled table fragments.
+    """
+    if not _MEDIAWIKI_RE.search(_head_slice(html)):
+        return MediaWikiChrome(html)
+    soup = BeautifulSoup(html, "html.parser")
+    for el in soup.select(".mw-editsection, .navbox, .navbox-inner, .navbox-subgroup"):
+        el.decompose()
+
+    boxes: list[str] = []
+    for box in soup.select("table.infobox"):
+        box.extract()
+        for junk in box.select(_MEDIAWIKI_NOISE):
+            junk.decompose()
+        title = _infobox_title(box)
+        rows = len(box.find_all("tr"))
+        words = len(box.get_text(" ", strip=True).split())
+        if not rows and not words:
+            continue  # the box was chrome all the way down
+        opened = " open" if words <= _INFOBOX_OPEN_MAX_WORDS and rows <= _INFOBOX_OPEN_MAX_ROWS else ""
+        # The title is page text being put back into markup, so it is escaped here
+        # rather than left for the sanitizer: nh3 would strip a tag it found, but the
+        # text around it would still have been reparsed as markup first.
+        boxes.append(
+            f"<details data-infobox{opened}>"
+            f"<summary>{html_mod.escape(title)}</summary>{box}</details>"
+        )
+
+    # After the infoboxes, so a table nested in one is not lifted out from under it.
+    tables: list[str] = []
+    for table in soup.select("table.wikitable"):
+        marker = soup.new_tag("p")
+        marker.string = f"{_TABLE_MARKER}{len(tables)}"
+        table.replace_with(marker)
+        for junk in table.select(_MEDIAWIKI_NOISE):
+            junk.decompose()
+        tables.append(str(table))
+
+    return MediaWikiChrome(str(soup), boxes, tables)
+
+
+def _restore_wiki_tables(body: str, tables: list[str]) -> str:
+    """Put the lifted data tables back where their markers ended up.
+
+    A marker that did not survive extraction means the section holding it was pruned
+    away. The table is appended rather than dropped, because losing a page's data
+    outright is the one outcome worse than showing it out of order.
+    """
+    clean = [_sanitize(table) for table in tables]
+    placed: set[int] = set()
+
+    def _swap(match: re.Match) -> str:
+        index = int(match.group(1))
+        if index in placed or index >= len(clean):
+            return ""  # a repeated or unknown marker is text nobody should read
+        placed.add(index)
+        return clean[index]
+
+    # The marker comes back as a paragraph of its own, so that is the shape to look
+    # for first; the bare form is only there in case something wrapped it in prose.
+    body = _TABLE_MARKER_P_RE.sub(_swap, body)
+    body = _TABLE_MARKER_BARE_RE.sub(_swap, body)
+    missing = [table for i, table in enumerate(clean) if i not in placed]
+    return body + "".join(missing)
+
+
+def _to_html_tags(fragment: str) -> str:
+    """Rewrite trafilatura's own XML vocabulary into the HTML the sanitizer keeps.
+
+    ``output_format="html"`` is only mostly HTML. An image comes back as
+    ``<graphic/>`` and a table as ``<table><row><cell>``, and of those only
+    ``<table>`` is in the allowlist, so ``row`` and ``cell`` were dropped by the
+    sanitizer while their text was kept — every table collapsed into a run of loose
+    paragraphs in the middle of the article. A Wikipedia infobox is the loudest case
+    but any page carrying a table hits it.
+
+    ``<graphic>`` is rewritten by regex, before the parse rather than during it:
+    html.parser has no idea the element is void, so ``<graphic/>`` would open a tag
+    that never closes and swallow the rest of the document into it. ``row`` and
+    ``cell`` arrive properly paired, so they are safe to rename on the tree.
+    """
+    fragment = re.sub(r'<graphic\b([^>]*)/>', r'<img\1>', fragment)
+    if "<row" not in fragment and "<cell" not in fragment:
+        return fragment
+    soup = BeautifulSoup(fragment, "html.parser")
+    for cell in soup.find_all("cell"):
+        span = cell.get("span")
+        cell.name = "th" if cell.get("role") == "head" else "td"
+        cell.attrs = {"colspan": span} if span else {}
+    for row in soup.find_all("row"):
+        row.name = "tr"
+        row.attrs = {}
+    return str(soup)
+
+
 def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
-    import re
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
                                  include_links=True, include_images=True,
                                  favor_precision=True)
     if not result:
         return None
-    # trafilatura outputs <graphic src="..." alt="..."/> instead of <img>
-    result = re.sub(r'<graphic\b([^>]*)/>', r'<img\1>', result)
-    return result
+    return _to_html_tags(result)
+
+
+_META_REFRESH_RE = re.compile(
+    r"""<meta[^>]+http-equiv\s*=\s*["']refresh["'][^>]*\bcontent\s*=\s*["'][^"']*?"""
+    r"""url\s*=\s*([^"'\s;]+)""",
+    re.IGNORECASE,
+)
+_META_REFRESH_ALT_RE = re.compile(
+    r"""<meta[^>]+\bcontent\s*=\s*["'][^"']*?url\s*=\s*([^"'\s;]+)["'][^>]*"""
+    r"""http-equiv\s*=\s*["']refresh["']""",
+    re.IGNORECASE,
+)
+# A redirect stub is a sentence and a link. Anything with real text is a page that
+# happens to carry a refresh — a slideshow, a live blog — and following it would
+# replace an article we already have.
+_META_REFRESH_MAX_WORDS = 100
+
+
+def _meta_refresh_target(html: str, base_url: str) -> Optional[str]:
+    """The address a client-side redirect page is pointing at, if that is all it is.
+
+    Some sites answer an old address with a stub that redirects in the browser rather
+    than over HTTP: ``blog.rust-lang.org`` serves a 460-byte page holding a script, a
+    ``<meta http-equiv="refresh">`` in a ``<noscript>``, and the words "Click here to
+    be redirected". We follow HTTP redirects and stop at that, so saving such a link
+    stored the stub — the article's whole text became "Click here to be redirected".
+
+    Restricted to the same host, and to a page with almost no text of its own. A
+    cross-host client-side redirect is the shape a tracker or an interstitial takes,
+    and following one would let a page hand us an article that is not the one asked
+    for; a genuine cross-host move is served over HTTP, which is already followed.
+    """
+    # Searched over the whole document rather than the head: the tag is routinely
+    # parked in a <noscript> down in the body, which is where the Rust stub keeps it,
+    # and that stub has no </head> to slice on at all. The regex is the cheap half of
+    # this function, so it runs before the text is counted.
+    m = _META_REFRESH_RE.search(html) or _META_REFRESH_ALT_RE.search(html)
+    if not m:
+        return None
+    if len(nh3.clean(html, tags=set()).split()) > _META_REFRESH_MAX_WORDS:
+        return None
+    target = urljoin(base_url, html_mod.unescape(m.group(1).strip()))
+    if not target.startswith(("http://", "https://")) or target == base_url:
+        return None
+    return target if _same_host(target, base_url) else None
+
+
+_HEADING_RE = re.compile(r"<h[1-4]\b", re.IGNORECASE)
+
+# How many headings readability has to find before its result is preferred, and how
+# many the page must carry for the question to be worth asking at all. Four is high
+# enough that a stray heading in a nav bar cannot reach it.
+_MIN_FALLBACK_HEADINGS = 4
+
+
+def _heading_count(html: Optional[str]) -> int:
+    return len(_HEADING_RE.findall(html or ""))
+
+
+def _prefer_readability(content: str, page_html: str) -> bool:
+    """True when trafilatura flattened a structured page and readability did not.
+
+    Some documents come back from trafilatura as unbroken prose with no headings at
+    all. On a reference page that is not a style, it is damage: a man page, the Rust
+    book, the Kubernetes docs and Pride and Prejudice all arrived as one wall of text,
+    and on PostgreSQL's SQL reference it goes further, because trafilatura renders an
+    inline ``<code>`` as a block-level ``<pre>`` and every sentence mentioning a
+    keyword is cut into three pieces. readability keeps both the headings and the
+    inline markup on exactly these pages.
+
+    The rule stays this narrow because trafilatura is the better extractor nearly
+    everywhere and must not be displaced on a guess. Measured against Zyte's
+    article-extraction-benchmark — 181 pages with a hand-written ground truth, scored
+    with that project's own token F1 — trafilatura alone gets 0.959 and readability
+    alone 0.922, so switching by default would cost real accuracy. This check fires on
+    **none** of those 181 pages, and on 7 of 7 of the reference pages that prompted it.
+
+    A version of this that also switched on the shredded-paragraph shape was measured
+    and dropped: it fired once on the benchmark and took F1 down to 0.956.
+    """
+    return _heading_count(content) == 0 and _heading_count(page_html) >= _MIN_FALLBACK_HEADINGS
 
 
 def _extract_with_readability(html: str) -> Optional[str]:
@@ -163,6 +432,11 @@ def _sanitize(html: str) -> str:
     }
     allowed_attrs = {
         "a": {"href", "title"},
+        # The marks a lifted infobox is rendered by (see _lift_mediawiki_chrome).
+        # data-infobox is what the stylesheet floats the box on, and `open` decides
+        # whether it starts expanded; without both in the allowlist every box would
+        # come out collapsed and styled as an ordinary table.
+        "details": {"open", "data-infobox"},
         # Kept so a stored video survives as something a player can be built from
         # (see app.utils.video). Both are inert ids, not URLs, and whatever reads them
         # has to validate them anyway, since a feed's own markup passes through here.
@@ -669,6 +943,15 @@ def extract_readable_with_title(
         # Nothing was downloaded, so there is no title or address to report either.
         return ReadableResult(error=fetch_error, http_status=http_status)
 
+    # A client-side redirect stub, followed once. Not in a loop: two stubs in a row is
+    # not a thing a real site does, and a loop here is a way to be walked in circles.
+    hop = _meta_refresh_target(html, final_url or url)
+    if hop:
+        hop_html, _, _, hop_final = _fetch_html(hop, auth_user, auth_pass)
+        if hop_html:
+            logger.info("readable: followed a meta refresh from %s to %s", url, hop)
+            html, final_url = hop_html, hop_final or hop
+
     if redirected_back_to_us(final_url, url, html):
         # An interstitial holding the address it interrupted. Report it as the wrong
         # page rather than extracting it, and keep the requested address: adopting the
@@ -704,19 +987,38 @@ def extract_readable_with_title(
         )
 
     video_figures = collect_video_figures(html)
-    html = _strip_pre_extraction_noise(html)
+    wiki = _lift_mediawiki_chrome(html)
+    html = _strip_pre_extraction_noise(wiki.html)
     content = _extract_with_trafilatura(html, url)
     if not content:
         content = _extract_with_readability(html)
+    elif _prefer_readability(content, html):
+        # Gated on the cheap heading counts first, so readability is only built for
+        # the pages that might need it rather than for every article.
+        alternative = _extract_with_readability(html)
+        if _heading_count(alternative) >= _MIN_FALLBACK_HEADINGS:
+            logger.info("readable: using readability for %s (trafilatura returned no"
+                        " headings on a structured page)", url)
+            content = alternative
     if not content:
+        # An infobox on its own is not an article, so a page that yielded nothing else
+        # fails here as it always did rather than being stored as a lone table.
         logger.warning("readable extraction yielded no content for %s", url)
         return ReadableResult(error=_EMPTY_CONTENT_MSG, title=title,
                               resolved_url=resolved_url, description=description)
 
     if video_figures:
         content += "\n" + "\n".join(video_figures)
-    final = rewrite_relative_urls(
-        soften_nbsp_runs(_drop_empty_blocks(_dedupe_images(_sanitize(content)))), url)
+    body = _drop_empty_blocks(_dedupe_images(_sanitize(content)))
+    # Lifted markup is sanitized on its own and joined on afterwards, deliberately
+    # skipping _dedupe_images: that keys on the filename, and a MediaWiki table repeats
+    # one file on purpose — Battle of Waterloo's infobox carries 54 images that are 8
+    # flags, one per unit — so running it here would leave most rows with none.
+    if wiki.tables:
+        body = _restore_wiki_tables(body, wiki.tables)
+    if wiki.infoboxes:
+        body = "".join(_sanitize(box) for box in wiki.infoboxes) + body
+    final = rewrite_relative_urls(soften_nbsp_runs(body), url)
     if not _has_visible_content(final):
         # Extraction produced markup that sanitized down to nothing usable.
         logger.warning("readable extraction collapsed to empty content for %s", url)

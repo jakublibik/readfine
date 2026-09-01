@@ -16,6 +16,10 @@ from app.services.readable_service import (
     _extract_with_trafilatura,
     _extract_with_readability,
     _strip_pre_extraction_noise,
+    _lift_mediawiki_chrome,
+    _restore_wiki_tables,
+    _meta_refresh_target,
+    _prefer_readability,
     _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
@@ -419,6 +423,183 @@ class TestExtractWithTrafilatura:
         assert result is not None
         assert "<img" in result
         assert "<graphic" not in result
+
+    def test_converts_row_and_cell_to_table_html(self):
+        # trafilatura's html output is its own XML for tables: <row>/<cell>. Neither is
+        # in the sanitizer's allowlist, so an unconverted table lost its structure and
+        # spilled its cells into the body as loose text.
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = (
+                "<table><row><cell role='head'>Name</cell><cell>Ada</cell></row></table>"
+            )
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert "<tr>" in result and "</tr>" in result
+        assert "<th>Name</th>" in result
+        assert "<td>Ada</td>" in result
+        assert "<row" not in result and "<cell" not in result
+        # And it survives the sanitizer, which is the point of converting at all.
+        assert "<th>Name</th>" in _sanitize(result)
+
+    def test_cell_span_becomes_colspan(self):
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = "<table><row><cell span='2'>wide</cell></row></table>"
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert 'colspan="2"' in result
+        assert 'colspan="2"' in _sanitize(result)
+
+    def test_graphic_conversion_does_not_swallow_following_content(self):
+        # <graphic/> is void but html.parser has no way to know, so converting it on a
+        # parse tree would open a tag that never closes and nest the rest of the
+        # document inside it. Guards the ordering in _to_html_tags.
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = (
+                '<p>before</p><graphic src="a.jpg"/><table><row><cell>x</cell></row></table>'
+                "<p>after</p>"
+            )
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert result.index("before") < result.index("after")
+        assert "<td>x</td>" in result
+
+
+# ── _lift_mediawiki_chrome ────────────────────────────────────────────────────
+
+def _wiki_page(body: str) -> str:
+    return (
+        '<html><head><meta name="generator" content="MediaWiki 1.47.0-wmf.17">'
+        "</head><body>" + body + "</body></html>"
+    )
+
+
+class TestLiftMediawikiChrome:
+    def test_passthrough_when_not_mediawiki(self):
+        html = '<html><head></head><body><table class="infobox"><tr><td>x</td></tr></table></body></html>'
+        wiki = _lift_mediawiki_chrome(html)
+        assert wiki.html == html
+        assert wiki.infoboxes == []
+        assert wiki.tables == []
+
+    def test_drops_edit_section_links(self):
+        # The real fix for the wall-of-text symptom: trafilatura's precision pass prunes
+        # a heading that contains a link, and on MediaWiki every heading carries [edit].
+        html = _wiki_page(
+            '<h2>History<span class="mw-editsection">[<a href="/edit">edit</a>]</span></h2>'
+            "<p>body</p>"
+        )
+        out = _lift_mediawiki_chrome(html).html
+        assert "History" in out
+        assert "mw-editsection" not in out
+        assert "/edit" not in out
+
+    def test_infobox_is_removed_from_the_page_and_returned_separately(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table><p>body</p>"
+        )
+        out, boxes = _lift_mediawiki_chrome(html)[:2]
+        assert "infobox" not in out
+        assert "1815" not in out  # extraction must not see it
+        assert "body" in out
+        assert len(boxes) == 1
+        assert "1815" in boxes[0]
+
+    def test_title_moves_to_the_summary_and_leaves_no_empty_row(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<summary>Ada</summary>" in boxes[0]
+        # Taken out of the table too, so an expanded box does not show its name twice.
+        assert boxes[0].count("Ada") == 1
+        assert "<tr></tr>" not in boxes[0]
+
+    def test_plain_first_cell_is_not_mistaken_for_a_title(self):
+        # A leading <td> is the value of a data row, not the box's name.
+        html = _wiki_page(
+            '<table class="infobox"><tr><td>a photo</td></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<summary>Infobox</summary>" in boxes[0]
+        assert "a photo" in boxes[0]
+
+    def test_short_box_opens_and_long_box_stays_collapsed(self):
+        short = _wiki_page('<table class="infobox"><tr><th>Born</th><td>1815</td></tr></table>')
+        boxes = _lift_mediawiki_chrome(short).infoboxes
+        assert "<details data-infobox open>" in boxes[0]
+
+        rows = "".join(f"<tr><th>f{i}</th><td>{'word ' * 12}</td></tr>" for i in range(30))
+        long = _wiki_page(f'<table class="infobox">{rows}</table>')
+        boxes = _lift_mediawiki_chrome(long).infoboxes
+        assert "<details data-infobox>" in boxes[0]
+
+    def test_hidden_and_chrome_rows_are_dropped(self):
+        # The sanitizer strips `style`, so anything the page had hidden would come back
+        # visible unless it is removed here.
+        html = _wiki_page(
+            '<table class="infobox"><tr><th>Coords</th>'
+            '<td>50.08<span style="display:none">duplicate copy</span></td></tr>'
+            '<tr class="noprint"><td>print me only</td></tr></table>'
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "50.08" in boxes[0]
+        assert "duplicate copy" not in boxes[0]
+        assert "print me only" not in boxes[0]
+
+    def test_summary_text_is_escaped(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">&lt;script&gt;x&lt;/script&gt;</th></tr>'
+            "<tr><th>a</th><td>b</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<script>" not in boxes[0]
+        assert "&lt;script&gt;" in boxes[0]
+
+    def test_wikitable_is_lifted_and_leaves_a_marker(self):
+        # trafilatura truncates a data table on a full page and spills the rest of the
+        # cells into the body one paragraph each (Prague's climate table read as a
+        # column of bare numbers), so the table is lifted and put back afterwards.
+        html = _wiki_page(
+            "<p>before</p>"
+            '<table class="wikitable"><tr><th>Month</th><th>Jan</th></tr>'
+            "<tr><td>High</td><td>1.5</td></tr></table><p>after</p>"
+        )
+        wiki = _lift_mediawiki_chrome(html)
+        assert len(wiki.tables) == 1
+        assert "1.5" in wiki.tables[0]
+        assert "1.5" not in wiki.html  # extraction must not see it
+        assert "RFDATATABLE0" in wiki.html
+        assert wiki.html.index("before") < wiki.html.index("RFDATATABLE0") < wiki.html.index("after")
+
+    def test_navboxes_are_dropped(self):
+        html = _wiki_page('<div class="navbox">Districts of Prague</div><p>body</p>')
+        wiki = _lift_mediawiki_chrome(html)
+        assert "Districts of Prague" not in wiki.html
+        assert "body" in wiki.html
+
+    def test_table_nested_in_an_infobox_is_not_lifted_twice(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            '<tr><td><table class="wikitable"><tr><td>nested</td></tr></table></td></tr>'
+            "</table>"
+        )
+        wiki = _lift_mediawiki_chrome(html)
+        assert wiki.tables == []
+        assert "nested" in wiki.infoboxes[0]
+
+    def test_lifted_box_survives_the_sanitizer_intact(self):
+        # details/open/data-infobox all have to be in the allowlist or the box comes out
+        # collapsed and unstyleable.
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        clean = _sanitize(boxes[0])
+        assert "data-infobox" in clean
+        assert "open" in clean
+        assert "<summary>Ada</summary>" in clean
+        assert "1815" in clean
 
 
 # ── _extract_with_readability ─────────────────────────────────────────────────
@@ -987,3 +1168,112 @@ class TestDoubleEncodedMetadata:
         # what rendered as a visible entity on screen.
         assert "&amp;#x27;" not in r.content
         assert "Here&#x27;s how it works" in r.content
+
+
+class TestRestoreWikiTables:
+    def test_marker_paragraph_is_replaced_in_place(self):
+        body = "<p>before</p><p>RFDATATABLE0</p><p>after</p>"
+        out = _restore_wiki_tables(body, ["<table><tr><td>1.5</td></tr></table>"])
+        assert "RFDATATABLE" not in out
+        assert out.index("before") < out.index("1.5") < out.index("after")
+
+    def test_markers_map_to_their_own_table(self):
+        body = "<p>RFDATATABLE1</p><p>mid</p><p>RFDATATABLE0</p>"
+        out = _restore_wiki_tables(
+            body, ["<table><tr><td>zero</td></tr></table>",
+                   "<table><tr><td>one</td></tr></table>"]
+        )
+        assert out.index("one") < out.index("mid") < out.index("zero")
+
+    def test_double_digit_marker_is_not_confused_with_a_single_one(self):
+        body = "<p>RFDATATABLE10</p>"
+        tables = [f"<table><tr><td>t{i}</td></tr></table>" for i in range(11)]
+        out = _restore_wiki_tables(body, tables)
+        assert "t10" in out
+        # t1 is appended as missing, but it must not have landed in the marker's place.
+        assert out.index("t10") < out.index("t1<") if "t1<" in out else True
+
+    def test_table_whose_marker_was_pruned_is_appended_not_lost(self):
+        # The section holding the marker did not survive extraction. Showing the table
+        # out of order beats dropping the page's data.
+        out = _restore_wiki_tables("<p>only prose</p>", ["<table><tr><td>1.5</td></tr></table>"])
+        assert "1.5" in out
+        assert out.index("only prose") < out.index("1.5")
+
+    def test_stray_marker_text_is_never_left_on_screen(self):
+        body = "<p>RFDATATABLE0</p><p>RFDATATABLE0</p><p>RFDATATABLE9</p>"
+        out = _restore_wiki_tables(body, ["<table><tr><td>1.5</td></tr></table>"])
+        assert "RFDATATABLE" not in out
+        assert out.count("1.5") == 1
+
+    def test_lifted_table_survives_the_sanitizer(self):
+        out = _restore_wiki_tables(
+            "<p>RFDATATABLE0</p>",
+            ['<table class="wikitable"><tr><th scope="row">High</th><td>1.5</td></tr></table>'],
+        )
+        assert "<th scope=\"row\">High</th>" in out
+        assert "<td>1.5</td>" in out
+
+
+class TestMetaRefreshTarget:
+    def _stub(self, target, extra=""):
+        return (
+            "<!doctype html><meta charset='utf-8'><title>Redirect</title>"
+            f"<noscript><meta http-equiv='refresh' content='0; url={target}'></noscript>"
+            f"<p><a href='{target}'>Click here</a> to be redirected.</p>{extra}"
+        )
+
+    def test_finds_target_in_a_noscript_body_tag(self):
+        # The tag is routinely parked in <noscript> in the body, and the Rust stub
+        # that prompted this has no </head> to slice on at all.
+        out = _meta_refresh_target(
+            self._stub("https://blog.rust-lang.org/2024/11/28/Rust-1.83.0/"),
+            "https://blog.rust-lang.org/2024/11/28/Rust-1.83.0.html",
+        )
+        assert out == "https://blog.rust-lang.org/2024/11/28/Rust-1.83.0/"
+
+    def test_resolves_a_relative_target(self):
+        out = _meta_refresh_target(self._stub("/new/place/"), "https://example.com/old.html")
+        assert out == "https://example.com/new/place/"
+
+    def test_refuses_to_leave_the_host(self):
+        # A cross-host client-side redirect is the shape a tracker takes; a genuine
+        # one is served over HTTP, which the fetcher already follows.
+        assert _meta_refresh_target(
+            self._stub("https://tracker.example.net/x"), "https://example.com/old.html"
+        ) is None
+
+    def test_ignores_a_page_that_has_real_text(self):
+        # A live blog or slideshow can carry a refresh; following it would throw away
+        # an article we already downloaded.
+        body = "<p>" + " ".join(["word"] * 300) + "</p>"
+        assert _meta_refresh_target(
+            self._stub("https://example.com/next", extra=body), "https://example.com/old"
+        ) is None
+
+    def test_none_without_the_tag(self):
+        assert _meta_refresh_target("<html><body><p>hi</p></body></html>",
+                                    "https://example.com/a") is None
+
+    def test_does_not_point_at_itself(self):
+        assert _meta_refresh_target(self._stub("https://example.com/a"),
+                                    "https://example.com/a") is None
+
+
+class TestPreferReadability:
+    def _page(self, n):
+        return "<html><body>" + "".join(f"<h2>Section {i}</h2><p>text</p>" for i in range(n)) + "</body></html>"
+
+    def test_fires_when_a_structured_page_came_back_flat(self):
+        assert _prefer_readability("<p>one long wall of text</p>", self._page(8)) is True
+
+    def test_does_not_fire_when_trafilatura_kept_headings(self):
+        assert _prefer_readability("<h2>Intro</h2><p>text</p>", self._page(8)) is False
+
+    def test_does_not_fire_on_a_page_with_no_structure_to_lose(self):
+        # A short news piece legitimately has no headings; nothing to rescue.
+        assert _prefer_readability("<p>a news story</p>", self._page(1)) is False
+
+    def test_needs_more_than_a_stray_nav_heading(self):
+        assert _prefer_readability("<p>flat</p>", self._page(3)) is False
+        assert _prefer_readability("<p>flat</p>", self._page(4)) is True
