@@ -320,11 +320,21 @@ def _to_html_tags(fragment: str) -> str:
     return str(soup)
 
 
-def _extract_with_trafilatura(html: str, url: str) -> Optional[str]:
+def _extract_with_trafilatura(html: str, url: str,
+                              favor_precision: bool = True) -> Optional[str]:
+    """Extract with trafilatura. ``favor_precision`` is the default for a reason.
+
+    It is what keeps navigation and related-article blocks out of the body, and the
+    181-page benchmark is scored with it on. It also has a cost that only shows on
+    some pages: on jvns.ca it discards all 21 section headings of a post whose text
+    it otherwise keeps. Turning it off is therefore not a global setting but a second
+    attempt, made only behind the gate that has already established the headings were
+    lost (see the call site).
+    """
     result = trafilatura.extract(html, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
                                  include_links=True, include_images=True,
-                                 favor_precision=True)
+                                 favor_precision=favor_precision)
     if not result:
         return None
     return _to_html_tags(result)
@@ -402,8 +412,16 @@ def _prefer_readability(content: str, page_html: str) -> bool:
     everywhere and must not be displaced on a guess. Measured against Zyte's
     article-extraction-benchmark — 181 pages with a hand-written ground truth, scored
     with that project's own token F1 — trafilatura alone gets 0.959 and readability
-    alone 0.922, so switching by default would cost real accuracy. This check fires on
-    **none** of those 181 pages, and on 7 of 7 of the reference pages that prompted it.
+    alone 0.922, so switching by default would cost real accuracy. It fires on 7 of the
+    7 reference pages that prompted it.
+
+    **Read the benchmark number carefully**: this predicate is true on 79 of the 181
+    pages, because plenty of news articles legitimately have no headings in the body
+    while the page around them has several. That costs nothing, since what follows a
+    true answer is a set of second readings that are each only accepted if they find
+    four headings, and on 180 of the 181 none of them does. The one that does is a
+    gift guide whose sections are real, and it scores better for it (0.975 to 0.998).
+    So the gate is cheap rather than rare, and the accepting is what is rare.
 
     A version of this that also switched on the shredded-paragraph shape was measured
     and dropped: it fired once on the benchmark and took F1 down to 0.956.
@@ -1134,22 +1152,33 @@ def extract_readable_with_title(
     if not content:
         content = _extract_with_readability(html)
     elif _prefer_readability(content, html):
-        # Gated on the cheap heading counts first, so neither the repair nor readability
-        # is built for pages that do not need them rather than for every article.
-        # Trafilatura gets the first of the two: it is the better extractor of the pair
-        # everywhere else, so where repairing the page is enough to bring the headings
-        # back there is no reason to hand the article to readability instead.
-        retry = _extract_with_trafilatura(_repair_headings(html), url)
-        if _heading_count(retry) >= _MIN_FALLBACK_HEADINGS:
-            logger.info("readable: re-read %s with its heading permalinks removed"
-                        " (trafilatura returned no headings on a structured page)", url)
-            content = retry
-        else:
-            alternative = _extract_with_readability(html)
-            if _heading_count(alternative) >= _MIN_FALLBACK_HEADINGS:
-                logger.info("readable: using readability for %s (trafilatura returned no"
-                            " headings on a structured page)", url)
-                content = alternative
+        # The gate has established that a structured page came back flat, so from here
+        # the question is only which second reading brings the headings back. Three are
+        # tried in order and the first that finds enough of them wins; each is built
+        # only if the one before it failed, and none of this runs for a page that never
+        # lost its headings in the first place.
+        #
+        # Trafilatura gets two of the three because it is the better extractor of the
+        # pair everywhere else, so readability is where to end up, not where to start.
+        # Its precision bias goes second rather than never: globally it is what keeps
+        # navigation out of every article, and it is what the benchmark is scored with,
+        # but on some pages it throws the headings away with the furniture.
+        repaired = _repair_headings(html)
+        attempts = (
+            ("with the heading permalinks removed",
+             lambda: _extract_with_trafilatura(repaired, url)),
+            ("without trafilatura's precision bias",
+             lambda: _extract_with_trafilatura(repaired, url, favor_precision=False)),
+            ("with readability",
+             lambda: _extract_with_readability(html)),
+        )
+        for how, run in attempts:
+            candidate = run()
+            if _heading_count(candidate) >= _MIN_FALLBACK_HEADINGS:
+                logger.info("readable: re-read %s %s (trafilatura returned no headings"
+                            " on a structured page)", url, how)
+                content = candidate
+                break
     if not content:
         # An infobox on its own is not an article, so a page that yielded nothing else
         # fails here as it always did rather than being stored as a lone table.

@@ -78,17 +78,25 @@ def headings(html: str | None) -> int:
 _GT: dict = {}
 
 
-def _extract(key: str) -> tuple[str, str, str, str]:
+def _extract(key: str) -> tuple[str, str, str, str, bool]:
     url = _GT[key]["url"]
     path = BENCH_DIR / "html" / f"{key}.html.gz"
     html = gzip.open(path, "rt", encoding="utf8", errors="replace").read()
     traf = rs._extract_with_trafilatura(html, url) or ""
     read = rs._extract_with_readability(html) or ""
-    # Only where the app would ask for it, so the cost here matches the cost there.
+    gated = bool(traf) and rs._prefer_readability(traf, html)
+    # Only where the app would ask for them, so the cost here matches the cost there.
+    # Both retries collapse into one column: they are alternatives, and the first with
+    # enough headings is the one the app would keep.
     retry = ""
-    if traf and rs._prefer_readability(traf, html):
-        retry = rs._extract_with_trafilatura(rs._repair_headings(html), url) or ""
-    return key, traf, read, retry
+    if gated:
+        repaired = rs._repair_headings(html)
+        for candidate in (rs._extract_with_trafilatura(repaired, url),
+                          rs._extract_with_trafilatura(repaired, url, favor_precision=False)):
+            if headings(candidate) >= rs._MIN_FALLBACK_HEADINGS:
+                retry = candidate or ""
+                break
+    return key, traf, read, retry, gated
 
 
 def _init(ground_truth: dict) -> None:
@@ -115,9 +123,10 @@ def main() -> int:
     with ProcessPoolExecutor(max_workers=args.workers,
                              initializer=_init, initargs=(ground_truth,)) as pool:
         rows = list(pool.map(_extract, keys))
-    traf = {k: t for k, t, _, _ in rows}
-    read = {k: r for k, _, r, _ in rows}
-    retry = {k: q for k, _, _, q in rows}
+    traf = {k: t for k, t, _, _, _ in rows}
+    read = {k: r for k, _, r, _, _ in rows}
+    retry = {k: q for k, _, _, q, _ in rows}
+    gated = {k: g for k, _, _, _, g in rows}
 
     def score(name: str, chosen: dict[str, str]) -> None:
         pairs = [
@@ -140,10 +149,11 @@ def main() -> int:
     fires = [k for k in keys if headings(traf[k]) == 0 and headings(read[k]) >= 4]
     score("headings gate",
           {k: (read[k] if k in fires else (traf[k] or read[k])) for k in keys})
-    # Behind the gate, trafilatura gets a second go at a page whose heading permalinks
-    # have been stripped, and readability is only reached if that still finds none.
-    # GitHub is the page this was written for; it is not in this corpus, so what the
-    # row is here to show is that the extra step costs the corpus nothing.
+    # Behind the gate, trafilatura gets two more goes at the page (permalinks stripped,
+    # then without its precision bias) and readability is only reached if both still
+    # find no headings. GitHub and jvns.ca are the pages these were written for and
+    # neither is in this corpus, so what the row is here to show is that the extra
+    # steps cost the corpus nothing.
     repaired = [k for k in keys if retry[k] and headings(retry[k]) >= 4]
 
     def resolved(k: str) -> str:
@@ -154,8 +164,17 @@ def main() -> int:
         return traf[k] or read[k]
 
     score("headings gate + permalink repair", {k: resolved(k) for k in keys})
-    print(f"\n  headings gate fires on {len(fires)}/{len(keys)} pages of this corpus")
-    print(f"  permalink repair rescues {len(repaired)}/{len(keys)} of them")
+
+    # Two different numbers, because reading one for the other is easy and wrong. The
+    # gate's own condition (trafilatura kept no heading on a page that has several) is
+    # common; what is rare is a second reading good enough to be taken instead, which
+    # is the only thing that can move the score.
+    shipped = {k: (traf[k] or read[k]) for k in keys}
+    changed = [k for k in keys if resolved(k) is not shipped[k] and resolved(k) != shipped[k]]
+    print(f"\n  the gate's condition holds on {sum(gated.values())}/{len(keys)} pages")
+    print(f"  readability is preferred on   {len(fires)}/{len(keys)}")
+    print(f"  a trafilatura retry wins on   {len(repaired)}/{len(keys)}")
+    print(f"  the page that is stored differs from today on {len(changed)}/{len(keys)}")
     return 0
 
 

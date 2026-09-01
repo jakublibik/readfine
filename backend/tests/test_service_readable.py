@@ -1341,6 +1341,48 @@ class TestPreferReadability:
         assert _prefer_readability("<p>flat</p>", self._page(4)) is True
 
 
+class TestSecondReadingOrder:
+    """Behind the gate, three readings are tried and the first with headings wins."""
+
+    PAGE = "<html><body>" + "".join(f"<h2>S{i}</h2><p>t</p>" for i in range(6)) + "</body></html>"
+    FLAT = "<p>" + ("one long wall of text " * 30) + "</p>"
+    STRUCTURED = "".join(f"<h2>Section {i}</h2><p>body text here</p>" for i in range(6))
+
+    def _run(self, trafilatura_side_effect, readability):
+        from app.services.readable_service import extract_readable_with_title
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(self.PAGE, None, None, "https://x.invalid/a")), \
+             patch("app.services.readable_service._extract_with_trafilatura",
+                   side_effect=trafilatura_side_effect), \
+             patch("app.services.readable_service._extract_with_readability",
+                   return_value=readability):
+            return extract_readable_with_title("https://x.invalid/a")
+
+    def test_precision_off_is_tried_before_readability(self):
+        # jvns.ca: favor_precision throws away every section heading of a post whose
+        # text it otherwise keeps, and readability has none of them either.
+        def traf(html, url, favor_precision=True):
+            return self.FLAT if favor_precision else self.STRUCTURED
+
+        r = self._run(traf, None)
+        assert "Section 0" in r.content
+        assert "one long wall" not in r.content
+
+    def test_readability_still_wins_when_neither_read_finds_headings(self):
+        def traf(html, url, favor_precision=True):
+            return self.FLAT
+
+        r = self._run(traf, self.STRUCTURED)
+        assert "Section 0" in r.content
+
+    def test_the_flat_result_is_kept_when_nothing_beats_it(self):
+        def traf(html, url, favor_precision=True):
+            return self.FLAT
+
+        r = self._run(traf, "<p>readability found no headings either</p>")
+        assert "one long wall" in r.content
+
+
 class TestRepairHeadings:
     # GitHub's README markup: the permalink is a sibling of the heading, inside a
     # wrapper div, and holds an SVG icon and no text. It costs astral-sh/uv all 18
