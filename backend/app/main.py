@@ -138,7 +138,15 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # Matches the <meta name="referrer"> in base.html, which is there so the policy
+        # is visible where the pages that depend on it are written. Article images are
+        # hotlinked from the publisher and some hosts refuse a foreign referrer
+        # (maps.wikimedia.org answers 403, which cost every MediaWiki locator map), so
+        # nothing is sent cross-origin. Same-origin requests keep a full referrer.
+        # Both are set to the same value deliberately: a document takes the meta over
+        # the header, since it is parsed later, and there is no reason to make anyone
+        # work that out from two places that disagree.
+        response.headers["Referrer-Policy"] = "same-origin"
         # CSP is sent in every environment (it does not depend on HTTPS and the
         # templates render identically in dev and prod), so XSS protection is
         # never silently dropped by DEBUG. 'unsafe-eval' is intentionally
