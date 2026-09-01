@@ -138,8 +138,19 @@ def _may_save_without_a_press(request: Request) -> bool:
     Saving on load is what makes sharing one step instead of two, but it also means a
     GET sets off a write. The write itself is still a POST from the page, so it keeps
     CSRF and the rate limit; what is left is that a crafted link could fire it for
-    anyone signed in. Chrome tells the two apart: a click from another site arrives as
-    cross-site, an app hand-off does not.
+    anyone signed in. A click from another site arrives as cross-site, an app hand-off
+    does not, so that is what this screens on.
+
+    Note what it therefore does *not* screen out: a link rendered inside one of our own
+    pages is same-origin and passes. Article bodies are feed-supplied HTML, so that is
+    reachable by anyone whose feed the reader subscribes to. Accepted, because the whole
+    of it is one unwanted row in Saved: the address still goes through
+    async_validate_feed_url, so no private host and no scheme we cannot fetch, and
+    saving a public URL is what the box in Saved does on request anyway. A real share
+    hand-off is believed to arrive as `none`, which would be the tighter test, but that
+    has not been measured on a device — including the case where the share lands in an
+    already-open window. Until it is, "not cross-site" is the honest condition, because
+    guessing wrong costs the feature rather than the guard.
 
     Unknown counts as unsafe, so a browser that sends no such header simply gets the
     button. Every refusal here degrades to today's behaviour rather than to an error.
