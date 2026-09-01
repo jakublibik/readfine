@@ -71,6 +71,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - Verify in Settings → AI now tells you what went wrong when the endpoint does not answer. A timeout reported itself as "Request timed out.", which says nothing about whether a local model is still loading or the server is not running at all, and an error that carried no message left the line blank with the button still reading "Verifying…", so there was nothing on screen to go on. A timeout now says the model may still be loading and to try again, an unreachable endpoint points at the address and the server, and no failure can leave the line empty.
 
+- The label column in a Wikipedia infobox is no longer a gray stripe in dark mode. Those labels get an opaque background in ordinary data tables, where the row stays readable while the columns scroll under it, and an infobox is meant to be exempt from all of that. The exemption was working in the light theme only.
+
 ## [0.16.0] - 2026-08-19
 
 ### Changed

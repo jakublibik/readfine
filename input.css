@@ -78,25 +78,33 @@ html.dark { color-scheme: dark; }
    th[scope=row], so pinning that column keeps "Mean daily maximum" on screen while the
    months move under it. It needs an opaque background of its own or the cells scroll
    visibly underneath, and the max-width keeps a long label from eating the screen it
-   is meant to be helping. */
+   is meant to be helping.
+
+   The colour is inherited rather than selected for, so that the exemption below can
+   turn it off by setting one custom property on the box. Written as a selector it had
+   to out-specify `.dark .article-body table:has(th) th[scope=row]`, which the first
+   attempt did not: the exemption won in the light theme and lost in the dark one, and
+   the stripe it was written to prevent came back on every infobox in dark mode. */
+.article-body { --pinned-label-bg: #fff; }
+.dark .article-body { --pinned-label-bg: #1e1e1e; }
+
 .article-body table:has(th) th[scope="row"] {
   position: sticky;
   left: 0;
   z-index: 1;
   max-width: 9rem;
-  background: #fff;
+  background: var(--pinned-label-bg);
 }
-.dark .article-body table:has(th) th[scope="row"] { background: #1e1e1e; }
 
 /* None of that belongs in an infobox: it is two columns, it never scrolls far enough
    to lose its labels, and the cap is what would squeeze them ("Venerated by",
    "Attributes"). The background matters most — a pinned cell has to be opaque or the
-   table scrolls visibly under it, and white on the box's own grey painted the label
-   column as a stripe down the side. */
+   table scrolls visibly under it, and an opaque colour on the box's own painted the
+   label column as a stripe down the side. */
+.article-body details[data-infobox] { --pinned-label-bg: transparent; }
 .article-body details[data-infobox] th[scope="row"] {
   position: static;
   max-width: none;
-  background: transparent;
 }
 
 /* Numeric tables fit noticeably more per screen a step down, and their cells are short
