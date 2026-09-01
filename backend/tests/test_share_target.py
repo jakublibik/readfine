@@ -65,6 +65,22 @@ class TestExtractSharedUrl:
     def test_sentence_punctuation_is_not_part_of_the_address(self, shared, expected):
         assert extract_shared_url(None, shared) == expected
 
+    @pytest.mark.parametrize("shared,expected", [
+        # Apps that shorten what they share glue the ellipsis to the last word, and
+        # the last word is the address.
+        ("Some very long headline https://example.com/story…", "https://example.com/story"),
+        # Sharing apps write prose, so the quotes around an address are usually curly.
+        ("He said “https://example.com/story”", "https://example.com/story"),
+        ("He said ‘https://example.com/story’", "https://example.com/story"),
+        ("Viz »https://example.com/story«", "https://example.com/story"),
+        # A share that carried a scrap of markup rather than plain text.
+        ('<a href="https://example.com/story">', "https://example.com/story"),
+    ])
+    def test_typographic_punctuation_is_not_part_of_the_address_either(self, shared, expected):
+        """ASCII is not what a phone puts around a link. Anything left on the end is
+        stored as part of the address, so Open original and Retry both point at it."""
+        assert extract_shared_url(None, shared) == expected
+
     def test_a_closing_bracket_the_address_opened_is_kept(self):
         """Wikipedia disambiguations end in one; trimming it fetches the wrong page."""
         url = "https://en.wikipedia.org/wiki/Mercury_(planet)"

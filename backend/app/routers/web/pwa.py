@@ -66,8 +66,12 @@ async def service_worker() -> FileResponse:
 # empty, so the address has to be dug out rather than read off.
 _URL_IN_TEXT = re.compile(r"https?://\S+", re.IGNORECASE)
 
-# A URL at the end of a sentence collects the sentence's punctuation.
-_TRAILING_PUNCTUATION = ".,;:!?\"'"
+# A URL at the end of a sentence collects the sentence's punctuation. Typographic
+# characters belong here as much as ASCII ones: sharing apps write real prose, so the
+# quotes around an address are usually curly, and an app that shortens what it shares
+# hands over an ellipsis glued to the end of the last word. Angle brackets are here for
+# a share that carried a scrap of markup rather than plain text.
+_TRAILING_PUNCTUATION = ".,;:!?\"'…“”‘’«»‹›<>"
 # Closing brackets are different: trimmed only when nothing in the address opened them,
 # because plenty of real addresses (Wikipedia disambiguations, most obviously) end in
 # one and cutting it silently fetches the wrong page.
