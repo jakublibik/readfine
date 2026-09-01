@@ -676,6 +676,35 @@ _WRONG_CONTENT_MSG = (
     "The site returned a consent or paywall page instead of the article"
 )
 
+_BOT_WALL_MSG = (
+    "The site asked for a browser check instead of showing the article"
+)
+
+# Phrases a browser check says and an article does not. Matched against the extracted
+# body, lowercased, with runs of whitespace collapsed, so a phrase broken across lines
+# in the source still matches.
+_BOT_WALL_PHRASES = (
+    "enable cookies",
+    "cookies must be enabled",
+    "cookies are disabled",
+    "enable javascript",
+    "javascript is disabled",
+    "javascript is required",
+    "requires javascript",
+    "turn on javascript",
+    "checking your browser",
+    "verify you are human",
+    "verifying you are human",
+    "are you a robot",
+)
+
+# A wall is a handful of words; an article that happens to mention one of the phrases
+# is not. PubMed's is 10 words and a Cloudflare interstitial around 30, while the
+# shortest legitimate extraction in the survey corpus is xkcd at 58 and the shortest
+# with any prose in it is Apple at 78. The cap sits well above the walls and below
+# anything that reads as writing, and it has to be cleared *as well as* a phrase.
+_BOT_WALL_MAX_WORDS = 120
+
 
 _CANONICAL_RE = re.compile(
     r"""<link[^>]+rel\s*=\s*["']canonical["'][^>]*\bhref\s*=\s*["']([^"']+)["']""",
@@ -874,6 +903,36 @@ def _content_contradicts_page(content_html: str, og_description: Optional[str]) 
     return overlap < _OG_DESC_MIN_OVERLAP
 
 
+def _looks_like_a_bot_wall(content_html: str) -> bool:
+    """True when the extracted body is a browser check rather than an article.
+
+    The sibling of ``_content_contradicts_page`` for the blind spot that one names:
+    a substitute page with no og:description to be judged against. PubMed is the case
+    that prompted it. It answers a server-side fetch with HTTP 203 and 5.5 kB of
+    JavaScript proof-of-work, and the only prose on it is "Enable cookies for
+    pubmed.ncbi.nlm.nih.gov and reload this page to continue." Stored as-is, the reader
+    gets a ten-word article that looks like the article. Cloudflare's interstitial and
+    Anubis land the same way.
+
+    The abstract itself is out of reach and stays that way: the cookie is computed by
+    the challenge script, so there is nothing to send on a second request (measured
+    with a cookie jar, which changes nothing), and running the script would mean a
+    headless browser. What this does is make the failure honest, so the reader gets
+    the error and the "Open original" button instead of the wall as an article.
+
+    Deliberately a phrase match and not a similarity score. The two scores that could
+    have covered the same blind spot were measured and rejected, for reasons written
+    out in ``_content_contradicts_page``; a wall, unlike a paywall teaser, says a
+    specific small set of things that articles do not say. Both halves are required,
+    so a piece *about* cookie banners is safe as long as it is longer than a wall,
+    and one shorter than 120 words that also tells you to enable cookies is a wall.
+    """
+    text = " ".join(nh3.clean(content_html, tags=set()).lower().split())
+    if not text or len(text.split()) > _BOT_WALL_MAX_WORDS:
+        return False
+    return any(phrase in text for phrase in _BOT_WALL_PHRASES)
+
+
 def _extract_title(html: str) -> Optional[str]:
     """Page title from og:title, falling back to <title>.
 
@@ -960,8 +1019,10 @@ def apply_readable_result(
     # ask a site that refuses us three times instead of once. Terminal like a 4xx; the
     # Retry button on a saved article still works, and that one is a person's decision.
     # An oversized page is terminal for the same reason, and more sharply: each retry
-    # would download the cap again before giving up in exactly the same place.
-    if is_4xx or error in (_WRONG_CONTENT_MSG, _TOO_LARGE_MSG):
+    # would download the cap again before giving up in exactly the same place. A browser
+    # check is the most terminal of the three: it is asking for a JavaScript engine we
+    # will not have on the next attempt either.
+    if is_4xx or error in (_WRONG_CONTENT_MSG, _TOO_LARGE_MSG, _BOT_WALL_MSG):
         article.readable_status = "failed"
         article.readable_failed_at = datetime.now(timezone.utc)
         article.readable_next_retry_at = None
@@ -1119,6 +1180,12 @@ def extract_readable_with_title(
         # storing the site's cookie notice as the article body.
         logger.info("readable extraction returned a substitute page for %s", url)
         return ReadableResult(error=_WRONG_CONTENT_MSG, title=title,
+                              resolved_url=resolved_url, description=description)
+    if reject_wrong_content and _looks_like_a_bot_wall(final):
+        # A browser check, which the description test above cannot see because a wall
+        # ships without a description to compare against.
+        logger.info("readable extraction returned a browser check for %s", url)
+        return ReadableResult(error=_BOT_WALL_MSG, title=title,
                               resolved_url=resolved_url, description=description)
     return ReadableResult(
         content=final, published_at=_find_published_date(html, url), title=title,

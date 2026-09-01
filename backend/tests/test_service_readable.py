@@ -19,6 +19,7 @@ from app.services.readable_service import (
     _lift_mediawiki_chrome,
     _restore_wiki_tables,
     _meta_refresh_target,
+    _looks_like_a_bot_wall,
     _prefer_readability,
     _repair_headings,
     _has_visible_content,
@@ -788,6 +789,66 @@ class TestRejectWrongContentIsOptIn:
             )
         assert r.content is None
         assert r.error == _WRONG_CONTENT_MSG
+
+
+class TestLooksLikeABotWall:
+    # Verbatim from pubmed.ncbi.nlm.nih.gov, which answers a server-side fetch with
+    # HTTP 203 and a JavaScript proof-of-work page. It carries no og:description, so
+    # _content_contradicts_page cannot see it and it used to be stored as the article.
+    PUBMED = ("<p>Enable cookies for pubmed.ncbi.nlm.nih.gov and reload this page"
+              " to continue.</p>")
+
+    def test_fires_on_the_pubmed_wall(self):
+        assert _looks_like_a_bot_wall(self.PUBMED) is True
+
+    def test_fires_on_a_browser_check(self):
+        assert _looks_like_a_bot_wall(
+            "<h1>Just a moment</h1><p>Checking your browser before accessing the site.</p>"
+        ) is True
+
+    def test_matches_a_phrase_broken_across_lines(self):
+        assert _looks_like_a_bot_wall("<p>Please enable\n  JavaScript to continue.</p>") is True
+
+    def test_leaves_a_short_article_alone(self):
+        # xkcd extracts to 58 words and is the shortest real page in the survey corpus.
+        assert _looks_like_a_bot_wall(
+            "<p>Someday ImageMagick will finally break for good and we will have no "
+            "idea how to fix it.</p>"
+        ) is False
+
+    def test_leaves_a_piece_about_the_phrase_alone(self):
+        # Length is the other half of the test: an article may say this, a wall is
+        # never this long.
+        body = "<p>" + ("The banner tells you to enable cookies and nobody reads it. " * 30) + "</p>"
+        assert _looks_like_a_bot_wall(body) is False
+
+    def test_empty_body_is_not_a_wall(self):
+        assert _looks_like_a_bot_wall("") is False
+
+    def test_reported_as_its_own_failure(self):
+        from app.services.readable_service import extract_readable_with_title, _BOT_WALL_MSG
+        page = "<html><body>" + self.PUBMED + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a", None, None, True)
+        assert r.content is None
+        assert r.error == _BOT_WALL_MSG
+
+    def test_not_rejected_when_the_caller_did_not_ask(self):
+        """Feed articles keep the same opt-in as the consent-page check."""
+        from app.services.readable_service import extract_readable_with_title
+        page = "<html><body>" + self.PUBMED + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a")
+        assert r.error is None
+
+    def test_failure_is_terminal(self):
+        from app.services.readable_service import apply_readable_result, _BOT_WALL_MSG
+        article = _make_article()
+        apply_readable_result(article, None, _BOT_WALL_MSG, None)
+        assert article.readable_status == "failed"
+        assert article.readable_next_retry_at is None
 
 
 # ── resolving the address an article really lives at ─────────────────────────
