@@ -16,6 +16,12 @@ from app.services.readable_service import (
     _extract_with_trafilatura,
     _extract_with_readability,
     _strip_pre_extraction_noise,
+    _lift_mediawiki_chrome,
+    _restore_wiki_tables,
+    _meta_refresh_target,
+    _looks_like_a_bot_wall,
+    _prefer_readability,
+    _repair_headings,
     _has_visible_content,
     _sanitize,
     _drop_empty_blocks,
@@ -420,6 +426,183 @@ class TestExtractWithTrafilatura:
         assert "<img" in result
         assert "<graphic" not in result
 
+    def test_converts_row_and_cell_to_table_html(self):
+        # trafilatura's html output is its own XML for tables: <row>/<cell>. Neither is
+        # in the sanitizer's allowlist, so an unconverted table lost its structure and
+        # spilled its cells into the body as loose text.
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = (
+                "<table><row><cell role='head'>Name</cell><cell>Ada</cell></row></table>"
+            )
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert "<tr>" in result and "</tr>" in result
+        assert "<th>Name</th>" in result
+        assert "<td>Ada</td>" in result
+        assert "<row" not in result and "<cell" not in result
+        # And it survives the sanitizer, which is the point of converting at all.
+        assert "<th>Name</th>" in _sanitize(result)
+
+    def test_cell_span_becomes_colspan(self):
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = "<table><row><cell span='2'>wide</cell></row></table>"
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert 'colspan="2"' in result
+        assert 'colspan="2"' in _sanitize(result)
+
+    def test_graphic_conversion_does_not_swallow_following_content(self):
+        # <graphic/> is void but html.parser has no way to know, so converting it on a
+        # parse tree would open a tag that never closes and nest the rest of the
+        # document inside it. Guards the ordering in _to_html_tags.
+        with patch("app.services.readable_service.trafilatura.extract") as mock_extract:
+            mock_extract.return_value = (
+                '<p>before</p><graphic src="a.jpg"/><table><row><cell>x</cell></row></table>'
+                "<p>after</p>"
+            )
+            result = _extract_with_trafilatura("<html></html>", "http://example.com")
+        assert result.index("before") < result.index("after")
+        assert "<td>x</td>" in result
+
+
+# ── _lift_mediawiki_chrome ────────────────────────────────────────────────────
+
+def _wiki_page(body: str) -> str:
+    return (
+        '<html><head><meta name="generator" content="MediaWiki 1.47.0-wmf.17">'
+        "</head><body>" + body + "</body></html>"
+    )
+
+
+class TestLiftMediawikiChrome:
+    def test_passthrough_when_not_mediawiki(self):
+        html = '<html><head></head><body><table class="infobox"><tr><td>x</td></tr></table></body></html>'
+        wiki = _lift_mediawiki_chrome(html)
+        assert wiki.html == html
+        assert wiki.infoboxes == []
+        assert wiki.tables == []
+
+    def test_drops_edit_section_links(self):
+        # The real fix for the wall-of-text symptom: trafilatura's precision pass prunes
+        # a heading that contains a link, and on MediaWiki every heading carries [edit].
+        html = _wiki_page(
+            '<h2>History<span class="mw-editsection">[<a href="/edit">edit</a>]</span></h2>'
+            "<p>body</p>"
+        )
+        out = _lift_mediawiki_chrome(html).html
+        assert "History" in out
+        assert "mw-editsection" not in out
+        assert "/edit" not in out
+
+    def test_infobox_is_removed_from_the_page_and_returned_separately(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table><p>body</p>"
+        )
+        out, boxes = _lift_mediawiki_chrome(html)[:2]
+        assert "infobox" not in out
+        assert "1815" not in out  # extraction must not see it
+        assert "body" in out
+        assert len(boxes) == 1
+        assert "1815" in boxes[0]
+
+    def test_title_moves_to_the_summary_and_leaves_no_empty_row(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<summary>Ada</summary>" in boxes[0]
+        # Taken out of the table too, so an expanded box does not show its name twice.
+        assert boxes[0].count("Ada") == 1
+        assert "<tr></tr>" not in boxes[0]
+
+    def test_plain_first_cell_is_not_mistaken_for_a_title(self):
+        # A leading <td> is the value of a data row, not the box's name.
+        html = _wiki_page(
+            '<table class="infobox"><tr><td>a photo</td></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<summary>Infobox</summary>" in boxes[0]
+        assert "a photo" in boxes[0]
+
+    def test_short_box_opens_and_long_box_stays_collapsed(self):
+        short = _wiki_page('<table class="infobox"><tr><th>Born</th><td>1815</td></tr></table>')
+        boxes = _lift_mediawiki_chrome(short).infoboxes
+        assert "<details data-infobox open>" in boxes[0]
+
+        rows = "".join(f"<tr><th>f{i}</th><td>{'word ' * 12}</td></tr>" for i in range(30))
+        long = _wiki_page(f'<table class="infobox">{rows}</table>')
+        boxes = _lift_mediawiki_chrome(long).infoboxes
+        assert "<details data-infobox>" in boxes[0]
+
+    def test_hidden_and_chrome_rows_are_dropped(self):
+        # The sanitizer strips `style`, so anything the page had hidden would come back
+        # visible unless it is removed here.
+        html = _wiki_page(
+            '<table class="infobox"><tr><th>Coords</th>'
+            '<td>50.08<span style="display:none">duplicate copy</span></td></tr>'
+            '<tr class="noprint"><td>print me only</td></tr></table>'
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "50.08" in boxes[0]
+        assert "duplicate copy" not in boxes[0]
+        assert "print me only" not in boxes[0]
+
+    def test_summary_text_is_escaped(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">&lt;script&gt;x&lt;/script&gt;</th></tr>'
+            "<tr><th>a</th><td>b</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        assert "<script>" not in boxes[0]
+        assert "&lt;script&gt;" in boxes[0]
+
+    def test_wikitable_is_lifted_and_leaves_a_marker(self):
+        # trafilatura truncates a data table on a full page and spills the rest of the
+        # cells into the body one paragraph each (Prague's climate table read as a
+        # column of bare numbers), so the table is lifted and put back afterwards.
+        html = _wiki_page(
+            "<p>before</p>"
+            '<table class="wikitable"><tr><th>Month</th><th>Jan</th></tr>'
+            "<tr><td>High</td><td>1.5</td></tr></table><p>after</p>"
+        )
+        wiki = _lift_mediawiki_chrome(html)
+        assert len(wiki.tables) == 1
+        assert "1.5" in wiki.tables[0]
+        assert "1.5" not in wiki.html  # extraction must not see it
+        assert "RFDATATABLE0" in wiki.html
+        assert wiki.html.index("before") < wiki.html.index("RFDATATABLE0") < wiki.html.index("after")
+
+    def test_navboxes_are_dropped(self):
+        html = _wiki_page('<div class="navbox">Districts of Prague</div><p>body</p>')
+        wiki = _lift_mediawiki_chrome(html)
+        assert "Districts of Prague" not in wiki.html
+        assert "body" in wiki.html
+
+    def test_table_nested_in_an_infobox_is_not_lifted_twice(self):
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            '<tr><td><table class="wikitable"><tr><td>nested</td></tr></table></td></tr>'
+            "</table>"
+        )
+        wiki = _lift_mediawiki_chrome(html)
+        assert wiki.tables == []
+        assert "nested" in wiki.infoboxes[0]
+
+    def test_lifted_box_survives_the_sanitizer_intact(self):
+        # details/open/data-infobox all have to be in the allowlist or the box comes out
+        # collapsed and unstyleable.
+        html = _wiki_page(
+            '<table class="infobox"><tr><th colspan="2">Ada</th></tr>'
+            "<tr><th>Born</th><td>1815</td></tr></table>"
+        )
+        boxes = _lift_mediawiki_chrome(html).infoboxes
+        clean = _sanitize(boxes[0])
+        assert "data-infobox" in clean
+        assert "open" in clean
+        assert "<summary>Ada</summary>" in clean
+        assert "1815" in clean
+
 
 # ── _extract_with_readability ─────────────────────────────────────────────────
 
@@ -606,6 +789,66 @@ class TestRejectWrongContentIsOptIn:
             )
         assert r.content is None
         assert r.error == _WRONG_CONTENT_MSG
+
+
+class TestLooksLikeABotWall:
+    # Verbatim from pubmed.ncbi.nlm.nih.gov, which answers a server-side fetch with
+    # HTTP 203 and a JavaScript proof-of-work page. It carries no og:description, so
+    # _content_contradicts_page cannot see it and it used to be stored as the article.
+    PUBMED = ("<p>Enable cookies for pubmed.ncbi.nlm.nih.gov and reload this page"
+              " to continue.</p>")
+
+    def test_fires_on_the_pubmed_wall(self):
+        assert _looks_like_a_bot_wall(self.PUBMED) is True
+
+    def test_fires_on_a_browser_check(self):
+        assert _looks_like_a_bot_wall(
+            "<h1>Just a moment</h1><p>Checking your browser before accessing the site.</p>"
+        ) is True
+
+    def test_matches_a_phrase_broken_across_lines(self):
+        assert _looks_like_a_bot_wall("<p>Please enable\n  JavaScript to continue.</p>") is True
+
+    def test_leaves_a_short_article_alone(self):
+        # xkcd extracts to 58 words and is the shortest real page in the survey corpus.
+        assert _looks_like_a_bot_wall(
+            "<p>Someday ImageMagick will finally break for good and we will have no "
+            "idea how to fix it.</p>"
+        ) is False
+
+    def test_leaves_a_piece_about_the_phrase_alone(self):
+        # Length is the other half of the test: an article may say this, a wall is
+        # never this long.
+        body = "<p>" + ("The banner tells you to enable cookies and nobody reads it. " * 30) + "</p>"
+        assert _looks_like_a_bot_wall(body) is False
+
+    def test_empty_body_is_not_a_wall(self):
+        assert _looks_like_a_bot_wall("") is False
+
+    def test_reported_as_its_own_failure(self):
+        from app.services.readable_service import extract_readable_with_title, _BOT_WALL_MSG
+        page = "<html><body>" + self.PUBMED + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a", None, None, True)
+        assert r.content is None
+        assert r.error == _BOT_WALL_MSG
+
+    def test_not_rejected_when_the_caller_did_not_ask(self):
+        """Feed articles keep the same opt-in as the consent-page check."""
+        from app.services.readable_service import extract_readable_with_title
+        page = "<html><body>" + self.PUBMED + "</body></html>"
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(page, None, None, "https://x.invalid/a")):
+            r = extract_readable_with_title("https://x.invalid/a")
+        assert r.error is None
+
+    def test_failure_is_terminal(self):
+        from app.services.readable_service import apply_readable_result, _BOT_WALL_MSG
+        article = _make_article()
+        apply_readable_result(article, None, _BOT_WALL_MSG, None)
+        assert article.readable_status == "failed"
+        assert article.readable_next_retry_at is None
 
 
 # ── resolving the address an article really lives at ─────────────────────────
@@ -987,3 +1230,257 @@ class TestDoubleEncodedMetadata:
         # what rendered as a visible entity on screen.
         assert "&amp;#x27;" not in r.content
         assert "Here&#x27;s how it works" in r.content
+
+
+class TestRestoreWikiTables:
+    def test_marker_paragraph_is_replaced_in_place(self):
+        body = "<p>before</p><p>RFDATATABLE0</p><p>after</p>"
+        out = _restore_wiki_tables(body, ["<table><tr><td>1.5</td></tr></table>"])
+        assert "RFDATATABLE" not in out
+        assert out.index("before") < out.index("1.5") < out.index("after")
+
+    def test_markers_map_to_their_own_table(self):
+        body = "<p>RFDATATABLE1</p><p>mid</p><p>RFDATATABLE0</p>"
+        out = _restore_wiki_tables(
+            body, ["<table><tr><td>zero</td></tr></table>",
+                   "<table><tr><td>one</td></tr></table>"]
+        )
+        assert out.index("one") < out.index("mid") < out.index("zero")
+
+    def test_double_digit_marker_is_not_confused_with_a_single_one(self):
+        body = "<p>RFDATATABLE10</p>"
+        tables = [f"<table><tr><td>t{i}</td></tr></table>" for i in range(11)]
+        out = _restore_wiki_tables(body, tables)
+        assert "t10" in out
+        # t1 is appended as missing, but it must not have landed in the marker's place.
+        assert out.index("t10") < out.index("t1<") if "t1<" in out else True
+
+    def test_table_whose_marker_was_pruned_is_appended_not_lost(self):
+        # The section holding the marker did not survive extraction. Showing the table
+        # out of order beats dropping the page's data.
+        out = _restore_wiki_tables("<p>only prose</p>", ["<table><tr><td>1.5</td></tr></table>"])
+        assert "1.5" in out
+        assert out.index("only prose") < out.index("1.5")
+
+    def test_stray_marker_text_is_never_left_on_screen(self):
+        body = "<p>RFDATATABLE0</p><p>RFDATATABLE0</p><p>RFDATATABLE9</p>"
+        out = _restore_wiki_tables(body, ["<table><tr><td>1.5</td></tr></table>"])
+        assert "RFDATATABLE" not in out
+        assert out.count("1.5") == 1
+
+    def test_lifted_table_survives_the_sanitizer(self):
+        out = _restore_wiki_tables(
+            "<p>RFDATATABLE0</p>",
+            ['<table class="wikitable"><tr><th scope="row">High</th><td>1.5</td></tr></table>'],
+        )
+        assert "<th scope=\"row\">High</th>" in out
+        assert "<td>1.5</td>" in out
+
+
+class TestMetaRefreshTarget:
+    def _stub(self, target, extra=""):
+        return (
+            "<!doctype html><meta charset='utf-8'><title>Redirect</title>"
+            f"<noscript><meta http-equiv='refresh' content='0; url={target}'></noscript>"
+            f"<p><a href='{target}'>Click here</a> to be redirected.</p>{extra}"
+        )
+
+    def test_finds_target_in_a_noscript_body_tag(self):
+        # The tag is routinely parked in <noscript> in the body, and the Rust stub
+        # that prompted this has no </head> to slice on at all.
+        out = _meta_refresh_target(
+            self._stub("https://blog.rust-lang.org/2024/11/28/Rust-1.83.0/"),
+            "https://blog.rust-lang.org/2024/11/28/Rust-1.83.0.html",
+        )
+        assert out == "https://blog.rust-lang.org/2024/11/28/Rust-1.83.0/"
+
+    def test_resolves_a_relative_target(self):
+        out = _meta_refresh_target(self._stub("/new/place/"), "https://example.com/old.html")
+        assert out == "https://example.com/new/place/"
+
+    def test_refuses_to_leave_the_host(self):
+        # A cross-host client-side redirect is the shape a tracker takes; a genuine
+        # one is served over HTTP, which the fetcher already follows.
+        assert _meta_refresh_target(
+            self._stub("https://tracker.example.net/x"), "https://example.com/old.html"
+        ) is None
+
+    def test_ignores_a_page_that_has_real_text(self):
+        # A live blog or slideshow can carry a refresh; following it would throw away
+        # an article we already downloaded.
+        body = "<p>" + " ".join(["word"] * 300) + "</p>"
+        assert _meta_refresh_target(
+            self._stub("https://example.com/next", extra=body), "https://example.com/old"
+        ) is None
+
+    def test_none_without_the_tag(self):
+        assert _meta_refresh_target("<html><body><p>hi</p></body></html>",
+                                    "https://example.com/a") is None
+
+    def test_does_not_point_at_itself(self):
+        assert _meta_refresh_target(self._stub("https://example.com/a"),
+                                    "https://example.com/a") is None
+
+
+class TestPreferReadability:
+    def _page(self, n):
+        return "<html><body>" + "".join(f"<h2>Section {i}</h2><p>text</p>" for i in range(n)) + "</body></html>"
+
+    def test_fires_when_a_structured_page_came_back_flat(self):
+        assert _prefer_readability("<p>one long wall of text</p>", self._page(8)) is True
+
+    def test_does_not_fire_when_trafilatura_kept_headings(self):
+        assert _prefer_readability("<h2>Intro</h2><p>text</p>", self._page(8)) is False
+
+    def test_does_not_fire_on_a_page_with_no_structure_to_lose(self):
+        # A short news piece legitimately has no headings; nothing to rescue.
+        assert _prefer_readability("<p>a news story</p>", self._page(1)) is False
+
+    def test_needs_more_than_a_stray_nav_heading(self):
+        assert _prefer_readability("<p>flat</p>", self._page(3)) is False
+        assert _prefer_readability("<p>flat</p>", self._page(4)) is True
+
+
+class TestSecondReadingOrder:
+    """Behind the gate, three readings are tried and the first with headings wins."""
+
+    PAGE = "<html><body>" + "".join(f"<h2>S{i}</h2><p>t</p>" for i in range(6)) + "</body></html>"
+    FLAT = "<p>" + ("one long wall of text " * 30) + "</p>"
+    STRUCTURED = "".join(f"<h2>Section {i}</h2><p>body text here</p>" for i in range(6))
+
+    def _run(self, trafilatura_side_effect, readability):
+        from app.services.readable_service import extract_readable_with_title
+        with patch("app.services.readable_service._fetch_html",
+                   return_value=(self.PAGE, None, None, "https://x.invalid/a")), \
+             patch("app.services.readable_service._extract_with_trafilatura",
+                   side_effect=trafilatura_side_effect), \
+             patch("app.services.readable_service._extract_with_readability",
+                   return_value=readability):
+            return extract_readable_with_title("https://x.invalid/a")
+
+    def test_precision_off_is_tried_before_readability(self):
+        # jvns.ca: favor_precision throws away every section heading of a post whose
+        # text it otherwise keeps, and readability has none of them either.
+        def traf(html, url, favor_precision=True):
+            return self.FLAT if favor_precision else self.STRUCTURED
+
+        r = self._run(traf, None)
+        assert "Section 0" in r.content
+        assert "one long wall" not in r.content
+
+    def test_readability_still_wins_when_neither_read_finds_headings(self):
+        def traf(html, url, favor_precision=True):
+            return self.FLAT
+
+        r = self._run(traf, self.STRUCTURED)
+        assert "Section 0" in r.content
+
+    def test_the_flat_result_is_kept_when_nothing_beats_it(self):
+        def traf(html, url, favor_precision=True):
+            return self.FLAT
+
+        r = self._run(traf, "<p>readability found no headings either</p>")
+        assert "one long wall" in r.content
+
+
+class TestRepairHeadings:
+    # GitHub's README markup: the permalink is a sibling of the heading, inside a
+    # wrapper div, and holds an SVG icon and no text. It costs astral-sh/uv all 18
+    # of its headings.
+    GITHUB = ('<div class="markdown-heading"><h2 class="heading-element">Highlights'
+              '</h2><a id="user-content-highlights" class="anchor" href="#highlights">'
+              '<svg viewBox="0 0 16 16"><path d="m7 3"></path></svg></a></div>')
+
+    def test_removes_the_permalink_beside_a_heading(self):
+        out = _repair_headings(self.GITHUB)
+        assert "<h2" in out and "Highlights" in out
+        assert "anchor" not in out
+
+    def test_removes_a_permalink_inside_a_heading(self):
+        out = _repair_headings('<h3>Install<a class="headerlink" href="#install">'
+                               '<svg></svg></a></h3>')
+        assert "headerlink" not in out
+        assert "Install" in out
+
+    def test_keeps_a_link_that_says_something(self):
+        out = _repair_headings('<h2><a href="/spec">The specification</a></h2>')
+        assert 'href="/spec"' in out
+        assert "The specification" in out
+
+    def test_leaves_anchors_that_are_nowhere_near_a_heading(self):
+        # A named anchor in the body of an article is not this problem, and removing
+        # it would break in-page links for the sake of nothing.
+        out = _repair_headings('<p>text</p><a id="footnote-1"></a><p>more</p>')
+        assert 'id="footnote-1"' in out
+
+    def test_leaves_an_ordinary_page_alone(self):
+        html = "<html><body><h1>Title</h1><p>Body text.</p></body></html>"
+        assert "Title" in _repair_headings(html)
+        assert "Body text." in _repair_headings(html)
+
+
+class TestCarryOverFeedMedia:
+    def _article(self, feed_html):
+        a = _make_article()
+        a.content = feed_html
+        return a
+
+    def test_comic_from_the_feed_survives_a_useless_extraction(self):
+        # xkcd: the feed hands over the strip and nothing else, while the page
+        # extracts to the site's footer gag. Without this the subscriber saw the gag.
+        article = self._article(
+            '<img src="https://imgs.xkcd.com/comics/dependency.png" alt="Dependency"'
+            ' title="Someday ImageMagick will finally break">'
+        )
+        apply_readable_result(article, "<p>xkcd.com is best viewed with Netscape</p>",
+                              None, None)
+        assert article.readable_status == "success"
+        assert "dependency.png" in article.readable_content
+        assert "Netscape" in article.readable_content
+        # The picture leads, because on a page that is a picture it is the article.
+        assert article.readable_content.index("dependency.png") < \
+               article.readable_content.index("Netscape")
+
+    def test_leaves_an_extraction_that_kept_its_own_pictures_alone(self):
+        article = self._article('<img src="https://cdn.example.com/lead.jpg">')
+        body = '<p>story</p><img src="https://cdn.example.com/inline.jpg">'
+        apply_readable_result(article, body, None, None)
+        assert article.readable_content == body
+
+    def test_a_full_article_is_never_traded_away_for_a_photo(self):
+        # The rejected design would have kept the teaser and dropped the article.
+        feed = '<img src="https://cdn.example.com/lead.jpg"><p>A short teaser.</p>'
+        body = "<p>" + " ".join(["word"] * 800) + "</p>"
+        article = self._article(feed)
+        apply_readable_result(article, body, None, None)
+        assert article.readable_content.endswith(body)
+        assert "lead.jpg" in article.readable_content
+        assert article.word_count >= 800
+
+    def test_tracking_pixels_are_not_carried(self):
+        article = self._article(
+            '<img src="https://track.example.com/p.gif" width="1" height="1">'
+        )
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert "track.example.com" not in article.readable_content
+
+    def test_srcless_image_is_not_carried(self):
+        article = self._article('<img alt="broken">')
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert article.readable_content == "<p>story</p>"
+
+    def test_saved_article_with_no_feed_content_is_untouched(self):
+        article = _make_article()
+        article.content = None
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert article.readable_content == "<p>story</p>"
+
+    def test_carried_markup_goes_through_this_module_sanitizer(self):
+        # Feed content was cleaned with the fetcher's allowlist, not this one, and
+        # readable_content is rendered unescaped.
+        article = self._article(
+            '<img src="https://cdn.example.com/a.jpg" onerror="alert(1)">'
+        )
+        apply_readable_result(article, "<p>story</p>", None, None)
+        assert "onerror" not in article.readable_content
+        assert "a.jpg" in article.readable_content

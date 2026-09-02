@@ -66,8 +66,12 @@ async def service_worker() -> FileResponse:
 # empty, so the address has to be dug out rather than read off.
 _URL_IN_TEXT = re.compile(r"https?://\S+", re.IGNORECASE)
 
-# A URL at the end of a sentence collects the sentence's punctuation.
-_TRAILING_PUNCTUATION = ".,;:!?\"'"
+# A URL at the end of a sentence collects the sentence's punctuation. Typographic
+# characters belong here as much as ASCII ones: sharing apps write real prose, so the
+# quotes around an address are usually curly, and an app that shortens what it shares
+# hands over an ellipsis glued to the end of the last word. Angle brackets are here for
+# a share that carried a scrap of markup rather than plain text.
+_TRAILING_PUNCTUATION = ".,;:!?\"'…“”‘’«»‹›<>"
 # Closing brackets are different: trimmed only when nothing in the address opened them,
 # because plenty of real addresses (Wikipedia disambiguations, most obviously) end in
 # one and cutting it silently fetches the wrong page.
@@ -115,6 +119,46 @@ def extract_shared_url(url: str | None, text: str | None) -> str | None:
     return None
 
 
+def shared_url_is_certain(url: str | None, text: str | None) -> bool:
+    """True when the address was read rather than guessed.
+
+    An app that filled the url field said which address it meant, and one line of text
+    holding a single address leaves nothing to choose between. Two of them do: the page
+    then has to ask rather than save the wrong one, because saving happens without a
+    press whenever this is true.
+    """
+    if _first_url(url):
+        return True
+    return len(_URL_IN_TEXT.findall(text or "")) == 1
+
+
+def _may_save_without_a_press(request: Request) -> bool:
+    """Whether this looks like a share rather than a link somebody clicked.
+
+    Saving on load is what makes sharing one step instead of two, but it also means a
+    GET sets off a write. The write itself is still a POST from the page, so it keeps
+    CSRF and the rate limit; what is left is that a crafted link could fire it for
+    anyone signed in. A click from another site arrives as cross-site, an app hand-off
+    does not, so that is what this screens on.
+
+    Note what it therefore does *not* screen out: a link rendered inside one of our own
+    pages is same-origin and passes. Article bodies are feed-supplied HTML, so that is
+    reachable by anyone whose feed the reader subscribes to. Accepted, because the whole
+    of it is one unwanted row in Saved: the address still goes through
+    async_validate_feed_url, so no private host and no scheme we cannot fetch, and
+    saving a public URL is what the box in Saved does on request anyway. A real share
+    hand-off is believed to arrive as `none`, which would be the tighter test, but that
+    has not been measured on a device — including the case where the share lands in an
+    already-open window. Until it is, "not cross-site" is the honest condition, because
+    guessing wrong costs the feature rather than the guard.
+
+    Unknown counts as unsafe, so a browser that sends no such header simply gets the
+    button. Every refusal here degrades to today's behaviour rather than to an error.
+    """
+    site = request.headers.get("sec-fetch-site")
+    return site is not None and site != "cross-site"
+
+
 @router.get("/share-target", response_class=HTMLResponse)
 async def share_target_form(
     request: Request,
@@ -133,10 +177,21 @@ async def share_target_form(
     Logged out, get_current_user redirects to /login and the shared address is lost
     (there is no `next` on that redirect). Known and accepted: an installed app stays
     signed in, and the recovery is to share again.
+
+    Nothing is navigated to afterwards, deliberately. This window holds one history
+    entry, so Back returns to whatever was being read when the share started; sending
+    it on to /app would put a second entry in the way of that.
     """
+    shared_url = extract_shared_url(url, text) or ""
+    certain = bool(shared_url) and shared_url_is_certain(url, text)
     return templates.TemplateResponse(request, "app/share_target.html", {
         "shared_title": (title or "").strip()[:_TITLE_MAX],
-        "shared_url": extract_shared_url(url, text) or "",
+        "shared_url": shared_url,
+        "auto_save": certain and _may_save_without_a_press(request),
+        # Kept apart from auto_save, which is also off for a share that arrived by a
+        # route we will not save from unasked. Only this one means "we had to choose",
+        # and only this one should say so on the page.
+        "ambiguous": bool(shared_url) and not certain,
     })
 
 
@@ -145,20 +200,50 @@ async def share_target_form(
 async def share_target_save(
     request: Request,
     url: str = Form(...),
+    title: str | None = Form(None),
+    ambiguous: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save the shared address, through the same service the app's own Saved box uses."""
+    """Save the shared address, through the same service the app's own Saved box uses.
+
+    *title* is what the sharing app said the page was called, carried over from the
+    GET. It is only ever a fallback for a page that cannot be fetched or parsed, so
+    it being editable in the DOM buys nothing: the worst it can do is name one row in
+    the sharer's own Saved. *ambiguous* is the same journey for the note explaining
+    why the address is worth a look, which the POST cannot work out for itself
+    because the text the share arrived in is not sent with the form.
+    """
     from app.services.saved_article_service import save_article_by_url
 
+    shared_title = (title or "").strip()[:_TITLE_MAX]
     try:
-        article, already_known = await save_article_by_url(url.strip(), user, db)
+        article, already_known = await save_article_by_url(
+            url.strip(), user, db, fallback_title=shared_title or None,
+        )
     except ValueError as exc:
         # Validation-time rejections: a scheme that is not http(s), no host, or an
         # address inside the server's own network. Anything that can only fail once
         # the fetch runs is saved and reported on the article itself.
+        #
+        # The form comes back with the error rather than the error alone: this may have
+        # been sent without anyone pressing anything, and a bare message would leave no
+        # way to correct the address it refused. auto_save is off on the way back, so
+        # the retry is a press.
+        #
+        # The title and the ambiguity note come back with it. Dropping them would have
+        # cost the retry its title and, where several links came through, taken away
+        # the one line saying the address is worth checking, which is when it is most
+        # worth saying.
         return templates.TemplateResponse(
-            request, "app/partials/share_target_result.html", {"error": str(exc)}
+            request, "app/partials/share_target_form.html",
+            {
+                "error": str(exc),
+                "shared_url": url.strip(),
+                "auto_save": False,
+                "shared_title": shared_title,
+                "ambiguous": bool(ambiguous),
+            },
         )
 
     return templates.TemplateResponse(request, "app/partials/share_target_result.html", {

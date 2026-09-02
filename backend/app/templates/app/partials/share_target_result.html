@@ -1,11 +1,14 @@
-{#- Outcome of a save from the share sheet. The only link here points at our own app
-    with the new article's id; the address that was shared is never made clickable. -#}
-{% if error %}
-  <p class="text-sm text-red-600 break-words">{{ error }}</p>
-{% else %}
-  <p class="text-sm text-gray-700">
-    {% if already_known %}Already in Saved.{% else %}Saved.{% endif %}
-  </p>
-  <a href="/app?open_article_id={{ article_id }}"
-     class="inline-block mt-2 text-sm text-blue-500 hover:text-blue-700">Read it now →</a>
-{% endif %}
+{#- Outcome of a save from the share sheet. Only rendered when the save succeeded: a
+    refusal goes back through share_target_form.html instead, so that the address stays
+    in an editable field and there is still a button to retry with.
+
+    The only link here points at our own app with the new article's id; the address that
+    was shared is never made clickable. -#}
+{#- already_known means the article was already in the database, which is true of
+    anything that ever arrived through a feed. It is not a statement about Saved, so the
+    wording must not make one. -#}
+<p class="text-sm text-gray-700">
+  Saved.{% if already_known %} Readfine already had this article.{% endif %}
+</p>
+<a href="/app?open_article_id={{ article_id }}"
+   class="inline-block mt-2 text-sm text-blue-500 hover:text-blue-700">Read it now →</a>

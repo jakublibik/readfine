@@ -3,6 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    {# Article images are hotlinked straight from the publisher, and the browser default
+       (strict-origin-when-cross-origin) tells every one of those hosts that the reader
+       is on Readfine. Some of them refuse on that basis: maps.wikimedia.org answers 403
+       to a foreign referrer, so every Wikipedia locator map arrived broken, and because
+       the <img> keeps its width/height the hole it left was several hundred pixels tall.
+       Sending nothing cross-origin fixes those and leaks less besides.
+
+       same-origin, not no-referrer, so our own requests keep a full referrer. Nothing
+       else on the page loses one: outbound links already carry rel="noopener noreferrer",
+       and the video player sets referrerpolicy on the iframe itself (app.js), which wins
+       over this. #}
+    <meta name="referrer" content="same-origin">
     {# Kept in step with the shell background by syncThemeColor() in init.js — the
        colour scheme is a stored preference, so a media-query pair would show the
        wrong bar to anyone who overrode their device setting. #}
@@ -34,6 +46,35 @@
         --sal: env(safe-area-inset-left, 0px);
         --sar: env(safe-area-inset-right, 0px);
         --mobile-bar-h: 2.75rem;
+      }
+
+      /* Every page that is not the reading shell: settings, help, legal, the login
+         and register forms, the error pages, and the share sheet's landing page.
+         They are ordinary scrolling documents with no fixed chrome of their own, so
+         until now nothing kept them out of the insets — which cost nothing while
+         Readfine only ran in a browser tab, because there the insets are 0. Installed,
+         every one of these is drawn edge to edge, and the share page is the one that
+         is *only* ever seen that way. So the padding goes on the body, once.
+
+         The shell opts out via body_class below: it is sized to the viewport and
+         already places all four insets itself, on itself and on each of its fixed
+         children. Adding them here as well would both double the top gap and push the
+         shell past the bottom of the screen. */
+      body {
+        padding-top: var(--sat);
+        padding-bottom: var(--sab);
+        padding-left: var(--sal);
+        padding-right: var(--sar);
+      }
+      body.app-chrome { padding: 0; }
+
+      /* Those pages all hang their background off a single min-h-screen wrapper, which
+         is 100vh and now sits inside that padding — together they overflow by exactly
+         the insets and leave a page that scrolls a few pixels with nothing in them.
+         Take the vertical pair back off. Where the insets are 0 this is 100vh, i.e.
+         what the utility already meant. */
+      body:not(.app-chrome) .min-h-screen {
+        min-height: calc(100vh - var(--sat) - var(--sab));
       }
 
       /* App shell height. 100vh is the *largest* viewport on mobile, i.e. the one
@@ -387,7 +428,9 @@
     <script src="{{ static_url('js/csrf.js') }}"></script>
     <script src="{{ static_url('js/app.js') }}" defer></script>
 </head>
-<body class="bg-gray-50 text-gray-900">
+{#- app-chrome marks the page as carrying its own chrome and its own safe-area
+    handling, which turns off the body padding above. Only the reading shell sets it. -#}
+<body class="bg-gray-50 text-gray-900{% block body_class %}{% endblock %}">
     {% block content %}{% endblock %}
     {% block scripts %}{% endblock %}
 </body>

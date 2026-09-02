@@ -229,6 +229,42 @@ class TestSaveArticleByUrl:
         assert article.feed_id is None
         assert article.readable_status == "pending"
 
+    async def test_a_fallback_title_names_a_new_article(self):
+        """The share sheet knows the headline; the address on its own gives a name
+        made out of the last path segment."""
+        db = make_db([None])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("asyncio.create_task", swallow_task()):
+            article, _ = await save_article_by_url(
+                "https://example.com/story", SimpleNamespace(id=1), db,
+                fallback_title="  Some\n  headline  ",
+            )
+        assert article.title == "Some headline"
+
+    async def test_a_fallback_title_never_renames_an_article_that_exists(self):
+        """An Article row is shared with everyone else who has it, so a title from
+        one person's share sheet is not allowed to be what the rest see."""
+        existing = make_article(id=42, feed_id=7, title="The title everyone sees",
+                                readable_status="success", readable_content="<p>Full</p>")
+        db = make_db([existing])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("app.services.saved_article_service.finalize_saved_article", AsyncMock()):
+            article, _ = await save_article_by_url(
+                "https://example.com/story", SimpleNamespace(id=1), db,
+                fallback_title="What the sharing app called it",
+            )
+        assert article.title == "The title everyone sees"
+
+    async def test_a_blank_fallback_title_falls_back_to_the_address(self):
+        db = make_db([None])
+        with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
+             patch("asyncio.create_task", swallow_task()):
+            article, _ = await save_article_by_url(
+                "https://example.com/some-story", SimpleNamespace(id=1), db,
+                fallback_title="   ",
+            )
+        assert article.title == title_from_url("https://example.com/some-story")
+
     async def test_new_article_gets_the_worker_buffer(self):
         db = make_db([None])
         before = datetime.now(timezone.utc)

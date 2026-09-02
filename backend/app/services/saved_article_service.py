@@ -69,10 +69,31 @@ def _has_usable_content(article: Article) -> bool:
     return bool(article.content and len(article.content.strip()) > _USABLE_CONTENT_CHARS)
 
 
+def _clean_fallback_title(value: str | None) -> str | None:
+    """A title from outside the app, fit to store, or None if there is nothing left.
+
+    Whitespace is collapsed because sharing apps hand over titles with newlines in
+    them, and the length matches the column so a long one is stored rather than
+    refused.
+    """
+    if not value:
+        return None
+    return " ".join(value.split())[:1000] or None
+
+
 async def save_article_by_url(
-    url: str, user: User, db: AsyncSession
+    url: str, user: User, db: AsyncSession, fallback_title: str | None = None
 ) -> tuple[Article, bool]:
     """Save a pasted URL for this user. Returns (article, already_known).
+
+    *fallback_title* is a title the caller already knows (the share sheet hands one
+    over with the address). It is used only when a new row is inserted, and only as
+    the placeholder the address-derived title would otherwise be: extraction still
+    overwrites it, even on a failure, because apply_readable_result lets the page's
+    own title win for a feedless article. So it shows up exactly where nothing else
+    could, which is a page that could not be fetched or parsed at all. Never applied
+    to an article that already exists — an Article row is global, and one user's
+    share sheet does not get to rename what everybody else sees.
 
     Raises ValueError for a URL that cannot be fetched safely — bad scheme, no host,
     unresolvable, or resolving to a private/loopback address — and for one too long to
@@ -192,7 +213,7 @@ async def save_article_by_url(
         guid_hash=hashlib.sha256(url.encode()).hexdigest(),
         url=url,
         url_normalized=normalized,
-        title=title_from_url(url),
+        title=_clean_fallback_title(fallback_title) or title_from_url(url),
         readable_status="pending",
         readable_next_retry_at=_buffer_until(),
         fetched_at=datetime.now(timezone.utc),

@@ -227,6 +227,34 @@
 <section class="mt-8 pt-6 border-t border-gray-200">
   <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">This device</h2>
   <p class="text-xs text-gray-500 mb-4">Saved in this browser only.</p>
+
+  {#- An offer, not a setting, so it is a card above the settings rather than another
+      row among them: the reason it exists is that people do not know installing is
+      possible, and a control that looks like the switches below goes unread.
+
+      Hidden until the browser says installing can actually happen. The toggled element
+      carries no display class of its own, because .hidden and .flex are both display
+      utilities and on one element the stylesheet order would decide, not the code. -#}
+  <div id="install-app-row" class="hidden mb-4">
+    <div class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg">
+      {#- The icon that will land on the home screen, so the offer shows its own result. -#}
+      <img src="{{ static_url('icons/icon-192.png') }}" alt="" width="40" height="40"
+           class="w-10 h-10 rounded-lg shrink-0">
+      <div class="min-w-0 flex-1">
+        <p id="install-app-title" class="text-sm font-medium text-gray-900">Install Readfine</p>
+        <p id="install-app-hint" class="text-xs text-gray-500 mt-0.5">
+          Opens in its own window, with no address bar.
+        </p>
+      </div>
+      {#- type="button" is load-bearing: this sits inside the preferences form, and a
+          button with no type submits it, saving and re-rendering the page out from
+          under the prompt. -#}
+      <button type="button" id="install-app-btn"
+              class="shrink-0 px-3 py-1.5 bg-blue-600 text-white text-sm rounded
+                     hover:bg-blue-700 disabled:opacity-60">Install</button>
+    </div>
+  </div>
+
   <div class="space-y-4">
 
     <div class="flex items-center justify-between">
@@ -290,27 +318,6 @@
       </select>
     </div>
 
-    {#- Hidden until the browser says installing is possible, so it never offers
-        something that cannot happen. The toggled element carries no display class of
-        its own: .hidden and .flex are both display utilities, and on the same element
-        the stylesheet order decides which wins rather than the code. -#}
-    <div id="install-app-row" class="hidden">
-      <div class="flex items-center justify-between gap-4">
-        <div>
-          <span class="text-sm font-medium text-gray-700">Install as an app</span>
-          <p id="install-app-hint" class="text-xs text-gray-500 mt-0.5">
-            Opens in its own window, with no address bar.
-          </p>
-        </div>
-        {#- type="button" is load-bearing: this sits inside the preferences form, and a
-            button with no type submits it, saving and re-rendering the page out from
-            under the prompt. -#}
-        <button type="button" id="install-app-btn"
-                class="shrink-0 border border-gray-300 rounded px-3 py-1.5 text-sm
-                       text-gray-700 hover:bg-gray-50 disabled:opacity-60">Install</button>
-      </div>
-    </div>
-
   </div>
 </section>
 
@@ -357,7 +364,8 @@ document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(
   var row = document.getElementById('install-app-row');
   var btn = document.getElementById('install-app-btn');
   var hint = document.getElementById('install-app-hint');
-  if (!row || !btn || !hint) return;
+  var title = document.getElementById('install-app-title');
+  if (!row || !btn || !hint || !title) return;
 
   function isInstalled() {
     return (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
@@ -370,20 +378,29 @@ document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   }
 
-  function show(text, withButton) {
+  function show(heading, text, withButton) {
+    title.textContent = heading;
     hint.textContent = text;
     btn.hidden = !withButton;
     row.classList.remove('hidden');
   }
 
-  if (isInstalled()) {
-    show('Installed on this device.', false);
-  } else if (isIos()) {
+  // Inside the installed app there is nothing left to offer, so the card stays hidden
+  // and neither listener below is wanted: an installed window is not asked to install
+  // again. Deliberately not a confirmation line either, since the only true thing it
+  // could say is that you are in the installed app, which the missing address bar
+  // already says. The appinstalled message further down is a different case: that one
+  // runs in the browser tab you pressed Install in, where naming where the app went is
+  // the whole point.
+  if (isInstalled()) return;
+
+  if (isIos()) {
     // No prompt exists on iOS and installing cannot be triggered from a page, so the
     // steps are all we can offer. The warning about signing in is not padding: iOS
     // gives an installed app its own storage, so the session does not come across and
     // the first launch looks like a login that failed.
-    show('Open the Share menu, then Add to Home Screen. You will be asked to sign in '
+    show('Install Readfine',
+         'Open the Share menu, then Add to Home Screen. You will be asked to sign in '
        + 'again there: iOS keeps an installed app’s data separate from the browser.', false);
   } else if (window._installPrompt) {
     row.classList.remove('hidden');
@@ -393,12 +410,13 @@ document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(
   window.addEventListener('beforeinstallprompt', function (e) {
     e.preventDefault();
     window._installPrompt = e;
-    if (!isInstalled()) { btn.hidden = false; row.classList.remove('hidden'); }
+    btn.hidden = false;
+    row.classList.remove('hidden');
   });
 
   window.addEventListener('appinstalled', function () {
     window._installPrompt = null;
-    show('Installed on this device.', false);
+    show('Readfine is installed', 'Open it from your home screen or app list.', false);
   });
 
   btn.addEventListener('click', function () {

@@ -15,11 +15,18 @@
 
     Both values are url-encoded: the poll endpoint echoes back whatever it was given,
     so one of them arriving with an & in it would otherwise split into a parameter of
-    its own on the next tick. -#}
+    its own on the next tick.
+
+    hx-target="this" is load-bearing, not decoration. hx-target is inherited, and this
+    element lives inside the article row, which targets #article-detail — so without it
+    the first tick swapped the poller's own answer, outerHTML, over the whole detail
+    panel and took it out of the page. Every later row click then had no target left to
+    open into, and only a reload brought the panel back. -#}
 {%- macro row_poll(article_id, density, label_display) -%}
 <div id="row-poll-{{ article_id }}"
      hx-get="/htmx/articles/{{ article_id }}/row-poll?density={{ density|urlencode }}&amp;label_display={{ label_display|urlencode }}"
      hx-trigger="every 2s"
+     hx-target="this"
      hx-swap="outerHTML"
      data-stop-propagation
      class="hidden"></div>

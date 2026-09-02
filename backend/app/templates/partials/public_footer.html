@@ -1,0 +1,29 @@
+{# Shared footer nav for the pages a signed-out visitor can reach: help,
+   features, the legal pages and the login form. Fixed order, product first
+   then legal, with the page you are on rendered as plain text so the row
+   looks the same everywhere. "Sign in" is dropped for a signed-in reader,
+   who has "Back to reader" at the top of the page instead, and on the sign-in
+   form itself, where the form below it is the thing it would point at.
+
+   current: key of the page being rendered ("help", "features", "terms",
+   "privacy", "login"). new_tab: open the links in a new tab, which the login
+   form wants so reading the terms doesn't discard a half-typed sign-in. #}
+{% macro public_footer(request, current="", new_tab=false) %}
+{% set items = [("features", "/features", "Features"),
+                ("help", "/help", "Help"),
+                ("terms", "/terms", "Terms of Service"),
+                ("privacy", "/privacy", "Privacy Policy")] %}
+{% if not request.session.get('user_id') and current != "login" %}
+{% set items = items + [("login", "/login", "Sign in")] %}
+{% endif %}
+<div class="text-center mt-6 text-xs text-gray-400 space-x-3">
+  {%- for key, url, label in items %}
+  {%- if not loop.first %} <span>·</span> {% endif -%}
+  {%- if key == current -%}
+  <span class="text-gray-500 dark:text-gray-300">{{ label }}</span>
+  {%- else -%}
+  <a href="{{ url }}"{% if new_tab %} target="_blank" rel="noopener noreferrer"{% endif %} class="hover:text-gray-600 hover:underline dark:hover:text-gray-300">{{ label }}</a>
+  {%- endif -%}
+  {%- endfor %}
+</div>
+{% endmacro %}

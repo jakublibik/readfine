@@ -131,6 +131,10 @@
 </script>
 {% endblock %}
 
+{#- The shell sizes itself to the viewport and places all four safe-area insets on
+    itself and on each of its fixed children, so it takes the body padding off. -#}
+{% block body_class %} app-chrome{% endblock %}
+
 {% block content %}
 <!-- Mobile bottom bar (hideable-up mode, small bucket only) -->
 <div id="mobile-bottom-bar">

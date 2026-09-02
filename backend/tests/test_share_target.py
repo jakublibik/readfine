@@ -9,7 +9,11 @@ import json
 
 import pytest
 
-from app.routers.web.pwa import extract_shared_url
+from app.routers.web.pwa import extract_shared_url, shared_url_is_certain
+
+# A share hand-off is not a link somebody clicked, and only the former saves unasked.
+FROM_SHARE = {"sec-fetch-site": "none"}
+FROM_A_LINK_ELSEWHERE = {"sec-fetch-site": "cross-site"}
 
 
 class TestExtractSharedUrl:
@@ -61,10 +65,85 @@ class TestExtractSharedUrl:
     def test_sentence_punctuation_is_not_part_of_the_address(self, shared, expected):
         assert extract_shared_url(None, shared) == expected
 
+    @pytest.mark.parametrize("shared,expected", [
+        # Apps that shorten what they share glue the ellipsis to the last word, and
+        # the last word is the address.
+        ("Some very long headline https://example.com/story…", "https://example.com/story"),
+        # Sharing apps write prose, so the quotes around an address are usually curly.
+        ("He said “https://example.com/story”", "https://example.com/story"),
+        ("He said ‘https://example.com/story’", "https://example.com/story"),
+        ("Viz »https://example.com/story«", "https://example.com/story"),
+        # A share that carried a scrap of markup rather than plain text.
+        ('<a href="https://example.com/story">', "https://example.com/story"),
+    ])
+    def test_typographic_punctuation_is_not_part_of_the_address_either(self, shared, expected):
+        """ASCII is not what a phone puts around a link. Anything left on the end is
+        stored as part of the address, so Open original and Retry both point at it."""
+        assert extract_shared_url(None, shared) == expected
+
     def test_a_closing_bracket_the_address_opened_is_kept(self):
         """Wikipedia disambiguations end in one; trimming it fetches the wrong page."""
         url = "https://en.wikipedia.org/wiki/Mercury_(planet)"
         assert extract_shared_url(None, f"Look at {url}") == url
+
+
+class TestSharedUrlIsCertain:
+    def test_the_url_field_is_a_statement_not_a_guess(self):
+        assert shared_url_is_certain("https://example.com/story", "a b https://other.example") is True
+
+    def test_one_address_in_the_text_leaves_nothing_to_choose(self):
+        assert shared_url_is_certain(None, "Some headline https://example.com/story") is True
+
+    def test_two_addresses_are_a_choice_we_should_not_make_alone(self):
+        assert shared_url_is_certain(
+            None, "via https://aggregator.example/i https://example.com/real"
+        ) is False
+
+    def test_no_address_is_not_certainty(self):
+        assert shared_url_is_certain(None, "just a note") is False
+
+
+class TestSavingWithoutAPress:
+    """Saving on load is what makes sharing one step, but it means a GET sets off a
+    write, so it happens only where the address was read rather than guessed and the
+    request looks like a hand-off rather than a link."""
+
+    def test_a_share_with_one_address_saves_itself(self, client):
+        resp = client.get("/share-target", params={"text": "Headline https://example.com/story"},
+                          headers=FROM_SHARE)
+        assert 'hx-trigger="load, submit"' in resp.text
+
+    def test_a_link_from_another_site_asks_first(self, client):
+        """Otherwise a crafted link would save for anyone signed in."""
+        resp = client.get("/share-target", params={"text": "https://example.com/story"},
+                          headers=FROM_A_LINK_ELSEWHERE)
+        assert 'hx-trigger="load, submit"' not in resp.text
+
+    def test_a_browser_that_says_nothing_asks_first(self, client):
+        """Unknown has to count as unsafe; the fallback is the button, not an error."""
+        resp = client.get("/share-target", params={"text": "https://example.com/story"})
+        assert 'hx-trigger="load, submit"' not in resp.text
+        assert 'value="https://example.com/story"' in resp.text
+
+    def test_two_addresses_ask_even_from_a_share(self, client):
+        resp = client.get(
+            "/share-target",
+            params={"text": "via https://aggregator.example/i https://example.com/real"},
+            headers=FROM_SHARE,
+        )
+        assert 'hx-trigger="load, submit"' not in resp.text
+        assert "More than one link" in resp.text
+
+    def test_a_share_with_no_address_asks(self, client):
+        resp = client.get("/share-target", params={"text": "no link here"}, headers=FROM_SHARE)
+        assert 'hx-trigger="load, submit"' not in resp.text
+        assert "No web address came through" in resp.text
+
+    def test_still_nothing_saved_by_asking_for_the_page(self, client, mock_db):
+        """The save is a second request; the page itself must stay read-only."""
+        client.get("/share-target", params={"text": "https://example.com/story"},
+                   headers=FROM_SHARE)
+        mock_db.commit.assert_not_called()
 
 
 class TestShareTargetForm:
@@ -104,7 +183,7 @@ class TestShareTargetSave:
     def test_the_form_is_not_a_way_round_url_validation(self, client, monkeypatch):
         """The field is editable, so the address it posts gets the same checks as any
         other saved URL rather than being trusted for having come from the share sheet."""
-        async def refuse(url, user, db):
+        async def refuse(url, user, db, fallback_title=None):
             raise ValueError("Only http and https addresses can be saved")
 
         monkeypatch.setattr(
@@ -114,6 +193,71 @@ class TestShareTargetSave:
         assert resp.status_code == 200
         assert "Only http and https addresses can be saved" in resp.text
         assert "Saved." not in resp.text
+
+    def test_a_refusal_comes_back_with_a_way_to_fix_it(self, client, monkeypatch):
+        """The save may have run without anyone pressing anything, so an error alone
+        would leave no field to correct the address in, and no button to retry with."""
+        async def refuse(url, user, db, fallback_title=None):
+            raise ValueError("That address could not be reached")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", refuse
+        )
+        resp = client.post("/share-target", data={"url": "https://example.com/typo"})
+        assert 'value="https://example.com/typo"' in resp.text
+        # Not with the trigger that sent it, or the failure would repeat on its own.
+        assert 'hx-trigger="load, submit"' not in resp.text
+
+    def test_a_refusal_keeps_the_title_and_the_note_about_several_links(
+        self, client, monkeypatch
+    ):
+        """Both came from the share and neither can be worked out again on a retry:
+        the POST is sent the address alone, and the text they were derived from is
+        long gone."""
+        async def refuse(url, user, db, fallback_title=None):
+            raise ValueError("That address could not be reached")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", refuse
+        )
+        resp = client.post("/share-target", data={
+            "url": "https://example.com/typo", "title": "Some headline", "ambiguous": "1",
+        })
+        assert 'name="title" value="Some headline"' in resp.text
+        assert 'name="ambiguous"' in resp.text
+        assert "More than one link came through" in resp.text
+
+    def test_the_shared_title_reaches_the_service_as_a_fallback(self, client, monkeypatch):
+        """It names the article when the page cannot be fetched or parsed, which is
+        the only case where nothing else can."""
+        seen = {}
+
+        async def capture(url, user, db, fallback_title=None):
+            seen["title"] = fallback_title
+            raise ValueError("stop here, the save itself is not what this tests")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", capture
+        )
+        client.post("/share-target", data={
+            "url": "https://example.com/story", "title": "  Some\n headline  ",
+        })
+        assert seen["title"] == "Some\n headline"
+
+    def test_no_title_shared_means_no_fallback(self, client, monkeypatch):
+        """An empty field must not become an empty title: the service would then have
+        to guess whether "" means "no title" or "call it that"."""
+        seen = {}
+
+        async def capture(url, user, db, fallback_title=None):
+            seen["title"] = fallback_title
+            raise ValueError("stop here")
+
+        monkeypatch.setattr(
+            "app.services.saved_article_service.save_article_by_url", capture
+        )
+        client.post("/share-target", data={"url": "https://example.com/story", "title": "   "})
+        assert seen["title"] is None
 
 
 def test_the_manifest_advertises_the_share_target(unauth_client):
