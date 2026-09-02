@@ -385,9 +385,16 @@ document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(
     row.classList.remove('hidden');
   }
 
-  if (isInstalled()) {
-    show('Readfine is installed', 'Open it from your home screen or app list.', false);
-  } else if (isIos()) {
+  // Inside the installed app there is nothing left to offer, so the card stays hidden
+  // and neither listener below is wanted: an installed window is not asked to install
+  // again. Deliberately not a confirmation line either, since the only true thing it
+  // could say is that you are in the installed app, which the missing address bar
+  // already says. The appinstalled message further down is a different case: that one
+  // runs in the browser tab you pressed Install in, where naming where the app went is
+  // the whole point.
+  if (isInstalled()) return;
+
+  if (isIos()) {
     // No prompt exists on iOS and installing cannot be triggered from a page, so the
     // steps are all we can offer. The warning about signing in is not padding: iOS
     // gives an installed app its own storage, so the session does not come across and
@@ -403,7 +410,8 @@ document.querySelectorAll('input[name="color_scheme_device"]').forEach(function(
   window.addEventListener('beforeinstallprompt', function (e) {
     e.preventDefault();
     window._installPrompt = e;
-    if (!isInstalled()) { btn.hidden = false; row.classList.remove('hidden'); }
+    btn.hidden = false;
+    row.classList.remove('hidden');
   });
 
   window.addEventListener('appinstalled', function () {
