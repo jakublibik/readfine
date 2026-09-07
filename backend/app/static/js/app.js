@@ -922,6 +922,22 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var topOffset = 0;
   var bottomOffset = 0;
 
+  // Where the list's own top edge sits, in the viewport coordinates the entry
+  // rectangles use. It is not the top of the screen: in the mobile shell the list
+  // starts below the fixed title bar and the status-bar inset, so a row leaves the
+  // list a good deal before its rect turns negative. Comparing against 0 asked for
+  // that extra distance, and the callback only runs when the visible fraction
+  // crosses the threshold, i.e. as the row leaves the list and never again after
+  // that, so scrolling on could not make up the difference. Every row but the last
+  // is taller than the title bar alone, which is why a browser tab (no status-bar
+  // inset) looked fine; installed, the last row, with exactly one list height of
+  // spacer under it, could not clear it at all.
+  // rootBounds is the root's rect with rootMargin applied, and can be null, hence
+  // the fallback.
+  function rootTopEdge(entry) {
+    return entry.rootBounds ? entry.rootBounds.top : list.getBoundingClientRect().top;
+  }
+
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
       var el = entry.target;
@@ -930,7 +946,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
       if (entry.isIntersecting) {
         seen.add(id);
-      } else if (!isRead && entry.boundingClientRect.top < 0) {
+      } else if (!isRead && entry.boundingClientRect.top < rootTopEdge(entry)) {
         // A jump the app made on the reader's behalf (pointing at a freshly saved
         // row) is not reading: whatever it flew past stays unread.
         if (window._suppressMarkRead) return;
