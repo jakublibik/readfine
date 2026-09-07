@@ -55,6 +55,7 @@ _Trim the stream down to what matters._
 _Optional AI on your own provider key._
 
 - **Summaries:** A one-tap summary of any article, plus an option to have starred articles summarized automatically.
+- **Context:** The summary tells you what an article says; context tells you what you need to know around it. Background, what led up to it, why it matters. You can add a focus for a single article when there is something specific you want filled in.
 - **Chat over articles:** Ask questions about an article and get answers grounded in its text.
 - **Interest profile:** Describe what you care about, or have the AI draft it from what you read; it drives scoring and digests.
 - **Profile on a schedule:** Have the profile regenerate itself every 2 or 4 weeks as your reading shifts, with the replaced version one click away.
@@ -77,7 +78,9 @@ _See how you actually read._
 _Multi-user, with the operator controls to match._
 
 - **Per-user accounts:** Every account has its own feeds, filters, labels, and preferences.
+- **Your account is yours to manage:** Change your name, password, or email address (a new address is confirmed before it takes effect), and close the account whenever you want. Deleting it takes your feeds, articles, filters and keys with it, right away and for good.
 - **Admin panel:** Manage users and instance-wide settings.
+- **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
 - **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.
 - **Retention & purge:** Tiered retention rules that purge old articles automatically.

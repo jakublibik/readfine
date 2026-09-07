@@ -24,7 +24,7 @@ from app.services.feed import cache_feed_preview, may_edit_feed_auth, subscribe,
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, http_reason
 from app.utils.parsing import safe_int
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -117,7 +117,8 @@ async def settings_feeds_test(
             sc = e.response.status_code
             if sc == 403:
                 return None, "HTTP 403: Access denied. The server is likely blocking requests from this host (geo-block or datacenter IP block)."
-            return None, f"HTTP {sc}: {e.response.reason_phrase}"
+            reason = http_reason(sc)
+            return None, f"HTTP {sc}: {reason}" if reason else f"HTTP {sc}"
         except (httpx.RequestError, ValueError) as e:
             return None, f"Connection error: {e}"
 

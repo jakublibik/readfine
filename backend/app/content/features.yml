@@ -161,6 +161,12 @@ categories:
         desc: >-
           A one-tap summary of any article, plus an option to have starred articles
           summarized automatically.
+      - title: Context
+        desc: >-
+          The summary tells you what an article says; context tells you what you need
+          to know around it. Background, what led up to it, why it matters. You can
+          add a focus for a single article when there is something specific you want
+          filled in.
       - title: Chat over articles
         desc: Ask questions about an article and get answers grounded in its text.
       - title: Interest profile
@@ -213,8 +219,19 @@ categories:
     features:
       - title: Per-user accounts
         desc: Every account has its own feeds, filters, labels, and preferences.
+      - title: Your account is yours to manage
+        desc: >-
+          Change your name, password, or email address (a new address is confirmed
+          before it takes effect), and close the account whenever you want. Deleting
+          it takes your feeds, articles, filters and keys with it, right away and for
+          good.
       - title: Admin panel
         desc: Manage users and instance-wide settings.
+      - title: Invite-only registration
+        desc: >-
+          Keep sign-ups closed and hand out invitation links instead. Each one works
+          once, can be tied to a specific address, can expire on a date you set, and
+          can be revoked before anyone uses it.
       - title: Email (SMTP)
         desc: Address verification, password reset, and briefing delivery.
       - title: API tokens

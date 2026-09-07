@@ -18,7 +18,7 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.crypto import auth_pair, feed_auth
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, http_reason
 from app.utils.parsing import count_words, rewrite_relative_urls, soften_nbsp_runs
 from app.utils.video import collect_video_figures, video_page_content, video_target
 
@@ -95,7 +95,7 @@ def _fetch_html(
         return None, _TOO_LARGE_MSG, None, None
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code
-        msg = f"HTTP {status_code} {exc.response.reason_phrase}"
+        msg = f"HTTP {status_code} {http_reason(status_code)}".rstrip()
         logger.warning("readable fetch failed for %s: %s", url, msg)
         return None, msg, status_code, None
     except httpx.TimeoutException:
