@@ -9,6 +9,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Fixed
+
+- The last article in a list gets marked as read when you scroll past it, in the installed app as well as in a browser tab. Scrolling a row off the top of the list is what counts it as read, but the check was measuring against the top of the screen rather than the top of the list, which on a phone sits a title bar and a status bar lower. So a row had to travel that much further than it looked, and the moment it was checked was the moment it left the list, never again after that, which is why scrolling on did nothing. Every row but the last one is tall enough to cover the difference in a browser tab, where the status bar is not there to add to it; installed, the gap is bigger and the last row, which has exactly enough room under it to leave the list and no more, could not close it at all.
+
+- The bar of buttons at the foot of the list covers the same amount of the list in the installed app as it does in a browser tab. On a phone with a home indicator the bar is that much taller, and the list ran on underneath it, so sliding the bar in took a whole article row with it and left one sitting half covered. The list now stops where the indicator starts, which is what the reading shell was already doing on the other three sides.
+
 ## [0.17.0] - 2026-09-07
 
 ### Added
