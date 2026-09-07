@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>Readfine – your RSS reader with AI</title>
-    <meta name="description" content="Readfine is an RSS reader with AI: subscribe, scrape any site, filter and score articles, then let AI summarize and brief you. Open source and self-hosted.">
+    <meta name="description" content="Readfine is an RSS reader with AI: subscribe, scrape any site, save any link, filter and score articles, then let AI summarize and brief you. Open source and self-hosted.">
     <link rel="canonical" href="{{ base_url }}">
 
     <!-- Open Graph -->
     <meta property="og:type" content="website">
     <meta property="og:site_name" content="Readfine">
     <meta property="og:title" content="Readfine – your RSS reader with AI">
-    <meta property="og:description" content="Subscribe, scrape, filter and read, with AI summaries, scoring and briefings. Open source and self-hosted.">
+    <meta property="og:description" content="Subscribe, scrape, save and read, with filters, AI summaries, scoring and briefings. Open source and self-hosted.">
     <meta property="og:url" content="{{ base_url }}">
     <meta property="og:image" content="{{ base_url }}static/images/landing/og.png">
     <meta property="og:image:width" content="1200">
@@ -22,7 +22,7 @@
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Readfine – your RSS reader with AI">
-    <meta name="twitter:description" content="Subscribe, scrape, filter and read, with AI summaries, scoring and briefings. Open source and self-hosted.">
+    <meta name="twitter:description" content="Subscribe, scrape, save and read, with filters, AI summaries, scoring and briefings. Open source and self-hosted.">
     <meta name="twitter:image" content="{{ base_url }}static/images/landing/og.png">
 
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
@@ -51,7 +51,7 @@
       "name": "Readfine",
       "applicationCategory": "NewsApplication",
       "operatingSystem": "Web",
-      "description": "RSS reader with feed scraping, filters, article scoring and AI summaries, scoring and briefings. Open source and self-hosted.",
+      "description": "RSS reader with feed scraping, saved links, filters, article scoring and AI summaries, chat and briefings. Open source and self-hosted.",
       "url": "{{ base_url }}",
       "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
     }
@@ -110,15 +110,15 @@
             <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 5.25h16.5m-16.5 6.75h16.5m-16.5 6.75h16.5"/></svg>
           </div>
           <h3 class="font-semibold mb-1">RSS, Atom &amp; scraping</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Subscribe to standard feeds, or scrape any site that doesn't have one using a CSS selector.</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Paste a feed address, or just the site's, and Readfine goes looking for the feed itself. YouTube channels included. A site with no feed at all can be scraped with a CSS selector.</p>
         </div>
 
         <div>
           <div class="text-blue-600 mb-3">
-            <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z"/></svg>
+            <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z"/></svg>
           </div>
-          <h3 class="font-semibold mb-1">Folders &amp; tags</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Organize feeds into folders and tag articles to keep everything where you expect it.</p>
+          <h3 class="font-semibold mb-1">Save anything you find</h3>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Paste a link to keep an article that is in none of your feeds, or share one to Readfine from any other app on Android. It lands in Saved, cleaned up like everything else, and stays there until you remove it.</p>
         </div>
 
         <div>
@@ -126,7 +126,15 @@
             <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21v-6.568a2.25 2.25 0 00-.659-1.591L3.659 7.409A2.25 2.25 0 013 5.818V4.774c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z"/></svg>
           </div>
           <h3 class="font-semibold mb-1">Filters</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Match on title, content, author, URL or AI score (regex and AND/OR rules included) and auto-label, mark read, star or archive. Each filter can be scoped to specific feeds or folders.</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Match on title, content, author or URL, with regex and AND/OR where plain "contains" runs out, then label, star, mark read or archive. Any filter can be kept to certain feeds or folders.</p>
+        </div>
+
+        <div>
+          <div class="text-blue-600 mb-3">
+            <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1">Relevance scoring</h3>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Say what you are interested in, or let the AI draft it from what you actually read, and every new article gets a score. A filter can then mark the low ones read before you ever see them.</p>
         </div>
 
         <div>
@@ -134,7 +142,15 @@
             <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
           </div>
           <h3 class="font-semibold mb-1">Clean reading view</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Readable extraction pulls the full article text right into the reader, without the cookie banners and sidebars of the original page.</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">The full article text is pulled into the reader, without the cookie banners and sidebars of the original page. Feeds that carry only a headline offer the source instead of an empty pane.</p>
+        </div>
+
+        <div>
+          <div class="text-blue-600 mb-3">
+            <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1">Videos play in the reader</h3>
+          <p class="text-sm text-gray-600 dark:text-gray-400">A YouTube or Vimeo link plays where it sits, with the whole description under it. No player loads until you press play, and the thumbnail comes from your own server, so the video site hears about you only when you decide to watch.</p>
         </div>
 
         <div>
@@ -142,7 +158,7 @@
             <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.456-2.456L14.25 6l1.035-.259a3.375 3.375 0 002.456-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z"/></svg>
           </div>
           <h3 class="font-semibold mb-1">AI on your own keys</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Summaries, relevance scoring and chat about any article. Bring your own API key (Anthropic, OpenAI or Gemini). Keys are per-user and stay yours.</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">A summary of any article, the background it assumes you already know, and a chat about it. Anthropic, OpenAI or Gemini on your own key, stored encrypted and used for nobody else.</p>
         </div>
 
         <div>
@@ -150,7 +166,15 @@
             <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25"/></svg>
           </div>
           <h3 class="font-semibold mb-1">Catch me up &amp; briefings</h3>
-          <p class="text-sm text-gray-600 dark:text-gray-400">Scheduled digests of what happened in your feeds while you were away.</p>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Ask what happened in your feeds while you were away, over whatever period and feeds you pick. The same digest can arrive in your inbox on a schedule instead.</p>
+        </div>
+
+        <div>
+          <div class="text-blue-600 mb-3">
+            <svg class="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-3 18.75h3"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1">Reads like an app</h3>
+          <p class="text-sm text-gray-600 dark:text-gray-400">Put it on a phone or a desktop and it opens in its own window. Two or three panels on a big screen, a proper small-screen layout on a phone, dark mode, and search on the <code class="text-xs">/</code> key.</p>
         </div>
 
       </div>
@@ -170,7 +194,7 @@
           <li>
             <div class="text-blue-600 font-bold text-sm mb-2">STEP 1</div>
             <h3 class="font-semibold mb-1">Subscribe</h3>
-            <p class="text-sm text-gray-600 dark:text-gray-400">Add a feed URL or scrape a site that doesn't have one.</p>
+            <p class="text-sm text-gray-600 dark:text-gray-400">Paste a feed address, or the site's own and let Readfine find it.</p>
           </li>
           <li>
             <div class="text-blue-600 font-bold text-sm mb-2">STEP 2</div>
@@ -209,12 +233,26 @@
 
     <!-- Self-hosting / open source -->
     <section class="bg-gray-50 dark:bg-gray-900 border-y border-gray-200 dark:border-gray-800">
-      <div class="max-w-3xl mx-auto px-4 py-16 text-center">
-        <h2 class="text-2xl font-bold mb-3">Open source. Self-host it yourself.</h2>
-        <p class="text-gray-600 dark:text-gray-400 mb-8">
-          Readfine is free and open source. Run it on your own server with Docker and keep your data
-          at home, or sign up here and let us host it for you.
-        </p>
+      <div class="max-w-4xl mx-auto px-4 py-16">
+        <h2 class="text-2xl font-bold mb-10 text-center">Open source, and yours to run</h2>
+        <div class="grid gap-10 sm:grid-cols-2 mb-10">
+          <div>
+            <h3 class="font-semibold mb-2">Self-host it</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+              Readfine is free and AGPL licensed, so you can read every line of it. Run it on your own
+              server with Docker and your feeds, articles and keys never leave the machine. Or sign up
+              here and let us host it for you.
+            </p>
+          </div>
+          <div>
+            <h3 class="font-semibold mb-2">Run the AI locally too</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+              The AI part doesn't have to be somebody's cloud either. Point Readfine at anything that
+              speaks the OpenAI API: Ollama or llama.cpp on your own machine, vLLM, a LiteLLM proxy, a
+              gateway like OpenRouter. A local server needs no key at all and nothing leaves your network.
+            </p>
+          </div>
+        </div>
         <div class="flex items-center justify-center gap-3">
           <a href="https://github.com/jakublibik/readfine" target="_blank" rel="noopener noreferrer"
              class="px-5 py-2.5 rounded-lg border border-gray-300 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 font-medium">
@@ -222,8 +260,8 @@
           </a>
           <a href="/register" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Create an account</a>
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-500 mt-6">
-          Built with AI (Claude Code) and fully open source, so you can read every line yourself.
+        <p class="text-xs text-gray-500 dark:text-gray-500 mt-6 text-center">
+          Built with AI (Claude Code), in the open, on GitHub.
         </p>
       </div>
     </section>
