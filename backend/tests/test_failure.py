@@ -79,6 +79,14 @@ class TestLogFailureMessage:
     def test_reason_phrase_is_included(self):
         assert log_failure_message(_http_error(429), FEED_URL).startswith("HTTP 429 Too Many Requests")
 
+    def test_non_standard_status_still_gets_a_phrase(self):
+        # Cloudflare's 52x range is not registered, so httpx has no phrase for it and
+        # the message used to be the bare number: "HTTP 520: <url>".
+        assert log_failure_message(_http_error(522), FEED_URL).startswith("HTTP 522 Connection Timed Out")
+
+    def test_unknown_status_leaves_no_trailing_space(self):
+        assert log_failure_message(_http_error(599), FEED_URL) == f"HTTP 599: {FEED_URL}"
+
     def test_query_string_is_redacted(self):
         exc = _http_error(403)
         msg = log_failure_message(exc, "https://example.com/feed.xml?api_key=secret")

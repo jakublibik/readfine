@@ -31,6 +31,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- A failed fetch says what the status code means, even when the code is not a standard one. A feed sitting behind Cloudflare that could not reach its own server reported "HTTP 520" and nothing more, because the 52x codes are Cloudflare's own invention and the HTTP library has no name for them. Now those read "HTTP 522 Connection Timed Out" and the like, in the feed row, in the admin fetch log and on the readable view. The same goes for the codes nginx and a few anti-bot front ends make up.
+
 - The last article in a list no longer disappears behind the title bar on a phone. Scroll to the very bottom and the list would go on a little further than it had to, taking the last row up behind the bar and leaving an empty screen with nothing to hold on to. The room under the last row is there on purpose, so the final articles can be scrolled up far enough to count as read, but it was a whole screen tall while the list itself is shorter than that by the height of the bar.
 
 - Saving a link no longer takes the reading panel down with it. Paste an address Readfine has not seen before and, a second or two later, the panel articles open into would vanish: clicking anything in the list did nothing at all, and only reloading the page brought it back. While a saved article is being fetched, its row runs a small ticker that keeps the row up to date until the real title arrives, and that ticker was putting its answer where the article should go instead of back into the row it belongs to.

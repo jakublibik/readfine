@@ -39,6 +39,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.fetcher import host_throttle
 from app.models.feed import Feed
+from app.utils.http_client import http_reason
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
     TRANSIENT_HTTP_STATUSES,
@@ -201,7 +202,7 @@ def log_failure_message(exc: Exception, feed_url: str) -> str:
     """
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-        reason = exc.response.reason_phrase
+        reason = http_reason(status)
         label = f"HTTP {status} {reason}".rstrip()
         return f"{label}: {redact_url(feed_url)}"[:500]
     return _redacted(str(exc), feed_url)[:500]
