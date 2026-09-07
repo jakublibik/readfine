@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-09-07
+
 ### Added
 
 - Readfine is in the share sheet on Android. Reading something in another app, share it to Readfine and it goes to Saved, fetched for reading like any link you paste in yourself. Usually there is nothing to do: a window says it was saved, and Back returns you to whatever you were reading. It stops to ask only when asking is the point, which is when more than one link came through and picking the wrong one would be worse than a question, or when none did. Apps are inconsistent about what they hand over, and many send the address buried in a line of text rather than on its own. A save that does not go through says so and hands you the button back, and if you share enough links in a row to hit the limit it says to wait a minute. The headline that came with the share is kept too, so an article whose page cannot be read, a 404, something behind a paywall, a page built entirely in JavaScript, lands in Saved under its own title instead of its web address; a page Readfine can read still names itself. Sharing to an app is something iOS does not offer web apps at all, so this is Android only; installing works on both.
