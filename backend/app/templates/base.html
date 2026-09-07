@@ -104,6 +104,15 @@
       .prose h3 { font-size: 1.05em !important; margin-top: 1.2em; margin-bottom: 0.4em; }
       .prose h4 { font-size: 1.0em !important; margin-top: 1.0em; margin-bottom: 0.4em; }
       .article-row { transition: opacity 150ms ease; }
+      /* Room under the last row so the last articles can still be scrolled off the
+         top edge, which is where mark-as-read on scroll picks them up (app.js). One
+         list height, not one viewport: the shell reserves the mobile title bar's
+         height, so a full viewport of spacer scrolled the last row that much too far
+         and parked it behind the bar, leaving nothing on screen at all. */
+      .article-list-end-spacer { height: 100vh; height: calc(100dvh - var(--sat)); }
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] .article-list-end-spacer {
+        height: calc(100dvh - var(--sat) - var(--mobile-bar-h));
+      }
       html.sidebar-unpinned #sidebar { width: 3rem; }
       /* Collapse/expand: both the rail and full sidebar are always rendered; CSS shows
          one so toggling needs no refetch. Default = full; rail wins when collapsed. */
