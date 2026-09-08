@@ -56,17 +56,19 @@ document.addEventListener('DOMContentLoaded', function () {
     else resetTitlePlaceholder();
   });
 
-  // htmx leaves a non-2xx response unswapped, and there is no app-wide handler to fall
-  // back on (the htmx:responseError listeners in app.js are each scoped to the article
-  // list, the star revert or the chat). So a Test that tripped this endpoint's
+  // htmx leaves a non-2xx response unswapped, so a Test that tripped this endpoint's
   // 10/minute did nothing whatsoever: the spinner stopped, the box stayed empty and the
-  // user had no way to know a limit existed, let alone that waiting would fix it.
+  // user had no way to know a limit existed, let alone that waiting would fix it. The
+  // app-wide fallback in app.js covers that much now, but the answer belongs in the
+  // result box the user is looking at rather than in a toast at the foot of the screen,
+  // so this stays and claims the error to keep the fallback quiet.
   document.body.addEventListener('htmx:responseError', function (evt) {
     var cfg = evt.detail.requestConfig;
     var path = cfg && cfg.path;
     if (path !== '/settings/feeds/test' && path !== '/settings/feeds') return;
     var box = document.getElementById('feed-test-result');
     if (!box) return;
+    _claimHtmxError(evt);
     var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
     var line = document.createElement('p');
     line.className = 'text-sm text-red-600';
