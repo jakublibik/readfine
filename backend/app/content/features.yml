@@ -42,6 +42,12 @@ categories:
           one fetch, so a site is polled once however many subscribers it has. Mark a
           feed private and it is kept to your account, with its own fetch and its own
           copy of the articles.
+      - title: Change a feed's address
+        desc: >-
+          A feed that moves, or whose address needs a fix, can be pointed somewhere
+          else without re-subscribing, so every article and every read state stays
+          where it is. The new address is fetched once before it is saved. On a feed
+          somebody else also follows, the address is the administrator's to change.
       - title: Folders
         desc: Group feeds into folders for organizing and for scoping filters.
       - title: Scheduled background fetching

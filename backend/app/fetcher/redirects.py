@@ -43,6 +43,41 @@ def redirect_conflicts() -> dict[int, RedirectConflict]:
     return dict(_redirect_conflicts)
 
 
+async def url_conflict(
+    db: AsyncSession,
+    *,
+    feed_id: int | None,
+    url: str,
+    feed_type: str = "rss",
+    selector: str | None = None,
+    is_private: bool = False,
+) -> int | None:
+    """Id of another feed that already holds *url*, or None when it is free.
+
+    Asks in the shape of the unique indexes that would reject the write (migration
+    0037): they cover public feeds only, keyed on ``feed_url`` alone for RSS and on
+    ``(feed_url, selector)`` for scrape, so a private feed is free to take an address
+    a public one already holds. Both ways a feed's address changes go through here,
+    redirect adoption and an edit by hand, which is why it is not inlined in either.
+
+    *feed_id* is the feed being moved, excluded from the answer; None when the caller
+    is checking an address for a row that does not exist yet.
+    """
+    if is_private:
+        return None
+    q = select(Feed.id).where(Feed.feed_url == url, Feed.is_private == False)  # noqa: E712
+    if feed_id is not None:
+        q = q.where(Feed.id != feed_id)
+    if feed_type == "scrape":
+        q = q.where(
+            Feed.feed_type == "scrape",
+            Feed.type_config["article_links_selector"].astext == selector,
+        )
+    else:
+        q = q.where(Feed.feed_type != "scrape")
+    return await db.scalar(q.limit(1))
+
+
 async def adopt_permanent_url(
     feed_id: int,
     old_url: str,
@@ -83,19 +118,10 @@ async def adopt_permanent_url(
     """
     try:
         if not is_private:
-            conflict = select(Feed.id).where(
-                Feed.feed_url == new_url,
-                Feed.id != feed_id,
-                Feed.is_private == False,  # noqa: E712
+            other_id = await url_conflict(
+                db, feed_id=feed_id, url=new_url, feed_type=feed_type,
+                selector=selector, is_private=is_private,
             )
-            if feed_type == "scrape":
-                conflict = conflict.where(
-                    Feed.feed_type == "scrape",
-                    Feed.type_config["article_links_selector"].astext == selector,
-                )
-            else:
-                conflict = conflict.where(Feed.feed_type != "scrape")
-            other_id = await db.scalar(conflict.limit(1))
             if other_id is not None:
                 logger.debug(
                     "Feed %d moved to %s but feed %d already holds it, keeping the redirect",

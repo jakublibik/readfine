@@ -9,6 +9,12 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- A feed's address can be changed. Until now it was the one thing about a feed that was fixed for good, so a feed that moved without leaving a redirect, or one whose address needed a small fix, meant unsubscribing and subscribing again, which throws away every article of that feed along with what you had read, starred and saved. The address is now a field in Settings → Feeds → the feed, and changing it keeps everything: only where the articles are fetched from moves. The new address is fetched once before it is saved, so a typo comes back as a message on the field rather than as a feed that quietly stops working, and if it redirects, the address it redirects to is what gets stored. Anything the old address left behind, an error, a counter, a wait imposed after a refusal, is cleared at the same time, and the feed is picked up on the next round rather than at its usual interval. A username and password written into the address are moved into the feed's credential fields, as they are when subscribing.
+
+- The address of a shared feed is the administrator's to change, in Admin → Feeds → Edit. On an instance where several people follow one feed, that feed is a single row fetched once for everyone, so its address is not one subscriber's to rewrite; the form says so instead of offering a field that would not work. An administrator gets the field for any feed, with a note of how many people are subscribed, and the change is written to the audit log with both addresses. There is also a checkbox to save an address without fetching it first, for fixing a feed whose host is down at that moment. The current address is never put into the admin form (it can carry an API key), only shown as a redacted hint, so leaving the field empty keeps the feed where it is.
+
 ### Fixed
 
 - A feed that comes back as something other than a feed says what came back. A site serving an error page where its feed should be, a WordPress one printing PHP warnings instead of XML, an address that turns out to point at an ordinary web page: all of them reported themselves as "junk after document element", which is the parser describing a document that was never there. The feed's error line now says the server returned a web page rather than a feed, or that the response was empty. The parser's own message is kept for the case it fits, a feed whose XML breaks part way through.

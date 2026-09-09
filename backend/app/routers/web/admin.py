@@ -38,10 +38,12 @@ from app.services.admin_service import (
     update_app_settings,
     update_feed_admin,
 )
+from app.services.feed import change_feed_url
 from app.utils.crypto import encrypt
 from app.utils.datetime_format import format_until
 from app.utils.parsing import clamp, safe_int
 from app.utils.smtp import send_email
+from app.utils.url_validator import redact_url
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +499,19 @@ async def admin_feed_edit_form(
     db: AsyncSession = Depends(get_db),
 ):
     """Feed-edit form for the admin modal — feed-wide fields only."""
+    return await _feed_edit_form_response(request, db, feed_id, group)
+
+
+async def _feed_edit_form_response(
+    request: Request,
+    db: AsyncSession,
+    feed_id: int,
+    group: str,
+    *,
+    url_error: str | None = None,
+) -> HTMLResponse:
+    """Render the admin feed-edit form. Also the POST's error path, which redraws the
+    form inside the open modal instead of swapping in the feeds table."""
     feed = await get_feed(db, feed_id)
     if not feed:
         return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
@@ -513,6 +528,7 @@ async def admin_feed_edit_form(
             feed.derived_interval_min, default_interval_min=default_interval,
             min_interval_min=min_interval, max_interval_min=max_interval,
         ),
+        "url_error": url_error,
     })
 
 
@@ -525,6 +541,35 @@ async def admin_feed_update(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
+
+    # The address before anything else: it fetches, and a rejected one has to come back
+    # as a message on the field rather than as a silently unchanged feed. Blank means
+    # "keep it" — the form never carries the current address, which can hold a token.
+    new_url = (form.get("feed_url") or "").strip()
+    if new_url:
+        feed = await get_feed(db, feed_id)
+        if not feed:
+            return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+        old_url = feed.feed_url
+        try:
+            changed = await change_feed_url(
+                db, feed, new_url, verify=form.get("skip_verify") != "1",
+            )
+        except ValueError as exc:
+            await db.rollback()
+            resp = await _feed_edit_form_response(request, db, feed_id, group, url_error=str(exc))
+            # The form posts into the feeds table; a redrawn form has to go back into
+            # the modal it came from instead, or it would replace the table with itself.
+            resp.headers["HX-Retarget"] = "#feed-edit-content"
+            resp.headers["HX-Reswap"] = "innerHTML"
+            return resp
+        if changed:
+            await log_audit(
+                db, user.id, "feed_url_change", target_type="feed", target_id=feed_id,
+                detail={"from": redact_url(old_url), "to": redact_url(feed.feed_url),
+                        "subscribers": feed.subscriber_count},
+            )
+
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _quantize15(interval_raw, 60) if interval_raw else None
     feed = await update_feed_admin(
