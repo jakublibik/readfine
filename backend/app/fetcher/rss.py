@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
@@ -56,6 +57,39 @@ _TIMEOUT = 30  # seconds
 
 
 
+# A feed's root element, or the XML declaration that precedes it. Looked for anywhere
+# in the head of the body, not just at position 0, because a broken publisher often
+# prints warnings ahead of an otherwise fine feed and we still want to say "broken XML"
+# for that one, not "no feed here".
+_FEED_ROOT_RE = re.compile(r"<(?:\?xml|(?:[\w-]+:)?(?:rss|feed|RDF))\b", re.IGNORECASE)
+# Enough of an HTML shape to tell a served page (or a PHP error dump, which is what a
+# WordPress feed under a fatal error looks like) from some other unparseable body.
+_HTML_RE = re.compile(r"<(?:!doctype\s+html|html|head|body|div|p|br|b|table|script)\b", re.IGNORECASE)
+# A feed root past this point is not a feed with junk in front of it, it is a body that
+# happens to mention one. Also keeps the scan off multi-megabyte responses.
+_ROOT_SCAN_LIMIT = 64 * 1024
+
+
+def unparseable_reason(body: str | None) -> str | None:
+    """Why this response holds no feed at all, in words a subscriber can act on.
+
+    Returns None when the body does look like a feed — then the XML itself is broken
+    somewhere and the parser's own message is the more useful one. The case this exists
+    for is a response with no feed in it whatsoever, where feedparser's "junk after
+    document element" describes the symptom in terms of a document that was never there.
+    """
+    if body is None:
+        return None
+    head = body[:_ROOT_SCAN_LIMIT].strip()
+    if not head:
+        return "The server returned an empty response instead of a feed."
+    if _FEED_ROOT_RE.search(head):
+        return None
+    if _HTML_RE.search(head):
+        return "The server returned a web page, not a feed. The address may be wrong, or the site may be serving an error page here."
+    return "The server's response is not a feed."
+
+
 class ParsedFeed(NamedTuple):
     """A parsed feed plus the address it permanently moved to, if any.
 
@@ -82,11 +116,12 @@ async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
 
     if parsed.bozo:
         import xml.sax._exceptions as _sax
+        reason = unparseable_reason(page.text)
         if isinstance(parsed.bozo_exception, _sax.SAXParseException):
             # XML parse error means the response is HTML, not RSS
-            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
         if not parsed.entries and not parsed.feed:
-            raise ValueError(f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
     return ParsedFeed(parsed, page.permanent_url)
 
@@ -178,7 +213,10 @@ async def fetch_feed(
             parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
 
         if parsed.bozo and not parsed.entries:
-            raise ValueError(f"Feed parse error: {parsed.bozo_exception}")
+            # A prefetched parse carries no body, but it came through
+            # fetch_and_parse_url, which already reports the same thing.
+            reason = unparseable_reason(resp.text) if resp is not None else None
+            raise ValueError(reason or f"Feed parse error: {parsed.bozo_exception}")
 
         new_count = await _save_articles(feed, parsed, db, limit=initial_limit, published_cutoff=published_cutoff)
         duration_ms = int(time.monotonic() * 1000) - start_ms
