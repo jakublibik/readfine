@@ -49,7 +49,7 @@ async def settings_scrape_setup(
     clean_url, auth_user, auth_pass = split_url_credentials(url)
     auth = auth_pair(auth_user, auth_pass)
 
-    _, folders, _ = await _get_feeds_context(user, db)
+    folders = (await _get_feeds_context(user, db))["folders"]
     html = ""
     page_title = ""
     prompt = ""
@@ -255,7 +255,7 @@ async def settings_scrape_subscribe(
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
 
-    _, folders, _ = await _get_feeds_context(user, db)
+    folders = (await _get_feeds_context(user, db))["folders"]
     try:
         await subscribe_scrape(user=user, url=url, selector=selector, title=title,
                                folder_id=folder_id, fetch_interval_min=fetch_interval_min, db=db)

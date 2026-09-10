@@ -4,7 +4,9 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 class FolderCreate(BaseModel):
     name: str
-    position: int = 0
+    # Left out, the folder goes to the end of the user's order rather than to the
+    # front, which a 0 default would have meant once positions started counting.
+    position: int | None = None
 
     @field_validator("name")
     @classmethod

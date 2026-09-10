@@ -28,6 +28,7 @@ from app.services.feed import (
     subscribe,
     unsubscribe,
 )
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
@@ -56,12 +57,10 @@ async def settings_feeds(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     return templates.TemplateResponse(request, "settings/feeds.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "error": None,
         "subscribe_url": "",
         "detected_feeds": [],
@@ -211,7 +210,6 @@ async def settings_feeds_subscribe(
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
 
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
     detected_feeds = []
     try:
@@ -292,11 +290,9 @@ async def settings_feeds_subscribe(
         })
 
     # Non-HTMX fallback (no-JS)
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/feeds.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "error": error if not detected_feeds else None,
         "subscribe_url": url,
         "detected_feeds": detected_feeds,
@@ -313,11 +309,13 @@ async def _feed_edit_page(
 ) -> HTMLResponse:
     """Render the feed's edit page. Shared by the GET and by the POST's error path,
     so a save that comes back with an error redraws exactly the form the user left."""
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+        select(Folder).where(Folder.user_id == user.id).order_by(
+            *folder_order_clause(user_s.folder_order if user_s else FOLDER_ORDER_DEFAULT)
+        )
     )
     folders = folders_result.scalars().all()
-    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     ai_selector_available = _ai_selector_available(app_s, user_s)
     is_sole_subscriber = uf.feed.subscriber_count == 1
@@ -503,11 +501,9 @@ async def settings_feed_delete(
         cleanup = await unsubscribe(user, user_feed_id, db)
     except ValueError:
         pass
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "scope_cleanup": cleanup,
     })
 
@@ -518,9 +514,7 @@ async def settings_feeds_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
     })

@@ -7,6 +7,9 @@ from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
 from app.schemas.feed import FolderCreate, FolderResponse, FolderUpdate
+from app.services.folder_service import (
+    folder_order_clause, get_folder_order, next_folder_position,
+)
 from app.services.scope_cleanup import strip_scope_references
 
 router = APIRouter(prefix="/folders", tags=["folders"])
@@ -17,10 +20,11 @@ async def list_folders(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Same order the web UI shows, so a client rendering a sidebar from this
+    # does not contradict what the user arranged in settings.
+    order = folder_order_clause(await get_folder_order(db, user.id))
     result = await db.execute(
-        select(Folder)
-        .where(Folder.user_id == user.id)
-        .order_by(Folder.position, Folder.name)
+        select(Folder).where(Folder.user_id == user.id).order_by(*order)
     )
     return result.scalars().all()
 
@@ -37,7 +41,10 @@ async def create_folder(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Folder name already exists")
 
-    folder = Folder(user_id=user.id, name=payload.name, position=payload.position)
+    position = payload.position
+    if position is None:
+        position = await next_folder_position(db, user.id)
+    folder = Folder(user_id=user.id, name=payload.name, position=position)
     db.add(folder)
     await db.commit()
     await db.refresh(folder)

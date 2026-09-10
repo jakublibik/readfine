@@ -44,6 +44,7 @@ async def catchup_page(
     from app.models.user import UserCatchupConfig
     from app.services.ai_service import _DEFAULT_CATCHUP_PROMPT
     from app.services.feed import list_user_feeds
+    from app.services.folder_service import FOLDER_ORDER_DEFAULT
 
     ai_on = bool(await ai_enabled_globally(db))
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
@@ -57,7 +58,9 @@ async def catchup_page(
             "saved_configs": [],
         })
 
-    user_feeds_data = await list_user_feeds(user, db)
+    user_feeds_data = await list_user_feeds(
+        user, db, folder_order=settings.folder_order if settings else FOLDER_ORDER_DEFAULT
+    )
     user_labels = await list_labels(user, db)
     saved_configs = (await db.execute(
         select(UserCatchupConfig)

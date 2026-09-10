@@ -49,7 +49,10 @@ categories:
           where it is. The new address is fetched once before it is saved. On a feed
           somebody else also follows, the address is the administrator's to change.
       - title: Folders
-        desc: Group feeds into folders for organizing and for scoping filters.
+        desc: >-
+          Group feeds into folders for organizing and for scoping filters. Folders
+          are listed alphabetically, or in an order you arrange yourself in
+          Settings → Feeds.
       - title: Scheduled background fetching
         desc: >-
           New articles are pulled automatically on a schedule, with adaptive

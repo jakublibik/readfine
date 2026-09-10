@@ -18,6 +18,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import auth_pair, encrypt, feed_auth
@@ -879,9 +880,16 @@ async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> No
 
 
 async def list_user_feeds(
-    user: User, db: AsyncSession, include_unread: bool = False
+    user: User, db: AsyncSession, include_unread: bool = False,
+    folder_order: str = FOLDER_ORDER_DEFAULT,
 ) -> list[UserFeed]:
-    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical).
+    """Return all subscriptions for a user, grouped by folder, feeds alphabetical.
+
+    Folders follow ``folder_order`` ("name" or "custom", from the user's
+    settings) and feeds with no folder come last either way. The mode is a
+    parameter rather than something this reads for itself: most callers already
+    hold the settings row, and passing it keeps one query out of every sidebar
+    render.
 
     With ``include_unread=True`` each returned object gets an ``unread_count``
     computed fresh from the DB (excluding retention-trimmed stubs), matching what
@@ -895,7 +903,7 @@ async def list_user_feeds(
         .options(selectinload(UserFeed.feed), selectinload(UserFeed.folder))
         .where(UserFeed.user_id == user.id)
         .order_by(
-            func.lower(Folder.name).nulls_last(),
+            *folder_order_clause(folder_order),
             func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
         )
     )

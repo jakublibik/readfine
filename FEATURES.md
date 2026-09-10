@@ -14,7 +14,7 @@ _Get content in, from anywhere._
 - **Authenticated feeds:** Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own fields or written into the address. Either way the credentials are stored encrypted, per feed.
 - **Shared & private feeds:** On an instance with several accounts, everyone following the same feed shares one fetch, so a site is polled once however many subscribers it has. Mark a feed private and it is kept to your account, with its own fetch and its own copy of the articles.
 - **Change a feed's address:** A feed that moves, or whose address needs a fix, can be pointed somewhere else without re-subscribing, so every article and every read state stays where it is. The new address is fetched once before it is saved. On a feed somebody else also follows, the address is the administrator's to change.
-- **Folders:** Group feeds into folders for organizing and for scoping filters.
+- **Folders:** Group feeds into folders for organizing and for scoping filters. Folders are listed alphabetically, or in an order you arrange yourself in Settings → Feeds.
 - **Scheduled background fetching:** New articles are pulled automatically on a schedule, with adaptive per-feed intervals that back off quiet feeds and check busy ones more often. Any feed can be pinned to a fixed interval instead.
 - **Feed health:** A feed that stops working says so instead of just going quiet: a red marker in the sidebar, the reason on hover, and a retry button. Sites that rate-limit get backed off automatically, and readable extraction switches itself off for a site that blocks it rather than filling the reader with empty articles.
 - **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS.
