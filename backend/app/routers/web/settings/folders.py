@@ -9,7 +9,7 @@ from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
 from app.services.folder_service import (
-    MOVE_DIRECTIONS, move_folder, next_folder_position, reset_folder_order, set_folder_order,
+    move_folder, next_folder_position, reset_folder_order, set_folder_order,
 )
 from app.services.scope_cleanup import strip_scope_references
 from app.templating import templates
@@ -120,11 +120,11 @@ async def settings_folder_move(
     not the user's, just re-renders the list unchanged.
     """
     form = await request.form()
-    direction = form.get("dir", "")
-    if direction not in MOVE_DIRECTIONS:
-        return HTMLResponse("Unknown direction", status_code=400)
     settings = await _get_or_create_settings(user, db)
-    await move_folder(db, settings, folder_id, direction)
+    try:
+        await move_folder(db, settings, folder_id, form.get("dir", ""))
+    except ValueError:
+        return HTMLResponse("Cannot move that folder", status_code=400)
     ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         **ctx,

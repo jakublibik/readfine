@@ -130,6 +130,16 @@ class TestMoveFolder:
         assert settings.folders_arranged is False
 
     @pytest.mark.asyncio
+    async def test_moving_while_sorted_alphabetically_raises(self):
+        """Positions decide nothing in that mode, so the move would rewrite them
+        with nothing to show for it. The arrows are not rendered there."""
+        db = AsyncMock()
+        settings = SimpleNamespace(user_id=1, folder_order="name", folders_arranged=True)
+        with pytest.raises(ValueError):
+            await move_folder(db, settings, folder_id=1, direction="up")
+        db.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_unknown_direction_raises(self):
         db = AsyncMock()
         with pytest.raises(ValueError):

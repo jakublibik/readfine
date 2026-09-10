@@ -20,7 +20,9 @@ from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
-from app.services.folder_service import next_folder_position
+from app.services.folder_service import (
+    FOLDER_ORDER_DEFAULT, folder_order_clause, next_folder_position,
+)
 from app.utils.datetime_format import is_valid_timezone
 
 logger = logging.getLogger(__name__)
@@ -75,8 +77,20 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     """Build and return an OPML 2.0 XML string for the user's subscriptions."""
 
     # Load data
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    user_settings = settings_result.scalar_one_or_none()
+
+    # Folder outlines come out in the order the user has them in, not always
+    # alphabetically: the file is a picture of their subscriptions, and a reader
+    # importing it has nothing else to go on for how to order them.
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(func.lower(Folder.name))
+        select(Folder).where(Folder.user_id == user.id).order_by(
+            *folder_order_clause(
+                user_settings.folder_order if user_settings else FOLDER_ORDER_DEFAULT
+            )
+        )
     )
     folders = {f.id: f for f in folders_result.scalars()}
 
@@ -104,11 +118,6 @@ async def export_opml(user: User, db: AsyncSession) -> str:
         .order_by(*FILTER_ORDER)
     )
     filters = filters_result.scalars().all()
-
-    settings_result = await db.execute(
-        select(UserSettings).where(UserSettings.user_id == user.id)
-    )
-    user_settings = settings_result.scalar_one_or_none()
 
     # Lookup maps for scope export and label resolution
     feed_id_to_url: dict[int, str] = {}

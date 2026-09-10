@@ -124,6 +124,11 @@ async def move_folder(
     """
     if direction not in MOVE_DIRECTIONS:
         raise ValueError(f"Unknown direction: {direction}")
+    if settings.folder_order != "custom":
+        # Sorting alphabetically means positions decide nothing, so a move would
+        # rewrite them with nothing to show for it. The arrows are not rendered in
+        # that mode; a request that gets here anyway was not made by the UI.
+        raise ValueError("Folders are sorted alphabetically")
 
     folders = await _ordered_folders(db, settings.user_id, "custom")
     index = next((i for i, f in enumerate(folders) if f.id == folder_id), None)
