@@ -327,10 +327,9 @@ class TestLearnedSpacing:
         host_throttle.record_rate_limited("reddit.com", NOW, 100000.0)
         assert host_throttle.effective_spacing("reddit.com") == host_throttle.MAX_SPACING
 
-    def test_manual_override_and_clear(self):
-        host_throttle.set_manual_spacing("reddit.com", 45.0, NOW)
+    def test_clear_drops_the_learned_value(self):
+        host_throttle.record_success("reddit.com", NOW, 45.0)
         assert host_throttle.effective_spacing("reddit.com") == 45.0
-        assert host_throttle._spacing["reddit.com"].source == "manual"
         assert host_throttle.clear_spacing("reddit.com") is True
         assert host_throttle.effective_spacing("reddit.com") == host_throttle.GLOBAL_MIN_SPACING
         assert host_throttle.clear_spacing("reddit.com") is False
