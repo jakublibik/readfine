@@ -10,16 +10,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.fetcher.failure import clear_failure_state
+from app.fetcher.redirects import url_conflict
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
-from app.utils.crypto import auth_pair, encrypt
-from app.utils.url_validator import async_validate_feed_url, split_url_credentials
+from app.utils.crypto import auth_pair, encrypt, feed_auth
+from app.utils.url_validator import (
+    async_validate_feed_url,
+    redact_url,
+    split_url_credentials,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +59,18 @@ class AlreadySubscribed(FeedSubscriptionError):
 
     def __init__(self, message: str = "Already subscribed to this feed"):
         super().__init__(message)
+
+
+class FeedUrlTaken(FeedSubscriptionError):
+    """The new address already belongs to another feed on this instance.
+
+    *feed_id* is the feed holding it, or None when the address was taken concurrently
+    and the unique index, rather than our own check, was what said so.
+    """
+
+    def __init__(self, feed_id: int | None = None):
+        self.feed_id = feed_id
+        super().__init__("Another feed on this instance already uses that address")
 
 
 class SharedPrivateFeed(FeedSubscriptionError):
@@ -137,6 +156,151 @@ def may_edit_feed_auth(feed: Feed) -> bool:
     feed from gaining a second subscriber. Together they keep credentials to one person.
     """
     return feed.subscriber_count == 1
+
+
+def may_edit_feed_url(feed: Feed) -> bool:
+    """Whether a subscriber may point *feed* at a different address.
+
+    Sole subscriber only, for the same reason as :func:`may_edit_feed_auth`: the
+    address is a column on the shared feed row, so on a row somebody else reads too,
+    changing it changes what they read, without them being asked or told. An admin is
+    not bound by this — the admin panel edits the row as the operator of the instance,
+    which is a different question and leaves an audit entry behind.
+    """
+    return feed.subscriber_count == 1
+
+
+async def _verify_feed_url(
+    url: str, *, feed_type: str, selector: str | None, auth
+) -> str:
+    """Fetch *url* to confirm it serves this feed's kind of content. Returns the
+    address to store, which is the redirect target when the new address redirects.
+
+    Saving an address nobody has fetched is how a feed ends up quietly dead: the
+    subscriber sees the save succeed, and finds out hours later, from an error badge,
+    that they typed the wrong thing. Everything here raises ``ValueError``, which the
+    two callers already turn into the form's error line.
+    """
+    if feed_type == "scrape":
+        from app.fetcher.scrape import extract_article_links, fetch_page_html
+        try:
+            html = await fetch_page_html(url, auth=auth)
+        except Exception as exc:
+            raise ValueError(f"Could not fetch that page: {exc}") from exc
+        if selector and not extract_article_links(html, selector, url):
+            raise ValueError(
+                f"The feed's CSS selector '{selector}' matched no article links on that page."
+            )
+        return url
+    try:
+        _, permanent_url = await fetch_and_parse_url(url, auth=auth)
+    except ValueError:
+        # Already a sentence about the feed itself ("Not a valid RSS/Atom feed",
+        # "The server returned a web page, not a feed", a blocked redirect).
+        raise
+    except Exception as exc:
+        raise ValueError(f"Could not fetch that address: {exc}") from exc
+    return permanent_url or url
+
+
+async def change_feed_url(
+    db: AsyncSession, feed: Feed, new_url: str, *, verify: bool = True
+) -> bool:
+    """Point *feed* at *new_url*, keeping its articles, subscribers and settings.
+
+    The address is the one thing about a feed that used to be unchangeable, which
+    left re-subscribing as the only way to follow a feed that moved without a 301 —
+    and that drops every article and every read/starred state with the old row. Only
+    ``feeds.feed_url`` moves here; nothing on ``articles`` is touched, so the history
+    survives the move and the fetcher deduplicates the overlap the new address serves
+    by the same guid/link keys it always uses.
+
+    Returns True when the address changed, False when it already was the one asked
+    for. Raises ``ValueError`` for an address that will not validate or fetch, and
+    :class:`FeedUrlTaken` when another feed on the instance holds it — deliberately
+    not a merge, because merging two feeds' subscribers and articles is a different
+    operation with a different set of things that can go wrong.
+
+    *verify* skips the confirming fetch. It exists for the caller that has to be able
+    to fix an address while the host is down, which is the admin panel.
+    """
+    new_url = (new_url or "").strip()
+    if not new_url:
+        raise ValueError("Feed URL cannot be empty")
+    if len(new_url) > 2048:
+        raise ValueError("Feed URL is too long (max 2048 characters)")
+
+    # Credentials in the address move into the auth columns, as they do on subscribe:
+    # left in feed_url they would reach the backups, the admin screens and an OPML
+    # export in clear text. On a shared row they cannot be accepted at all — writing
+    # them would make the row private under somebody else's subscription.
+    url, auth_user, auth_pass = split_url_credentials(new_url)
+    if (auth_user is not None or auth_pass is not None) and feed.subscriber_count > 1:
+        raise ValueError(
+            "That address carries a username and password, and this feed is shared with "
+            "other people. Subscribe to it separately to have a private copy of your own."
+        )
+    if auth_user and len(auth_user) > 255:
+        raise ValueError("Username is too long (max 255 characters)")
+
+    new_auth = auth_pair(auth_user, auth_pass)
+    if url == feed.feed_url and new_auth is None:
+        return False
+
+    await async_validate_feed_url(url)
+
+    selector = (feed.type_config or {}).get("article_links_selector")
+    auth = new_auth or feed_auth(
+        feed.fetch_auth_user, feed.fetch_auth_pass_encrypted, context=f"feed {feed.id}"
+    )
+    if verify:
+        url = await _verify_feed_url(
+            url, feed_type=feed.feed_type, selector=selector, auth=auth
+        )
+        if url == feed.feed_url and new_auth is None:
+            # The new address redirects back onto the one already stored.
+            return False
+
+    becomes_private = feed.is_private or new_auth is not None
+    other_id = await url_conflict(
+        db, feed_id=feed.id, url=url, feed_type=feed.feed_type,
+        selector=selector, is_private=becomes_private,
+    )
+    if other_id is not None:
+        raise FeedUrlTaken(other_id)
+
+    old_url = feed.feed_url
+    feed.feed_url = url
+    if new_auth is not None:
+        feed.fetch_auth_user = auth_user
+        # Non-NULL rather than truthy, the rule crypto.feed_auth reads them back under.
+        feed.fetch_auth_pass_encrypted = encrypt(auth_pass) if auth_pass is not None else None
+        feed.is_private = True
+    if feed.feed_type == "scrape":
+        # A scrape feed's site *is* the page it scrapes (see subscribe_scrape).
+        feed.site_url = url
+    # The validators describe a body served by the old address; kept, the first poll of
+    # the new one would be a conditional request whose 304 means nothing here.
+    feed.etag = None
+    feed.last_modified = None
+    # Changing the address is also the answer to "this feed is broken", so it clears the
+    # failure trail the broken address left, deferral included, the same as saving the
+    # edit form does.
+    clear_failure_state(feed)
+    # Due at the next scheduler tick rather than one interval after the last poll of an
+    # address we are no longer using.
+    feed.last_fetched_at = None
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Lost a race to the same address (the partial unique indexes from migration
+        # 0037 are the backstop behind the conflict check above).
+        await db.rollback()
+        raise FeedUrlTaken() from None
+    logger.info(
+        "Feed %d URL changed: %s -> %s", feed.id, redact_url(old_url), redact_url(url)
+    )
+    return True
 
 
 async def attach_subscriber(feed: Feed, user: User, db: AsyncSession, **fields) -> UserFeed:
@@ -716,9 +880,16 @@ async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> No
 
 
 async def list_user_feeds(
-    user: User, db: AsyncSession, include_unread: bool = False
+    user: User, db: AsyncSession, include_unread: bool = False,
+    folder_order: str = FOLDER_ORDER_DEFAULT,
 ) -> list[UserFeed]:
-    """Return all subscriptions for a user, ordered by folder name then feed name (both alphabetical).
+    """Return all subscriptions for a user, grouped by folder, feeds alphabetical.
+
+    Folders follow ``folder_order`` ("name" or "custom", from the user's
+    settings) and feeds with no folder come last either way. The mode is a
+    parameter rather than something this reads for itself: most callers already
+    hold the settings row, and passing it keeps one query out of every sidebar
+    render.
 
     With ``include_unread=True`` each returned object gets an ``unread_count``
     computed fresh from the DB (excluding retention-trimmed stubs), matching what
@@ -732,7 +903,7 @@ async def list_user_feeds(
         .options(selectinload(UserFeed.feed), selectinload(UserFeed.folder))
         .where(UserFeed.user_id == user.id)
         .order_by(
-            func.lower(Folder.name).nulls_last(),
+            *folder_order_clause(folder_order),
             func.lower(func.coalesce(UserFeed.custom_title, Feed.title)),
         )
     )

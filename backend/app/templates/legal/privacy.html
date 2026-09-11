@@ -56,12 +56,32 @@
             <td class="px-3 py-2">Security, abuse prevention (server logs)</td>
             <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(f) GDPR</td>
           </tr>
+          {% if app_traffic_stats_enabled() %}
+          <tr>
+            <td class="px-3 py-2 whitespace-nowrap">Visits to public pages</td>
+            <td class="px-3 py-2">Visitor counts for the operator, stored as totals only</td>
+            <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(f) GDPR</td>
+          </tr>
+          {% endif %}
         </tbody>
       </table>
     </div>
+    {% if app_traffic_stats_enabled() %}
+    <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+      We use no third-party analytics, no advertising data, and we sell nothing to
+      anyone. The operator does count visits to the public pages (the landing page,
+      sign-in, registration, features, help, privacy and terms). To tell a repeat
+      visit apart from a new one within the same day, your IP address and browser
+      user-agent are turned into a short hash that exists only in the server's memory,
+      using a key that is thrown away and regenerated every day. No record of an
+      individual visit is written down: the database holds nothing but counts per hour
+      and per day. Pages you see while signed in are not counted at all.
+    </p>
+    {% else %}
     <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
       We do not collect analytics, advertising data, or sell data to third parties.
     </p>
+    {% endif %}
   </section>
 
   <section>

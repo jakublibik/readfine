@@ -558,6 +558,74 @@ document.body.addEventListener('showToast', function (e) {
   showToast(e.detail.msg, e.detail.type);
 });
 
+// Fallback reporting for htmx errors that nobody else took.
+//
+// htmx does not swap a 4xx/5xx response, so a request that fails with no listener of its
+// own leaves the page exactly as it was: the spinner stops and the target keeps whatever
+// was in it, which reads the same as a request that succeeded and found nothing. That is
+// how a rate limit on the feed test and a failed share both came to look like nothing
+// happening at all, until each got a handler of its own. Every other request on the site
+// still had none.
+//
+// The rule for the scoped handlers is: claim the error only if you told the user
+// something. Putting state back is not telling them, so a reverted star still gets a
+// message from here, while the chat, which writes the failure into the thread, does not
+// get a second one on top.
+var _FALLBACK_ERROR_GAP_MS = 4000;
+// -Infinity, not 0: performance.now() starts near zero, so a zero here would read as
+// "just toasted" and swallow every failure in the page's first four seconds, which is
+// the window the first list load lands in.
+var _lastFallbackErrorAt = -Infinity;
+
+function _claimHtmxError(e) {
+  if (e && e.detail) e.detail._rfHandled = true;
+}
+
+// A polling element asks again by itself, so its failure is neither news nor actionable,
+// and saying so every 2s until the user leaves the page would be worse than silence.
+// hx-trigger is the only place that says an element polls. A trigger that both loads once
+// and polls after ("load, ..., every 300s") counts as polling here, so the initial load
+// failing is silent too: mistaking a one-shot for a poll only costs the message we have
+// been living without, mistaking a poll for a one-shot costs a toast every other second.
+function _isPollingRequest(elt) {
+  if (!elt || !elt.getAttribute) return false;
+  var trigger = elt.getAttribute('hx-trigger') || elt.getAttribute('data-hx-trigger') || '';
+  return /(^|,)\s*every\s/.test(trigger);
+}
+
+function _reportUnhandledHtmxError(e, msg) {
+  var detail = e.detail;
+  if (!detail || _isPollingRequest(detail.elt)) return;
+  // Decide a tick later so the scoped handlers get to run first, whatever order they
+  // registered in. They cannot be relied on to register first: app.js is deferred and the
+  // page scripts that carry two of them are not, so today they always do, and the day
+  // app.js loses its defer they would silently stop.
+  setTimeout(function () {
+    if (detail._rfHandled) return;
+    // Toasts all sit at the same spot on screen, so two at once are unreadable rather
+    // than twice as informative. One failure usually arrives with company. Measured on
+    // the monotonic clock: Date.now() steps whenever the OS corrects the wall clock,
+    // which on a laptop waking from sleep is exactly when a pile of requests fails.
+    var now = performance.now();
+    if (now - _lastFallbackErrorAt < _FALLBACK_ERROR_GAP_MS) return;
+    _lastFallbackErrorAt = now;
+    showToast(msg, 'error');
+  }, 0);
+}
+
+document.body.addEventListener('htmx:responseError', function (e) {
+  // An expired session does not come through here: it answers 200 with HX-Redirect to
+  // the login page (main.py), so htmx navigates instead of failing.
+  var status = e.detail && e.detail.xhr ? e.detail.xhr.status : 0;
+  _reportUnhandledHtmxError(e, status === 429
+    ? 'Too many requests in a row. Wait a minute and try again.'
+    : 'That did not go through (HTTP ' + status + '). Please try again.');
+});
+
+document.body.addEventListener('htmx:sendError', function (e) {
+  _reportUnhandledHtmxError(e, 'No connection. Check your network, then try again.');
+});
+
 // An article was removed from Saved. It no longer exists in the current view, so
 // drop its row and clear the detail panel. No two-way state sync is needed here
 // (unlike star/archive): nothing survives to keep in sync.
@@ -680,6 +748,7 @@ document.body.addEventListener('htmx:sendError', function (e) {
 document.body.addEventListener('htmx:responseError', function (e) {
   if (!e.detail.target || e.detail.target.id !== 'article-list') return;
   if (!_navSnapshot) return;
+  _claimHtmxError(e);
   _showNavErrorToast();
   _revertNavSnapshot();
 });
@@ -1586,6 +1655,10 @@ function _revertOptimisticStar(elt) {
   delete btn._optimisticStarred;
 }
 
+// These two deliberately do not claim the error: putting the star back says that it did
+// not stick, not why, and a star bouncing back on its own is exactly the kind of thing
+// the app-wide fallback exists to explain. Starring several articles quickly enough to
+// hit the rate limit is the case that needs the words.
 document.body.addEventListener('htmx:sendError', function (e) { _revertOptimisticStar(e.detail.elt); });
 document.body.addEventListener('htmx:responseError', function (e) { _revertOptimisticStar(e.detail.elt); });
 document.body.addEventListener('htmx:afterRequest', function (e) {
@@ -1867,6 +1940,7 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
       cleanup();
       var content = document.getElementById(CONTENT_ID);
       if (!content) return;
+      _claimHtmxError(ev);
       content.innerHTML = '<div class="px-6 py-6 text-sm text-gray-400">' +
         'Couldn’t load this article. ' +
         '<button type="button" data-inline-retry class="text-blue-600 underline">Retry</button></div>';
@@ -3274,11 +3348,13 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   });
 
+  // Returns whether the failure was actually reported in the thread, which is what
+  // decides if the app-wide fallback should stay quiet about it.
   function _handleChatCommError(elt, errMsg) {
     var postUrl = (elt.getAttribute('hx-post') || '');
     var artMatch = postUrl.match(/articles\/(\d+)\/ai-chat/);
     var isGeneral = postUrl === '/htmx/ai-chat';
-    if (!artMatch && !isGeneral) return;
+    if (!artMatch && !isGeneral) return false;
     var key     = artMatch ? artMatch[1] : 'general';
     var inputId = artMatch ? 'chat-input-' + artMatch[1] : 'general-chat-input';
     var msgsId  = artMatch ? 'chat-messages-' + artMatch[1] : 'general-chat-messages';
@@ -3296,13 +3372,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       if (input) { input.value = pending; input.focus(); }
       delete _chatPending[key];
     }
+    return !!area;
   }
 
   document.body.addEventListener('htmx:responseError', function (e) {
-    _handleChatCommError(e.detail.elt, 'Request failed — please try again.');
+    if (_handleChatCommError(e.detail.elt, 'Request failed — please try again.')) _claimHtmxError(e);
   });
   document.body.addEventListener('htmx:sendError', function (e) {
-    _handleChatCommError(e.detail.elt, 'Network error — please try again.');
+    if (_handleChatCommError(e.detail.elt, 'Network error — please try again.')) _claimHtmxError(e);
   });
 
   document.addEventListener('DOMContentLoaded', function () {

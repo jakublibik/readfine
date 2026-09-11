@@ -34,6 +34,15 @@ entry while the context is fresh. At **release**, that `[Unreleased]` list is wh
 move into the dated section, so keeping it current as you go makes the release a rename,
 not an archaeology dig.
 
+**Keep entries short.** An entry says what changed, what it means for the reader and what
+they have to do about it (a setting to turn on, an env var to set). It is not the place for
+design rationale, a defence of a method, or a walk through every state a feature can be in;
+that belongs in the help page, the feature list or a code comment. Aim for roughly 100 words
+per entry, 200 at the very most for a large feature. A follow-up fix to something still
+unreleased is folded into the entry it belongs to rather than listed as its own fix, and
+folding it in means rewriting that entry, not appending to it: an entry that keeps growing
+by a paragraph per commit is the usual way one ends up three times too long.
+
 **Gate: before any merge to `master`, verify on staging first** (`staging.readfine.app`,
 `./deploy-staging.sh dev`). Staging tracks `dev`, so it exercises exactly what you're about
 to merge.

@@ -66,6 +66,13 @@ class UserSettings(Base):
     format_profile: Mapped[str] = mapped_column(String(10), nullable=False, default="iso")
     keyboard_shortcuts_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     label_display: Mapped[str] = mapped_column(String(20), default="indicator")
+    # 'name' sorts folders alphabetically, 'custom' by Folder.position, which the
+    # user arranges in Settings → Feeds. folders_arranged is False until they
+    # first move one, which is what lets the manual order be seeded from the
+    # alphabetical one without ever overwriting an arrangement they made. See
+    # services/folder_service.py.
+    folder_order: Mapped[str] = mapped_column(String(10), nullable=False, default="name")
+    folders_arranged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     bucket_small_max: Mapped[int] = mapped_column(SmallInteger, default=640)
     bucket_medium_max: Mapped[int] = mapped_column(SmallInteger, default=1100)
     reading_font_size: Mapped[str] = mapped_column(String(10), nullable=False, default="md")

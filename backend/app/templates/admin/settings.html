@@ -137,6 +137,37 @@
     </div>
   </section>
 
+  <!-- Traffic -->
+  <section>
+    <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Traffic</h2>
+    <div class="space-y-4 max-w-lg">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Count public page visits</label>
+          <p class="text-xs text-gray-400">
+            Aggregated counts for the landing, sign-in and info pages, shown under
+            <a href="/admin/traffic" class="underline hover:text-gray-600">Traffic</a>.
+            Signed-in traffic is not counted. Nothing per-visit is stored: no IP
+            address, no user agent, no cookie, no third party.
+          </p>
+        </div>
+        <input type="checkbox" name="traffic_stats_enabled" value="true"
+               {% if s.traffic_stats_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
+      </div>
+      {# Counting is independent of registration on purpose: it changes what the
+         privacy page says, which is not something opening sign-ups should decide.
+         Closing registration does shrink what there is to count, though, and that
+         is worth saying before the landing figures come back empty. #}
+      <p id="traffic-closed-note" class="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded p-2 {% if s.registration_enabled %}hidden{% endif %}">
+        With registration closed there is no landing page to count: <code>/</code>
+        sends visitors straight to sign-in. Sign-in, features, help, privacy and terms
+        are still counted, and so are visits to <code>/register</code>, which on an
+        invite-only instance is people finding the door locked.
+      </p>
+    </div>
+  </section>
+
   <!-- Legal -->
   <section id="legal-section" class="{% if not s.registration_enabled %}hidden{% endif %}">
     <h2 class="text-sm font-medium text-gray-700 mb-1 pb-1 border-b border-gray-200">Legal pages</h2>
@@ -270,6 +301,7 @@ document.querySelector('[name="registration_enabled"]').addEventListener('change
     document.getElementById('legal-section').classList.toggle('hidden', !enabled);
     var w = document.getElementById('legal-warning');
     if (w) w.classList.toggle('hidden', !enabled);
+    document.getElementById('traffic-closed-note').classList.toggle('hidden', enabled);
 });
 </script>
 {% endblock %}

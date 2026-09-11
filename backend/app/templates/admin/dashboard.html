@@ -10,7 +10,7 @@
   <span class="text-xs text-gray-400">Readfine v{{ app_version }}</span>
 </div>
 
-<div class="grid grid-cols-2 gap-4 mb-6 sm:grid-cols-4">
+<div class="grid grid-cols-2 gap-4 mb-6 {{ 'sm:grid-cols-5' if traffic_views_7d is not none else 'sm:grid-cols-4' }}">
   <a href="/admin/users" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-2xl font-bold text-gray-900">{{ stats.user_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Users <span class="text-gray-400">({{ stats.active_user_count|num }} active)</span></div>
@@ -27,6 +27,12 @@
     <div class="text-2xl font-bold {{ 'text-red-600' if stats.error_feed_count else 'text-gray-900' }}">{{ stats.error_feed_count|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Feeds in error <span class="text-gray-400">now</span></div>
   </a>
+  {% if traffic_views_7d is not none %}
+  <a href="/admin/traffic" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
+    <div class="text-2xl font-bold text-gray-900">{{ traffic_views_7d|num }}</div>
+    <div class="text-sm text-gray-500 mt-1">Page views <span class="text-gray-400">last 7 days</span></div>
+  </a>
+  {% endif %}
 </div>
 
 {# One row saying what needs a look, in the order the sections appear below. Built as

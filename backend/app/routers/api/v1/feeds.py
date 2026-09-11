@@ -13,6 +13,7 @@ from app.services.feed import (
     AlreadySubscribed, attach_unread_counts, list_user_feeds, may_edit_feed_auth,
     subscribe, unsubscribe,
 )
+from app.services.folder_service import get_folder_order
 from app.utils.crypto import encrypt
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
@@ -23,7 +24,9 @@ async def get_feeds(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    return await list_user_feeds(user, db, include_unread=True)
+    return await list_user_feeds(
+        user, db, include_unread=True, folder_order=await get_folder_order(db, user.id)
+    )
 
 
 @router.post("", response_model=UserFeedResponse, status_code=status.HTTP_201_CREATED)

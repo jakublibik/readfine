@@ -8,10 +8,13 @@ from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
+from app.services.folder_service import (
+    move_folder, next_folder_position, reset_folder_order, set_folder_order,
+)
 from app.services.scope_cleanup import strip_scope_references
 from app.templating import templates
 
-from .common import _get_feeds_context
+from .common import _get_feeds_context, _get_or_create_settings
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -29,13 +32,12 @@ async def settings_folder_create(
             select(Folder).where(Folder.user_id == user.id, Folder.name == name)
         )
         if not existing.scalar_one_or_none():
-            db.add(Folder(user_id=user.id, name=name))
+            position = await next_folder_position(db, user.id)
+            db.add(Folder(user_id=user.id, name=name, position=position))
             await db.commit()
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "with_folder_oob": True,
     })
 
@@ -56,11 +58,9 @@ async def settings_folder_delete(
         cleanup = await strip_scope_references(db, kind="folder", ref_id=folder_id, user_id=user.id)
         await db.delete(folder)
         await db.commit()
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "with_folder_oob": True,
         "scope_cleanup": cleanup,
     })
@@ -100,10 +100,70 @@ async def settings_folder_rename(
     if folder and name:
         folder.name = name
         await db.commit()
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
+        "with_folder_oob": True,
+    })
+
+
+@router.post("/folders/{folder_id}/move", response_class=HTMLResponse)
+async def settings_folder_move(
+    folder_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Move a folder one step up or down in the manual order.
+
+    A folder that is already at the end it was asked to move towards, or that is
+    not the user's, just re-renders the list unchanged.
+    """
+    form = await request.form()
+    settings = await _get_or_create_settings(user, db)
+    try:
+        await move_folder(db, settings, folder_id, form.get("dir", ""))
+    except ValueError:
+        return HTMLResponse("Cannot move that folder", status_code=400)
+    ctx = await _get_feeds_context(user, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
+        **ctx,
+        # The subscribe form's folder dropdown follows the same order, so it has
+        # to be swapped along or it keeps showing the order from before the move.
+        "with_folder_oob": True,
+    })
+
+
+@router.post("/folder-order", response_class=HTMLResponse)
+async def settings_folder_order(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    settings = await _get_or_create_settings(user, db)
+    try:
+        await set_folder_order(db, settings, form.get("mode", ""))
+    except ValueError:
+        return HTMLResponse("Unknown folder order", status_code=400)
+    ctx = await _get_feeds_context(user, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
+        **ctx,
+        "with_folder_oob": True,
+    })
+
+
+@router.post("/folder-order/reset", response_class=HTMLResponse)
+async def settings_folder_order_reset(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Discard the arrangement and put the folders back in alphabetical order."""
+    settings = await _get_or_create_settings(user, db)
+    await reset_folder_order(db, settings)
+    ctx = await _get_feeds_context(user, db)
+    return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
+        **ctx,
         "with_folder_oob": True,
     })

@@ -638,6 +638,26 @@ async def _cleanup_expired_pending_emails() -> None:
         await session.commit()
 
 
+async def _flush_traffic_stats() -> None:
+    """Job: persist the minute's public-page visit counts."""
+    if db.async_session_factory is None:
+        return
+    from app.services import traffic_service
+    if not traffic_service.get_enabled():
+        return
+    async with db.async_session_factory() as session:
+        await traffic_service.flush(session)
+
+
+async def _purge_traffic_stats() -> None:
+    """Job: drop visit counts past the retention horizon."""
+    if db.async_session_factory is None:
+        return
+    from app.services import traffic_service
+    async with db.async_session_factory() as session:
+        await traffic_service.purge_old(session)
+
+
 async def _sweep_thumb_cache() -> None:
     """Job: drop video thumbnails nobody has requested within the idle window."""
     from app.services.video_thumb_service import sweep_idle_thumbnails
@@ -894,6 +914,25 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=50,
         id="sweep_thumb_cache",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _flush_traffic_stats,
+        trigger="interval",
+        minutes=1,
+        id="flush_traffic_stats",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=30,
+    )
+    scheduler.add_job(
+        _purge_traffic_stats,
+        trigger="cron",
+        hour=4,
+        minute=30,
+        id="purge_traffic_stats",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

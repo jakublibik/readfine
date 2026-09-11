@@ -30,7 +30,7 @@ FALLBACK_BLOCK_COOLDOWN = timedelta(seconds=60)
 # A minimum gap the scheduler leaves between same-host fetches, learned from what a
 # host advertises. It learns *precisely* from live RateLimit-* headers on a success
 # (reset/remaining) and *tightens* on repeated 429s; it never auto-loosens (that
-# would oscillate around the limit). An admin clears/overrides it manually.
+# would oscillate around the limit). An admin clears it to make it re-learn.
 GLOBAL_MIN_SPACING = 2.0    # floor enforced for every host, incl. hosts we know nothing about (s)
 MAX_SPACING = 600.0         # cap on a learned spacing so a feed never stalls forever (10 min)
 SPACING_MARGIN = 1.15       # multiplicative tighten applied when a 429 ratchet fires
@@ -41,7 +41,7 @@ TIGHTEN_AFTER_429 = 2       # consecutive 429s before tightening (debounces a lo
 class LearnedSpacing:
     host: str
     seconds: float          # learned min gap; 0.0 means "tracking only, nothing learned yet"
-    source: str             # "200" | "429" | "manual"
+    source: str             # "200" | "429"
     learned_at: datetime
     consecutive_429: int = 0
 
@@ -207,14 +207,6 @@ def arm_after_fetch(host: str, now: datetime) -> None:
     entry = _spacing.get(host)
     if entry and entry.seconds > 0:
         note_rate_limited(host, now + timedelta(seconds=entry.seconds))
-
-
-def set_manual_spacing(host: str, seconds: float, now: datetime) -> LearnedSpacing:
-    """Admin override: pin a spacing (source ``manual``). Clamped to ``MAX_SPACING``."""
-    entry = LearnedSpacing(host, min(max(seconds, 0.0), MAX_SPACING), "manual", now, 0)
-    _spacing[host] = entry
-    _dirty.add(host)
-    return entry
 
 
 def clear_spacing(host: str) -> bool:

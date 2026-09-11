@@ -16,6 +16,7 @@ from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.services.feed import list_user_feeds
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.utils.crypto import auth_pair, feed_auth
 from app.utils.datetime_format import format_until
 from app.utils.parsing import safe_int
@@ -95,12 +96,25 @@ async def _get_or_create_settings(user: User, db: AsyncSession) -> UserSettings:
     return s
 
 
-async def _get_feeds_context(user, db):
-    user_feeds = await list_user_feeds(user, db)
+async def _get_feeds_context(user, db) -> dict:
+    """Everything the feeds page and its list partial render from.
+
+    Returns a dict so callers can splat it into the template context and adding
+    a value here does not mean editing every route that renders the list.
+    """
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    folder_order = user_s.folder_order if user_s else FOLDER_ORDER_DEFAULT
+    user_feeds = await list_user_feeds(user, db, folder_order=folder_order)
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+        select(Folder).where(Folder.user_id == user.id).order_by(*folder_order_clause(folder_order))
     )
     folders = folders_result.scalars().all()
+    # Folders that have feeds, in display order. The list partial needs both the
+    # membership test (which folders to list as empty) and the ends of the order
+    # (which arrows to render as disabled). Read off the subscriptions already in
+    # hand rather than asking the database again.
+    with_feeds = {uf.folder_id for uf in user_feeds if uf.folder_id is not None}
+    filled_folder_ids = [f.id for f in folders if f.id in with_feeds]
     feed_ids = [uf.feed_id for uf in user_feeds]
     if feed_ids:
         counts_result = await db.execute(
@@ -129,4 +143,11 @@ async def _get_feeds_context(user, db):
             min_interval_min=min_interval, max_interval_min=max_interval, now=now,
         )
         f.next_fetch_rel = format_until(f.next_fetch_at, now)
-    return user_feeds, folders, article_counts
+    return {
+        "user_feeds": user_feeds,
+        "folders": folders,
+        "article_counts": article_counts,
+        "folder_order": folder_order,
+        "folders_arranged": bool(user_s and user_s.folders_arranged),
+        "filled_folder_ids": filled_folder_ids,
+    }

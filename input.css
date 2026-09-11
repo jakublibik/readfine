@@ -312,3 +312,10 @@ html.dark[data-layout="3"] .article-row.article-active {
 }
 .row-just-saved { animation: row-just-saved 2s ease-out; }
 .dark .row-just-saved { animation-name: row-just-saved-dark; }
+
+/* A folder header that was just moved. Each folder's feeds sit between the headers,
+   so one step up or down can carry a folder past a screenful of rows and out of
+   sight. Same fade as a row landing in Saved, for the same reason: it says where the
+   thing you just acted on ended up. */
+.folder-just-moved { animation: row-just-saved 2s ease-out; }
+.dark .folder-just-moved { animation-name: row-just-saved-dark; }

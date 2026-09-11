@@ -56,17 +56,19 @@ document.addEventListener('DOMContentLoaded', function () {
     else resetTitlePlaceholder();
   });
 
-  // htmx leaves a non-2xx response unswapped, and there is no app-wide handler to fall
-  // back on (the htmx:responseError listeners in app.js are each scoped to the article
-  // list, the star revert or the chat). So a Test that tripped this endpoint's
+  // htmx leaves a non-2xx response unswapped, so a Test that tripped this endpoint's
   // 10/minute did nothing whatsoever: the spinner stopped, the box stayed empty and the
-  // user had no way to know a limit existed, let alone that waiting would fix it.
+  // user had no way to know a limit existed, let alone that waiting would fix it. The
+  // app-wide fallback in app.js covers that much now, but the answer belongs in the
+  // result box the user is looking at rather than in a toast at the foot of the screen,
+  // so this stays and claims the error to keep the fallback quiet.
   document.body.addEventListener('htmx:responseError', function (evt) {
     var cfg = evt.detail.requestConfig;
     var path = cfg && cfg.path;
     if (path !== '/settings/feeds/test' && path !== '/settings/feeds') return;
     var box = document.getElementById('feed-test-result');
     if (!box) return;
+    _claimHtmxError(evt);
     var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
     var line = document.createElement('p');
     line.className = 'text-sm text-red-600';
@@ -135,6 +137,43 @@ document.addEventListener('DOMContentLoaded', function () {
       savedFolderValue = sel ? sel.value : null;
     }
   });
+  // --- Moving a folder: keep the keyboard on the arrows -----------------------------
+  // A move swaps the whole list, so the button that was clicked is gone and htmx puts
+  // focus back on the element with the same id. That covers walking a folder up step
+  // by step; the one step it cannot cover is the last one, where the folder reaches an
+  // end of the list and that arrow is no longer rendered. Land on the folder's other
+  // arrow instead of on the body.
+  var movedFolderId = null;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    var cfg = evt.detail.requestConfig;
+    var match = cfg && cfg.path && cfg.path.match(/\/settings\/folders\/(\d+)\/move$/);
+    movedFolderId = match ? match[1] : null;
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    if (movedFolderId === null) return;
+    var folderId = movedFolderId;
+    movedFolderId = null;
+
+    // A step past the neighbouring folder is a step past all of that folder's feeds,
+    // so the folder can land well down the page or off it. Bring it back into view
+    // (only if it left) and fade its header, or the click leaves the user hunting for
+    // where the folder went.
+    var header = document.getElementById('folder-header-' + folderId);
+    var row = header ? (header.closest('tr') || header) : null;
+    if (row) {
+      row.scrollIntoView({ block: 'nearest' });
+      row.classList.add('folder-just-moved');
+      setTimeout(function () { row.classList.remove('folder-just-moved'); }, 2000);
+    }
+
+    // htmx restores focus by id, which covers every step but the last one into an end
+    // of the list, where the arrow that was clicked is no longer rendered.
+    if (document.activeElement && document.activeElement !== document.body) return;
+    var btn = document.getElementById('folder-move-up-' + folderId) ||
+              document.getElementById('folder-move-down-' + folderId);
+    if (btn) btn.focus();
+  });
+
   document.body.addEventListener('htmx:afterSettle', function (evt) {
     var cfg = evt.detail.requestConfig;
     if (cfg && cfg.path && cfg.path.indexOf('/settings/folders') !== -1 && savedFolderValue !== null) {

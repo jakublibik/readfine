@@ -38,6 +38,28 @@
       class="space-y-4">
 
   <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Feed address</label>
+    {% if can_edit_url %}
+    <input type="text" name="feed_url"
+           value="{{ url_value if url_value is defined else uf.feed.feed_url }}"
+           maxlength="2048" spellcheck="false" autocomplete="off"
+           class="w-full border {{ 'border-red-300' if url_error is defined else 'border-gray-300' }} rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    {% if url_error is defined %}
+    <p class="text-xs text-red-600 mt-1">{{ url_error }}</p>
+    {% endif %}
+    <p class="text-xs text-gray-400 mt-1">
+      Where this feed is fetched from. Changing it keeps every article and its read
+      state; the new address is fetched once before it is saved.
+    </p>
+    {% else %}
+    <p class="text-xs text-gray-400 mt-1">
+      This feed is shared with {{ uf.feed.subscriber_count }} people, so its address is
+      the server administrator's to change.
+    </p>
+    {% endif %}
+  </div>
+
+  <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">Custom title</label>
     <input type="text" name="custom_title"
            value="{{ uf.custom_title or '' }}"

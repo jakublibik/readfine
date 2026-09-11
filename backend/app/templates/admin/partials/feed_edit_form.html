@@ -6,6 +6,28 @@
       class="space-y-4">
 
   <div>
+    <label class="block text-sm font-medium text-gray-700 mb-1">Feed address</label>
+    {# Empty, with the current address only as a redacted placeholder: the real one can
+       carry an API token or credentials and must not reach the page. Blank = no change. #}
+    <input type="text" name="feed_url" value="" maxlength="2048"
+           spellcheck="false" autocomplete="off"
+           placeholder="{{ feed.feed_url | redact_url_display }}"
+           class="w-full border {{ 'border-red-300' if url_error else 'border-gray-300' }} rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    {% if url_error %}
+    <p class="text-xs text-red-600 mt-1">{{ url_error }}</p>
+    {% endif %}
+    <label class="mt-1.5 flex items-center gap-2 text-xs text-gray-500 cursor-pointer select-none">
+      <input type="checkbox" name="skip_verify" value="1" class="rounded">
+      Save without fetching it first
+    </label>
+    <p class="text-xs text-gray-400 mt-1">
+      Leave blank to keep the current address. Changing it keeps every article and every
+      subscriber; {{ feed.subscriber_count }} {{ 'person is' if feed.subscriber_count == 1 else 'people are' }}
+      subscribed to this feed.
+    </p>
+  </div>
+
+  <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">Title</label>
     <input type="text" name="title" value="{{ feed.title }}" maxlength="255"
            class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">

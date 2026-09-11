@@ -20,7 +20,43 @@
       {% endif %}
     </div>
   {% endif %}
+  {% if folders | length > 1 %}
+    {# Folder order lives here rather than in Preferences: this is the list it
+       reorders, and the arrows below only appear once "Custom" is on. #}
+    <div class="mb-2">
+      <div class="flex items-center justify-end gap-2">
+        <span class="text-xs text-gray-400">Folder order</span>
+        <div class="flex items-center gap-1">
+          {% for mode, label in [("name", "Alphabetical"), ("custom", "Custom")] %}
+            <button hx-post="/settings/folder-order"
+                    hx-vals='{"mode": "{{ mode }}"}'
+                    hx-target="#feeds-list"
+                    hx-swap="outerHTML"
+                    class="px-2 py-0.5 text-xs rounded {% if folder_order == mode %}bg-gray-100 text-gray-700 font-medium{% else %}text-gray-500 hover:bg-gray-100{% endif %}">{{ label }}</button>
+          {% endfor %}
+        </div>
+      </div>
+      {% if folder_order == "custom" and folders_arranged %}
+        {# The way to throw an arrangement away on purpose. Switching to
+           Alphabetical is only a view and deliberately keeps it. #}
+        <div class="flex justify-end mt-1">
+          <button type="button"
+                  class="swap-confirm px-2 py-0.5 text-xs border border-gray-300 rounded text-gray-600 hover:bg-gray-50"
+                  data-confirm-text="Confirm reset"
+                  data-confirm-class="px-2 py-0.5 text-xs rounded font-medium text-white bg-red-600 hover:bg-red-700"
+                  hx-post="/settings/folder-order/reset"
+                  hx-target="#feeds-list"
+                  hx-swap="outerHTML">Reset to alphabetical</button>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
   {% if user_feeds %}
+    {# Groups break on a change of folder name, and the sentinel starts as None,
+       so a first group of "No folder" renders no header. Only reachable for a
+       user with no folders at all (nulls_last keeps it at the bottom otherwise),
+       where a lone "No folder" header would be noise anyway. Worth knowing if
+       "No folder" ever becomes sortable. #}
     {% set ns = namespace(current_folder=none) %}
     <div class="overflow-x-auto">
     <table class="w-full text-sm">
@@ -47,6 +83,30 @@
                   <span class="text-xs font-semibold text-gray-500 uppercase tracking-wide">
                     {{ folder_name or "No folder" }}
                   </span>
+                  {% if uf.folder and folder_order == "custom" and filled_folder_ids | length > 1 %}
+                    <div class="flex items-center flex-shrink-0 ml-1">
+                      {# An end of the list has nowhere to go, and its arrow is left
+                         out rather than shown dead: nothing lines up in a column
+                         here, so removing it costs no alignment. #}
+                      {% for dir, arrow, at_end in [
+                        ("up", "↑", uf.folder.id == filled_folder_ids[0]),
+                        ("down", "↓", uf.folder.id == filled_folder_ids[-1]),
+                      ] %}
+                        {% if not at_end %}
+                          {# The id is what htmx restores focus to after the swap, so
+                             a folder can be walked up the list without the keyboard
+                             falling back to the body between steps. #}
+                          <button id="folder-move-{{ dir }}-{{ uf.folder.id }}"
+                                  hx-post="/settings/folders/{{ uf.folder.id }}/move"
+                                  hx-vals='{"dir": "{{ dir }}"}'
+                                  hx-target="#feeds-list"
+                                  hx-swap="outerHTML"
+                                  class="px-1 text-xs leading-none rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                                  title="Move {{ dir }}">{{ arrow }}</button>
+                        {% endif %}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
                   {% if uf.folder %}
                     <div class="relative flex-shrink-0 ml-1">
                       <button data-menu-toggle
@@ -157,16 +217,14 @@
       You can also <a href="/settings/opml" class="text-blue-600 hover:underline">import OPML</a> from another reader.</p>
   {% endif %}
 
-  {% if folders %}
+  {% if folders | length > filled_folder_ids | length %}
     <div class="mt-4 pt-3 border-t border-gray-100">
       <p class="text-xs text-gray-400 mb-2">Empty folders:</p>
       <ul class="flex flex-wrap gap-2">
         {% for folder in folders %}
-          {% set has_feeds = namespace(v=false) %}
-          {% for uf in user_feeds %}
-            {% if uf.folder_id == folder.id %}{% set has_feeds.v = true %}{% endif %}
-          {% endfor %}
-          {% if not has_feeds.v %}
+          {# An empty folder is rendered nowhere else, so it has no place in the
+             order to move around either. It takes its slot once it has feeds. #}
+          {% if folder.id not in filled_folder_ids %}
             <li class="flex items-center gap-1 px-2 py-1 bg-gray-50 border border-gray-200 rounded text-sm" id="folder-header-{{ folder.id }}">
               <span class="text-gray-600 flex-1">{{ folder.name }}</span>
               <div class="relative flex-shrink-0">

@@ -13,7 +13,8 @@ _Get content in, from anywhere._
 - **Web-scraping feeds:** Follow sites that have no feed. Point Readfine at a listing page and a CSS selector that matches the article links; with an AI key it can suggest the selector for you.
 - **Authenticated feeds:** Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own fields or written into the address. Either way the credentials are stored encrypted, per feed.
 - **Shared & private feeds:** On an instance with several accounts, everyone following the same feed shares one fetch, so a site is polled once however many subscribers it has. Mark a feed private and it is kept to your account, with its own fetch and its own copy of the articles.
-- **Folders:** Group feeds into folders for organizing and for scoping filters.
+- **Change a feed's address:** A feed that moves, or whose address needs a fix, can be pointed somewhere else without re-subscribing, so every article and every read state stays where it is. The new address is fetched once before it is saved. On a feed somebody else also follows, the address is the administrator's to change.
+- **Folders:** Group feeds into folders for organizing and for scoping filters. Folders are listed alphabetically, or in an order you arrange yourself in Settings → Feeds.
 - **Scheduled background fetching:** New articles are pulled automatically on a schedule, with adaptive per-feed intervals that back off quiet feeds and check busy ones more often. Any feed can be pinned to a fixed interval instead.
 - **Feed health:** A feed that stops working says so instead of just going quiet: a red marker in the sidebar, the reason on hover, and a retry button. Sites that rate-limit get backed off automatically, and readable extraction switches itself off for a site that blocks it rather than filling the reader with empty articles.
 - **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS.
@@ -80,6 +81,7 @@ _Multi-user, with the operator controls to match._
 - **Per-user accounts:** Every account has its own feeds, filters, labels, and preferences.
 - **Your account is yours to manage:** Change your name, password, or email address (a new address is confirmed before it takes effect), and close the account whenever you want. Deleting it takes your feeds, articles, filters and keys with it, right away and for good.
 - **Admin panel:** Manage users and instance-wide settings.
+- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
 - **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
 - **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.

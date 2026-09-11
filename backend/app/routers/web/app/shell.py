@@ -17,6 +17,7 @@ from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
 from app.services.article import mark_scope_read
 from app.services.feed import list_user_feeds
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
 from app.templating import templates
 
@@ -70,7 +71,10 @@ async def htmx_sidebar(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds = await list_user_feeds(user, db)
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    user_feeds = await list_user_feeds(
+        user, db, folder_order=settings.folder_order if settings else FOLDER_ORDER_DEFAULT
+    )
     user_labels = await list_labels(user, db)
 
     feed_ids = [uf.feed_id for uf in user_feeds]
@@ -190,7 +194,6 @@ async def htmx_sidebar(
 
     pinned = request.query_params.get("pinned", "true").lower() != "false"
 
-    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     ai = await _ai_availability(settings, db)
     chat_available = ai.chat
     catchup_avail = ai.catchup
@@ -457,7 +460,7 @@ async def htmx_search_modal(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds = await list_user_feeds(user, db)
+    user_feeds = await list_user_feeds(user, db, folder_order=await get_folder_order(db, user.id))
     user_labels = await list_labels(user, db)
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {

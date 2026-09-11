@@ -42,8 +42,17 @@ categories:
           one fetch, so a site is polled once however many subscribers it has. Mark a
           feed private and it is kept to your account, with its own fetch and its own
           copy of the articles.
+      - title: Change a feed's address
+        desc: >-
+          A feed that moves, or whose address needs a fix, can be pointed somewhere
+          else without re-subscribing, so every article and every read state stays
+          where it is. The new address is fetched once before it is saved. On a feed
+          somebody else also follows, the address is the administrator's to change.
       - title: Folders
-        desc: Group feeds into folders for organizing and for scoping filters.
+        desc: >-
+          Group feeds into folders for organizing and for scoping filters. Folders
+          are listed alphabetically, or in an order you arrange yourself in
+          Settings → Feeds.
       - title: Scheduled background fetching
         desc: >-
           New articles are pulled automatically on a schedule, with adaptive
@@ -227,6 +236,12 @@ categories:
           good.
       - title: Admin panel
         desc: Manage users and instance-wide settings.
+      - title: Public page traffic
+        desc: >-
+          Optional visitor counts for the pages anyone can reach, shown in the admin
+          panel. No analytics service, no cookie, no stored IP address: the database
+          holds counts per hour and per day and nothing else. Signed-in traffic is
+          left out.
       - title: Invite-only registration
         desc: >-
           Keep sign-ups closed and hand out invitation links instead. Each one works

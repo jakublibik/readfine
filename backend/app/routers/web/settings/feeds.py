@@ -20,7 +20,15 @@ from app.models.feed import Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.feed import cache_feed_preview, may_edit_feed_auth, subscribe, unsubscribe
+from app.services.feed import (
+    cache_feed_preview,
+    change_feed_url,
+    may_edit_feed_auth,
+    may_edit_feed_url,
+    subscribe,
+    unsubscribe,
+)
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
@@ -49,12 +57,10 @@ async def settings_feeds(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     return templates.TemplateResponse(request, "settings/feeds.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "error": None,
         "subscribe_url": "",
         "detected_feeds": [],
@@ -204,7 +210,6 @@ async def settings_feeds_subscribe(
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _snap_interval(interval_raw) if interval_raw else None
 
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
     error = None
     detected_feeds = []
     try:
@@ -285,11 +290,9 @@ async def settings_feeds_subscribe(
         })
 
     # Non-HTMX fallback (no-JS)
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/feeds.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "error": error if not detected_feeds else None,
         "subscribe_url": url,
         "detected_feeds": detected_feeds,
@@ -297,26 +300,22 @@ async def settings_feeds_subscribe(
     })
 
 
-@router.get("/feeds/{user_feed_id}/edit", response_class=HTMLResponse)
-async def settings_feed_edit(
-    user_feed_id: int,
+async def _feed_edit_page(
     request: Request,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(UserFeed)
-        .where(UserFeed.id == user_feed_id, UserFeed.user_id == user.id)
-        .options(selectinload(UserFeed.feed))
-    )
-    uf = result.scalar_one_or_none()
-    if not uf:
-        return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+    uf: UserFeed,
+    user: User,
+    db: AsyncSession,
+    **extra,
+) -> HTMLResponse:
+    """Render the feed's edit page. Shared by the GET and by the POST's error path,
+    so a save that comes back with an error redraws exactly the form the user left."""
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
+        select(Folder).where(Folder.user_id == user.id).order_by(
+            *folder_order_clause(user_s.folder_order if user_s else FOLDER_ORDER_DEFAULT)
+        )
     )
     folders = folders_result.scalars().all()
-    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     ai_selector_available = _ai_selector_available(app_s, user_s)
     is_sole_subscriber = uf.feed.subscriber_count == 1
@@ -337,6 +336,8 @@ async def settings_feed_edit(
         # Same function the POST handler gates on, so the form cannot offer a field the
         # save would then ignore.
         "can_edit_auth": may_edit_feed_auth(uf.feed),
+        # Ditto for the address; see services.feed.may_edit_feed_url.
+        "can_edit_url": may_edit_feed_url(uf.feed),
         "default_interval_min": default_interval,
         # Effective interval Auto would use for this feed — hint next to the "Auto" option.
         "auto_interval_min": auto_interval_min(
@@ -345,10 +346,30 @@ async def settings_feed_edit(
         ),
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,
+        **extra,
     })
 
 
+@router.get("/feeds/{user_feed_id}/edit", response_class=HTMLResponse)
+async def settings_feed_edit(
+    user_feed_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(UserFeed)
+        .where(UserFeed.id == user_feed_id, UserFeed.user_id == user.id)
+        .options(selectinload(UserFeed.feed))
+    )
+    uf = result.scalar_one_or_none()
+    if not uf:
+        return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+    return await _feed_edit_page(request, uf, user, db)
+
+
 @router.post("/feeds/{user_feed_id}/edit", response_class=HTMLResponse)
+@limiter.limit("10/minute")
 async def settings_feed_update(
     user_feed_id: int,
     request: Request,
@@ -365,6 +386,35 @@ async def settings_feed_update(
         return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
 
     form = await request.form()
+
+    # The address first, and on its own: it fetches, it can fail with something the
+    # user has to read, and it is the one field here whose save is worth reporting
+    # separately from "the form was saved". Nothing else has been written yet at this
+    # point, so a rejected address leaves the whole form unsaved rather than half.
+    new_url = form.get("feed_url", "").strip()
+    # Credentials typed into the address are moved onto the row by change_feed_url; the
+    # auth fields below must then leave them alone, or an address with a password in it
+    # and both fields empty would save the password and immediately clear its username.
+    url_carried_credentials = False
+    if new_url and may_edit_feed_url(uf.feed):
+        url_carried_credentials = split_url_credentials(_ensure_scheme(new_url))[1] is not None
+        try:
+            # FeedUrlTaken is a ValueError too, and its message already reads as one.
+            await change_feed_url(db, uf.feed, _ensure_scheme(new_url))
+        except ValueError as exc:
+            await db.rollback()
+            # The rollback expired the instance; the page reads half the row.
+            uf = (await db.execute(
+                select(UserFeed)
+                .where(UserFeed.id == user_feed_id, UserFeed.user_id == user.id)
+                .options(selectinload(UserFeed.feed))
+            )).scalar_one_or_none()
+            if not uf:
+                return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+            return await _feed_edit_page(
+                request, uf, user, db, url_error=str(exc), url_value=new_url,
+            )
+
     custom_title = form.get("custom_title", "").strip() or None
     folder_id_raw = form.get("folder_id")
     folder_id = safe_int(folder_id_raw)
@@ -398,7 +448,7 @@ async def settings_feed_update(
     # services.feed.may_edit_feed_auth for why, and feed_edit.html, which hides the
     # fields under the same rule and tells a shared feed's subscriber how to get a
     # credentialed copy of their own.
-    if may_edit_feed_auth(uf.feed):
+    if may_edit_feed_auth(uf.feed) and not url_carried_credentials:
         fetch_auth_user = form.get("fetch_auth_user", "").strip() or None
         fetch_auth_pass = form.get("fetch_auth_pass", "") or None
         uf.feed.fetch_auth_user = fetch_auth_user
@@ -451,11 +501,9 @@ async def settings_feed_delete(
         cleanup = await unsubscribe(user, user_feed_id, db)
     except ValueError:
         pass
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
         "scope_cleanup": cleanup,
     })
 
@@ -466,9 +514,7 @@ async def settings_feeds_list(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    user_feeds, folders, article_counts = await _get_feeds_context(user, db)
+    ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
-        "user_feeds": user_feeds,
-        "folders": folders,
-        "article_counts": article_counts,
+        **ctx,
     })

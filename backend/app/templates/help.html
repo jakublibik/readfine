@@ -273,10 +273,13 @@
             <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">A feed shows a red marker. What now?</h3>
             <p>That means the last fetch failed. Hover the marker to see why: a site that moved, a feed URL that no
               longer exists, a temporary outage. Hit <strong>↻</strong> on the feed row to retry right away; if it
-              succeeds, the marker disappears. When the URL has genuinely changed, correct it in
-              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>,
-              where you can also set a custom title, move the feed into a folder, adjust how often it's checked, and
-              store credentials for a feed that sits behind a login.</p>
+              succeeds, the marker disappears. When the address has genuinely changed, correct it in
+              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>:
+              open the feed and edit <strong>Feed address</strong>. Everything the feed already holds stays where it is,
+              articles included, and the new address is fetched once before it is saved. On an instance where somebody
+              else follows the same feed, the address is the administrator's to change. The same page is where you set a
+              custom title, move the feed into a folder, adjust how often it's checked, and store credentials for a feed
+              that sits behind a login.</p>
           </div>
 
           <div id="stats" class="py-5 first:pt-0 last:pb-0">

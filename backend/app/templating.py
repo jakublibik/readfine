@@ -178,8 +178,34 @@ def set_feedback_available(value: bool) -> None:
     _feedback_available = value
 
 
+def landing_template_exists() -> bool:
+    """Whether the operator supplied a landing page.
+
+    ``/`` renders ``landing.html`` only when registration is open AND the file is
+    there; it is gitignored and absent from a fresh clone, in which case ``/``
+    redirects to sign-in. Traffic counting only sees pages that answer 200, so on
+    an instance without one there is no landing row to show.
+    """
+    from jinja2 import TemplateNotFound
+    try:
+        templates.env.get_template("landing.html")
+        return True
+    except TemplateNotFound:
+        return False
+
+
+def _traffic_stats_enabled() -> bool:
+    # Imported here, not at module scope: the service pulls in app.rate_limit, and
+    # templating is imported from within create_app's middleware setup.
+    from app.services.traffic_service import get_enabled
+    return get_enabled()
+
+
 templates.env.globals["static_url"] = static_url
 templates.env.globals["app_ai_enabled"] = get_ai_enabled
+# Whether the admin nav shows the Traffic page. The mirror itself lives in the
+# service that reads it on every request, so there is one copy of the flag.
+templates.env.globals["app_traffic_stats_enabled"] = _traffic_stats_enabled
 templates.env.globals["app_feedback_available"] = get_feedback_available
 templates.env.globals["viewer_is_admin"] = lambda: current_viewer_is_admin.get()
 templates.env.globals["ai_error_fresh"] = lambda: current_viewer_ai_error.get()

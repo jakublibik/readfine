@@ -25,6 +25,7 @@ from app.fetcher.rss import (
     _url_dedup_keys,
     fetch_feed,
     is_full_content_feed,
+    unparseable_reason,
 )
 from app.fetcher.scheduler import (
     compute_next_fetch_at,
@@ -1360,6 +1361,83 @@ class TestFetchFeedConditional:
             await fetch_feed(feed, session)
         assert feed.etag == '"keep"'
         assert feed.last_modified == "Tue, 02 Jan 2024 00:00:00 GMT"
+
+
+class TestUnparseableReason:
+    """A body with no feed in it gets a plain sentence, not a SAX message."""
+
+    def test_html_page(self):
+        reason = unparseable_reason("<!DOCTYPE html><html><body>Not here</body></html>")
+        assert reason is not None
+        assert "web page" in reason
+
+    def test_php_error_dump(self):
+        # What a WordPress feed under a fatal error serves: HTML fragments, no XML.
+        body = (
+            "<br />\n<b>Notice</b>: Function _load_textdomain_just_in_time was called "
+            "<strong>incorrectly</strong>. in <b>/wp-includes/functions.php</b> on line <b>6260</b><br />"
+        )
+        reason = unparseable_reason(body)
+        assert reason is not None
+        assert "web page" in reason
+
+    def test_empty_body(self):
+        assert "empty" in unparseable_reason("   \n  ")
+
+    def test_json_body(self):
+        reason = unparseable_reason('{"error": "gone"}')
+        assert reason == "The server's response is not a feed."
+
+    def test_feed_with_leading_junk_keeps_parser_message(self):
+        # There *is* a feed here, just preceded by warnings — the parser's own
+        # complaint about the XML is the more useful one.
+        assert unparseable_reason("<br />warning<?xml version='1.0'?><rss><channel/></rss>") is None
+
+    def test_atom_root(self):
+        assert unparseable_reason("<feed xmlns='http://www.w3.org/2005/Atom'></feed>") is None
+
+    def test_rdf_root(self):
+        assert unparseable_reason("<rdf:RDF xmlns:rdf='...'></rdf:RDF>") is None
+
+    def test_missing_body(self):
+        assert unparseable_reason(None) is None
+
+    def test_feed_root_far_past_the_scan_limit_is_not_a_feed(self):
+        assert unparseable_reason("<p>x</p>" + "y" * 70_000 + "<rss>") is not None
+
+
+class TestFetchFeedUnparseableBody:
+    """fetch_feed: the stored error names what came back, when it was not a feed."""
+
+    def _bozo(self):
+        import feedparser
+        from xml.sax._exceptions import SAXParseException
+        return feedparser.FeedParserDict({
+            "bozo": True,
+            "bozo_exception": SAXParseException("junk after document element", None, MagicMock()),
+            "entries": [],
+            "feed": feedparser.FeedParserDict({}),
+        })
+
+    async def _run(self, body: str):
+        feed = _make_feed()
+        session = _make_session()
+        resp = ConditionalResponse(200, body, None, None)
+        with (
+            patch("app.fetcher.rss.fetch_url_conditional", return_value=resp),
+            patch("app.fetcher.rss.feedparser.parse", return_value=self._bozo()),
+        ):
+            await fetch_feed(feed, session)
+        return session.add.call_args[0][0].error_message
+
+    async def test_error_page_body_gets_plain_message(self):
+        message = await self._run("<br /><b>Fatal error</b>: something broke<br />")
+        assert "web page" in message
+        assert "junk after document element" not in message
+
+    async def test_broken_xml_keeps_parser_detail(self):
+        message = await self._run("<?xml version='1.0'?><rss><channel></rss>")
+        assert "junk after document element" in message
 
 
 class TestFetchFeedDuplicateRace:

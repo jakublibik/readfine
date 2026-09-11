@@ -20,6 +20,9 @@ from app.models.user import User, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
+from app.services.folder_service import (
+    FOLDER_ORDER_DEFAULT, folder_order_clause, next_folder_position,
+)
 from app.utils.datetime_format import is_valid_timezone
 
 logger = logging.getLogger(__name__)
@@ -74,8 +77,20 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     """Build and return an OPML 2.0 XML string for the user's subscriptions."""
 
     # Load data
+    settings_result = await db.execute(
+        select(UserSettings).where(UserSettings.user_id == user.id)
+    )
+    user_settings = settings_result.scalar_one_or_none()
+
+    # Folder outlines come out in the order the user has them in, not always
+    # alphabetically: the file is a picture of their subscriptions, and a reader
+    # importing it has nothing else to go on for how to order them.
     folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(func.lower(Folder.name))
+        select(Folder).where(Folder.user_id == user.id).order_by(
+            *folder_order_clause(
+                user_settings.folder_order if user_settings else FOLDER_ORDER_DEFAULT
+            )
+        )
     )
     folders = {f.id: f for f in folders_result.scalars()}
 
@@ -103,11 +118,6 @@ async def export_opml(user: User, db: AsyncSession) -> str:
         .order_by(*FILTER_ORDER)
     )
     filters = filters_result.scalars().all()
-
-    settings_result = await db.execute(
-        select(UserSettings).where(UserSettings.user_id == user.id)
-    )
-    user_settings = settings_result.scalar_one_or_none()
 
     # Lookup maps for scope export and label resolution
     feed_id_to_url: dict[int, str] = {}
@@ -342,10 +352,13 @@ async def import_opml(
     if import_feeds:
         # Collect all top-level feed outlines, unwrapping TTRSS "All articles" wrapper
         feed_outlines = _collect_feed_outlines(body)
+        next_folder_pos = await next_folder_position(db, user.id)
         for outline, folder_name in feed_outlines:
             folder_id = None
             if folder_name:
-                folder_id = await _get_or_create_folder(user, folder_name, folder_name_to_id, db)
+                folder_id, next_folder_pos = await _get_or_create_folder(
+                    user, folder_name, folder_name_to_id, db, next_folder_pos
+                )
             xml_url = outline.get("xmlUrl", "")
             try:
                 added_id = await _import_feed(user, outline, folder_id, result, db)
@@ -512,19 +525,27 @@ async def _get_or_create_folder(
     name: str,
     cache: dict[str, int],
     db: AsyncSession,
-) -> int:
+    next_position: int,
+) -> tuple[int, int]:
+    """Return the folder's id and the position the next new folder should take.
+
+    The caller counts positions up instead of asking the database per folder:
+    an import creating thirty folders would otherwise run thirty MAX() queries,
+    each one relying on the previous folder having been flushed already.
+    """
     if name in cache:
-        return cache[name]
+        return cache[name], next_position
     result = await db.execute(
         select(Folder).where(Folder.user_id == user.id, Folder.name == name)
     )
     folder = result.scalar_one_or_none()
     if folder is None:
-        folder = Folder(user_id=user.id, name=name)
+        folder = Folder(user_id=user.id, name=name, position=next_position)
+        next_position += 1
         db.add(folder)
         await db.flush()
     cache[name] = folder.id
-    return folder.id
+    return folder.id, next_position
 
 
 async def _import_feed(

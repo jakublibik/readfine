@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
+from app.config import settings as app_config
 from app.database import get_db
 from app.fetcher import host_throttle
 from app.fetcher.failure import has_failure_trail
@@ -38,14 +39,22 @@ from app.services.admin_service import (
     update_app_settings,
     update_feed_admin,
 )
+from app.services import traffic_service
+from app.services.feed import change_feed_url
 from app.utils.crypto import encrypt
 from app.utils.datetime_format import format_until
 from app.utils.parsing import clamp, safe_int
 from app.utils.smtp import send_email
+from app.utils.url_validator import redact_url
 
 logger = logging.getLogger(__name__)
 
-from app.templating import templates, set_ai_enabled, set_feedback_available
+from app.templating import (
+    landing_template_exists,
+    set_ai_enabled,
+    set_feedback_available,
+    templates,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -66,9 +75,57 @@ async def admin_dashboard(
 ):
     from app import __version__
     stats = await get_dashboard_stats(db)
-    return templates.TemplateResponse(
-        request, "admin/dashboard.html", {"stats": stats, "app_version": __version__}
+    traffic_views_7d = (
+        await traffic_service.get_recent_views(db, days=7)
+        if traffic_service.get_enabled()
+        else None
     )
+    return templates.TemplateResponse(request, "admin/dashboard.html", {
+        "stats": stats,
+        "app_version": __version__,
+        "traffic_views_7d": traffic_views_7d,
+    })
+
+
+@router.get("/traffic", response_class=HTMLResponse)
+async def admin_traffic(
+    request: Request,
+    days: int | None = None,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    # Not a 404 when the flag is off: the nav item is hidden but the URL stays in
+    # browser history, and an empty state saying where to switch it on beats a
+    # page that claims not to exist.
+    # Telling one visitor from another needs the real client address. With no proxy
+    # trusted, anything in front of the app (the Docker setup's own nginx included)
+    # hands us its address for everyone and the count collapses to one, which looks
+    # like a measured number rather than a misconfiguration. Views and bots are
+    # unaffected, so the page is still worth showing, with the warning on it.
+    client_ip_unreliable = (
+        app_config.trusted_proxy_count == 0 and not app_config.trust_cloudflare
+    )
+    if not traffic_service.get_enabled():
+        return templates.TemplateResponse(request, "admin/traffic.html", {
+            "traffic": None,
+            "client_ip_unreliable": client_ip_unreliable,
+        })
+    window = clamp(days, 7, 365, 30)
+    data = await traffic_service.get_traffic_overview(db, days=window)
+    # The funnel ends in a completed registration, so with registration closed every
+    # row of it would read zero and look like a measurement fault.
+    from app.services.app_settings_cache import get_registration_enabled
+    registration_open = await get_registration_enabled(db)
+    return templates.TemplateResponse(request, "admin/traffic.html", {
+        "traffic": data,
+        "show_funnel": registration_open,
+        # "/" answers 200 only when registration is open and the operator's own
+        # landing.html is there. Otherwise it redirects to sign-in and is never
+        # counted, so the funnel has to start a step later instead of dividing by a
+        # landing figure that is structurally zero.
+        "landing_counted": registration_open and landing_template_exists(),
+        "client_ip_unreliable": client_ip_unreliable,
+    })
 
 
 @router.get("/scoring-eval", response_class=HTMLResponse)
@@ -192,6 +249,7 @@ async def admin_settings_save(
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
         "feedback_enabled": form.get("feedback_enabled") == "true",
+        "traffic_stats_enabled": form.get("traffic_stats_enabled") == "true",
         "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
         "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
         "legal_jurisdiction": form.get("legal_jurisdiction", "").strip() or None,
@@ -210,6 +268,10 @@ async def admin_settings_save(
         s = await update_app_settings(db, data)
         set_ai_enabled(s.ai_enabled)
         set_feedback_available(bool(s.feedback_enabled and s.smtp_host and s.smtp_from_email))
+        # update_app_settings only invalidates the registration cache, so without this
+        # the toggle would look broken: counting wouldn't start until the next restart.
+        # Switching it off also empties the process; the service owns that.
+        await traffic_service.apply_enabled(db, s.traffic_stats_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
         legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {
@@ -497,6 +559,19 @@ async def admin_feed_edit_form(
     db: AsyncSession = Depends(get_db),
 ):
     """Feed-edit form for the admin modal — feed-wide fields only."""
+    return await _feed_edit_form_response(request, db, feed_id, group)
+
+
+async def _feed_edit_form_response(
+    request: Request,
+    db: AsyncSession,
+    feed_id: int,
+    group: str,
+    *,
+    url_error: str | None = None,
+) -> HTMLResponse:
+    """Render the admin feed-edit form. Also the POST's error path, which redraws the
+    form inside the open modal instead of swapping in the feeds table."""
     feed = await get_feed(db, feed_id)
     if not feed:
         return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
@@ -513,6 +588,7 @@ async def admin_feed_edit_form(
             feed.derived_interval_min, default_interval_min=default_interval,
             min_interval_min=min_interval, max_interval_min=max_interval,
         ),
+        "url_error": url_error,
     })
 
 
@@ -525,6 +601,35 @@ async def admin_feed_update(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
+
+    # The address before anything else: it fetches, and a rejected one has to come back
+    # as a message on the field rather than as a silently unchanged feed. Blank means
+    # "keep it" — the form never carries the current address, which can hold a token.
+    new_url = (form.get("feed_url") or "").strip()
+    if new_url:
+        feed = await get_feed(db, feed_id)
+        if not feed:
+            return HTMLResponse("<p class='text-red-500 p-4'>Feed not found.</p>", status_code=404)
+        old_url = feed.feed_url
+        try:
+            changed = await change_feed_url(
+                db, feed, new_url, verify=form.get("skip_verify") != "1",
+            )
+        except ValueError as exc:
+            await db.rollback()
+            resp = await _feed_edit_form_response(request, db, feed_id, group, url_error=str(exc))
+            # The form posts into the feeds table; a redrawn form has to go back into
+            # the modal it came from instead, or it would replace the table with itself.
+            resp.headers["HX-Retarget"] = "#feed-edit-content"
+            resp.headers["HX-Reswap"] = "innerHTML"
+            return resp
+        if changed:
+            await log_audit(
+                db, user.id, "feed_url_change", target_type="feed", target_id=feed_id,
+                detail={"from": redact_url(old_url), "to": redact_url(feed.feed_url),
+                        "subscribers": feed.subscriber_count},
+            )
+
     interval_raw = safe_int(form.get("fetch_interval_min"))
     fetch_interval_min = _quantize15(interval_raw, 60) if interval_raw else None
     feed = await update_feed_admin(

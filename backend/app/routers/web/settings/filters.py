@@ -21,6 +21,7 @@ from app.services.filter_service import (
     test_filter,
     update_filter,
 )
+from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.label_service import list_labels
 from app.templating import templates
 from app.utils.parsing import safe_int
@@ -70,12 +71,13 @@ async def settings_filter_edit(
 
 async def _filter_form_context(user, db):
     labels = await list_labels(user, db)
-    user_feeds = await list_user_feeds(user, db)
-    folders_result = await db.execute(
-        select(Folder).where(Folder.user_id == user.id).order_by(Folder.position, Folder.name)
-    )
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
     user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    folder_order = user_s.folder_order if user_s else FOLDER_ORDER_DEFAULT
+    user_feeds = await list_user_feeds(user, db, folder_order=folder_order)
+    folders_result = await db.execute(
+        select(Folder).where(Folder.user_id == user.id).order_by(*folder_order_clause(folder_order))
+    )
     ai_score_available = bool(
         app_s and app_s.ai_enabled and user_s and user_s.ai_scoring_enabled_default
     )
