@@ -24,6 +24,7 @@ import hashlib
 import logging
 import re
 import secrets
+import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -102,6 +103,14 @@ _salt: bytes = secrets.token_bytes(32)
 # restart would overwrite a whole day with the handful of visits since boot.
 _baseline: dict[str, int] = {}
 
+# The owner's timezone changes about once in an instance's life, and the flush runs
+# every minute, so looking it up each time is 1440 pointless joins a day. Only the
+# lookup is cached: the day itself is still recomputed from the clock on every flush,
+# so a rollover is never late. The cost of the cache is that moving the owner's
+# timezone takes up to this long to take effect.
+_OWNER_TZ_TTL_SECONDS = 600
+_owner_tz_cache: tuple[float, str] | None = None
+
 
 def get_enabled() -> bool:
     return _enabled
@@ -112,15 +121,39 @@ def set_enabled(value: bool) -> None:
     _enabled = value
 
 
-def reset_state() -> None:
-    """Drop every in-memory counter (tests; never called by the app)."""
-    global _views, _sources, _visitors, _day, _salt, _baseline
+async def apply_enabled(db: AsyncSession, enabled: bool) -> None:
+    """Point the mirror at a saved setting, emptying the process when it goes off.
+
+    Switching off is not just a boolean: the flush job stops the moment the flag
+    drops, so without a last flush the minute since the previous one is lost, and
+    without the discard the day's visitor hashes would sit in memory for the life of
+    the process with nothing left to write them to.
+    """
+    was_enabled = _enabled
+    set_enabled(enabled)
+    if was_enabled and not enabled:
+        try:
+            await flush(db)
+        except Exception as exc:
+            logger.warning("Traffic stats: final flush on disable failed: %s", exc)
+        discard_state()
+
+
+def discard_state() -> None:
+    """Drop every in-memory counter, the day's visitor hashes included.
+
+    Called when an admin switches counting off (after a last flush), so the hashes
+    do not sit in the process for the rest of its life with nothing left to write
+    them. Also how the tests start from a known state.
+    """
+    global _views, _sources, _visitors, _day, _salt, _baseline, _owner_tz_cache
     _views = {}
     _sources = {}
     _visitors = {}
     _day = None
     _salt = secrets.token_bytes(32)
     _baseline = {}
+    _owner_tz_cache = None
 
 
 # ── Recording ─────────────────────────────────────────────────────────────────
@@ -226,7 +259,17 @@ async def _owner_timezone(db: AsyncSession) -> str:
     """The instance owner's timezone: the oldest active admin, i.e. the one
     ``seed_first_admin`` created. UTC when there is none — an instance without an
     active admin must not take the daily rotation, and with it the whole flush, down.
+
+    The answer is resolved through ``resolve_tz`` before it is returned, so the name
+    that goes on to ``AT TIME ZONE`` in the query layer is one Python accepted. The
+    two would otherwise disagree about a bad value: Python falls back to UTC, while
+    Postgres raises and takes the admin page with it.
     """
+    global _owner_tz_cache
+    now = time.monotonic()
+    if _owner_tz_cache and now - _owner_tz_cache[0] < _OWNER_TZ_TTL_SECONDS:
+        return _owner_tz_cache[1]
+
     row = await db.execute(text("""
         SELECT us.timezone
         FROM users u
@@ -235,7 +278,9 @@ async def _owner_timezone(db: AsyncSession) -> str:
         ORDER BY u.id
         LIMIT 1
     """))
-    return row.scalar() or "UTC"
+    tz = str(resolve_tz(row.scalar()))
+    _owner_tz_cache = (now, tz)
+    return tz
 
 
 async def _load_baseline(db: AsyncSession, day: date) -> dict[str, int]:
@@ -505,6 +550,14 @@ async def get_traffic_overview(db: AsyncSession, days: int) -> dict:
         "visitors_avg_change": _pct_change(visitors_avg, prev_visitors_avg),
         "visitors_peak": peak,
         "visitors_peak_day": peak_day,
+        # How many different people the window saw cannot be recovered from daily
+        # counts (the sets are collapsed to a number when they are written), but the
+        # counts do bracket it. Not fewer than the busiest single day, since those
+        # people were all here at once; not more than every day added up, since that
+        # counts a regular once per day. Both bounds are tight at their extreme, so
+        # where the truth sits inside says whether the audience returns or arrives.
+        "visitors_floor": peak,
+        "visitors_ceiling": sum(visitors),
         "views_total": sum(views),
         "views_change": _pct_change(sum(views), sum(prev_views)),
         "bot_total": sum(bots),

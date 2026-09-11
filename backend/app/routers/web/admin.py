@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
+from app.config import settings as app_config
 from app.database import get_db
 from app.fetcher import host_throttle
 from app.fetcher.failure import has_failure_trail
@@ -48,7 +49,12 @@ from app.utils.url_validator import redact_url
 
 logger = logging.getLogger(__name__)
 
-from app.templating import templates, set_ai_enabled, set_feedback_available
+from app.templating import (
+    landing_template_exists,
+    set_ai_enabled,
+    set_feedback_available,
+    templates,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -91,16 +97,34 @@ async def admin_traffic(
     # Not a 404 when the flag is off: the nav item is hidden but the URL stays in
     # browser history, and an empty state saying where to switch it on beats a
     # page that claims not to exist.
+    # Telling one visitor from another needs the real client address. With no proxy
+    # trusted, anything in front of the app (the Docker setup's own nginx included)
+    # hands us its address for everyone and the count collapses to one, which looks
+    # like a measured number rather than a misconfiguration. Views and bots are
+    # unaffected, so the page is still worth showing, with the warning on it.
+    client_ip_unreliable = (
+        app_config.trusted_proxy_count == 0 and not app_config.trust_cloudflare
+    )
     if not traffic_service.get_enabled():
-        return templates.TemplateResponse(request, "admin/traffic.html", {"traffic": None})
+        return templates.TemplateResponse(request, "admin/traffic.html", {
+            "traffic": None,
+            "client_ip_unreliable": client_ip_unreliable,
+        })
     window = clamp(days, 7, 365, 30)
     data = await traffic_service.get_traffic_overview(db, days=window)
     # The funnel ends in a completed registration, so with registration closed every
     # row of it would read zero and look like a measurement fault.
     from app.services.app_settings_cache import get_registration_enabled
+    registration_open = await get_registration_enabled(db)
     return templates.TemplateResponse(request, "admin/traffic.html", {
         "traffic": data,
-        "show_funnel": await get_registration_enabled(db),
+        "show_funnel": registration_open,
+        # "/" answers 200 only when registration is open and the operator's own
+        # landing.html is there. Otherwise it redirects to sign-in and is never
+        # counted, so the funnel has to start a step later instead of dividing by a
+        # landing figure that is structurally zero.
+        "landing_counted": registration_open and landing_template_exists(),
+        "client_ip_unreliable": client_ip_unreliable,
     })
 
 
@@ -246,7 +270,8 @@ async def admin_settings_save(
         set_feedback_available(bool(s.feedback_enabled and s.smtp_host and s.smtp_from_email))
         # update_app_settings only invalidates the registration cache, so without this
         # the toggle would look broken: counting wouldn't start until the next restart.
-        traffic_service.set_enabled(s.traffic_stats_enabled)
+        # Switching it off also empties the process; the service owns that.
+        await traffic_service.apply_enabled(db, s.traffic_stats_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
         legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {

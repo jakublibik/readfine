@@ -13,6 +13,19 @@
 {% block admin_content %}
 <h1 class="text-xl font-semibold text-gray-900 mb-2">Traffic</h1>
 
+{% if client_ip_unreliable %}
+<p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+  <strong>Visitor counts need the real client address, and this instance trusts no
+  proxy to supply one.</strong>
+  <code>TRUSTED_PROXY_COUNT</code> is 0 and <code>TRUST_CLOUDFLARE</code> is off, so
+  if anything sits in front of the app, including the nginx that comes with the
+  Docker setup, every visit arrives from that one address and the visitor numbers
+  below collapse to 1. Page views and bots are counted correctly either way. The
+  README has the setting for each deployment shape; it is the same one the rate
+  limiter uses.
+</p>
+{% endif %}
+
 {% if not traffic %}
 <p class="text-sm text-gray-500 mb-4">
   Counting public page visits is switched off. Turn it on under
@@ -80,6 +93,39 @@
 <p class="text-xs text-gray-400 -mt-6 mb-8">
   Change is against the {{ traffic.days }} days before this window.
 </p>
+
+{# The one number the daily counts cannot give, given as the range they do give. #}
+{% if traffic.visitors_ceiling %}
+<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8">
+  <h2 class="text-sm font-semibold text-gray-700 mb-2">Different people over the whole window</h2>
+  {% if traffic.visitors_floor == traffic.visitors_ceiling %}
+  <div class="text-2xl font-bold text-gray-900 mb-2">{{ traffic.visitors_floor|num }}</div>
+  <p class="text-sm text-gray-500">
+    Exact, because only one day in this window saw any traffic.
+  </p>
+  {% else %}
+  <div class="flex flex-wrap items-baseline gap-x-8 gap-y-2 mb-3">
+    <div>
+      <span class="text-2xl font-bold text-gray-900">{{ traffic.visitors_floor|num }}</span>
+      <span class="text-sm text-gray-500 ml-2">at least</span>
+    </div>
+    <div>
+      <span class="text-2xl font-bold text-gray-900">{{ traffic.visitors_ceiling|num }}</span>
+      <span class="text-sm text-gray-500 ml-2">at most</span>
+    </div>
+  </div>
+  <p class="text-sm text-gray-500">
+    How many different people came over the {{ traffic.days }} days is not something
+    daily counts can pin down, but they do bracket it. It cannot be fewer than the
+    best single day above, since those people were all here at once, and it cannot
+    be more than every day added together, since that counts a regular visitor once
+    per day. Where the truth sits in between says something in itself: near
+    {{ traffic.visitors_floor|num }} means largely the same people coming back, near
+    {{ traffic.visitors_ceiling|num }} means mostly first-time arrivals.
+  </p>
+  {% endif %}
+</div>
+{% endif %}
 
 {# ── Chart ─────────────────────────────────────────────────────────────────
    Both series share one scale (page views), so the height of the dark bar next
@@ -165,13 +211,24 @@
 {# ── Funnel ────────────────────────────────────────────────────────────── #}
 {% if show_funnel %}
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Registration funnel</h2>
-{% set funnel_top = traffic.funnel.landing or 1 %}
+{# The landing step is dropped rather than shown as zero when "/" is not a page
+   here, because every later step is a percentage of the first one and dividing by
+   a structural zero turns 22 sign-up views into 2200%. #}
+{% set steps = ([{"label": "Landing page", "count": traffic.funnel.landing}] if landing_counted else [])
+   + [{"label": "Registration page", "count": traffic.funnel.register},
+      {"label": "Accounts created", "count": traffic.funnel.signups}] %}
+{% set funnel_top = steps[0].count or 1 %}
+{% if not landing_counted %}
+<p class="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-3">
+  This instance serves no landing page, so <code>/</code> redirects straight to
+  sign-in and never gets counted, which is also why it is missing from the table
+  above. The funnel starts at the registration page instead. A landing page is an
+  operator's own <code>landing.html</code>; it is not part of the repository, and
+  without it <code>/</code> is a redirect rather than a page.
+</p>
+{% endif %}
 <div class="bg-white border border-gray-200 rounded-lg p-4 mb-8 space-y-1.5">
-  {% for step in [
-    {"label": "Landing page", "count": traffic.funnel.landing},
-    {"label": "Registration page", "count": traffic.funnel.register},
-    {"label": "Accounts created", "count": traffic.funnel.signups},
-  ] %}
+  {% for step in steps %}
   <div class="flex items-center gap-3">
     <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
     <div class="flex-1 bg-gray-100 rounded-full h-2">
@@ -179,7 +236,7 @@
     </div>
     <div class="w-40 text-xs text-gray-500">
       {{ step.label }}
-      <span class="text-gray-400">({{ (step.count / funnel_top * 100)|num(1) }}%)</span>
+      <span class="text-gray-400">({{ [step.count / funnel_top * 100, 100]|min|num(1) }}%)</span>
     </div>
   </div>
   {% endfor %}
@@ -198,9 +255,10 @@
 <h2 class="text-sm font-semibold text-gray-700 mb-3">How to read these numbers</h2>
 <ul class="bg-white border border-gray-200 rounded-lg p-4 mb-8 text-sm text-gray-600 space-y-2 list-disc pl-8">
   <li>
-    <strong>Visitors are an average per day, never a total.</strong> Someone who comes
-    back every day is one visitor on each of those days, so adding the days up would
-    count them {{ traffic.days }} times. Page views are totals and do add up.
+    <strong>The daily visitor figures are averages, not a total.</strong> Someone who
+    comes back every day is one visitor on each of those days, so adding the days up
+    would count them {{ traffic.days }} times. That is why the figure for the whole
+    window is a range rather than a number. Page views are totals and do add up.
   </li>
   <li>
     A visitor is one IP address and one browser for one day. Two people on a shared

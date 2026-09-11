@@ -27,10 +27,10 @@ CHROME_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0 Saf
 
 @pytest.fixture(autouse=True)
 def enabled():
-    ts.reset_state()
+    ts.discard_state()
     ts.set_enabled(True)
     yield
-    ts.reset_state()
+    ts.discard_state()
     ts.set_enabled(False)
 
 
@@ -238,6 +238,26 @@ def test_visitor_sets_are_per_page_as_well_as_total():
     assert visitors("/help") == 2
 
 
+# ── Wiring ────────────────────────────────────────────────────────────────────
+# Everything above drives record() directly, which says nothing about whether the
+# app ever calls it. The whole feature hangs on one line in the security-headers
+# middleware, and without these two the line can be deleted with the suite staying
+# green.
+
+def test_the_middleware_counts_a_real_public_page(unauth_client):
+    resp = unauth_client.get("/login")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+    assert total_views() == 1
+    assert visitors("/login") == 1
+
+
+def test_the_middleware_leaves_everything_else_alone(unauth_client):
+    unauth_client.get("/healthz")
+    unauth_client.get("/static/js/ai-settings.js")
+    assert ts._views == {}
+
+
 def test_record_never_raises(monkeypatch):
     monkeypatch.setattr(ts, "_record_inner", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
     ts.record(make_request("/"), html())  # must not propagate
@@ -264,6 +284,7 @@ class FakeSession:
 
     def __init__(self, tz="UTC"):
         self.tz = tz
+        self.tz_queries = 0
         self.views: dict[tuple[datetime, str], list[int]] = {}
         self.sources: dict[tuple[datetime, str], int] = {}
         self.visitors: dict[tuple[date, str], int] = {}
@@ -277,6 +298,7 @@ class FakeSession:
         sql = " ".join(str(stmt).split())
         params = params or {}
         if "us.timezone" in sql:
+            self.tz_queries += 1
             return FakeResult(scalar=self.tz)
         if sql.startswith("SELECT path, visitors FROM visitor_daily"):
             rows = [
@@ -447,6 +469,58 @@ async def test_flush_survives_an_instance_with_no_active_admin():
     assert db.visitors[(today_in("UTC"), ts.TOTAL_PATH)] == 1
 
 
+@pytest.mark.asyncio
+async def test_the_owner_timezone_is_not_looked_up_on_every_flush():
+    """The flush runs once a minute and the owner's timezone changes about once in
+    an instance's life, so the lookup is cached."""
+    db = FakeSession()
+    for _ in range(5):
+        ts.record(make_request("/"), html())
+        await ts.flush(db)
+    assert db.tz_queries == 1
+
+
+# ── Switching it off ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_switching_off_writes_the_last_minute_and_empties_the_process():
+    """The flush job stops the moment the flag drops, so anything still in memory
+    would never be written, and the day's hashes would stay there for the life of
+    the process with nothing left to do with them."""
+    db = FakeSession()
+    ts.record(make_request("/", ip="198.51.100.1"), html())
+    ts.record(make_request("/", ip="198.51.100.2"), html())
+
+    await ts.apply_enabled(db, False)
+
+    assert db.visitors[(today_in("UTC"), ts.TOTAL_PATH)] == 2
+    assert sum(v for v, _ in db.views.values()) == 2
+    assert not ts.get_enabled()
+    assert ts._visitors == {}
+    assert ts._views == {}
+
+
+@pytest.mark.asyncio
+async def test_switching_off_empties_the_process_even_if_the_write_fails():
+    db = FakeSession()
+    ts.record(make_request("/", ip="198.51.100.1"), html())
+    db.fail_writes = True
+
+    await ts.apply_enabled(db, False)
+
+    assert ts._visitors == {}
+    assert ts._views == {}
+
+
+@pytest.mark.asyncio
+async def test_switching_on_touches_nothing():
+    db = FakeSession()
+    ts.set_enabled(False)
+    await ts.apply_enabled(db, True)
+    assert ts.get_enabled()
+    assert db.commits == 0
+
+
 # ── Against the real database ─────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
@@ -496,6 +570,26 @@ async def test_overview_does_not_add_the_total_to_the_pages(pg):
     assert data["visitors_peak"] == 10        # not 22
     assert data["visitors_avg"] == 10 / 7
     assert [p["path"] for p in data["pages"]] == []  # no views recorded, so no page rows
+
+
+@pytest.mark.asyncio
+async def test_window_visitors_are_bracketed_rather_than_summed(pg):
+    """The daily counts cannot say how many different people a window saw, but they
+    bound it: not fewer than the busiest day, not more than every day added up."""
+    tz = await ts._owner_timezone(pg)
+    day = today_in(tz)
+    await _clear_window(pg, day)
+    for offset, n in ((0, 10), (1, 4), (2, 7)):
+        await pg.execute(
+            text("INSERT INTO visitor_daily (day, path, visitors) VALUES (:d, '*', :v)"),
+            {"d": day - timedelta(days=offset), "v": n},
+        )
+
+    data = await ts.get_traffic_overview(pg, days=7)
+
+    assert data["visitors_floor"] == 10
+    assert data["visitors_ceiling"] == 21
+    assert data["visitors_avg"] == 21 / 7
 
 
 @pytest.mark.asyncio
