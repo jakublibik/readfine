@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI):
             await seed_first_admin(session, settings.first_admin_email, settings.first_admin_password)
 
     from app.models.settings import AppSettings
+    from app.services import traffic_service
     from app.templating import set_ai_enabled, set_feedback_available
     async with db.async_session_factory() as session:
         row = await session.scalar(select(AppSettings).where(AppSettings.id == 1))
@@ -54,6 +55,7 @@ async def lifespan(app: FastAPI):
             set_feedback_available(
                 bool(row.feedback_enabled and row.smtp_host and row.smtp_from_email)
             )
+            traffic_service.set_enabled(row.traffic_stats_enabled)
 
     # Hydrate the learned per-host fetch spacing so it survives restarts/deploys.
     from app.services.host_rate_limit_service import load_into_memory
@@ -77,6 +79,11 @@ async def lifespan(app: FastAPI):
     from app.services.host_rate_limit_service import flush
     async with db.async_session_factory() as session:
         await flush(session)
+    # The last minute of traffic counts, which the flush job would otherwise lose to
+    # the deploy.
+    if traffic_service.get_enabled():
+        async with db.async_session_factory() as session:
+            await traffic_service.flush(session)
     await db.engine.dispose()
 
 
@@ -131,6 +138,8 @@ def create_app() -> FastAPI:
     app.add_exception_handler(RateLimitExceeded, _html_rate_limit_handler)
 
     # Security headers
+    from app.services.traffic_service import record as record_visit
+
     @app.middleware("http")
     async def security_headers(request, call_next):
         nonce = secrets.token_urlsafe(16)
@@ -177,6 +186,12 @@ def create_app() -> FastAPI:
         if response.headers.get("content-type", "").startswith("text/html"):
             response.headers["Cache-Control"] = "no-store"
             response.headers["Vary"] = "Cookie"
+        # Public-page visit counting (off unless an admin turned it on). It rides
+        # along in this middleware rather than adding one of its own: a second
+        # BaseHTTPMiddleware wrapper costs something on every request including
+        # /static, and anything added here would sit outside SessionMiddleware,
+        # where request.session raises. record() never throws.
+        record_visit(request, response)
         return response
 
     # Health check — dedicated endpoint for uptime/monitoring probes. Unauthenticated

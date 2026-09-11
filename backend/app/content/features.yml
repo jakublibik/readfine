@@ -236,6 +236,12 @@ categories:
           good.
       - title: Admin panel
         desc: Manage users and instance-wide settings.
+      - title: Public page traffic
+        desc: >-
+          Optional visitor counts for the pages anyone can reach, shown in the admin
+          panel. No analytics service, no cookie, no stored IP address: the database
+          holds counts per hour and per day and nothing else. Signed-in traffic is
+          left out.
       - title: Invite-only registration
         desc: >-
           Keep sign-ups closed and hand out invitation links instead. Each one works

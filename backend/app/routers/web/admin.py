@@ -38,6 +38,7 @@ from app.services.admin_service import (
     update_app_settings,
     update_feed_admin,
 )
+from app.services import traffic_service
 from app.services.feed import change_feed_url
 from app.utils.crypto import encrypt
 from app.utils.datetime_format import format_until
@@ -68,9 +69,39 @@ async def admin_dashboard(
 ):
     from app import __version__
     stats = await get_dashboard_stats(db)
-    return templates.TemplateResponse(
-        request, "admin/dashboard.html", {"stats": stats, "app_version": __version__}
+    traffic_views_7d = (
+        await traffic_service.get_recent_views(db, days=7)
+        if traffic_service.get_enabled()
+        else None
     )
+    return templates.TemplateResponse(request, "admin/dashboard.html", {
+        "stats": stats,
+        "app_version": __version__,
+        "traffic_views_7d": traffic_views_7d,
+    })
+
+
+@router.get("/traffic", response_class=HTMLResponse)
+async def admin_traffic(
+    request: Request,
+    days: int | None = None,
+    user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    # Not a 404 when the flag is off: the nav item is hidden but the URL stays in
+    # browser history, and an empty state saying where to switch it on beats a
+    # page that claims not to exist.
+    if not traffic_service.get_enabled():
+        return templates.TemplateResponse(request, "admin/traffic.html", {"traffic": None})
+    window = clamp(days, 7, 365, 30)
+    data = await traffic_service.get_traffic_overview(db, days=window)
+    # The funnel ends in a completed registration, so with registration closed every
+    # row of it would read zero and look like a measurement fault.
+    from app.services.app_settings_cache import get_registration_enabled
+    return templates.TemplateResponse(request, "admin/traffic.html", {
+        "traffic": data,
+        "show_funnel": await get_registration_enabled(db),
+    })
 
 
 @router.get("/scoring-eval", response_class=HTMLResponse)
@@ -194,6 +225,7 @@ async def admin_settings_save(
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
         "feedback_enabled": form.get("feedback_enabled") == "true",
+        "traffic_stats_enabled": form.get("traffic_stats_enabled") == "true",
         "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
         "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
         "legal_jurisdiction": form.get("legal_jurisdiction", "").strip() or None,
@@ -212,6 +244,9 @@ async def admin_settings_save(
         s = await update_app_settings(db, data)
         set_ai_enabled(s.ai_enabled)
         set_feedback_available(bool(s.feedback_enabled and s.smtp_host and s.smtp_from_email))
+        # update_app_settings only invalidates the registration cache, so without this
+        # the toggle would look broken: counting wouldn't start until the next restart.
+        traffic_service.set_enabled(s.traffic_stats_enabled)
         await log_audit(db, user.id, "app_settings_update", target_type="app_settings", target_id=1)
         legal_configured = bool(s.legal_operator_name and s.legal_contact_email and s.legal_jurisdiction)
         return templates.TemplateResponse(request, "admin/settings.html", {

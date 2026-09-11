@@ -8,6 +8,7 @@ from app.models.host_rate_limit import HostRateLimit
 from app.models.label import Label, ArticleLabel
 from app.models.filter import Filter, FilterCondition, FilterAction
 from app.models.ai import UserAiKey
+from app.models.traffic import PageViewHourly, TrafficSourceHourly, VisitorDaily
 
 __all__ = [
     "User", "UserSettings",
@@ -19,4 +20,5 @@ __all__ = [
     "Label", "ArticleLabel",
     "Filter", "FilterCondition", "FilterAction",
     "UserAiKey",
+    "PageViewHourly", "TrafficSourceHourly", "VisitorDaily",
 ]

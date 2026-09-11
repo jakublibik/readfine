@@ -81,6 +81,7 @@ _Multi-user, with the operator controls to match._
 - **Per-user accounts:** Every account has its own feeds, filters, labels, and preferences.
 - **Your account is yours to manage:** Change your name, password, or email address (a new address is confirmed before it takes effect), and close the account whenever you want. Deleting it takes your feeds, articles, filters and keys with it, right away and for good.
 - **Admin panel:** Manage users and instance-wide settings.
+- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
 - **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
 - **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.

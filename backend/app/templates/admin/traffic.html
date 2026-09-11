@@ -1,0 +1,232 @@
+{% extends "admin/base.html" %}
+{% block title %}Traffic – Readfine{% endblock %}
+{% set active = "traffic" %}
+
+{% macro change(pct) %}
+  {% if pct is not none %}
+  <span class="text-xs {{ 'text-green-600' if pct >= 0 else 'text-gray-500' }}">
+    {{ '+' if pct >= 0 }}{{ pct|num(0) }}%
+  </span>
+  {% endif %}
+{% endmacro %}
+
+{% block admin_content %}
+<h1 class="text-xl font-semibold text-gray-900 mb-2">Traffic</h1>
+
+{% if not traffic %}
+<p class="text-sm text-gray-500 mb-4">
+  Counting public page visits is switched off. Turn it on under
+  <a href="/admin/settings" class="text-blue-600 underline">Settings → Traffic</a>;
+  numbers start from the moment you do, there is nothing to backfill.
+</p>
+{% else %}
+
+<p class="text-sm text-gray-500 mb-4">
+  The public pages only: landing, sign-in, registration, features, help, privacy and
+  terms. Requests carrying a session are left out, so these are visits from outside
+  the app. Days run in {{ traffic.timezone }}, the instance owner's timezone.
+</p>
+
+<div class="flex flex-wrap items-center gap-3 mb-6 text-sm">
+  <span class="text-gray-500">Window:</span>
+  {% for d in traffic.presets %}
+  <a href="/admin/traffic?days={{ d }}"
+     class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if traffic.days == d else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">
+    {{ d }}d
+  </a>
+  {% endfor %}
+  <span class="text-gray-400 text-xs">
+    {{ traffic.start.strftime('%Y-%m-%d') }} – {{ traffic.end.strftime('%Y-%m-%d') }}
+  </span>
+</div>
+
+{% if not traffic.has_data %}
+<p class="text-sm text-gray-400">No visits recorded in this window.</p>
+{% else %}
+
+{# ── KPIs ──────────────────────────────────────────────────────────────────
+   Visitors sit apart from the two totals on purpose: they are an average per day
+   and the others are sums, and reading them as the same kind of number is the one
+   mistake this page has to prevent. #}
+<div class="grid gap-4 mb-8 sm:grid-cols-3">
+  <div class="bg-white border border-blue-200 rounded-lg p-4">
+    <div class="flex items-baseline gap-2">
+      <div class="text-2xl font-bold text-gray-900">{{ traffic.visitors_avg|num(1) }}</div>
+      {{ change(traffic.visitors_avg_change) }}
+    </div>
+    <div class="text-sm text-gray-500 mt-1">Visitors per day <span class="text-gray-400">(average)</span></div>
+    {% if traffic.visitors_peak %}
+    <div class="text-xs text-gray-400 mt-1">
+      Best day {{ traffic.visitors_peak|num }} on {{ traffic.visitors_peak_day.strftime('%Y-%m-%d') }}
+    </div>
+    {% endif %}
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="flex items-baseline gap-2">
+      <div class="text-2xl font-bold text-gray-900">{{ traffic.views_total|num }}</div>
+      {{ change(traffic.views_change) }}
+    </div>
+    <div class="text-sm text-gray-500 mt-1">Page views <span class="text-gray-400">(total)</span></div>
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-4">
+    <div class="flex items-baseline gap-2">
+      <div class="text-2xl font-bold text-gray-900">{{ traffic.bot_total|num }}</div>
+      {{ change(traffic.bot_change) }}
+    </div>
+    <div class="text-sm text-gray-500 mt-1">Identified bots <span class="text-gray-400">(total)</span></div>
+    <div class="text-xs text-gray-400 mt-1">Not included in the views above</div>
+  </div>
+</div>
+<p class="text-xs text-gray-400 -mt-6 mb-8">
+  Change is against the {{ traffic.days }} days before this window.
+</p>
+
+{# ── Chart ─────────────────────────────────────────────────────────────────
+   Both series share one scale (page views), so the height of the dark bar next
+   to the light one is how many views a visitor is worth. #}
+<h2 class="text-sm font-semibold text-gray-700 mb-1">
+  {{ 'Per week' if traffic.chart_weekly else 'Per day' }}
+</h2>
+<div class="flex items-center gap-4 text-xs text-gray-500 mb-3">
+  <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-sm bg-blue-500"></span>Visitors{{ ' per day (average)' if traffic.chart_weekly }}</span>
+  <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-sm bg-blue-200"></span>Page views</span>
+</div>
+{% set scale = (traffic.chart|map(attribute='views')|max) or 1 %}
+<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8 overflow-x-auto">
+  <div class="flex items-end gap-1 h-40 min-w-max">
+    {% for bar in traffic.chart %}
+    <div class="flex items-end gap-px h-full w-4"
+         title="{{ bar.date.strftime('%Y-%m-%d') }}{% if traffic.chart_weekly %} – {{ bar.last_date.strftime('%Y-%m-%d') }}{% endif %}: {{ bar.visitors }} visitors, {{ bar.views }} views">
+      <div class="flex-1 bg-blue-500 rounded-t-sm" style="height: {{ (bar.visitors / scale * 100)|round(1) }}%"></div>
+      <div class="flex-1 bg-blue-200 rounded-t-sm" style="height: {{ (bar.views / scale * 100)|round(1) }}%"></div>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="flex justify-between text-xs text-gray-400 mt-2">
+    <span>{{ traffic.start.strftime('%Y-%m-%d') }}</span>
+    <span>{{ traffic.end.strftime('%Y-%m-%d') }}</span>
+  </div>
+</div>
+
+{# ── Pages ─────────────────────────────────────────────────────────────── #}
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Pages</h2>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Page</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Views</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Visitors / day</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Bots</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for page in traffic.pages %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700 font-mono text-xs">{{ page.path }}</td>
+        <td class="px-4 py-2 text-gray-700 text-right tabular-nums">{{ page.views|num }}</td>
+        <td class="px-4 py-2 text-gray-500 text-right tabular-nums">{{ page.visitors_avg|num(1) }}</td>
+        <td class="px-4 py-2 text-gray-400 text-right tabular-nums">{{ page.bot_views|num }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── Sources ───────────────────────────────────────────────────────────── #}
+<h2 class="text-sm font-semibold text-gray-700 mb-1">Sources</h2>
+<p class="text-xs text-gray-400 mb-3">
+  Human views only, so these add up to less than the view totals above.
+  <strong>direct</strong> will almost certainly be the largest and does not mean
+  people typed the address: a click from an email, a chat app or a mobile app sends
+  no referrer at all, and most sites send only their bare domain.
+</p>
+<div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50 border-b border-gray-200">
+      <tr>
+        <th class="text-left px-4 py-2 text-xs font-medium text-gray-500">Source</th>
+        <th class="text-right px-4 py-2 text-xs font-medium text-gray-500">Views</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-gray-100">
+      {% for src in traffic.sources %}
+      <tr>
+        <td class="px-4 py-2 text-gray-700">{{ src.source }}</td>
+        <td class="px-4 py-2 text-gray-700 text-right tabular-nums">{{ src.views|num }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="2" class="px-4 py-3 text-gray-400">Nothing yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── Funnel ────────────────────────────────────────────────────────────── #}
+{% if show_funnel %}
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Registration funnel</h2>
+{% set funnel_top = traffic.funnel.landing or 1 %}
+<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8 space-y-1.5">
+  {% for step in [
+    {"label": "Landing page", "count": traffic.funnel.landing},
+    {"label": "Registration page", "count": traffic.funnel.register},
+    {"label": "Accounts created", "count": traffic.funnel.signups},
+  ] %}
+  <div class="flex items-center gap-3">
+    <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
+    <div class="flex-1 bg-gray-100 rounded-full h-2">
+      <div class="bg-blue-500 h-2 rounded-full" style="width: {{ [step.count / funnel_top * 100, 100]|min|round }}%"></div>
+    </div>
+    <div class="w-40 text-xs text-gray-500">
+      {{ step.label }}
+      <span class="text-gray-400">({{ (step.count / funnel_top * 100)|num(1) }}%)</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<h2 class="text-sm font-semibold text-gray-700 mb-3">Registration funnel</h2>
+<p class="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4 mb-8">
+  Registration is closed, so there is no funnel to draw and no landing page above
+  either: with sign-ups shut, <code>/</code> sends visitors straight to sign-in and
+  never gets counted. Views of <code>/register</code> are still worth a look, as they
+  are people arriving at the page that tells them the door is locked.
+</p>
+{% endif %}
+
+{# ── The caveats ───────────────────────────────────────────────────────── #}
+<h2 class="text-sm font-semibold text-gray-700 mb-3">How to read these numbers</h2>
+<ul class="bg-white border border-gray-200 rounded-lg p-4 mb-8 text-sm text-gray-600 space-y-2 list-disc pl-8">
+  <li>
+    <strong>Visitors are an average per day, never a total.</strong> Someone who comes
+    back every day is one visitor on each of those days, so adding the days up would
+    count them {{ traffic.days }} times. Page views are totals and do add up.
+  </li>
+  <li>
+    A visitor is one IP address and one browser for one day. Two people on a shared
+    connection using the same browser count as one; one person on a phone and a
+    laptop counts as two.
+  </li>
+  <li>
+    <strong>Restarting the app inflates that day a little</strong>, because anyone who
+    comes back after the restart is counted again. The day's number never goes down.
+  </li>
+  <li>
+    <strong>Identified bots is a floor, not the truth.</strong> It counts what says so
+    in its user agent, which is most crawler volume; a scraper posing as Chrome is in
+    the human numbers. If this instance is behind Cloudflare, its Security → Bots
+    dashboard is a free second opinion.
+  </li>
+  <li>
+    Signed-in users are never counted, so the numbers for /features and /help are
+    traffic from outside, not from inside the app.
+  </li>
+  <li>
+    Changing the owner's timezone re-slices past page views correctly, but past
+    visitor days keep the boundaries they were recorded with.
+  </li>
+</ul>
+
+{% endif %}
+{% endif %}
+{% endblock %}
