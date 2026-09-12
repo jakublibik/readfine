@@ -1125,16 +1125,20 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
 
-// Story block: scroll the unfolded list into view. It sits at the end of the article, so
-// it opens below the fold and the reader is left hunting for what they just asked to see.
-// Aligned on its bottom edge, which puts the last source on screen; a list long enough to
-// push its own heading off the top is the rare case, and the last source is what the
-// scroll was for.
+// Story block: bring the unfolded list into view when it needs it. It sits at the end of
+// the article, so it often opens below the fold and the reader is left hunting for what
+// they just asked to see.
+//
+// 'nearest', not 'end': 'end' aligns the block's bottom with the bottom of the viewport
+// whether or not that is needed, so unfolding it while it sat near the top of the screen
+// dragged it down, which reads as the page scrolling the wrong way. 'nearest' moves by
+// the smallest amount that puts the end of the list on screen, and by nothing at all when
+// it is already there.
 document.body.addEventListener('htmx:afterSettle', function (e) {
   var id = e.detail.target.id || '';
   if (id.indexOf('story-members-') !== 0) return;
   var block = document.getElementById('story-block-' + id.slice('story-members-'.length));
-  if (block) block.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  if (block) block.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
 
 // ── Story block: open another article covering the same story ─────────────────
@@ -1149,7 +1153,7 @@ document.addEventListener('click', function (e) {
   e.preventDefault();
   var id = link.dataset.openStoryMember;
   var inline = document.getElementById('inline-article-detail-content');
-  htmx.ajax('GET', '/htmx/articles/' + id, {
+  var loaded = htmx.ajax('GET', '/htmx/articles/' + id, {
     target: inline ? '#inline-article-detail-content' : '#article-detail',
     swap: 'innerHTML'
   });
@@ -1164,6 +1168,15 @@ document.addEventListener('click', function (e) {
   // something to try in a browser.
   var shell = document.getElementById('inline-article-detail');
   if (shell) shell.dataset.articleId = id;
+  // And the scroll has to be taken back to the top of it. The click comes from the end
+  // of an article, and the inline shell sits in the list, which keeps its scroll
+  // position across the swap: a shorter article lands entirely above where the reader is
+  // looking, leaving them on the blank space past its end with nothing appearing to have
+  // happened. The right panel resets its own scroll on swap (htmx:afterSwap, above), the
+  // list does not.
+  if (shell && loaded && loaded.then) {
+    loaded.then(function () { shell.scrollIntoView({ block: 'start' }); });
+  }
 });
 
 // ── The row whose article is open in the detail pane ──────────────────────────

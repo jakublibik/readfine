@@ -23,7 +23,11 @@
     Both render paths therefore have to pass related_count, or the block would vanish the
     moment an extraction finished and the content block was swapped. -#}
 {% if related_count %}
-<div id="story-block-{{ article.id }}" class="mt-5">
+{#- scroll-mb-16 is breathing room for the scroll only, not layout: app.js brings the
+    unfolded list into view and without it the scroll would stop exactly on the last
+    source, at the very bottom edge. The margin is wide enough to bring the action bar
+    below along, which gives the eye a visible end of the article to stop on. -#}
+<div id="story-block-{{ article.id }}" class="mt-5 scroll-mb-16">
   <div class="border-l-2 border-gray-300 dark:border-gray-600 pl-4">
     <div class="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Same story</div>
     <button id="story-toggle-{{ article.id }}"
