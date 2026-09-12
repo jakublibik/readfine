@@ -28,6 +28,7 @@ from app.services.article import (
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
+from app.services.story_service import count_members, list_members
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html
@@ -636,6 +637,7 @@ async def htmx_article_detail(
         )
         if existing_chat and existing_chat.messages:
             chat_messages = list(existing_chat.messages)
+    related_count = await count_members(user.id, article.story_id, article_id, db)
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {
         "article": article,
         "mark_read_on_scroll": mark_read_on_scroll,
@@ -643,6 +645,34 @@ async def htmx_article_detail(
         "summary_pending": summary_pending,
         "chat_available": chat_available,
         "chat_messages": chat_messages,
+        "related_count": related_count,
+    })
+
+
+@router.get("/htmx/articles/{article_id}/related", response_class=HTMLResponse)
+async def htmx_article_related(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The rest of the coverage of this article's story, unfolded on click.
+
+    Access is checked twice on purpose: once for the article being read, and again, per
+    member, inside the service. The group is global, so the second check is the one that
+    keeps a feed the reader never subscribed to out of the footer.
+    """
+    story_id = (await db.execute(
+        add_article_access_joins(select(Article.story_id), user.id)
+        .where(Article.id == article_id, article_access_predicate())
+    )).scalar_one_or_none()
+    if story_id is None:
+        return HTMLResponse("")
+
+    members = await list_members(user.id, story_id, article_id, db)
+    return templates.TemplateResponse(request, "app/partials/story_members.html", {
+        "article_id": article_id,
+        "members": members,
     })
 
 

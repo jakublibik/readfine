@@ -1,0 +1,31 @@
+{#- The unfolded story footer: the other articles covering this story.
+
+    Deliberately not article rows. A .article-row is watched by the list's
+    IntersectionObserver (app.js), which marks a row read as soon as it is on screen —
+    these would mark themselves read the moment the footer opened, and the reader would
+    lose the coverage they just asked to see.
+
+    The title opens the article in whichever container is showing the reader; app.js
+    resolves that, because the right panel is display:none in the two-panel layout and
+    the inline shell is where the article actually lives there. -#}
+<ul class="mt-3 space-y-2.5">
+  {% for member in members %}
+  <li class="text-sm leading-snug">
+    <a href="#" data-open-story-member="{{ member.id }}"
+       class="{% if member.is_read %}text-gray-500 dark:text-gray-400{% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}
+              hover:underline">{{ member.title }}</a>
+    <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+      {% if member.is_starred %}<span class="text-gray-500 dark:text-gray-400">★</span>{% endif %}
+      <span class="truncate">{{ member.feed_title or (member.url | hostname) }}</span>
+      {% if member.published_at %}
+      <span aria-hidden="true">·</span>
+      <time datetime="{{ member.published_at.isoformat() }}">{{ member.published_at | localtime('short') }}</time>
+      {% endif %}
+      {% if member.url %}
+      <a href="{{ member.url }}" target="_blank" rel="noopener noreferrer"
+         class="hover:text-gray-600 dark:hover:text-gray-300" title="Open at the source">↗</a>
+      {% endif %}
+    </div>
+  </li>
+  {% endfor %}
+</ul>

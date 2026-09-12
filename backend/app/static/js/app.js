@@ -1125,6 +1125,28 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
 
+// ── Story footer: open another article covering the same story ────────────────
+// Not plain hx-get on the link. The reader lives in two different containers — the
+// inline shell when a row is expanded (2-panel and small/inline), the right panel
+// otherwise — and in the 2-panel layout #article-detail is display:none, so a link
+// aimed at it would look like nothing happened. Detect by the shell's presence, the
+// same way hideDuplicateH1 does, rather than by layout.
+document.addEventListener('click', function (e) {
+  var link = e.target.closest('[data-open-story-member]');
+  if (!link) return;
+  e.preventDefault();
+  var id = link.dataset.openStoryMember;
+  var inline = document.getElementById('inline-article-detail-content');
+  htmx.ajax('GET', '/htmx/articles/' + id, {
+    target: inline ? '#inline-article-detail-content' : '#article-detail',
+    swap: 'innerHTML'
+  });
+  // The shell's id is what "remove from Saved" and the collapse-on-reclick check read
+  // to decide which article is expanded, so it has to follow the content.
+  var shell = document.getElementById('inline-article-detail');
+  if (shell) shell.dataset.articleId = id;
+});
+
 // ── The row whose article is open in the detail pane ──────────────────────────
 // Read off the detail rather than set where the click happens. Every way an article
 // reaches the pane ends in a swap into #article-detail — a row click, the

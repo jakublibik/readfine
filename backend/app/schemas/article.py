@@ -113,5 +113,27 @@ class ArticleResponse(BaseModel):
     ai_summary_truncated: bool = False
     ai_context: str | None = None
     labels: list[dict] = []
+    # Story group this article belongs to, or None when nothing else covered it. Only
+    # says a group exists — how much of it this reader may see is a separate question
+    # (services.story_service), since the grouping is global and feeds are not.
+    story_id: int | None = None
+
+    model_config = {"from_attributes": False}
+
+
+class StoryMember(BaseModel):
+    """One other article covering the same story, as the reader footer shows it.
+
+    Deliberately narrow: the footer lists coverage, it does not re-render article rows,
+    and a member comes from a group built across all feeds, so anything selected here
+    is one access mistake away from leaking another reader's subscriptions.
+    """
+    id: int
+    title: str
+    url: str | None
+    feed_title: str | None
+    published_at: datetime | None
+    is_read: bool = False
+    is_starred: bool = False
 
     model_config = {"from_attributes": False}

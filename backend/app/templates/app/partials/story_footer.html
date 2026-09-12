@@ -1,0 +1,39 @@
+{#- Other coverage of the same story, folded until asked for.
+
+    Rendered only when the reader can actually open something: the route counts the
+    members it may see, so a group whose other members sit in feeds this reader does not
+    subscribe to, or that retention has taken away, produces no footer at all rather than
+    a button that unfolds to nothing.
+
+    The list is fetched on click, not with the article. Most articles have no story, an
+    unfolded footer is the exception, and the count already answers the only question the
+    reader has before opening it. -#}
+{% if related_count %}
+<div class="max-w-[52rem] px-6 pb-8 -mt-2">
+  <div class="border-t border-gray-100 dark:border-gray-700 pt-4">
+    <button id="story-toggle-{{ article.id }}"
+            class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400
+                   hover:text-gray-700 dark:hover:text-gray-200"
+            hx-get="/htmx/articles/{{ article.id }}/related"
+            hx-target="#story-members-{{ article.id }}"
+            hx-swap="innerHTML"
+            hx-disabled-elt="this"
+            hx-indicator="#story-spinner-{{ article.id }}">
+      <span aria-hidden="true">⧉</span>
+      <span>
+        {%- if related_count == 1 -%}
+          1 other source covered this
+        {%- else -%}
+          {{ related_count }} other sources covered this
+        {%- endif -%}
+      </span>
+      <svg id="story-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3.5 w-3.5"
+           fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+      </svg>
+    </button>
+    <div id="story-members-{{ article.id }}"></div>
+  </div>
+</div>
+{% endif %}

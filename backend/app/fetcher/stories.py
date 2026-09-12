@@ -53,7 +53,15 @@ async def assign_stories_global(since: datetime, db: AsyncSession) -> int:
     ``rss.dedup_cross_feed_global``.
     """
     ids = (await db.execute(
-        select(Article.id).where(Article.fetched_at >= since)
+        select(Article.id).where(
+            Article.fetched_at >= since,
+            # Articles saved by URL are left out. At insert their title is a placeholder
+            # built from the address and the real one arrives minutes later through
+            # extraction, so whether one got grouped would depend on nothing but whether
+            # the save happened to land inside a fetch round. They stay eligible as
+            # counterparts for feed articles, which costs nothing.
+            Article.feed_id.is_not(None),
+        )
     )).scalars().all()
     linked = await _link(list(ids), db)
     if linked:

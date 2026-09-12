@@ -494,6 +494,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         ai_summary=state.ai_summary if state else None,
         ai_summary_truncated=state.ai_summary_truncated if state else False,
         ai_context=state.ai_context if state else None,
+        story_id=article.story_id,
         labels=[
             {"id": r.id, "name": r.name, "color": r.color}
             for r in (await db.execute(
