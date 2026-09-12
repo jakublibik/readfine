@@ -1143,6 +1143,13 @@ document.addEventListener('click', function (e) {
   });
   // The shell's id is what "remove from Saved" and the collapse-on-reclick check read
   // to decide which article is expanded, so it has to follow the content.
+  //
+  // Provisional where the reader is inline: swapping in place leaves the list row above
+  // it describing a different article than the content below. The alternative is to give
+  // the related article a surface of its own, which the small bucket already has in the
+  // fullscreen overlay (mobile-detail-open, further down this file) and the 2-panel
+  // layout does not. Worth revisiting once the story feature is finished and there is
+  // something to try in a browser.
   var shell = document.getElementById('inline-article-detail');
   if (shell) shell.dataset.articleId = id;
 });
