@@ -7,13 +7,20 @@
 
     The list is fetched on click, not with the article. Most articles have no story, an
     unfolded footer is the exception, and the count already answers the only question the
-    reader has before opening it. -#}
+    reader has before opening it.
+
+    Drawn as a labelled block with a left rule, the shape ai_blocks.html established for
+    "a section that belongs to this article but is not its text". It sits past the bottom
+    action bar, which is the article's own closing row, and as a plain line under a plain
+    rule it read as something left behind rather than as a section of its own. Neutral
+    grey on purpose: blue and amber are spoken for by the AI blocks, and this is not one. -#}
 {% if related_count %}
-<div id="story-footer-{{ article.id }}" class="max-w-[52rem] px-6 pb-8 -mt-2">
-  <div class="border-t border-gray-100 dark:border-gray-700 pt-4">
+<div id="story-footer-{{ article.id }}" class="max-w-[52rem] px-6 pb-8 pt-5">
+  <div class="border-l-2 border-gray-300 dark:border-gray-600 pl-4">
+    <div class="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Same story</div>
     <button id="story-toggle-{{ article.id }}"
-            class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400
-                   hover:text-gray-700 dark:hover:text-gray-200"
+            class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300
+                   hover:text-gray-900 dark:hover:text-gray-100"
             hx-get="/htmx/articles/{{ article.id }}/related"
             hx-target="#story-members-{{ article.id }}"
             hx-swap="innerHTML"
