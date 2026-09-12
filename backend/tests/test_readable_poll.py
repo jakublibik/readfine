@@ -35,6 +35,9 @@ def make_article(**kwargs):
         "is_archived": False,
         "ai_summary": None,
         "ai_summary_truncated": False,
+        # No story by default: the content block carries the "same story" section, and
+        # the poll re-renders that block, so the route asks every article for its group.
+        "story_id": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

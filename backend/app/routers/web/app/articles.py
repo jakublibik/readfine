@@ -699,8 +699,9 @@ async def htmx_readable_poll(
                 request=request, article=article
             )
         )
-    response = _content_with_readtime_oob(
-        request, article, extra_oob=await _summary_refresh_oob(article, user, db)
+    response = await _content_with_readtime_oob(
+        request, article, user, db,
+        extra_oob=await _summary_refresh_oob(article, user, db),
     )
     response.headers["HX-Retarget"] = f"#article-content-{article.id}"
     response.headers["HX-Reswap"] = "outerHTML"
@@ -785,10 +786,18 @@ async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
     ))
 
 
-def _content_with_readtime_oob(request: Request, article, extra_oob: str = "") -> HTMLResponse:
-    """Return article_content.html + OOB span to update the reading-time metadata."""
+async def _content_with_readtime_oob(
+    request: Request, article, user: User, db: AsyncSession, extra_oob: str = ""
+) -> HTMLResponse:
+    """Return article_content.html + OOB span to update the reading-time metadata.
+
+    The story block lives inside that template, so its count has to be worked out here
+    too: this render replaces the whole content block, and without it the block would
+    disappear the moment an extraction finished.
+    """
     content_html = templates.env.get_template("app/partials/article_content.html").render(
-        request=request, article=article, chat_available=False
+        request=request, article=article, chat_available=False,
+        related_count=await count_members(user.id, article.story_id, article.id, db),
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (
@@ -1162,7 +1171,7 @@ async def htmx_extract_readable(
     article_resp = await get_article(user, article_id, db)
     if article_resp is None:
         return HTMLResponse("")
-    return _content_with_readtime_oob(request, article_resp)
+    return await _content_with_readtime_oob(request, article_resp, user, db)
 
 
 @router.post("/htmx/articles/save-url", response_class=HTMLResponse)

@@ -1125,19 +1125,19 @@ document.body.addEventListener('htmx:afterSwap', function (e) {
   if (e.detail.target.id === 'article-detail') e.detail.target.scrollTop = 0;
 });
 
-// Story footer: scroll the unfolded list into view. It sits at the very bottom of the
-// article, so it opens below the fold and the reader is left hunting for what they just
-// asked to see. Aligned on its bottom edge, which puts the last source on screen; a list
-// long enough to push its own heading off the top is the rare case, and the last source
-// is what the scroll was for.
+// Story block: scroll the unfolded list into view. It sits at the end of the article, so
+// it opens below the fold and the reader is left hunting for what they just asked to see.
+// Aligned on its bottom edge, which puts the last source on screen; a list long enough to
+// push its own heading off the top is the rare case, and the last source is what the
+// scroll was for.
 document.body.addEventListener('htmx:afterSettle', function (e) {
   var id = e.detail.target.id || '';
   if (id.indexOf('story-members-') !== 0) return;
-  var footer = document.getElementById('story-footer-' + id.slice('story-members-'.length));
-  if (footer) footer.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  var block = document.getElementById('story-block-' + id.slice('story-members-'.length));
+  if (block) block.scrollIntoView({ behavior: 'smooth', block: 'end' });
 });
 
-// ── Story footer: open another article covering the same story ────────────────
+// ── Story block: open another article covering the same story ─────────────────
 // Not plain hx-get on the link. The reader lives in two different containers — the
 // inline shell when a row is expanded (2-panel and small/inline), the right panel
 // otherwise — and in the 2-panel layout #article-detail is display:none, so a link
