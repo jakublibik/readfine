@@ -355,4 +355,7 @@ async def _save_scrape_articles(
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
 
+        from app.fetcher.stories import assign_stories
+        await assign_stories(new_articles, db)
+
     return len(new_articles)

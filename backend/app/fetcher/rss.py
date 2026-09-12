@@ -415,6 +415,9 @@ async def _save_articles(
 
         await _dedup_cross_feed(feed.id, new_articles, db)
 
+        from app.fetcher.stories import assign_stories
+        await assign_stories(new_articles, db)
+
         # Auto-detect full-content feed and disable readable extraction if warranted
         from app.services.readable_service import maybe_disable_readable_for_feed
         await maybe_disable_readable_for_feed(feed.id, db)
@@ -464,7 +467,7 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
 
     await db.execute(
         pg_insert(UserArticleState)
-        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .values([_dedup_state(r) for r in rows])
         .on_conflict_do_nothing()
     )
 
@@ -513,9 +516,24 @@ async def _dedup_cross_feed(
 
     await db.execute(
         pg_insert(UserArticleState)
-        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .values([_dedup_state(r) for r in rows])
         .on_conflict_do_nothing()
     )
+
+
+def _dedup_state(row) -> dict:
+    """State row for an article the dedup marked read.
+
+    suppressed_at says the machine wrote this is_read, not the user. Story dedup reads
+    "already seen" off is_read, so without the marker a deduped article would count as
+    seen and suppress coverage the reader never had in front of them.
+    """
+    return {
+        "user_id": row.user_id,
+        "article_id": row.article_id,
+        "is_read": True,
+        "suppressed_at": datetime.now(timezone.utc),
+    }
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

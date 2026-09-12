@@ -488,6 +488,10 @@ async def _execute_actions(
                 if action.action_type == "mark_read" and not state.is_read:
                     state.is_read = True
                     state.read_at = datetime.now(timezone.utc)
+                    # Stamped as a machine read (same reasoning as the is_starred note
+                    # below): story dedup treats is_read as "the reader has seen this
+                    # news", and a filter firing is not the reader seeing anything.
+                    state.suppressed_at = state.read_at
                     changed = True
                 elif action.action_type == "star" and not state.is_starred:
                     # Filter star sets is_starred ONLY — deliberately not the

@@ -817,6 +817,40 @@ class TestExecuteArchiveAction:
         assert added.is_archived is True
 
 
+# ── _execute_actions: mark_read ───────────────────────────────────────────────
+
+class TestExecuteMarkReadAction:
+    async def test_mark_read_is_stamped_as_a_machine_read(self):
+        """Story dedup reads "the user has seen this news" off is_read, and a filter
+        firing is not the user seeing anything. suppressed_at keeps the two apart."""
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("mark_read")]
+        state = SimpleNamespace(is_read=False, is_starred=False, is_archived=False,
+                                read_at=None, suppressed_at=None)
+        db = _state_fetch_db(state)
+
+        changed = await _execute_actions(f, make_article(), user_id=1, user_feed=make_user_feed(), db=db)
+
+        assert changed is True
+        assert state.is_read is True
+        assert state.suppressed_at == state.read_at
+
+    async def test_already_read_article_is_left_alone(self):
+        """An article the user read for real must not be restamped as a machine read."""
+        f = make_filter([])
+        f.id = 1
+        f.actions = [make_action("mark_read")]
+        state = SimpleNamespace(is_read=True, is_starred=False, is_archived=False,
+                                read_at=None, suppressed_at=None)
+        db = _state_fetch_db(state)
+
+        changed = await _execute_actions(f, make_article(), user_id=1, user_feed=make_user_feed(), db=db)
+
+        assert changed is False
+        assert state.suppressed_at is None
+
+
 # ── Saved articles: scope with no feed and no UserFeed ────────────────────────
 
 class TestScopeWithoutAFeed:

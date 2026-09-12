@@ -480,6 +480,12 @@ async def _fetch_due_feeds() -> None:
         n = await dedup_cross_feed_global(fetch_start, session)
         if n:
             logger.info("Post-gather dedup: marked %d (user, article) pairs as read", n)
+        # Same race, one level up: two feeds covering the same story in this round
+        # couldn't see each other's rows while they were still uncommitted.
+        from app.fetcher.stories import assign_stories_global
+        grouped = await assign_stories_global(fetch_start, session)
+        if grouped:
+            logger.info("Post-gather story grouping: linked %d articles", grouped)
         # Persist any learned per-host spacing changed this round (batched write-back).
         from app.services.host_rate_limit_service import flush
         await flush(session)

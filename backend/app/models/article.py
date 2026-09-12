@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Float, Integer, SmallInteger,
+    BigInteger, Boolean, Computed, DateTime, Float, Integer, SmallInteger,
     String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -25,6 +25,17 @@ class Article(Base):
     url: Mapped[str | None] = mapped_column(String(2048))
     url_normalized: Mapped[str | None] = mapped_column(String(2048), index=True)
     title: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # Generated in the database (see migration 0098) because articles are inserted from
+    # three different places and a value computed in Python would sooner or later be
+    # missing from one of them. Never assign to it.
+    title_norm: Mapped[str | None] = mapped_column(
+        Text, Computed("immutable_unaccent(lower(title))", persisted=True)
+    )
+    # Id of the oldest article in this story group (cross-source near-duplicates of one
+    # piece of news). NULL = no known counterpart. Global, not per user: a member may
+    # well come from a feed the reader doesn't subscribe to, so anything user-facing has
+    # to filter the group through article_access_predicate.
+    story_id: Mapped[int | None] = mapped_column(BigInteger)
     author: Mapped[str | None] = mapped_column(String(255))
     content: Mapped[str | None] = mapped_column(Text)
     content_source: Mapped[str | None] = mapped_column(String(20))
@@ -72,6 +83,11 @@ class UserArticleState(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     article_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True)
     is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Set when the machine wrote is_read, not the user: the cross-feed URL dedup and the
+    # filter `mark_read` action. Story dedup reads "the user has already seen this news"
+    # off is_read, and without this marker an automatic read would count as having seen
+    # it and cascade into suppressing coverage nobody ever laid eyes on.
+    suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
