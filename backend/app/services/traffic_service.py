@@ -647,7 +647,13 @@ async def _funnel(db: AsyncSession, tz: str, lower: datetime, start: date) -> di
     """Landing → register page → account created. All three are sums, which is fine:
     these are views and rows, not visitors.
 
-    The last step needs no tracking of its own — it is the users table.
+    The last step needs no tracking of its own — it is the users table. That is also
+    what makes it the one step that can reach further back than the others: views
+    begin the hour counting was switched on, while the users table goes back to the
+    instance's first day, so a window that starts before that hour would put accounts
+    against visits that were never recorded and read as more sign-ups than visitors.
+    Sign-ups are therefore counted from the first recorded view, and the page says so
+    when that cuts the window short.
     """
     rows = (await db.execute(
         text("""
@@ -660,15 +666,21 @@ async def _funnel(db: AsyncSession, tz: str, lower: datetime, start: date) -> di
         {"tz": tz, "lower": lower, "start": start},
     )).fetchall()
     by_path = {r.path: int(r.views or 0) for r in rows}
+
+    zone = resolve_tz(tz)
+    window_start = datetime.combine(start, datetime.min.time(), tzinfo=zone)
+    first_hour = await db.scalar(text("SELECT MIN(hour) FROM page_view_hourly"))
+    clipped = first_hour is not None and first_hour > window_start
+    since = first_hour if clipped else window_start
     signups = await db.scalar(
-        text("""
-            SELECT COUNT(*) FROM users
-            WHERE (created_at AT TIME ZONE :tz)::date >= :start
-        """),
-        {"tz": tz, "start": start},
+        text("SELECT COUNT(*) FROM users WHERE created_at >= :since"),
+        {"since": since},
     )
     return {
         "landing": by_path.get("/", 0),
         "register": by_path.get("/register", 0),
         "signups": int(signups or 0),
+        # None unless counting started inside the window, in which case this is the
+        # day the sign-up step actually covers.
+        "signups_from": since.astimezone(zone).date() if clipped else None,
     }

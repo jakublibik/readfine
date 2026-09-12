@@ -615,6 +615,64 @@ async def test_overview_sums_views_and_compares_with_the_previous_window(pg):
 
 
 @pytest.mark.asyncio
+async def test_signups_are_counted_from_the_first_recorded_view(pg):
+    """Counting was switched on long after the instance opened, so the users table
+    reaches back further than the views do. Accounts created before the first
+    recorded view are left out, or the last funnel step ends up above the first."""
+    tz = await ts._owner_timezone(pg)
+    day = today_in(tz)
+    await _clear_window(pg, day)
+    await pg.execute(text("DELETE FROM page_view_hourly"))
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    await pg.execute(
+        text("""INSERT INTO page_view_hourly (hour, path, views, bot_views)
+                VALUES (:h, '/register', 20, 0)"""),
+        {"h": now - timedelta(days=2)},
+    )
+
+    async def signups() -> dict:
+        return (await ts.get_traffic_overview(pg, days=7))["funnel"]
+
+    async def add_user(days_ago: int) -> None:
+        await pg.execute(
+            text("""INSERT INTO users (email, password_hash, display_name, created_at,
+                                       updated_at)
+                    VALUES (:e, 'x', 'x', :t, :t)"""),
+            {"e": f"{uuid.uuid4().hex}@example.test", "t": now - timedelta(days=days_ago)},
+        )
+
+    before = (await signups())["signups"]
+    await add_user(5)          # predates counting
+    assert (await signups())["signups"] == before
+    await add_user(1)          # inside the counted period
+    funnel = await signups()
+    assert funnel["signups"] == before + 1
+    assert funnel["signups_from"] == (now - timedelta(days=2)).astimezone(
+        resolve_tz(tz)
+    ).date()
+
+
+@pytest.mark.asyncio
+async def test_a_window_inside_the_counted_period_is_not_clipped(pg):
+    """The note only shows when counting started mid-window; once the whole window
+    is covered, sign-ups run from the window's own start."""
+    tz = await ts._owner_timezone(pg)
+    day = today_in(tz)
+    await _clear_window(pg, day)
+    await pg.execute(text("DELETE FROM page_view_hourly"))
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    await pg.execute(
+        text("""INSERT INTO page_view_hourly (hour, path, views, bot_views)
+                VALUES (:h, '/register', 3, 0)"""),
+        {"h": now - timedelta(days=20)},
+    )
+
+    data = await ts.get_traffic_overview(pg, days=7)
+
+    assert data["funnel"]["signups_from"] is None
+
+
+@pytest.mark.asyncio
 async def test_purge_drops_rows_past_retention_and_keeps_the_rest(pg):
     old = datetime.now(timezone.utc) - timedelta(days=ts.RETENTION_DAYS + 1)
     recent = datetime.now(timezone.utc) - timedelta(days=ts.RETENTION_DAYS - 1)

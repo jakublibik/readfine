@@ -17,12 +17,10 @@
 <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
   <strong>Visitor counts need the real client address, and this instance trusts no
   proxy to supply one.</strong>
-  <code>TRUSTED_PROXY_COUNT</code> is 0 and <code>TRUST_CLOUDFLARE</code> is off, so
-  if anything sits in front of the app, including the nginx that comes with the
-  Docker setup, every visit arrives from that one address and the visitor numbers
-  below collapse to 1. Page views and bots are counted correctly either way. The
-  README has the setting for each deployment shape; it is the same one the rate
-  limiter uses.
+  With anything in front of the app, the Docker setup's own nginx included, every
+  visit arrives from one address and the visitor numbers below collapse to 1. Set
+  <code>TRUSTED_PROXY_COUNT</code> or <code>TRUST_CLOUDFLARE</code> (see the README);
+  page views and bots are correct either way.
 </p>
 {% endif %}
 
@@ -35,9 +33,7 @@
 {% else %}
 
 <p class="text-sm text-gray-500 mb-4">
-  The public pages only: landing, sign-in, registration, features, help, privacy and
-  terms. Requests carrying a session are left out, so these are visits from outside
-  the app. Days run in {{ traffic.timezone }}, the instance owner's timezone.
+  Public pages only, signed-in visits excluded. Days run in {{ traffic.timezone }}.
 </p>
 
 <div class="flex flex-wrap items-center gap-3 mb-6 text-sm">
@@ -87,7 +83,7 @@
       {{ change(traffic.bot_change) }}
     </div>
     <div class="text-sm text-gray-500 mt-1">Identified bots <span class="text-gray-400">(total)</span></div>
-    <div class="text-xs text-gray-400 mt-1">Not included in the views above</div>
+    <div class="text-xs text-gray-400 mt-1">Not counted as page views</div>
   </div>
 </div>
 <p class="text-xs text-gray-400 -mt-6 mb-8">
@@ -115,13 +111,9 @@
     </div>
   </div>
   <p class="text-sm text-gray-500">
-    How many different people came over the {{ traffic.days }} days is not something
-    daily counts can pin down, but they do bracket it. It cannot be fewer than the
-    best single day above, since those people were all here at once, and it cannot
-    be more than every day added together, since that counts a regular visitor once
-    per day. Where the truth sits in between says something in itself: near
-    {{ traffic.visitors_floor|num }} means largely the same people coming back, near
-    {{ traffic.visitors_ceiling|num }} means mostly first-time arrivals.
+    Near {{ traffic.visitors_floor|num }} means largely the same people coming back,
+    near {{ traffic.visitors_ceiling|num }} mostly first-time arrivals.
+    <a href="#how-to-read" class="text-blue-600 hover:underline">Why a range?</a>
   </p>
   {% endif %}
 </div>
@@ -138,19 +130,54 @@
   <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-sm bg-blue-200"></span>Page views</span>
 </div>
 {% set scale = (traffic.chart|map(attribute='views')|max) or 1 %}
-<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8 overflow-x-auto">
-  <div class="flex items-end gap-1 h-40 min-w-max">
-    {% for bar in traffic.chart %}
-    <div class="flex items-end gap-px h-full w-4"
-         title="{{ bar.date.strftime('%Y-%m-%d') }}{% if traffic.chart_weekly %} – {{ bar.last_date.strftime('%Y-%m-%d') }}{% endif %}: {{ bar.visitors }} visitors, {{ bar.views }} views">
-      <div class="flex-1 bg-blue-500 rounded-t-sm" style="height: {{ (bar.visitors / scale * 100)|round(1) }}%"></div>
-      <div class="flex-1 bg-blue-200 rounded-t-sm" style="height: {{ (bar.views / scale * 100)|round(1) }}%"></div>
+{% set mid = (scale / 2)|round|int %}
+{# One line per bar, built here so the script only has to move text around and the
+   figure is readable with no script at all. A hover tooltip is not enough on its
+   own: a touch screen has no hover, so the same line is what a tap writes out. #}
+{%- macro readout(bar) -%}
+  {{ bar.date.strftime('%Y-%m-%d') }}
+  {%- if traffic.chart_weekly %} to {{ bar.last_date.strftime('%Y-%m-%d') }}{% endif -%}
+  : {{ bar.visitors|num }} visitors{{ ' per day' if traffic.chart_weekly }},
+  {{- ' ' }}{{ bar.views|num }} views
+{%- endmacro -%}
+<div class="bg-white border border-gray-200 rounded-lg p-4 mb-8">
+  {# The scale sits outside the scrolling box so it stays put, and the gridlines
+     inside it so they run the whole width of the bars and, more to the point, line
+     up with the foot of the bars whether or not a horizontal scrollbar appears. #}
+  <div class="flex">
+    <div class="relative h-40 w-10 shrink-0 text-xs text-gray-400 tabular-nums">
+      <span class="absolute right-2 top-0 -translate-y-1/2">{{ scale|num }}</span>
+      {% if mid > 0 and mid < scale %}
+      <span class="absolute right-2 top-1/2 -translate-y-1/2">{{ mid|num }}</span>
+      {% endif %}
+      <span class="absolute right-2 bottom-0 translate-y-1/2">0</span>
     </div>
-    {% endfor %}
+    <div class="flex-1 min-w-0 overflow-x-auto">
+      <div id="traffic-bars" class="relative flex items-end gap-1 h-40 min-w-max">
+        <div class="absolute inset-x-0 top-0 border-t border-gray-100"></div>
+        <div class="absolute inset-x-0 top-1/2 border-t border-gray-100"></div>
+        <div class="absolute inset-x-0 bottom-0 border-t border-gray-200"></div>
+        {% for bar in traffic.chart %}
+        <button type="button" tabindex="{{ 0 if loop.last else -1 }}"
+                data-readout="{{ readout(bar) }}"
+                title="{{ readout(bar) }}"
+                class="flex items-end gap-px h-full w-4 p-0 border-0 bg-transparent cursor-pointer rounded-sm hover:bg-gray-100 focus:bg-gray-100 focus:outline-none focus:ring-1 focus:ring-blue-400">
+          <span class="flex-1 bg-blue-500 rounded-t-sm" style="height: {{ (bar.visitors / scale * 100)|round(1) }}%"></span>
+          <span class="flex-1 bg-blue-200 rounded-t-sm" style="height: {{ (bar.views / scale * 100)|round(1) }}%"></span>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
   </div>
-  <div class="flex justify-between text-xs text-gray-400 mt-2">
+  <div class="flex justify-between text-xs text-gray-400 mt-2 pl-10">
     <span>{{ traffic.start.strftime('%Y-%m-%d') }}</span>
     <span>{{ traffic.end.strftime('%Y-%m-%d') }}</span>
+  </div>
+  {# Starts on the most recent bar, so the line says something before anything is
+     hovered or tapped and never collapses to an empty row. #}
+  <div id="traffic-readout" aria-live="polite"
+       class="text-xs text-gray-600 mt-2 pl-10 tabular-nums">
+    {{ readout(traffic.chart[-1]) if traffic.chart }}
   </div>
 </div>
 
@@ -182,10 +209,9 @@
 {# ── Sources ───────────────────────────────────────────────────────────── #}
 <h2 class="text-sm font-semibold text-gray-700 mb-1">Sources</h2>
 <p class="text-xs text-gray-400 mb-3">
-  Human views only, so these add up to less than the view totals above.
-  <strong>direct</strong> will almost certainly be the largest and does not mean
-  people typed the address: a click from an email, a chat app or a mobile app sends
-  no referrer at all, and most sites send only their bare domain.
+  Human views only. <strong>direct</strong> means no referrer was sent, not that
+  people typed the address.
+  <a href="#how-to-read" class="text-blue-600 hover:underline">More</a>
 </p>
 <div class="bg-white border border-gray-200 rounded-lg overflow-hidden mb-8">
   <table class="w-full text-sm">
@@ -220,11 +246,8 @@
 {% set funnel_top = steps[0].count or 1 %}
 {% if not landing_counted %}
 <p class="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-3 mb-3">
-  This instance serves no landing page, so <code>/</code> redirects straight to
-  sign-in and never gets counted, which is also why it is missing from the table
-  above. The funnel starts at the registration page instead. A landing page is an
-  operator's own <code>landing.html</code>; it is not part of the repository, and
-  without it <code>/</code> is a redirect rather than a page.
+  This instance serves no landing page of its own, so <code>/</code> redirects to
+  sign-in and is never counted. The funnel starts at the registration page instead.
 </p>
 {% endif %}
 <div class="bg-white border border-gray-200 rounded-lg p-4 mb-8 space-y-1.5">
@@ -240,51 +263,76 @@
     </div>
   </div>
   {% endfor %}
+  {% if traffic.funnel.signups_from %}
+  <p class="text-xs text-gray-500 pt-2">
+    Accounts created counts from {{ traffic.funnel.signups_from.strftime('%Y-%m-%d') }},
+    when counting was switched on.
+  </p>
+  {% endif %}
 </div>
 {% else %}
 <h2 class="text-sm font-semibold text-gray-700 mb-3">Registration funnel</h2>
 <p class="text-sm text-gray-500 bg-gray-50 border border-gray-200 rounded-lg p-4 mb-8">
-  Registration is closed, so there is no funnel to draw and no landing page above
-  either: with sign-ups shut, <code>/</code> sends visitors straight to sign-in and
-  never gets counted. Views of <code>/register</code> are still worth a look, as they
-  are people arriving at the page that tells them the door is locked.
+  Registration is closed, so there is no funnel to draw and <code>/</code> redirects
+  to sign-in rather than being counted. Views of <code>/register</code> are still
+  worth a look: those are people finding the door locked.
 </p>
 {% endif %}
 
-{# ── The caveats ───────────────────────────────────────────────────────── #}
-<h2 class="text-sm font-semibold text-gray-700 mb-3">How to read these numbers</h2>
-<ul class="bg-white border border-gray-200 rounded-lg p-4 mb-8 text-sm text-gray-600 space-y-2 list-disc pl-8">
-  <li>
-    <strong>The daily visitor figures are averages, not a total.</strong> Someone who
-    comes back every day is one visitor on each of those days, so adding the days up
-    would count them {{ traffic.days }} times. That is why the figure for the whole
-    window is a range rather than a number. Page views are totals and do add up.
-  </li>
-  <li>
-    A visitor is one IP address and one browser for one day. Two people on a shared
-    connection using the same browser count as one; one person on a phone and a
-    laptop counts as two.
-  </li>
-  <li>
-    <strong>Restarting the app inflates that day a little</strong>, because anyone who
-    comes back after the restart is counted again. The day's number never goes down.
-  </li>
-  <li>
-    <strong>Identified bots is a floor, not the truth.</strong> It counts what says so
-    in its user agent, which is most crawler volume; a scraper posing as Chrome is in
-    the human numbers. If this instance is behind Cloudflare, its Security → Bots
-    dashboard is a free second opinion.
-  </li>
-  <li>
-    Signed-in users are never counted, so the numbers for /features and /help are
-    traffic from outside, not from inside the app.
-  </li>
-  <li>
-    Changing the owner's timezone re-slices past page views correctly, but past
-    visitor days keep the boundaries they were recorded with.
-  </li>
-</ul>
+{# ── The caveats ─────────────────────────────────────────────────────────
+   Collapsed, and everything the page trimmed out of its one-line notes lives in
+   here: the explanations are worth reading once and a nuisance on every visit. #}
+<details id="how-to-read" class="mb-8">
+  <summary class="cursor-pointer select-none text-sm font-semibold text-gray-700 hover:text-gray-900">
+    How to read these numbers
+  </summary>
+  <ul class="bg-white border border-gray-200 rounded-lg p-4 mt-3 text-sm text-gray-600 space-y-2 list-disc pl-8">
+    <li>
+      <strong>The daily visitor figures are averages, not a total.</strong> Someone who
+      comes back every day is one visitor on each of those days, so adding the days up
+      would count them {{ traffic.days }} times. Page views are totals and do add up.
+    </li>
+    <li>
+      <strong>Different people over the window is a range because daily counts cannot
+      pin it down.</strong> It cannot be fewer than the best single day, since those
+      people were all here at once, and not more than every day added together, since
+      that counts a regular visitor once per day.
+    </li>
+    <li>
+      A visitor is one IP address and one browser for one day. Two people on a shared
+      connection using the same browser count as one; one person on a phone and a
+      laptop counts as two.
+    </li>
+    <li>
+      <strong>Restarting the app inflates that day a little</strong>, because anyone who
+      comes back after the restart is counted again. The day's number never goes down.
+    </li>
+    <li>
+      <strong>Identified bots is a floor, not the truth.</strong> It counts what says so
+      in its user agent, which is most crawler volume; a scraper posing as Chrome is in
+      the human numbers. If this instance is behind Cloudflare, its Security → Bots
+      dashboard is a free second opinion.
+    </li>
+    <li>
+      <strong>Sources count human views only</strong>, so they total less than page
+      views. <strong>direct</strong> is almost always the largest: a click from an
+      email, a chat app or a mobile app sends no referrer at all, and most sites send
+      only their bare domain.
+    </li>
+    <li>
+      Only the public pages are counted: landing, sign-in, registration, features,
+      help, privacy and terms. Signed-in visits are skipped, so the numbers for
+      /features and /help are traffic from outside the app.
+    </li>
+    <li>
+      Changing the owner's timezone re-slices past page views correctly, but past
+      visitor days keep the boundaries they were recorded with.
+    </li>
+  </ul>
+</details>
 
 {% endif %}
 {% endif %}
 {% endblock %}
+
+{% block scripts %}<script src="{{ static_url('js/traffic-chart.js') }}"></script>{% endblock %}
