@@ -9,7 +9,7 @@
     unfolded footer is the exception, and the count already answers the only question the
     reader has before opening it. -#}
 {% if related_count %}
-<div class="max-w-[52rem] px-6 pb-8 -mt-2">
+<div id="story-footer-{{ article.id }}" class="max-w-[52rem] px-6 pb-8 -mt-2">
   <div class="border-t border-gray-100 dark:border-gray-700 pt-4">
     <button id="story-toggle-{{ article.id }}"
             class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400
