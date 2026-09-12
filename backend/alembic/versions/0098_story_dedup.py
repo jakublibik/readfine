@@ -48,6 +48,13 @@ def upgrade() -> None:
         ALTER TABLE articles ADD COLUMN title_norm TEXT
         GENERATED ALWAYS AS (immutable_unaccent(lower(title))) STORED
     """)
+    # No foreign key on story_id on purpose. It points at the oldest member, and with
+    # ON DELETE SET NULL the retention purge taking that one article out would dissolve
+    # the whole group; with RESTRICT it would block the purge outright. A dangling value
+    # costs nothing here: it is a label, the id sequence never hands the number out
+    # again, and a later merge still resolves to the same minimum. Anything reading a
+    # group must therefore select members by story_id and never assume the article whose
+    # id it is still exists.
     op.add_column("articles", sa.Column("story_id", sa.BigInteger(), nullable=True))
     op.add_column(
         "user_article_states",
@@ -135,6 +142,9 @@ def _backfill_stories() -> None:
 
 
 def downgrade() -> None:
+    # pg_trgm stays installed. Dropping an extension is database-wide, so this would be
+    # undoing something another migration, or the operator, may be relying on; an unused
+    # extension costs nothing beyond a catalog entry.
     op.drop_column("user_article_states", "suppressed_at")
     op.execute("DROP INDEX IF EXISTS ix_articles_story")
     op.execute("DROP INDEX IF EXISTS ix_articles_title_trgm")
