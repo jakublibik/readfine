@@ -397,6 +397,9 @@ def _to_list_item(
         is_saved=bool(state and state.saved_at),
         ai_score=state.ai_score if state else None,
         labels=labels,
+        # Only the group's identity. What the row says about it (how many other
+        # sources, whether one was read) is user-scoped and gets annotated later.
+        story_id=article.story_id,
         sort_ts=article.published_at or article.fetched_at,
     )
 

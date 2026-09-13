@@ -28,7 +28,14 @@ from app.services.article import (
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
-from app.services.story_service import count_members, list_members
+from app.services.story_service import (
+    annotate as annotate_stories,
+    collapse_page,
+    count_members,
+    list_members,
+    next_shown as next_shown_stories,
+    parse_shown as parse_shown_stories,
+)
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html
@@ -236,13 +243,27 @@ def _build_filter_params(
     return params
 
 
-def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: int) -> str:
+def _build_more_qs(
+    filter_params: dict, articles, q: str | None, next_offset: int,
+    shown_stories: list[int] | None = None,
+) -> str:
     """Query string for the infinite-scroll "load more" sentinel.
 
     Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
     and search isn't unread-filtered). Everything else uses a keyset cursor on
     (sort_ts, id) so marking articles read mid-scroll can't shift the window and
     skip rows — see ix_articles_sort_ts.
+
+    ``articles`` has to be the page as the query returned it, before story collapsing
+    drops the folded-away rows. Taking the cursor off the last row still on screen
+    would ask the next page to start again in the middle of the page just rendered,
+    and the members that folded into a row here would come back as rows of their own
+    there — the representative they belong under is no longer in the window.
+
+    ``shown_stories`` travels with the cursor for the same reason and is the other half
+    of it: the cursor says where to read on, this says which stories already have a row
+    above. Carrying it in the address keeps the server out of it — the state belongs to
+    one scroll through one list, and a reload starts a fresh one.
     """
     params = dict(filter_params)
     if q and q.strip():
@@ -250,7 +271,47 @@ def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: in
     elif articles:
         params["cursor_ts"] = articles[-1].sort_ts.isoformat()
         params["cursor_id"] = articles[-1].id
+    if shown_stories:
+        params["shown_stories"] = ",".join(str(i) for i in shown_stories)
     return urlencode(params)
+
+
+def _collapses_stories(
+    *, feed_id: int | None, starred_only: bool, archived_only: bool,
+    saved_only: bool, is_search: bool,
+) -> bool:
+    """Whether this view folds the other coverage of a story into one row.
+
+    The reading views (everything, a folder, unread, a label) do. The views the
+    reader arrives at with a specific article in mind do not: a single feed is a
+    question about that feed and hiding its article because another source filed
+    first would answer a different one, and starred/saved/archive/search are lists of
+    articles the reader picked out by hand, where dropping one is losing it.
+    """
+    return not (
+        feed_id is not None or starred_only or archived_only or saved_only or is_search
+    )
+
+
+async def _apply_story_collapse(
+    rows: list, user: User, db: AsyncSession, *, collapse: bool,
+    shown_stories: list[int] | None = None,
+) -> tuple[list, list[int]]:
+    """Fold the page's stories (when the view does that) and annotate what is left.
+
+    Returns the rows to render and the story list for the next page's address.
+
+    The annotation runs either way: a view that does not collapse still marks a row
+    that has other coverage behind it, so the reader can tell before opening it. The
+    story list is only kept where the view folds, since that is the only place a later
+    page has to know what came before.
+    """
+    if not collapse:
+        await annotate_stories(rows, user.id, db)
+        return rows, []
+    articles = collapse_page(rows, shown_stories)
+    await annotate_stories(articles, user.id, db)
+    return articles, next_shown_stories(shown_stories or [], articles)
 
 
 @router.get("/htmx/articles", response_class=HTMLResponse)
@@ -359,7 +420,7 @@ async def render_list(
             )
             effective_unread_only = len(probe) > 0
 
-    articles = await list_articles(
+    rows = await list_articles(
         user=user,
         db=db,
         feed_id=feed_id,
@@ -379,7 +440,16 @@ async def render_list(
         offset=offset,
     )
 
-    has_more = len(articles) >= articles_per_page
+    # has_more counts what the query returned, not what survives collapsing: a full
+    # page means there is more behind it even if half of it folded into one row.
+    has_more = len(rows) >= articles_per_page
+    articles, shown_stories = await _apply_story_collapse(
+        rows, user, db,
+        collapse=_collapses_stories(
+            feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
+            saved_only=saved_only, is_search=is_search,
+        ),
+    )
 
     # Title bar count for mobile hideable mode
     title_bar_count: int | None = None
@@ -468,7 +538,8 @@ async def render_list(
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
         has_more=has_more,
-        more_qs=_build_more_qs(filter_params, articles, q, len(articles)),
+        # Cursor off the raw page, see _build_more_qs.
+        more_qs=_build_more_qs(filter_params, rows, q, len(rows), shown_stories),
         title_bar_count=title_bar_count,
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
@@ -496,6 +567,10 @@ async def htmx_article_list_more(
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
+    # Stories the pages above already have a row for, put there by the sentinel this
+    # request came from. Kept as a string and parsed in the service: it is a list the
+    # client hands back, so its length and contents are checked rather than declared.
+    shown_stories: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -513,7 +588,7 @@ async def htmx_article_list_more(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
     label_display = settings.label_display if settings else "indicator"
 
-    articles = await list_articles(
+    rows = await list_articles(
         user=user,
         db=db,
         feed_id=feed_id,
@@ -535,7 +610,15 @@ async def htmx_article_list_more(
         cursor_id=cursor_id,
     )
 
-    has_more = len(articles) >= articles_per_page
+    has_more = len(rows) >= articles_per_page
+    articles, next_stories = await _apply_story_collapse(
+        rows, user, db,
+        collapse=_collapses_stories(
+            feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
+            saved_only=saved_only, is_search=is_search,
+        ),
+        shown_stories=parse_shown_stories(shown_stories),
+    )
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
         label_id=label_id, unread_only=unread_only,
@@ -557,7 +640,10 @@ async def htmx_article_list_more(
         "label_display": label_display,
         "show_ai_score": settings.ai_score_show_in_list if settings else False,
         "has_more": has_more,
-        "more_qs": _build_more_qs(filter_params, articles, q, offset + len(articles)),
+        # Cursor off the raw page, see _build_more_qs.
+        "more_qs": _build_more_qs(
+            filter_params, rows, q, offset + len(rows), next_stories
+        ),
         **extra_ctx,
     })
 
@@ -737,6 +823,10 @@ async def htmx_row_poll(
         return HTMLResponse(
             str(macros.row_poll(article_id, density or "", label_display or ""))
         )
+
+    # Rebuilding the row means rebuilding everything on it, the story marker included,
+    # or finishing an extraction would silently take the marker away.
+    await annotate_stories([item], user.id, db)
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     row_html = templates.env.get_template("app/partials/article_row.html").render(

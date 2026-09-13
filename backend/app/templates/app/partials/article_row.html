@@ -37,6 +37,27 @@
   {%- endif -%}
 {% endmacro %}
 
+{#- The marker for "other sources covered this too".
+
+    Says the number rather than the sources themselves: the list is a list of stories
+    once collapsing is on, and the reader is one click away from the same articles in
+    the "Same story" block at the bottom of the article. In the views that do not
+    collapse (a single feed, starred, saved, archive, search) it stays as the quiet
+    hint that this row has company somewhere else.
+
+    story_seen marks a group the reader has already read something from, which is the
+    one thing the count cannot say: the read member is usually not in the list at all,
+    unread views having filtered it out. Worth a word rather than a shade of grey,
+    since it is the reason to skip the row. -#}
+{% macro story_marker(article) %}
+  {%- if article.story_others -%}
+    <span class="text-xs text-gray-500 flex-shrink-0 whitespace-nowrap"
+          title="{{ article.story_others + 1 }} sources covered this story{% if article.story_seen %}, and you have read one of them{% endif %}">
+      <span aria-hidden="true">⧉</span> {{ article.story_others + 1 }}{% if article.story_seen %} · read{% endif %}
+    </span>
+  {%- endif -%}
+{% endmacro %}
+
 {% set d = density | default("comfortable") %}
 {% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
 {% set ld = label_display | default("indicator") %}
@@ -99,6 +120,7 @@
       {% if show_score and article.ai_score is not none %}
       <span class="text-xs {{ score_class }}">{{ score_int }}</span>
       {% endif %}
+      {{ story_marker(article) }}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -165,6 +187,7 @@
     <div class="flex items-center gap-1.5 min-w-0">
       <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-500 leading-none">▲</span>
       <span class="text-xs text-gray-500 truncate">{{ article.feed_title or (article.url | hostname) or "Unknown feed" }}</span>
+      {{ story_marker(article) }}
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
