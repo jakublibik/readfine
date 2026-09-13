@@ -20,6 +20,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
 from app.schemas.article import ArticleListItem
+from app.services.article import list_articles
 from app.services.story_service import (
     MAX_SHOWN_STORIES,
     annotate,
@@ -282,3 +283,58 @@ class TestAnnotate:
         await annotate(rows, user.id, pg)
 
         assert [r.story_others for r in rows] == [1, 2]
+
+
+class TestListingOneStory:
+    """``list_articles(story_id=...)`` feeds the rows the list unfolds under a group.
+
+    A story is global, so this is one of the two list queries with no user-owned anchor
+    of its own (search is the other) and it lives or dies on the access predicate.
+    """
+
+    async def test_the_whole_group_comes_back_whatever_state_it_is_in(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        pg.add(UserArticleState(user_id=user.id, article_id=second.id, is_read=True))
+        await pg.flush()
+
+        rows = await list_articles(user=user, db=pg, story_id=head.story_id)
+
+        assert {r.id for r in rows} == {head.id, second.id}
+        assert any(r.is_read for r in rows)
+
+    async def test_a_feed_the_reader_does_not_take_stays_out(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        rows = await list_articles(user=user, db=pg, story_id=head.story_id)
+
+        assert "Not subscribed" not in {r.title for r in rows}
+
+    async def test_a_starred_member_survives_the_missing_subscription(self, pg):
+        """The same rule the footer follows: a star keeps access to the article."""
+        user = await _user(pg)
+        head, _, _, theirs = await _story(pg, user)
+        kept = await _article(pg, theirs, story_id=head.story_id, title="Starred")
+        pg.add(UserArticleState(user_id=user.id, article_id=kept.id, is_starred=True))
+        await pg.flush()
+
+        rows = await list_articles(user=user, db=pg, story_id=head.story_id)
+
+        assert kept.id in {r.id for r in rows}
+
+    async def test_trimmed_members_stay_out(self, pg):
+        user = await _user(pg)
+        head, _, mine, _ = await _story(pg, user)
+        gone = await _article(pg, mine, story_id=head.story_id, title="Old", trimmed=True)
+
+        rows = await list_articles(user=user, db=pg, story_id=head.story_id)
+
+        assert gone.id not in {r.id for r in rows}
+
+    async def test_a_stranger_gets_nothing(self, pg):
+        user = await _user(pg)
+        stranger = await _user(pg)
+        head, _, _, _ = await _story(pg, user)
+
+        assert await list_articles(user=stranger, db=pg, story_id=head.story_id) == []

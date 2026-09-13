@@ -151,6 +151,7 @@ async def list_articles(
     archived_only: bool = False,
     saved_only: bool = False,
     labeled_only: bool = False,
+    story_id: int | None = None,
     q: str | None = None,
     sort_order: str = "newest",
     limit: int = 50,
@@ -175,10 +176,16 @@ async def list_articles(
     # be found by search at all (it has no feed, so the inner join drops it), which
     # defeats the point of saving it; the same was quietly true of starred/archived
     # articles left orphaned by an unsubscribe.
+    #
+    # Asking for one story's members is the third kind. Like search it has no anchor
+    # of its own — a story is global, built across every feed in the instance — so it
+    # carries ``article_access_predicate`` below and must keep the optional joins, or
+    # a member the reader keeps only through a star would drop out of its own group.
     searching = bool(q and q.strip())
     feed_optional = (
         starred_only or archived_only or saved_only
         or label_id is not None or labeled_only or searching
+        or story_id is not None
     )
     stmt = select(
         Article,
@@ -208,11 +215,15 @@ async def list_articles(
             .outerjoin(UserArticleState, uas_join)
         )
 
-    if searching:
-        # The one branch above that has no anchor of its own. This is what keeps
-        # search user-scoped, so it must not be dropped or narrowed: the joins are
-        # outer here, and without it search would match every article in the table.
+    if searching or story_id is not None:
+        # The branches above with no anchor of their own. This is what keeps them
+        # user-scoped, so it must not be dropped or narrowed: the joins are outer
+        # here, and without it search would match every article in the table and a
+        # story would hand over the feeds this reader never subscribed to.
         stmt = stmt.where(article_access_predicate())
+
+    if story_id is not None:
+        stmt = stmt.where(Article.story_id == story_id)
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
     # profile — never shown in the UI.

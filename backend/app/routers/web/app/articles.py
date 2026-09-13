@@ -29,6 +29,7 @@ from app.services.article import (
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.story_service import (
+    MEMBER_LIMIT,
     annotate as annotate_stories,
     collapse_page,
     count_members,
@@ -277,20 +278,23 @@ def _build_more_qs(
 
 
 def _collapses_stories(
-    *, feed_id: int | None, starred_only: bool, archived_only: bool,
-    saved_only: bool, is_search: bool,
+    *, feed_id: int | None, starred_only: bool, archived_only: bool, saved_only: bool,
 ) -> bool:
     """Whether this view folds the other coverage of a story into one row.
 
-    The reading views (everything, a folder, unread, a label) do. The views the
-    reader arrives at with a specific article in mind do not: a single feed is a
-    question about that feed and hiding its article because another source filed
-    first would answer a different one, and starred/saved/archive/search are lists of
-    articles the reader picked out by hand, where dropping one is losing it.
+    The reading views do, search included: a search for a story that five newsrooms
+    filed answered with five rows saying the same thing, and folding only ever hides a
+    row that did match, under the best-matching one, with the marker saying it is
+    there. That last part is why search waited for the list to be able to unfold a
+    group — until then the only way to the folded article led through the article
+    above it, which is too far for a view whose job is to answer "is this in here".
+
+    Starred, saved and archive do not: those are lists the reader assembled by hand,
+    and a row missing from one of them is a row they put there themselves. Nor does a
+    single feed, which is a question about that feed, and hiding one of its articles
+    because another source filed first answers a different one.
     """
-    return not (
-        feed_id is not None or starred_only or archived_only or saved_only or is_search
-    )
+    return not (feed_id is not None or starred_only or archived_only or saved_only)
 
 
 async def _apply_story_collapse(
@@ -447,7 +451,7 @@ async def render_list(
         rows, user, db,
         collapse=_collapses_stories(
             feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
-            saved_only=saved_only, is_search=is_search,
+            saved_only=saved_only,
         ),
     )
 
@@ -615,7 +619,7 @@ async def htmx_article_list_more(
         rows, user, db,
         collapse=_collapses_stories(
             feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
-            saved_only=saved_only, is_search=is_search,
+            saved_only=saved_only,
         ),
         shown_stories=parse_shown_stories(shown_stories),
     )
@@ -759,6 +763,60 @@ async def htmx_article_related(
     return templates.TemplateResponse(request, "app/partials/story_members.html", {
         "article_id": article_id,
         "members": members,
+    })
+
+
+@router.get("/htmx/articles/{article_id}/story-rows", response_class=HTMLResponse)
+async def htmx_article_story_rows(
+    article_id: int,
+    request: Request,
+    density: str | None = Query(None),
+    label_display: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The rest of this article's story as list rows, to sit under the row it came from.
+
+    Rows rather than the footer's short entries: a member opens from the list the way
+    every other row opens, into the detail panel, so the list needs nothing of its own
+    to open articles with. That is also why these are real ``.article-row`` elements,
+    marked read on scroll like their neighbours — the rule against that applies to rows
+    that are in the DOM without being on screen, and these are only ever inserted
+    because the reader asked to see them.
+
+    State is deliberately ignored: a group is shown whole, read members included, even
+    where the view around it is filtered to unread. The count on the row promised that
+    many, and a group is usually read in pieces, which is the reason to look at it.
+    """
+    story_id = (await db.execute(
+        add_article_access_joins(select(Article.story_id), user.id)
+        .where(Article.id == article_id, article_access_predicate())
+    )).scalar_one_or_none()
+    if story_id is None:
+        return HTMLResponse("")
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    members = await list_articles(
+        user=user, db=db, story_id=story_id,
+        sort_order=settings.default_sort_order if settings else "newest",
+        limit=MEMBER_LIMIT + 1,
+    )
+    rows = [m for m in members if m.id != article_id]
+    if not rows:
+        return HTMLResponse("")
+
+    extra_ctx: dict = {}
+    if settings and getattr(settings, "ai_chat_enabled", False):
+        extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
+            user.id, [r.id for r in rows], db
+        )
+    return templates.TemplateResponse(request, "app/partials/story_rows.html", {
+        "articles": rows,
+        "parent_id": article_id,
+        "density": density or (settings.list_density_web if settings else "comfortable"),
+        "label_display": label_display or (settings.label_display if settings else "indicator"),
+        "show_ai_score": settings.ai_score_show_in_list if settings else False,
+        **extra_ctx,
     })
 
 

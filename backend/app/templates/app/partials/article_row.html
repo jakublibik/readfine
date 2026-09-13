@@ -70,23 +70,27 @@
     the score, and on a phone the feed name is what loses. A line costs height on the
     few rows that have a story and nothing on the rest, which is the better trade, and
     it is where aggregators put this anyway (Google News "Full Coverage", Techmeme's
-    "More:" line). It is also the only place in a row wide enough for a word, so it is
-    where the unfold control will sit once the list can show the group. -#}
+    "More:" line). It is also the only place in a row wide enough for a word, which is
+    why the unfold control sits here. -#}
 {% macro story_line(article) %}
   {%- if article.story_others -%}
     {#- Tinted around the words only, not across the row: a band the full width of the
         list would turn two neighbouring stories into stripes, and a filled panel is
         spoken for by the AI blocks (blue, amber), which is why the same section in the
-        reader is a neutral rule. Sized to the text, it also already has the shape of
-        the control it is about to become. -#}
+        reader is a neutral rule. Sized to the text, it is the control that unfolds the
+        rest of the group under this row. -#}
     <div class="mt-1 pl-[26px]">
-      <span class="story-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs">
+      <button type="button" data-stop-propagation
+              data-story-toggle="{{ article.id }}" aria-expanded="false"
+              class="story-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs
+                     cursor-pointer disabled:opacity-60">
         <span aria-hidden="true">⧉</span>
         <span>
           {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
           {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
         </span>
-      </span>
+        <span data-story-caret aria-hidden="true">▾</span>
+      </button>
     </div>
   {%- endif -%}
 {% endmacro %}
@@ -102,9 +106,23 @@
   {% else %}{% set score_class = "ai-score-low" %}{% endif %}
 {% endif %}
 
+{#- story_child is the id of the row this one was unfolded from.
+
+    It indents the row, far enough that the star lands in the column of the ⧉ on the row
+    above, the marker the group was unfolded from. Indentation alone, deliberately:
+    everything tried on top of it collided with something the list already does — a rule
+    at the indent crossed every horizontal separator into a grid, the same rule at the
+    left edge landed in the channel the open article's marker uses, a recessed
+    background needed a whole set of states of its own, and a bullet in the gutter was
+    one mark too many.
+
+    It also takes away the row's own story marker: the group is named by the row above,
+    and a marker here would invite unfolding a group from inside itself. -#}
+{% set child_of = story_child | default(none) %}
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if d == 'compact' %}pl-2 pr-4 pt-1 pb-1.5{% else %}pl-2 pr-4 pt-1.5 pb-2.5{% endif %}"
+     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if child_of %}pl-9{% else %}pl-2{% endif %} {% if d == 'compact' %}pr-4 pt-1 pb-1.5{% else %}pr-4 pt-1.5 pb-2.5{% endif %}"
+     {% if child_of %}data-story-parent="{{ child_of }}"{% endif %}
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
@@ -153,7 +171,7 @@
       {% if show_score and article.ai_score is not none %}
       <span class="text-xs {{ score_class }}">{{ score_int }}</span>
       {% endif %}
-      {{ story_marker(article) }}
+      {% if not child_of %}{{ story_marker(article) }}{% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -276,7 +294,7 @@
   {% if d == "summary" and article.snippet %}
     <p class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
-  {{ story_line(article) }}
+  {% if not child_of %}{{ story_line(article) }}{% endif %}
   {% endif %}
 
 </div>

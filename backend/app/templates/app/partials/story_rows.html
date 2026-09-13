@@ -1,0 +1,13 @@
+{#- The other coverage of one story, as rows to slot in under the row it belongs to.
+
+    Each row is the ordinary list row, indented and without a marker of its own: it
+    opens, stars, labels and marks itself read exactly like the row above it, so
+    nothing here has to know how the list opens an article.
+
+    data-story-parent is what the toggle in app.js removes when the reader folds the
+    group back up, and what tells a row it is somebody's member rather than a row of
+    the list proper. -#}
+{% for article in articles %}
+  {% set story_child = parent_id %}
+  {% include "app/partials/article_row.html" %}
+{% endfor %}

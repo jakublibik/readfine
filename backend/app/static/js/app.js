@@ -1179,6 +1179,59 @@ document.addEventListener('click', function (e) {
   }
 });
 
+// ── Story rows: unfold the rest of a group under its row in the list ──────────
+// The members arrive as ordinary list rows and are inserted after the row that was
+// clicked, so opening, starring and labelling one of them needs nothing new: it is a
+// row like its neighbours, only indented. Folding back up is removing them again,
+// which is why this is a handler and not a pair of hx- attributes.
+//
+// Rows inserted here are watched by the list's IntersectionObserver (its mutation
+// observer picks up new children), so they mark themselves read on scroll as any row
+// does. That is the point: they are on screen because the reader asked for them.
+//
+// Capture phase, which is the one thing here that is not obvious. Every element in a
+// row carrying data-stop-propagation is given a click listener that stops the event
+// (further down this file), so that a control inside a row does not also open the
+// article. The toggle needs that mark for the same reason, and a listener on document
+// would then never see the click at all: capture runs on the way down, before the
+// button's own listeners. The row's own hx-trigger already filters the click out.
+document.addEventListener('click', function (e) {
+  var btn = e.target.closest && e.target.closest('[data-story-toggle]');
+  if (!btn) return;
+  e.preventDefault();
+  var id = btn.dataset.storyToggle;
+
+  function setState(open) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    var caret = btn.querySelector('[data-story-caret]');
+    if (caret) caret.textContent = open ? '▴' : '▾';
+  }
+
+  var shown = document.querySelectorAll('[data-story-parent="' + id + '"]');
+  if (shown.length) {
+    shown.forEach(function (el) { el.remove(); });
+    setState(false);
+    return;
+  }
+
+  var row = document.getElementById('article-row-' + id);
+  if (!row) return;
+  btn.disabled = true;
+  // Density travels with the request: the row knows which one it was rendered at, and
+  // a member drawn at a different one would break the rhythm of the list it lands in.
+  var url = '/htmx/articles/' + id + '/story-rows'
+    + '?density=' + encodeURIComponent(row.dataset.density || '');
+  var loaded = htmx.ajax('GET', url, { target: '#article-row-' + id, swap: 'afterend' });
+  if (loaded && loaded.then) {
+    loaded.then(function () {
+      btn.disabled = false;
+      setState(document.querySelector('[data-story-parent="' + id + '"]') !== null);
+    });
+  } else {
+    btn.disabled = false;
+  }
+}, true);
+
 // ── The row whose article is open in the detail pane ──────────────────────────
 // Read off the detail rather than set where the click happens. Every way an article
 // reaches the pane ends in a swap into #article-detail — a row click, the
