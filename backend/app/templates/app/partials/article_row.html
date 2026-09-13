@@ -39,6 +39,11 @@
 
 {#- The marker for "other sources covered this too".
 
+    Counts the others, not the group, and says so with a plus: every number the reader
+    is shown then equals the number of articles they can open, here and in the block at
+    the foot of the article, which lists exactly those. A group total would read as one
+    more thing to click than there is.
+
     Says the number rather than the sources themselves: the list is a list of stories
     once collapsing is on, and the reader is one click away from the same articles in
     the "Same story" block at the bottom of the article. In the views that do not
@@ -52,8 +57,8 @@
 {% macro story_marker(article) %}
   {%- if article.story_others -%}
     <span class="text-xs text-gray-500 flex-shrink-0 whitespace-nowrap"
-          title="{{ article.story_others + 1 }} sources covered this story{% if article.story_seen %}, and you have read one of them{% endif %}">
-      <span aria-hidden="true">⧉</span> {{ article.story_others + 1 }}{% if article.story_seen %} · read{% endif %}
+          title="{% if article.story_others == 1 %}1 other source covered this{% else %}{{ article.story_others }} other sources covered this{% endif %}{% if article.story_seen %}, and you have read one of them{% endif %}">
+      <span aria-hidden="true">⧉</span> +{{ article.story_others }}{% if article.story_seen %} · read{% endif %}
     </span>
   {%- endif -%}
 {% endmacro %}
