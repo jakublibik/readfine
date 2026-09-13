@@ -73,14 +73,14 @@ class ArticleListItem(BaseModel):
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
     # Story group this article belongs to, or None when nothing else covered it.
     story_id: int | None = None
-    # How many other members of the group this reader may open, and whether one of
-    # them is already read. Both are filled in by services.story_service while the
+    # How many other members of the group this reader may open, and how many of those
+    # they have already read. Both are filled in by services.story_service while the
     # list renders, never by _to_list_item: they take a user-scoped query over the
     # whole group, and the group reaches past the page (a read member is missing from
     # an unread-only page, and the group can straddle the page boundary). Excluded
     # from API JSON, where nothing fills them in and a 0 would read as a fact.
     story_others: int = Field(default=0, exclude=True)
-    story_seen: bool = Field(default=False, exclude=True)
+    story_read: int = Field(default=0, exclude=True)
     # coalesce(published_at, fetched_at) used for keyset pagination cursor;
     # excluded from API JSON (internal pagination concern only)
     sort_ts: datetime | None = Field(default=None, exclude=True)

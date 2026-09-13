@@ -50,16 +50,35 @@
     collapse (a single feed, starred, saved, archive, search) it stays as the quiet
     hint that this row has company somewhere else.
 
-    story_seen marks a group the reader has already read something from, which is the
-    one thing the count cannot say: the read member is usually not in the list at all,
-    unread views having filtered it out. Worth a word rather than a shade of grey,
-    since it is the reason to skip the row. -#}
+    story_read says how many of them are already read, which is the one thing the row
+    itself cannot show: those members are usually not in the list at all, unread views
+    having filtered them out. Worth writing down, since it is the reason to skip the
+    row without opening it. -#}
 {% macro story_marker(article) %}
   {%- if article.story_others -%}
     <span class="text-xs text-gray-500 flex-shrink-0 whitespace-nowrap"
-          title="{% if article.story_others == 1 %}1 other source covered this{% else %}{{ article.story_others }} other sources covered this{% endif %}{% if article.story_seen %}, and you have read one of them{% endif %}">
-      <span aria-hidden="true">⧉</span> +{{ article.story_others }}{% if article.story_seen %} · read{% endif %}
+          title="{% if article.story_others == 1 %}1 other source covered this{% else %}{{ article.story_others }} other sources covered this{% endif %}{% if article.story_read %}, {{ article.story_read }} of them read{% endif %}">
+      <span aria-hidden="true">⧉</span> +{{ article.story_others }}{% if article.story_read %} · {{ article.story_read }} read{% endif %}
     </span>
+  {%- endif -%}
+{% endmacro %}
+
+{#- The same thing where there is room to write it out: a line of its own under the
+    row, indented to the text column like the summary snippet.
+
+    In the meta line it would be competing with the feed name, the date, the labels and
+    the score, and on a phone the feed name is what loses. A line costs height on the
+    few rows that have a story and nothing on the rest, which is the better trade, and
+    it is where aggregators put this anyway (Google News "Full Coverage", Techmeme's
+    "More:" line). It is also the only place in a row wide enough for a word, so it is
+    where the unfold control will sit once the list can show the group. -#}
+{% macro story_line(article) %}
+  {%- if article.story_others -%}
+    <div class="text-xs text-gray-500 mt-1 pl-[26px]">
+      <span aria-hidden="true">⧉</span>
+      {% if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif %}
+      {%- if article.story_read %} · {{ article.story_read }} read{% endif %}
+    </div>
   {%- endif -%}
 {% endmacro %}
 
@@ -192,7 +211,6 @@
     <div class="flex items-center gap-1.5 min-w-0">
       <span class="expand-indicator flex-shrink-0 w-5 text-center text-[10px] text-gray-500 leading-none">▲</span>
       <span class="text-xs text-gray-500 truncate">{{ article.feed_title or (article.url | hostname) or "Unknown feed" }}</span>
-      {{ story_marker(article) }}
       <span data-archived-indicator class="text-[10px] text-gray-500 flex-shrink-0 {% if not article.is_archived %}hidden{% endif %}">· archived</span>
     </div>
     <div class="flex items-center gap-1.5 ml-2 flex-shrink-0">
@@ -249,6 +267,7 @@
   {% if d == "summary" and article.snippet %}
     <p class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
+  {{ story_line(article) }}
   {% endif %}
 
 </div>

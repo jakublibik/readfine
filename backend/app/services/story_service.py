@@ -169,7 +169,7 @@ def next_shown(already_shown: list[int], items: list[ArticleListItem]) -> list[i
 
 
 async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession) -> None:
-    """Fill in ``story_others`` / ``story_seen`` on the rows of one rendered page.
+    """Fill in ``story_others`` / ``story_read`` on the rows of one rendered page.
 
     One batch query for the whole page, in the spirit of the label batch in
     ``list_articles``. Counting on the page itself would not do: a read member is
@@ -206,4 +206,4 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
         # the same access gate.
         total, read = stats.get(item.story_id, (0, 0))
         item.story_others = max(total - 1, 0)
-        item.story_seen = read - (1 if item.is_read else 0) > 0
+        item.story_read = max(read - (1 if item.is_read else 0), 0)

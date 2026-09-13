@@ -205,7 +205,7 @@ class TestAnnotate:
         row = _item(head.id, story_id=head.story_id, is_read=True)
         await annotate([row], user.id, pg)
 
-        assert row.story_seen is False
+        assert row.story_read == 0
 
     async def test_a_read_sibling_marks_the_row(self, pg):
         user = await _user(pg)
@@ -216,7 +216,7 @@ class TestAnnotate:
         row = _item(head.id, story_id=head.story_id)
         await annotate([row], user.id, pg)
 
-        assert row.story_seen is True
+        assert row.story_read == 1
 
     async def test_a_read_sibling_in_a_feed_the_reader_lost_does_not_count(self, pg):
         """Same gate as the count: a member behind a subscription the reader does not
@@ -231,7 +231,7 @@ class TestAnnotate:
         row = _item(head.id, story_id=head.story_id)
         await annotate([row], user.id, pg)
 
-        assert row.story_seen is False
+        assert row.story_read == 0
         assert row.story_others == 1
 
     async def test_trimmed_members_are_not_counted(self, pg):
@@ -255,7 +255,7 @@ class TestAnnotate:
         await annotate([row], stranger.id, pg)
 
         assert row.story_others == 0
-        assert row.story_seen is False
+        assert row.story_read == 0
 
     async def test_rows_without_a_story_are_left_alone(self, pg):
         user = await _user(pg)
@@ -263,7 +263,7 @@ class TestAnnotate:
 
         await annotate(rows, user.id, pg)
 
-        assert all(r.story_others == 0 and r.story_seen is False for r in rows)
+        assert all(r.story_others == 0 and r.story_read == 0 for r in rows)
 
     async def test_every_row_of_one_page_is_answered_together(self, pg):
         """The page is one query, so two groups on it must both come back right."""

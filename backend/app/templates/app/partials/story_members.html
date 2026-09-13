@@ -17,6 +17,13 @@
     <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
       {% if member.is_starred %}<span class="text-gray-500 dark:text-gray-400">★</span>{% endif %}
       <span class="truncate">{{ member.feed_title or (member.url | hostname) }}</span>
+      {#- Said in a word, not left to the weight of the title. The list does it with
+          boldness alone, but a row there has its neighbours to be compared against,
+          while here one grey line among four is easy to read as a shade of nothing. -#}
+      {% if member.is_read %}
+      <span aria-hidden="true">·</span>
+      <span>read</span>
+      {% endif %}
       {% if member.published_at %}
       <span aria-hidden="true">·</span>
       <time datetime="{{ member.published_at.isoformat() }}">{{ member.published_at | localtime('short') }}</time>
