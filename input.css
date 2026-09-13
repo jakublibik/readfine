@@ -299,6 +299,22 @@ html.dark[data-layout="3"] .article-row.article-active {
   box-shadow: inset 2px 0 0 0 #60a5fa;
 }
 
+/* The "other sources covered this" chip on a row. An outline rather than a fill, and
+   kept here with the row backgrounds above because that is what settled it: the row
+   is white, #f3f4f6 under the pointer and #f3f8ff when its article is open, so a fill
+   light enough to stay quiet on white disappears on the other two, and one dark enough
+   to survive them shouts on a list where most rows have nothing. There is no shade
+   left in between. A line owes the background nothing, so it holds across all three
+   states and in both themes at a fraction of the ink. */
+.story-chip {
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+}
+.dark .story-chip {
+  border-color: #3a3a3a;
+  color: #9ca3af;
+}
+
 /* A row that was just added to Saved. The list is ordered by publication date, so the
    row can land anywhere in it; the fade says which one of them is the article you
    pasted. It ends on its own, leaving the row's normal (and hover) background. */

@@ -8,29 +8,54 @@
     The title opens the article in whichever container is showing the reader; app.js
     resolves that, because the right panel is display:none in the two-panel layout and
     the inline shell is where the article actually lives there. -#}
-<ul class="mt-3 space-y-2.5">
+{#- Ruled rather than merely spaced. Coverage of one story is four headlines saying
+    nearly the same thing, and once they are read they carry the same colour and weight
+    as well, so proximity alone gave the eye nothing to divide them by: the gap between
+    two articles was barely wider than the gap between a headline and its own source
+    line. Faintness is the dial here rather than length, since a rule that stops short
+    repeats into an ornament and leaves the list with a ragged edge; separators run the
+    full width or start at the text column, and there is no gutter here to start from.
+    The colours are halfway between the two greys either side of them: gray-200 drew a
+    table, gray-100 was not there at all against the panel. -#}
+<ul class="mt-3 divide-y divide-[#ecedf1] dark:divide-[#353535]">
   {% for member in members %}
-  <li class="text-sm leading-snug">
-    <a href="#" data-open-story-member="{{ member.id }}"
-       class="{% if member.is_read %}text-gray-500 dark:text-gray-400{% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}
-              hover:underline">{{ member.title }}</a>
-    <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-      {% if member.is_starred %}<span class="text-gray-500 dark:text-gray-400">★</span>{% endif %}
-      <span class="truncate">{{ member.feed_title or (member.url | hostname) }}</span>
-      {#- Said in a word, not left to the weight of the title. The list does it with
-          boldness alone, but a row there has its neighbours to be compared against,
-          while here one grey line among four is easy to read as a shade of nothing. -#}
-      {% if member.is_read %}
-      <span aria-hidden="true">·</span>
-      <span>read</span>
-      {% endif %}
+  <li class="text-sm leading-snug py-2.5 first:pt-0 last:pb-0">
+    {#- The star sits in a gutter beside the title, where the list keeps it and where
+        the eye goes looking for it. Held open on every item so the titles line up,
+        marked only on the ones that carry a star: an empty outline on each of them
+        would read as a button, and this one is a statement, not a control. -#}
+    <div class="flex items-baseline gap-1">
+      <span class="flex-shrink-0 w-3.5 text-center text-gray-500 dark:text-gray-400"
+            {% if member.is_starred %}title="Starred"{% endif %}>{% if member.is_starred %}★{% endif %}</span>
+      <a href="#" data-open-story-member="{{ member.id }}"
+         class="min-w-0 {% if member.is_read %}text-gray-500 dark:text-gray-400{% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}
+                hover:underline">{{ member.title }}</a>
+    </div>
+    {#- Only the source name gives way when the line runs out of room. It carries
+        min-w-0 so truncate can actually cut it (a flex item will not shrink below its
+        content without that), and everything else is held whole: without it the line
+        shrank the one part that must not be shrunk and broke a date across two lines
+        on a narrow panel. -#}
+    <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5 pl-[18px]">
+      <span class="truncate min-w-0">{{ member.feed_title or (member.url | hostname) }}</span>
       {% if member.published_at %}
-      <span aria-hidden="true">·</span>
-      <time datetime="{{ member.published_at.isoformat() }}">{{ member.published_at | localtime('short') }}</time>
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <time class="flex-shrink-0 whitespace-nowrap"
+            datetime="{{ member.published_at.isoformat() }}">{{ member.published_at | localtime('short') }}</time>
+      {% endif %}
+      {#- Last, after the article's own details. Said in a word rather than left to the
+          weight of the title: the list can do it with boldness alone because a row
+          there has its neighbours to be compared against, while a group here is often
+          read through and through, and then there is nothing to compare against. Set
+          between the source and the date it read as a label for the date, as though
+          the time given were when the article was read. -#}
+      {% if member.is_read %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <span class="flex-shrink-0">read</span>
       {% endif %}
       {% if member.url %}
       <a href="{{ member.url }}" target="_blank" rel="noopener noreferrer"
-         class="hover:text-gray-600 dark:hover:text-gray-300" title="Open at the source">↗</a>
+         class="flex-shrink-0 hover:text-gray-600 dark:hover:text-gray-300" title="Open at the source">↗</a>
       {% endif %}
     </div>
   </li>

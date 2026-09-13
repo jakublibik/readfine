@@ -74,10 +74,19 @@
     where the unfold control will sit once the list can show the group. -#}
 {% macro story_line(article) %}
   {%- if article.story_others -%}
-    <div class="text-xs text-gray-500 mt-1 pl-[26px]">
-      <span aria-hidden="true">⧉</span>
-      {% if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif %}
-      {%- if article.story_read %} · {{ article.story_read }} read{% endif %}
+    {#- Tinted around the words only, not across the row: a band the full width of the
+        list would turn two neighbouring stories into stripes, and a filled panel is
+        spoken for by the AI blocks (blue, amber), which is why the same section in the
+        reader is a neutral rule. Sized to the text, it also already has the shape of
+        the control it is about to become. -#}
+    <div class="mt-1 pl-[26px]">
+      <span class="story-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs">
+        <span aria-hidden="true">⧉</span>
+        <span>
+          {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
+          {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
+        </span>
+      </span>
     </div>
   {%- endif -%}
 {% endmacro %}
