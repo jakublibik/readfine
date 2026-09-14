@@ -22,10 +22,29 @@ Usage, from the repository root::
     uv run --project backend python scripts/survey_dedup.py
     uv run --project backend python scripts/survey_dedup.py --user 1 --days 60
     uv run --project backend python scripts/survey_dedup.py --pairs /tmp/pairs.tsv
+    uv run --project backend python scripts/survey_dedup.py --from-csv export.csv
 
 ``--user`` restricts the corpus to one account's subscriptions and, because it can then
 see read state, additionally estimates how many articles the suppression branch would
 have hidden. Without it the survey runs over every feed in the database.
+
+``--from-csv`` reads a corpus exported from somewhere this machine cannot reach. On the
+server, for the account whose read state is worth looking at::
+
+    docker exec -i readfine-db-1 psql -U readfine -d readfine -c "\\copy ( \\
+      SELECT a.id, a.feed_id, f.title AS feed_title, a.title, a.published_at, \\
+             a.fetched_at, a.url_normalized, \\
+             COALESCE(s.is_read, false) AS is_read, s.read_at, \\
+             COALESCE(s.dwell_seconds, 0) AS dwell_seconds, \\
+             COALESCE(s.link_opened, false) AS link_opened, \\
+             COALESCE(s.ever_starred, false) AS ever_starred \\
+      FROM articles a JOIN feeds f ON f.id = a.feed_id \\
+      LEFT JOIN user_article_states s ON s.article_id = a.id AND s.user_id = 1 \\
+      WHERE a.fetched_at > now() - interval '90 days' \\
+    ) TO STDOUT WITH CSV HEADER" > export.csv
+
+The file holds article titles and one account's reading history, so it must not land in
+the repository or in a synced folder, and it should be deleted once the run is done.
 """
 from __future__ import annotations
 
