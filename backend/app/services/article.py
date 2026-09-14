@@ -569,7 +569,7 @@ async def mark_scope_read(
                 UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
-            .values(is_read=True, read_at=now, suppressed_at=null())
+            .values(is_read=True, read_at=now, suppressed_at=null(), suppressed_by=null())
         )
         await db.commit()
         return
@@ -612,7 +612,8 @@ async def mark_scope_read(
         insert_select,
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
-        set_={"is_read": True, "read_at": now, "suppressed_at": null()},
+        set_={"is_read": True, "read_at": now,
+              "suppressed_at": null(), "suppressed_by": null()},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
@@ -684,7 +685,8 @@ async def mark_articles_read_batch(
         # suppressed_at goes with the read it belongs to: a machine mark that the
         # reader has since undone and then read for real is a human read now, and
         # leaving the stamp behind would let it pass as a machine one forever.
-        set_={"is_read": True, "read_at": now, "suppressed_at": null()},
+        set_={"is_read": True, "read_at": now,
+              "suppressed_at": null(), "suppressed_by": null()},
         where=(UserArticleState.__table__.c.is_read.is_not(True)),
     )
     await db.execute(stmt)
@@ -707,6 +709,7 @@ def _apply_star_side_effects(state, article, *, starred: bool, extract_readable:
         # Starring something the machine had closed says the guess was wrong about
         # this one, so it stops being a machine read and counts as seen for real.
         state.suppressed_at = None
+        state.suppressed_by = None
         if extract_readable and article.readable_status == "skipped":
             article.readable_status = "pending"
     else:
@@ -794,6 +797,7 @@ async def toggle_article_state(
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
         state.suppressed_at = None
+        state.suppressed_by = None
         if new_value and close_story and article.story_id is not None:
             await db.flush()
             await _close_stories(user.id, [article_id], db)
@@ -826,6 +830,7 @@ async def update_article_state(
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
         state.suppressed_at = None
+        state.suppressed_by = None
         if payload.is_read and close_story and article.story_id is not None:
             await db.flush()
             await _close_stories(user.id, [article_id], db)

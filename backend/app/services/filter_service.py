@@ -492,6 +492,7 @@ async def _execute_actions(
                     # below): story dedup treats is_read as "the reader has seen this
                     # news", and a filter firing is not the reader seeing anything.
                     state.suppressed_at = state.read_at
+                    state.suppressed_by = "filter"
                     changed = True
                 elif action.action_type == "star" and not state.is_starred:
                     # Filter star sets is_starred ONLY — deliberately not the

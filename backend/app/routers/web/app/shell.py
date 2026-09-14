@@ -19,7 +19,7 @@ from app.services.article import mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
-from app.services.story_service import row_count
+from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html, _badge_total_html
@@ -79,12 +79,16 @@ async def htmx_sidebar(
     user_labels = await list_labels(user, db)
 
     feed_ids = [uf.feed_id for uf in user_feeds]
+    # A reader with story dedup off gets a list that folds nothing, so their badges
+    # count articles again.
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
+    rows_drawn = row_count(story_dedup != DEDUP_OFF)
 
     # Nav counts. Every counter over a view that folds stories counts rows rather than
     # articles (story_service.row_count): the badge stands above a list, and a list that
     # shows one row for five sources must not be labelled 5.
     nav_total = (await db.execute(
-        select(row_count()).select_from(Article)
+        select(rows_drawn).select_from(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
@@ -114,13 +118,13 @@ async def htmx_sidebar(
     nav_saved = uas_row.saved or 0
     nav_unread_saved = uas_row.unread_saved or 0
     nav_labeled = (await db.execute(
-        select(row_count())
+        select(rows_drawn)
         .select_from(ArticleLabel)
         .join(Article, Article.id == ArticleLabel.article_id)
         .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
     nav_unread_labeled = (await db.execute(
-        select(row_count())
+        select(rows_drawn)
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
@@ -161,7 +165,7 @@ async def htmx_sidebar(
     # row it has.
     def _scoped(*extra):
         return (
-            select(UserFeed.folder_id, row_count())
+            select(UserFeed.folder_id, rows_drawn)
             .select_from(Article)
             .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
             .outerjoin(
@@ -180,7 +184,7 @@ async def htmx_sidebar(
     ))).all())
 
     nav_unread = (await db.execute(
-        select(row_count())
+        select(rows_drawn)
         .select_from(Article)
         .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
         .outerjoin(
@@ -197,7 +201,7 @@ async def htmx_sidebar(
     label_ids = [lb.id for lb in user_labels]
     if label_ids:
         label_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, row_count())
+            select(ArticleLabel.label_id, rows_drawn)
             .join(Article, Article.id == ArticleLabel.article_id)
             .where(
                 ArticleLabel.user_id == user.id,
@@ -207,7 +211,7 @@ async def htmx_sidebar(
             .group_by(ArticleLabel.label_id)
         )).all())
         label_unread_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, row_count())
+            select(ArticleLabel.label_id, rows_drawn)
             .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &

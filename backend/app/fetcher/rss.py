@@ -533,6 +533,7 @@ def _dedup_state(row) -> dict:
         "article_id": row.article_id,
         "is_read": True,
         "suppressed_at": datetime.now(timezone.utc),
+        "suppressed_by": "url",
     }
 
 

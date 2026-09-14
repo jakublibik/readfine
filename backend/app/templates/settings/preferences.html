@@ -114,6 +114,62 @@
         </select>
       </div>
 
+      <div>
+        <label class="text-sm font-medium text-gray-700">One story, several sources</label>
+        <p class="text-xs text-gray-500 mt-0.5">
+          What to do when several of your feeds file the same piece of news.
+          <a href="/help#stories" class="text-blue-600 hover:underline">Learn more</a>.
+        </p>
+        <div class="mt-2.5 space-y-3">
+
+          <label class="flex gap-2.5 items-start cursor-pointer">
+            <input type="radio" name="story_dedup" value="off"
+                   {% if s.story_dedup == "off" %}checked{% endif %}
+                   class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+            <span class="min-w-0">
+              <span class="block text-sm text-gray-700">Off</span>
+              <span class="block text-xs text-gray-500 mt-0.5">Every article gets its own row.</span>
+            </span>
+          </label>
+
+          <label class="flex gap-2.5 items-start cursor-pointer">
+            <input type="radio" name="story_dedup" value="collapse"
+                   {% if s.story_dedup != "off" and s.story_dedup != "collapse_suppress" %}checked{% endif %}
+                   class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+            <span class="min-w-0">
+              <span class="block text-sm text-gray-700">Fold into one row</span>
+              <span class="block text-xs text-gray-500 mt-0.5">
+                The coverage becomes a single row that says how many sources filed it.
+                Open the rest under it, or at the foot of the article.
+              </span>
+            </span>
+          </label>
+
+          <div>
+            <label class="flex gap-2.5 items-start cursor-pointer">
+              <input type="radio" name="story_dedup" value="collapse_suppress"
+                     {% if s.story_dedup == "collapse_suppress" %}checked{% endif %}
+                     class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+              <span class="min-w-0">
+                <span class="block text-sm text-gray-700">Fold, and don't show a story I've read again</span>
+                <span class="block text-xs text-gray-500 mt-0.5">
+                  A later article about a story you have already read arrives marked as read,
+                  so it stays out of your unread list. It is not deleted: you find it under the
+                  article you read and in All. Matching is on the headline, so now and then it
+                  catches a follow-up rather than a repeat.
+                </span>
+              </span>
+            </label>
+            {% if s.story_dedup == "collapse_suppress" %}
+            <p class="text-xs text-gray-500 mt-1 pl-[26px]">
+              Hidden in the last 7 days: <span class="font-medium text-gray-700">{{ suppressed_week }}</span>.
+            </p>
+            {% endif %}
+          </div>
+
+        </div>
+      </div>
+
     </div>
   </section>
 

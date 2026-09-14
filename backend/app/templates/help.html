@@ -113,6 +113,14 @@
           </div>
 
           <div>
+            <dt class="font-medium text-gray-900 dark:text-gray-100">The line under an article in the list</dt>
+            <dd>When several of your feeds file the same story, Readfine keeps one row for it and puts a line
+              underneath saying how many other sources covered it and how many of those you have read. The line
+              opens them as rows indented under the first one. See
+              <a href="#stories" class="text-blue-600 hover:underline dark:text-blue-400">Several of my feeds carry the same story</a>.</dd>
+          </div>
+
+          <div>
             <dt class="font-medium text-gray-900 dark:text-gray-100">Search from anywhere</dt>
             <dd>Press <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">/</kbd>
               to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
@@ -232,6 +240,37 @@
               time, whether the list starts <strong>filtered to unread</strong>, whether Readfine <strong>jumps to the
               next feed</strong> after you mark everything read, and whether an article that carries only a headline
               <strong>opens the original page</strong> straight away.</p>
+          </div>
+
+          <div id="stories" class="py-5 first:pt-0 last:pb-0">
+            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Several of my feeds carry the same story. What does Readfine do?</h3>
+            <p>It keeps one row for the story instead of five. Readfine compares the headlines of
+              articles that arrive <strong>within 72 hours of each other and from different feeds</strong>,
+              which catches the same event written up by five newsrooms under five addresses and five
+              headlines. One article stays in the list, with a line under it saying how many other
+              sources covered the same thing and how many of those you have already read. Two articles
+              from the <em>same</em> feed are never grouped: a newsroom filing twice is usually an update
+              or a correction, not a duplicate.</p>
+            <p class="mt-2">That line opens the rest of the group in place, as ordinary rows indented
+              under the first one, so they read, star and open like any other row. The same list is at
+              the foot of the article as well. <strong>Reading the row finishes the story</strong>: the
+              articles behind it are marked read too, so the same event stops coming back as unread in a
+              label, a feed or a search. Unfold the group and that stops, the articles are then yours one
+              at a time. Only feeds you subscribe to are ever counted or listed.</p>
+            <p class="mt-2">In
+              <a href="/settings/preferences" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Preferences</a>
+              you can turn this off, or take it one step further. With <strong>Fold, and don't show a
+              story I've read again</strong>, an article that repeats a story you have read arrives
+              already marked as read, so it stays out of your unread list. It is not deleted: it is under
+              the article you read, in All, and in search. The setting also says how many articles it kept
+              out in the last 7 days, so you can see what it is doing for you.</p>
+            <p class="mt-2">That last option is off unless you ask for it, because the match is lexical.
+              Comparing headlines cannot tell "another source on the same event" from "the next
+              development in it", so now and then it catches a follow-up rather than a repeat. Folding
+              only ever moves such an article one tap away; hiding it means you may not see it at all,
+              which is a bigger thing to hand over to a guess. Starred, saved, archive and a single feed's
+              own list are left alone either way, and marking a feed or folder read never reaches beyond
+              it.</p>
           </div>
 
           <div id="saved" class="py-5 first:pt-0 last:pb-0">

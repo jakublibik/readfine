@@ -1,13 +1,17 @@
 """Web routes for reading/display preferences in settings."""
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
+from app.models.article import UserArticleState
 from app.models.user import User, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.services.story_service import DEDUP_COLLAPSE, DEDUP_VALUES
 from app.templating import templates
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.formats import is_valid_format
@@ -21,6 +25,25 @@ _DENSITY_VALUES = {"compact", "comfortable", "summary"}
 _SORT_VALUES = {"newest", "oldest"}
 _FONT_SIZE_VALUES = {"sm", "md", "lg"}
 _FONT_FAMILY_VALUES = {"sans", "serif"}
+
+
+async def _suppressed_this_week(user_id: int, db: AsyncSession) -> int:
+    """How many articles the story dedup hid from this reader in the last 7 days.
+
+    Counts only what the similarity rule hid. The same column also carries reads
+    written by the URL dedup, by a filter action and by finishing a story, and mixing
+    those in would leave the reader watching a number that has little to do with the
+    setting they are looking at.
+    """
+    return await db.scalar(
+        select(func.count())
+        .select_from(UserArticleState)
+        .where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.suppressed_by == "similar",
+            UserArticleState.suppressed_at >= datetime.now(timezone.utc) - timedelta(days=7),
+        )
+    ) or 0
 
 
 async def _reschedule_briefings(user_id: int, tz_str: str, db: AsyncSession) -> None:
@@ -45,7 +68,10 @@ async def settings_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     s = await _get_or_create_settings(user, db)
-    return templates.TemplateResponse(request, "settings/preferences.html", {"s": s})
+    return templates.TemplateResponse(request, "settings/preferences.html", {
+        "s": s,
+        "suppressed_week": await _suppressed_this_week(user.id, db),
+    })
 
 
 @router.post("/preferences", response_class=HTMLResponse)
@@ -80,6 +106,11 @@ async def settings_preferences_save(
     s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
     s.mark_read_auto_advance = form.get("mark_read_auto_advance") == "on"
     s.open_original_when_empty = form.get("open_original_when_empty") == "on"
+
+    story_dedup = form.get("story_dedup", DEDUP_COLLAPSE)
+    if story_dedup not in DEDUP_VALUES:
+        story_dedup = DEDUP_COLLAPSE
+    s.story_dedup = story_dedup
 
     label_display = form.get("label_display", "indicator")
     if label_display not in {"none", "indicator", "dots"}:
@@ -121,4 +152,5 @@ async def settings_preferences_save(
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
         "saved": True,
+        "suppressed_week": await _suppressed_this_week(user.id, db),
     })

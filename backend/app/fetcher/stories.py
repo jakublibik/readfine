@@ -16,18 +16,29 @@ The grouping is global, shared by every user. A group can therefore contain arti
 feeds a given reader doesn't subscribe to, so anything user-facing has to filter members
 through ``article_access_predicate``.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
-from app.models.article import Article
+from app.models.article import Article, UserArticleState
+from app.models.feed import UserFeed
+from app.models.user import UserSettings
+from app.services.story_service import DEDUP_SUPPRESS
 
 # Measured, not chosen: see scripts/survey_dedup.py and the plan behind it. At 0.30 the
 # production corpus collapses ~11 articles a day out of ~240; the precision cliff sits
 # between 0.25 and 0.30 and everything above 0.50 is effectively an exact-title match.
 COLLAPSE_THRESHOLD = 0.30
 WINDOW_HOURS = 72
+
+# Hiding an article outright is a stronger claim than folding it away, so it asks for a
+# stronger match, and one made directly against the article the reader read rather than
+# through the group. The same export puts this at ~2.4 articles a day hidden and 2 the
+# reader would have wanted over 87 days. Below 0.40 that regret climbs fast.
+SUPPRESS_THRESHOLD = 0.40
 
 # Titles shorter than this are not compared at all. A trigram score over a handful of
 # trigrams swings wildly, and the fetcher's own "Untitled" placeholder (rss.py) would
@@ -97,7 +108,7 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
 
     members: set[int] = set()
     old_stories: set[int] = set()
-    for new_id, cand_id, cand_story in rows:
+    for new_id, cand_id, cand_story, _similarity in rows:
         union(new_id, cand_id)
         members.update((new_id, cand_id))
         if cand_story is not None:
@@ -123,10 +134,91 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
             .values(story_id=root)
         )
 
+    await suppress_seen(rows, db)
     return len(members & set(new_ids))
 
 
-async def _find_pairs(new_ids: list[int], db: AsyncSession) -> list[tuple[int, int, int | None]]:
+async def suppress_seen(
+    rows: list[tuple[int, int, int | None, float]], db: AsyncSession
+) -> int:
+    """Hide a new article from readers who have already read the same news.
+
+    Opt-in (``UserSettings.story_dedup == 'collapse_suppress'``), and decided against
+    one article the reader read themselves, never against the group. Group membership
+    is transitive at 0.30, which builds clusters of up to 13 where the two ends are not
+    the same story at all — fine for folding a list, not for taking an article away. So
+    the pair has to clear 0.40 directly.
+
+    "Read it themselves" is ``is_read`` with no ``suppressed_at``: a read written by the
+    URL dedup, by a filter, or by finishing another story cannot hide anything, or one
+    machine decision would quietly feed the next. An article a filter starred is left
+    alone too — that is the reader saying in advance they want it.
+
+    Does not commit; the caller owns the fetch transaction. Returns how many (reader,
+    article) pairs were hidden.
+    """
+    seen_by_article: dict[int, list[int]] = {}
+    for new_id, cand_id, _story, similarity in rows:
+        if similarity >= SUPPRESS_THRESHOLD:
+            seen_by_article.setdefault(new_id, []).append(cand_id)
+    if not seen_by_article:
+        return 0
+
+    now = datetime.now(timezone.utc)
+    hidden = 0
+    for new_id, seen_ids in seen_by_article.items():
+        # One statement per article rather than one for the batch: at 0.40 the measured
+        # corpus produces a handful of these a day, so the loop is shorter than the
+        # VALUES list it would replace.
+        seen = aliased(UserArticleState)
+        feed_of_new = select(Article.feed_id).where(Article.id == new_id).scalar_subquery()
+        readers = (await db.execute(
+            select(seen.user_id)
+            .select_from(seen)
+            .join(
+                UserSettings,
+                (UserSettings.user_id == seen.user_id)
+                & (UserSettings.story_dedup == DEDUP_SUPPRESS),
+            )
+            .join(
+                UserFeed,
+                (UserFeed.user_id == seen.user_id) & (UserFeed.feed_id == feed_of_new),
+            )
+            .where(
+                seen.article_id.in_(seen_ids),
+                seen.is_read.is_(True),
+                seen.suppressed_at.is_(None),
+            )
+            .distinct()
+        )).scalars().all()
+        if not readers:
+            continue
+
+        result = await db.execute(
+            pg_insert(UserArticleState)
+            .values([
+                {"user_id": uid, "article_id": new_id, "is_read": True,
+                 "is_starred": False, "is_archived": False,
+                 "read_at": now, "suppressed_at": now, "suppressed_by": "similar"}
+                for uid in readers
+            ])
+            .on_conflict_do_update(
+                index_elements=["user_id", "article_id"],
+                set_={"is_read": True, "read_at": now, "suppressed_at": now,
+                      "suppressed_by": "similar"},
+                where=(
+                    UserArticleState.__table__.c.is_read.is_not(True)
+                    & UserArticleState.__table__.c.is_starred.is_not(True)
+                ),
+            )
+        )
+        hidden += result.rowcount or 0
+    return hidden
+
+
+async def _find_pairs(
+    new_ids: list[int], db: AsyncSession
+) -> list[tuple[int, int, int | None, float]]:
     """Near-duplicate (new article, candidate) pairs, with the candidate's story.
 
     One query per new article rather than a single self-join. The self-join measured
@@ -151,18 +243,27 @@ async def _find_pairs(new_ids: list[int], db: AsyncSession) -> list[tuple[int, i
         )
     )).all()
 
-    pairs: list[tuple[int, int, int | None]] = []
+    pairs: list[tuple[int, int, int | None, float]] = []
     for article_id, feed_id, title_norm, ts in new_rows:
         candidates = await db.execute(_candidate_stmt(article_id, feed_id, title_norm, ts))
-        pairs.extend((article_id, cand_id, story) for cand_id, story in candidates)
+        pairs.extend(
+            (article_id, cand_id, story, similarity)
+            for cand_id, story, similarity in candidates
+        )
     return pairs
 
 
 def _candidate_stmt(article_id: int, feed_id: int | None, title_norm: str, ts: datetime):
-    """Articles that cover the same story as one given article."""
+    """Articles that cover the same story as one given article.
+
+    The score comes back with the pair because the two thresholds are read off the same
+    match: 0.30 folds the coverage together, 0.40 is what ``suppress_seen`` needs.
+    """
     window = timedelta(hours=WINDOW_HOURS)
     cand_ts = func.coalesce(Article.published_at, Article.fetched_at)
-    return select(Article.id, Article.story_id).where(
+    return select(
+        Article.id, Article.story_id, func.similarity(Article.title_norm, title_norm)
+    ).where(
         Article.id != article_id,
         # Same-feed near-duplicates are a newsroom reposting or correcting itself, which
         # is not what this is for. IS DISTINCT FROM also keeps two orphaned articles

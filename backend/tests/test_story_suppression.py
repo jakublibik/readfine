@@ -22,9 +22,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
+from app.fetcher.stories import assign_stories, assign_stories_global
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.models.user import User
+from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
     mark_articles_read_batch,
@@ -32,9 +33,18 @@ from app.services.article import (
     toggle_article_state,
     update_article_state,
 )
+from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, DEDUP_SUPPRESS
 
 NOW = datetime.now(timezone.utc)
 LONG_AGO = NOW - timedelta(days=3)
+
+
+@pytest_asyncio.fixture
+def nonce():
+    """Short token shared by one test's titles, so they can only ever match each other
+    and never a real article sitting in the development database. Short because it
+    lands in every title, and a long one would lift the scores the tests turn on."""
+    return "zz" + uuid.uuid4().hex[:4]
 
 
 @pytest_asyncio.fixture
@@ -65,21 +75,23 @@ async def _user(pg) -> User:
     return user
 
 
-async def _feed(pg, user) -> Feed:
+async def _feed(pg, *subscribers) -> Feed:
     u = uuid.uuid4().hex[:12]
     feed = Feed(feed_url=f"https://ex.invalid/{u}.xml", title=f"Feed {u[:4]}",
-                subscriber_count=1)
+                subscriber_count=len(subscribers))
     pg.add(feed)
     await pg.flush()
-    pg.add(UserFeed(user_id=user.id, feed_id=feed.id))
+    for user in subscribers:
+        pg.add(UserFeed(user_id=user.id, feed_id=feed.id))
     await pg.flush()
     return feed
 
 
-async def _article(pg, feed, title="T") -> Article:
+async def _article(pg, feed, title="T", *, hours_ago=0) -> Article:
     u = uuid.uuid4().hex
+    when = NOW - timedelta(hours=hours_ago) if hours_ago else LONG_AGO
     article = Article(feed_id=feed.id, guid=u, guid_hash=u, title=title,
-                      published_at=LONG_AGO, fetched_at=LONG_AGO)
+                      published_at=when, fetched_at=when)
     pg.add(article)
     await pg.flush()
     return article
@@ -250,3 +262,200 @@ class TestWorkingWithTheArticleClearsTheMark:
         await toggle_article_state(user, article.id, "is_starred", pg)
 
         assert await _stamp(pg, user, article) is None
+
+
+# ── the rule itself: hiding a repeat of something already read ────────────────
+
+# Measured against the live pg_trgm: 0.86, well over the 0.40 that hiding asks for.
+SEEN_TITLE = "city council approves the new tram line"
+REPEAT_TITLE = "new tram line approved by the city council"
+# 0.35: enough to fold the two together in the list, not enough to take one away.
+RELATED_TITLE = "new tram line to open next year"
+
+
+async def _settings(pg, user, mode) -> UserSettings:
+    s = UserSettings(user_id=user.id, story_dedup=mode)
+    pg.add(s)
+    await pg.flush()
+    return s
+
+
+async def _read_by_hand(pg, user, article) -> UserArticleState:
+    state = UserArticleState(user_id=user.id, article_id=article.id, is_read=True,
+                             read_at=NOW - timedelta(hours=2))
+    pg.add(state)
+    await pg.flush()
+    return state
+
+
+async def _story_of(pg, article) -> int | None:
+    """From the database: the grouping is done in SQL, so the session's copy is stale."""
+    return await pg.scalar(select(Article.story_id).where(Article.id == article.id))
+
+
+async def _state(pg, user, article) -> UserArticleState | None:
+    return await pg.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.article_id == article.id,
+        )
+    )
+
+
+async def _arrives(pg, user, title=REPEAT_TITLE, *, nonce="", feed=None):
+    """A new article lands in a feed the reader takes, and the fetcher groups it."""
+    feed = feed if feed is not None else await _feed(pg, user)
+    article = await _article(pg, feed, f"{nonce} {title}".strip(), hours_ago=1)
+    await assign_stories([article], pg)
+    return article
+
+
+class TestHidingARepeat:
+    """The opt-in half of story dedup: an article that repeats one the reader has
+    already read does not come back as a new row.
+
+    Every one of these needs the real pg_trgm, so the titles are fixed phrases whose
+    scores were measured rather than assumed, and the nonce keeps them from pairing up
+    with whatever else is in the development database.
+    """
+
+    async def test_a_repeat_of_something_read_is_hidden(self, pg, nonce):
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        state = await _state(pg, user, arrival)
+        assert state is not None and state.is_read is True
+        assert state.suppressed_by == "similar"
+
+    async def test_folding_alone_hides_nothing(self, pg, nonce):
+        """The default. The article is still grouped, it just stays in the list."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_COLLAPSE)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await _state(pg, user, arrival) is None
+        assert await _story_of(pg, arrival) == seen.id
+
+    async def test_the_feature_off_hides_nothing(self, pg, nonce):
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_OFF)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await _state(pg, user, arrival) is None
+
+    async def test_a_match_that_only_folds_is_not_strong_enough_to_hide(self, pg, nonce):
+        """0.30 folds, 0.40 hides. Group membership is transitive and reaches further
+        than either, which is why hiding is decided on the pair and not on the group."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, RELATED_TITLE, nonce=nonce)
+
+        assert await _story_of(pg, arrival) == seen.id
+        assert await _state(pg, user, arrival) is None
+
+    async def test_a_machine_read_cannot_hide_anything(self, pg, nonce):
+        """Otherwise one automatic decision feeds the next: a filter closes an article,
+        that closes the next day's coverage, and the reader never sees the story."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _machine_read(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await _state(pg, user, arrival) is None
+
+    async def test_an_unread_article_hides_nothing(self, pg, nonce):
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await _state(pg, user, arrival) is None
+
+    async def test_an_article_a_filter_starred_is_left_alone(self, pg, nonce):
+        """A star is the reader saying in advance that they want this one, and filters
+        run before the grouping does, so the state row is already there."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        feed = await _feed(pg, user)
+        arrival = await _article(pg, feed, f"{nonce} {REPEAT_TITLE}", hours_ago=1)
+        pg.add(UserArticleState(user_id=user.id, article_id=arrival.id, is_starred=True))
+        await pg.flush()
+
+        await assign_stories([arrival], pg)
+
+        state = await _state(pg, user, arrival)
+        assert state.is_read is False
+        assert state.suppressed_at is None
+
+    async def test_the_window_holds(self, pg, nonce):
+        """Coverage a week apart is the next story about the same subject, not a repeat
+        of this one."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=200)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await _story_of(pg, arrival) is None
+        assert await _state(pg, user, arrival) is None
+
+    async def test_only_the_reader_who_read_it_loses_the_article(self, pg, nonce):
+        """The grouping is global, the reading is not."""
+        user = await _user(pg)
+        stranger = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        await _settings(pg, stranger, DEDUP_SUPPRESS)
+        source = await _feed(pg, user, stranger)
+        seen = await _article(pg, source, f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce, feed=await _feed(pg, user, stranger))
+
+        assert (await _state(pg, user, arrival)).suppressed_by == "similar"
+        assert await _state(pg, stranger, arrival) is None
+
+    async def test_a_reader_who_does_not_take_the_new_feed_is_not_touched(self, pg, nonce):
+        """Nothing to hide from someone the article was never going to reach; writing a
+        state row for them would only leave rubbish behind."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        elsewhere = await _feed(pg)
+        arrival = await _article(pg, elsewhere, f"{nonce} {REPEAT_TITLE}", hours_ago=1)
+        await assign_stories([arrival], pg)
+
+        assert await _state(pg, user, arrival) is None
+
+    async def test_the_post_gather_pass_hides_it_too(self, pg, nonce):
+        """Two feeds in one scheduler round cannot see each other's rows, so the second
+        pass is where most cross-feed pairs are actually found."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _article(pg, await _feed(pg, user), f"{nonce} {REPEAT_TITLE}",
+                                 hours_ago=1)
+
+        await assign_stories_global(NOW - timedelta(hours=2), pg)
+
+        assert (await _state(pg, user, arrival)).suppressed_by == "similar"

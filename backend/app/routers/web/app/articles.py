@@ -29,6 +29,8 @@ from app.services.article import (
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.story_service import (
+    DEDUP_COLLAPSE,
+    DEDUP_OFF,
     ENGAGED_DWELL_SECONDS,
     MEMBER_LIMIT,
     row_count,
@@ -146,10 +148,15 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
         return ""
     oob = ""
     # Rows, not articles: a label view folds a story into one row like the other
-    # reading views, and these badges stand above it (story_service.row_count).
+    # reading views, and these badges stand above it (story_service.row_count). Unless
+    # the reader has the feature off, in which case their list folds nothing.
+    story_dedup = await db.scalar(
+        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
+    )
+    rows_drawn = row_count(story_dedup != DEDUP_OFF)
     if label_id:
         lu = (await db.scalar(
-            select(row_count())
+            select(rows_drawn)
             .select_from(ArticleLabel)
             .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
@@ -162,7 +169,7 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
             )
         )) or 0
         lt = (await db.scalar(
-            select(row_count())
+            select(rows_drawn)
             .select_from(ArticleLabel)
             .join(Article, Article.id == ArticleLabel.article_id)
             .where(ArticleLabel.user_id == user_id, ArticleLabel.label_id == label_id)
@@ -170,14 +177,14 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
     all_unread = (await db.scalar(
-        select(row_count())
+        select(rows_drawn)
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
         .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
     )) or 0
     all_total = (await db.scalar(
-        select(row_count())
+        select(rows_drawn)
         .select_from(ArticleLabel)
         .join(Article, Article.id == ArticleLabel.article_id)
         .where(ArticleLabel.user_id == user_id, Article.trimmed_at.is_(None))
@@ -291,9 +298,14 @@ def _build_more_qs(
 
 
 def _collapses_stories(
-    *, feed_id: int | None, starred_only: bool, archived_only: bool, saved_only: bool,
+    *, story_dedup: str, feed_id: int | None, starred_only: bool,
+    archived_only: bool, saved_only: bool,
 ) -> bool:
     """Whether this view folds the other coverage of a story into one row.
+
+    Nothing folds when the reader has the feature off: the setting is what decides
+    whether the list is theirs to shape at all, and the view only decides where that
+    shaping makes sense.
 
     The reading views do, search included: a search for a story that five newsrooms
     filed answered with five rows saying the same thing, and folding only ever hides a
@@ -307,12 +319,14 @@ def _collapses_stories(
     single feed, which is a question about that feed, and hiding one of its articles
     because another source filed first answers a different one.
     """
+    if story_dedup == DEDUP_OFF:
+        return False
     return not (feed_id is not None or starred_only or archived_only or saved_only)
 
 
 async def _apply_story_collapse(
     rows: list, user: User, db: AsyncSession, *, collapse: bool,
-    shown_stories: list[int] | None = None,
+    story_dedup: str = DEDUP_COLLAPSE, shown_stories: list[int] | None = None,
 ) -> tuple[list, list[int]]:
     """Fold the page's stories (when the view does that) and annotate what is left.
 
@@ -322,7 +336,13 @@ async def _apply_story_collapse(
     that has other coverage behind it, so the reader can tell before opening it. The
     story list is only kept where the view folds, since that is the only place a later
     page has to know what came before.
+
+    With the feature off the rows come back untouched and unmarked. Off means the list
+    looks like it did before any of this existed, not "folds nothing but still points
+    at what it would have folded".
     """
+    if story_dedup == DEDUP_OFF:
+        return rows, []
     if not collapse:
         await annotate_stories(rows, user.id, db)
         return rows, []
@@ -410,6 +430,7 @@ async def render_list(
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     label_display = settings.label_display if settings else "indicator"
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
     is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
@@ -463,17 +484,19 @@ async def render_list(
     articles, shown_stories = await _apply_story_collapse(
         rows, user, db,
         collapse=_collapses_stories(
-            feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
-            saved_only=saved_only,
+            story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+            archived_only=archived_only, saved_only=saved_only,
         ),
+        story_dedup=story_dedup,
     )
 
     # Title bar count for mobile hideable mode
+    rows_drawn = row_count(story_dedup != DEDUP_OFF)
     title_bar_count: int | None = None
     title_bar_count_type: str | None = None
     if label_id is not None:
         title_bar_count = (await db.execute(
-            select(row_count())
+            select(rows_drawn)
             .select_from(ArticleLabel)
             .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
@@ -488,7 +511,7 @@ async def render_list(
         title_bar_count_type = "unread"
     elif labeled_only:
         title_bar_count = (await db.execute(
-            select(row_count())
+            select(rows_drawn)
             .select_from(Article)
             .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
             .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
@@ -606,6 +629,7 @@ async def htmx_article_list_more(
     is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
     label_display = settings.label_display if settings else "indicator"
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
 
     rows = await list_articles(
         user=user,
@@ -633,9 +657,10 @@ async def htmx_article_list_more(
     articles, next_stories = await _apply_story_collapse(
         rows, user, db,
         collapse=_collapses_stories(
-            feed_id=feed_id, starred_only=starred_only, archived_only=archived_only,
-            saved_only=saved_only,
+            story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+            archived_only=archived_only, saved_only=saved_only,
         ),
+        story_dedup=story_dedup,
         shown_stories=parse_shown_stories(shown_stories),
     )
     filter_params = _build_filter_params(
@@ -742,7 +767,11 @@ async def htmx_article_detail(
         )
         if existing_chat and existing_chat.messages:
             chat_messages = list(existing_chat.messages)
-    related_count = await count_members(user.id, article.story_id, article_id, db)
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
+    related_count = (
+        0 if story_dedup == DEDUP_OFF
+        else await count_members(user.id, article.story_id, article_id, db)
+    )
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {
         "article": article,
         "mark_read_on_scroll": mark_read_on_scroll,
@@ -958,9 +987,18 @@ async def _content_with_readtime_oob(
     too: this render replaces the whole content block, and without it the block would
     disappear the moment an extraction finished.
     """
+    related_count = 0
+    if article.story_id is not None:
+        # Only then is the setting worth a query: without a story there is no block to
+        # draw either way.
+        story_dedup = await db.scalar(
+            select(UserSettings.story_dedup).where(UserSettings.user_id == user.id)
+        )
+        if story_dedup != DEDUP_OFF:
+            related_count = await count_members(user.id, article.story_id, article.id, db)
     content_html = templates.env.get_template("app/partials/article_content.html").render(
         request=request, article=article, chat_available=False,
-        related_count=await count_members(user.id, article.story_id, article.id, db),
+        related_count=related_count,
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (
@@ -1093,6 +1131,10 @@ async def htmx_article_dwell(
                     (UserArticleState.dwell_seconds + seconds >= ENGAGED_DWELL_SECONDS, null()),
                     else_=UserArticleState.suppressed_at,
                 ),
+                "suppressed_by": case(
+                    (UserArticleState.dwell_seconds + seconds >= ENGAGED_DWELL_SECONDS, null()),
+                    else_=UserArticleState.suppressed_by,
+                ),
             },
         )
     )
@@ -1118,6 +1160,7 @@ async def htmx_article_link_opened(
         # Opening the link is the reader doing something with the article, so a
         # machine mark on it no longer stands (see the dwell handler above).
         state.suppressed_at = None
+        state.suppressed_by = None
         await db.commit()
     return HTMLResponse("", status_code=204)
 

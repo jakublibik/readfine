@@ -49,6 +49,7 @@ _Trim the stream down to what matters._
 - **Feed & folder scoping:** Restrict any filter to specific feeds or folders.
 - **Retroactive apply:** Run a filter over existing articles, not just new ones.
 - **Duplicates across feeds:** A story that two of your feeds both carry is not put in front of you twice. The first copy stays unread and the later one arrives already marked read, so it is still there if you want it.
+- **One story, several sources:** Headlines are matched across your feeds, so the same event covered by five newsrooms under five addresses is one row saying how many sources filed it. Open the rest in place or from the foot of the article; reading the row finishes the story. Optionally, an article that repeats one you have already read is kept out of the list altogether.
 - **Relevance scoring:** With an AI key, each incoming article is scored against your interest profile, so you can surface or hide articles by score (a filter can mark anything below a threshold as read).
 
 ## AI (bring your own key)

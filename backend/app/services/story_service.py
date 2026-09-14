@@ -22,6 +22,14 @@ from app.services.article import add_article_access_joins, article_access_predic
 # against a pathological cluster, not a page size. Nothing paginates the footer.
 MEMBER_LIMIT = 25
 
+# The three values of UserSettings.story_dedup. Everyone starts on COLLAPSE, which is
+# what the list does today; SUPPRESS adds hiding an article that repeats one the reader
+# has read, and OFF leaves the list untouched and the footer out.
+DEDUP_OFF = "off"
+DEDUP_COLLAPSE = "collapse"
+DEDUP_SUPPRESS = "collapse_suppress"
+DEDUP_VALUES = (DEDUP_OFF, DEDUP_COLLAPSE, DEDUP_SUPPRESS)
+
 # Time in front of an article that counts as having read it. Same number the stats and
 # the retention pass use for the same question; it lives here because this is where it
 # decides something — it clears the machine's ``suppressed_at``.
@@ -108,8 +116,12 @@ async def list_members(
     ]
 
 
-def row_count():
+def row_count(collapsing: bool = True):
     """SQL count of rows as a collapsing view draws them, for the badge above it.
+
+    ``collapsing=False`` gives a plain count of articles, which is what a reader with
+    the feature off must see: their list folds nothing, so a badge that counted stories
+    would stand above a list with more rows in it than the number says.
 
     One per story, one per article that has none: ``coalesce(story_id, -id)`` keys a
     grouped article by its story and an ungrouped one by itself, and ids being positive
@@ -124,6 +136,8 @@ def row_count():
     Measured at 33 ms against 30 ms for the plain count over 15k unread articles, so the
     distinct is not what makes a badge expensive.
     """
+    if not collapsing:
+        return func.count()
     return func.count(func.distinct(func.coalesce(Article.story_id, -Article.id)))
 
 
@@ -285,12 +299,13 @@ async def mark_group_read(
         .values([
             {"user_id": user_id, "article_id": aid, "is_read": True,
              "is_starred": False, "is_archived": False,
-             "read_at": now, "suppressed_at": now}
+             "read_at": now, "suppressed_at": now, "suppressed_by": "story"}
             for aid in members
         ])
         .on_conflict_do_update(
             index_elements=["user_id", "article_id"],
-            set_={"is_read": True, "read_at": now, "suppressed_at": now},
+            set_={"is_read": True, "read_at": now, "suppressed_at": now,
+                  "suppressed_by": "story"},
             # The row may have been read between the select above and here; the guard
             # is what makes sure this never restamps somebody's own reading.
             where=(UserArticleState.__table__.c.is_read.is_not(True)),
