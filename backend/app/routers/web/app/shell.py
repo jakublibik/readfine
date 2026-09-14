@@ -19,6 +19,7 @@ from app.services.article import mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
+from app.services.story_service import row_count
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html, _badge_total_html
@@ -79,9 +80,11 @@ async def htmx_sidebar(
 
     feed_ids = [uf.feed_id for uf in user_feeds]
 
-    # Nav counts
+    # Nav counts. Every counter over a view that folds stories counts rows rather than
+    # articles (story_service.row_count): the badge stands above a list, and a list that
+    # shows one row for five sources must not be labelled 5.
     nav_total = (await db.execute(
-        select(func.count()).select_from(Article)
+        select(row_count()).select_from(Article)
         .join(UserFeed, UserFeed.feed_id == Article.feed_id)
         .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
@@ -111,13 +114,13 @@ async def htmx_sidebar(
     nav_saved = uas_row.saved or 0
     nav_unread_saved = uas_row.unread_saved or 0
     nav_labeled = (await db.execute(
-        select(func.count(func.distinct(ArticleLabel.article_id)))
+        select(row_count())
         .select_from(ArticleLabel)
         .join(Article, Article.id == ArticleLabel.article_id)
         .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
     )).scalar() or 0
     nav_unread_labeled = (await db.execute(
-        select(func.count(Article.id.distinct()))
+        select(row_count())
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
@@ -151,21 +154,50 @@ async def htmx_sidebar(
         feed_total_counts = {}
         feed_unread_counts = {}
 
-    nav_unread = sum(feed_unread_counts.values())
+    # Folder and nav counters are asked for separately rather than added up from the
+    # feed ones. A story runs across feeds, so two of its articles in two feeds of one
+    # folder are one row in the folder's list; summing would count them twice. The feed
+    # counters above stay a plain count of articles, since a feed's own list shows every
+    # row it has.
+    def _scoped(*extra):
+        return (
+            select(UserFeed.folder_id, row_count())
+            .select_from(Article)
+            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+            .outerjoin(
+                UserArticleState,
+                (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+            )
+            .where(Article.trimmed_at.is_(None), *extra)
+            .group_by(UserFeed.folder_id)
+        )
 
-    # Aggregate counts per folder (None = no folder)
-    folder_unread_counts: dict[int | None, int] = {}
-    folder_total_counts: dict[int | None, int] = {}
-    for uf in user_feeds:
-        key = uf.folder_id
-        folder_unread_counts[key] = folder_unread_counts.get(key, 0) + feed_unread_counts.get(uf.feed_id, 0)
-        folder_total_counts[key] = folder_total_counts.get(key, 0) + feed_total_counts.get(uf.feed_id, 0)
+    folder_total_counts: dict[int | None, int] = dict(
+        (await db.execute(_scoped())).all()
+    )
+    folder_unread_counts: dict[int | None, int] = dict((await db.execute(_scoped(
+        (UserArticleState.is_read == None) | (UserArticleState.is_read == False)
+    ))).all())
+
+    nav_unread = (await db.execute(
+        select(row_count())
+        .select_from(Article)
+        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
+        .outerjoin(
+            UserArticleState,
+            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
+        )
+        .where(
+            Article.trimmed_at.is_(None),
+            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+        )
+    )).scalar() or 0
 
     # Label article counts (batch)
     label_ids = [lb.id for lb in user_labels]
     if label_ids:
         label_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, func.count(ArticleLabel.article_id))
+            select(ArticleLabel.label_id, row_count())
             .join(Article, Article.id == ArticleLabel.article_id)
             .where(
                 ArticleLabel.user_id == user.id,
@@ -175,7 +207,7 @@ async def htmx_sidebar(
             .group_by(ArticleLabel.label_id)
         )).all())
         label_unread_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, func.count(ArticleLabel.article_id))
+            select(ArticleLabel.label_id, row_count())
             .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &

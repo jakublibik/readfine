@@ -640,13 +640,40 @@ async def filter_accessible_article_ids(
     return [r[0] for r in rows.all()]
 
 
-async def mark_articles_read_batch(user: User, article_ids: list[int], db: AsyncSession) -> None:
-    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read."""
+async def _close_stories(user_id: int, article_ids: list[int], db: AsyncSession) -> None:
+    """Read one article of a story, be done with the story.
+
+    A folded row stands for the whole story, so finishing with it finishes with the
+    rest. Unfolding it takes that back: the members are then rows of their own on
+    screen, and closing the ones the reader just asked to see, while they are looking
+    at them, is the opposite of what the gesture meant. Which of the two it is, only
+    the browser knows, so it says so on the request and the callers pass it on.
+
+    Imported here rather than at module level because story_service imports the access
+    helpers from this module. Kept as one call so every human way of marking an article
+    read — the scroll batch, the button, the API — closes a group the same way; the
+    machine ways (URL dedup, the filter action) deliberately do not, or a filter could
+    close stories nobody had looked at.
+    """
+    from app.services.story_service import mark_group_read
+    await mark_group_read(user_id, article_ids, db)
+
+
+async def mark_articles_read_batch(
+    user: User, article_ids: list[int], db: AsyncSession,
+    unfolded_ids: list[int] | None = None,
+) -> None:
+    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read.
+
+    ``unfolded_ids`` are the ones whose story is open on screen, and they keep their
+    story to themselves — see ``_close_stories``.
+    """
     if not article_ids:
         return
     article_ids = await filter_accessible_article_ids(user.id, article_ids, db)
     if not article_ids:
         return
+    folded = [aid for aid in article_ids if aid not in set(unfolded_ids or ())]
     now = datetime.now(timezone.utc)
     stmt = pg_insert(UserArticleState).values([
         {"user_id": user.id, "article_id": aid, "is_read": True,
@@ -658,6 +685,7 @@ async def mark_articles_read_batch(user: User, article_ids: list[int], db: Async
         where=(UserArticleState.__table__.c.is_read.is_not(True)),
     )
     await db.execute(stmt)
+    await _close_stories(user.id, folded, db)
     await db.commit()
 
 
@@ -742,8 +770,12 @@ async def toggle_article_state(
     article_id: int,
     field: str,
     db: AsyncSession,
+    close_story: bool = True,
 ) -> ArticleResponse | None:
-    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
+    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip.
+
+    ``close_story=False`` when the article's story is unfolded on screen — see
+    ``_close_stories``."""
     assert field in {"is_read", "is_starred", "is_archived"}
     loaded = await _load_article_for_write(user, article_id, db)
     if loaded is None:
@@ -755,6 +787,9 @@ async def toggle_article_state(
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
+        if new_value and close_story and article.story_id is not None:
+            await db.flush()
+            await _close_stories(user.id, [article_id], db)
 
     if field == "is_starred":
         _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
@@ -770,6 +805,7 @@ async def update_article_state(
     article_id: int,
     payload: ArticleStateUpdate,
     db: AsyncSession,
+    close_story: bool = True,
 ) -> ArticleResponse | None:
     """Set is_read / is_starred / is_archived / is_saved from a payload. Creates
     UserArticleState if needed. One round-trip: load, apply, commit, respond from
@@ -782,6 +818,9 @@ async def update_article_state(
     if payload.is_read is not None:
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
+        if payload.is_read and close_story and article.story_id is not None:
+            await db.flush()
+            await _close_stories(user.id, [article_id], db)
 
     if payload.is_starred is not None:
         was_starred = bool(state.is_starred)

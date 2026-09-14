@@ -1,12 +1,16 @@
 """Reading side of story grouping: the rest of the coverage of one piece of news.
 
-``app.fetcher.stories`` builds the groups, this reads them back for one reader. The
+``app.fetcher.stories`` builds the groups, this reads them back for one reader (and,
+in ``mark_group_read``, closes one off when the reader is done with it). The
 split matters: ``story_id`` is global, so a group routinely holds articles from feeds
 this reader doesn't subscribe to. Everything here goes through
 ``add_article_access_joins`` + ``article_access_predicate``, the same gate as every
 other article read path, and nothing outside this module should query members itself.
 """
+from datetime import datetime, timezone
+
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -97,6 +101,25 @@ async def list_members(
         )
         for r in rows
     ]
+
+
+def row_count():
+    """SQL count of rows as a collapsing view draws them, for the badge above it.
+
+    One per story, one per article that has none: ``coalesce(story_id, -id)`` keys a
+    grouped article by its story and an ungrouped one by itself, and ids being positive
+    is what keeps the two halves from ever colliding.
+
+    Always scoped to the view it labels, never summed across views. A story runs across
+    feeds, so two of its articles in two feeds of one folder are two rows in each feed's
+    own list and one row in the folder's, and a folder counter added up from its feeds
+    would therefore say something no list ever shows. The per-feed counters stay a plain
+    count of articles for the same reason: a feed's own list does not collapse.
+
+    Measured at 33 ms against 30 ms for the plain count over 15k unread articles, so the
+    distinct is not what makes a badge expensive.
+    """
+    return func.count(func.distinct(func.coalesce(Article.story_id, -Article.id)))
 
 
 def collapse_page(
@@ -207,3 +230,65 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
         total, read = stats.get(item.story_id, (0, 0))
         item.story_others = max(total - 1, 0)
         item.story_read = max(read - (1 if item.is_read else 0), 0)
+
+
+async def mark_group_read(
+    user_id: int, article_ids: list[int], db: AsyncSession
+) -> list[int]:
+    """Mark the rest of each article's story read, and say which articles that was.
+
+    Reading one article of a story settles the story: the row in the list stands for
+    the event, not for one newsroom's write-up of it, so once the reader is done with
+    it the other five must not come back as unread in a label view, in a feed, or on
+    the next fetch. Without this the group is only folded away where the list folds
+    it, and every other view still counts it as six unread articles.
+
+    The members are marked the way the URL dedup and the filter action mark theirs,
+    with ``suppressed_at`` set: the reader read one article, and the rest were closed
+    on their behalf. Nothing reads that column yet; it is what will keep the
+    suppression rule (phase 4) from chaining, since that only ever triggers on a read
+    the reader made themselves. Without it, an article arriving tomorrow could be
+    hidden for resembling one of these — one nobody ever looked at. Retention is not
+    involved either way: it ignores ``is_read`` on purpose (purge_service, which
+    counts dwell, an opened link, or a star).
+
+    Never touches an article that is already read, so a member read properly keeps its
+    own read stamp and stays a human read. Does not commit — the caller owns the
+    transaction, which is also what keeps this atomic with the read that caused it.
+    """
+    if not article_ids:
+        return []
+
+    stories = select(Article.story_id).where(
+        Article.id.in_(article_ids), Article.story_id.is_not(None)
+    )
+    members = (await db.execute(
+        add_article_access_joins(select(Article.id), user_id).where(
+            Article.story_id.in_(stories),
+            Article.id.not_in(article_ids),
+            Article.trimmed_at.is_(None),
+            article_access_predicate(),
+            (UserArticleState.is_read.is_(None)) | (UserArticleState.is_read.is_(False)),
+        )
+    )).scalars().all()
+    if not members:
+        return []
+
+    now = datetime.now(timezone.utc)
+    await db.execute(
+        pg_insert(UserArticleState)
+        .values([
+            {"user_id": user_id, "article_id": aid, "is_read": True,
+             "is_starred": False, "is_archived": False,
+             "read_at": now, "suppressed_at": now}
+            for aid in members
+        ])
+        .on_conflict_do_update(
+            index_elements=["user_id", "article_id"],
+            set_={"is_read": True, "read_at": now, "suppressed_at": now},
+            # The row may have been read between the select above and here; the guard
+            # is what makes sure this never restamps somebody's own reading.
+            where=(UserArticleState.__table__.c.is_read.is_not(True)),
+        )
+    )
+    return list(members)

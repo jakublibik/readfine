@@ -42,13 +42,20 @@ class TestMarkArticlesReadBatch:
         db.commit.assert_not_called()
 
     async def test_upserts_only_accessible_ids(self):
+        """Closing the stories those articles belong to is stubbed out: it is a query
+        of its own against the real database (tests/test_story_list.py), and what is
+        being checked here is that nothing inaccessible reaches the upsert."""
         db = _make_db()
         user = SimpleNamespace(id=5)
-        with patch("app.services.article.filter_accessible_article_ids",
-                   new=AsyncMock(return_value=[1, 3])):
+        with (
+            patch("app.services.article.filter_accessible_article_ids",
+                  new=AsyncMock(return_value=[1, 3])),
+            patch("app.services.article._close_stories", new=AsyncMock()) as closed,
+        ):
             await mark_articles_read_batch(user, [1, 2, 3], db)
         db.execute.assert_awaited_once()
         db.commit.assert_awaited_once()
+        closed.assert_awaited_once_with(5, [1, 3], db)
 
 
 class TestAccessPredicateCoversSaved:

@@ -945,11 +945,20 @@ function _flushMarkRead() {
   fetch('/htmx/articles/set-read-batch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-csrftoken': csrfToken },
-    body: JSON.stringify({ ids: ids }),
+    body: JSON.stringify({ ids: ids, unfolded: ids.filter(_storyUnfolded) }),
     credentials: 'same-origin',
   }).then(function (r) {
     if (r.ok) htmx.trigger(document.body, 'sidebarRefresh');
   }).catch(function (e) { console.warn('mark-read-batch failed:', e); });
+}
+
+// Whether this article's story is unfolded in the list, i.e. its members are rows of
+// their own on screen. Reading a folded row finishes the whole story (the server does
+// that, see _close_stories); reading one that is unfolded finishes only itself, since
+// the rest are right there and the reader asked to see them. Only the browser knows
+// which it is, so every human mark-as-read carries the answer.
+function _storyUnfolded(id) {
+  return document.querySelector('[data-story-parent="' + id + '"]') !== null;
 }
 
 function _queueMarkRead(id) {
@@ -1177,6 +1186,14 @@ document.addEventListener('click', function (e) {
   if (shell && loaded && loaded.then) {
     loaded.then(function () { shell.scrollIntoView({ block: 'start' }); });
   }
+});
+
+// The read button and the set-read endpoint carry the same answer as the scroll batch:
+// htmx builds these requests from attributes in the template, and whether a story is
+// unfolded is not something a template can know, so it is added here on the way out.
+document.body.addEventListener('htmx:configRequest', function (e) {
+  var m = /\/htmx\/articles\/(\d+)\/(read|set-read)$/.exec(e.detail.path || '');
+  if (m && _storyUnfolded(m[1])) e.detail.parameters.story_unfolded = 'true';
 });
 
 // ── Story rows: unfold the rest of a group under its row in the list ──────────

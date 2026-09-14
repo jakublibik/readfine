@@ -30,6 +30,7 @@ from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.story_service import (
     MEMBER_LIMIT,
+    row_count,
     annotate as annotate_stories,
     collapse_page,
     count_members,
@@ -130,7 +131,11 @@ async def htmx_set_read_batch(
 ):
     data = await request.json()
     ids = [int(i) for i in (data.get("ids") or [])[:500] if str(i).isdigit()]
-    await mark_articles_read_batch(user, ids, db)
+    # Rows whose story is unfolded in the list right now. They are read one by one
+    # like any other row and do not close the rest of their group; the browser is the
+    # only place that knows which those are.
+    unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
 
@@ -139,9 +144,13 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
     if not label_id and not labeled_only:
         return ""
     oob = ""
+    # Rows, not articles: a label view folds a story into one row like the other
+    # reading views, and these badges stand above it (story_service.row_count).
     if label_id:
         lu = (await db.scalar(
-            select(func.count(ArticleLabel.article_id))
+            select(row_count())
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &
                 (UserArticleState.user_id == user_id))
@@ -152,22 +161,25 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
             )
         )) or 0
         lt = (await db.scalar(
-            select(func.count(ArticleLabel.article_id))
+            select(row_count())
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
             .where(ArticleLabel.user_id == user_id, ArticleLabel.label_id == label_id)
         )) or 0
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
     all_unread = (await db.scalar(
-        select(func.count(Article.id.distinct()))
+        select(row_count())
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
         .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
     )) or 0
     all_total = (await db.scalar(
-        select(func.count()).select_from(
-            select(ArticleLabel.article_id).where(ArticleLabel.user_id == user_id).distinct().subquery()
-        )
+        select(row_count())
+        .select_from(ArticleLabel)
+        .join(Article, Article.id == ArticleLabel.article_id)
+        .where(ArticleLabel.user_id == user_id, Article.trimmed_at.is_(None))
     )) or 0
     oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
     return oob
@@ -460,7 +472,9 @@ async def render_list(
     title_bar_count_type: str | None = None
     if label_id is not None:
         title_bar_count = (await db.execute(
-            select(func.count(ArticleLabel.article_id))
+            select(row_count())
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &
                 (UserArticleState.user_id == user.id))
@@ -473,7 +487,7 @@ async def render_list(
         title_bar_count_type = "unread"
     elif labeled_only:
         title_bar_count = (await db.execute(
-            select(func.count(Article.id.distinct()))
+            select(row_count())
             .select_from(Article)
             .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
             .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
@@ -1016,10 +1030,16 @@ def _archive_response(request: Request, article) -> HTMLResponse:
 async def htmx_toggle_read(
     article_id: int,
     request: Request,
+    # Set by app.js when this article's story is unfolded in the list: the members are
+    # then rows of their own on screen and are read one by one, so this one keeps its
+    # story to itself.
+    story_unfolded: bool = Form(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    article = await toggle_article_state(user, article_id, "is_read", db)
+    article = await toggle_article_state(
+        user, article_id, "is_read", db, close_story=not story_unfolded
+    )
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     return _read_response(request, article)
@@ -1030,10 +1050,14 @@ async def htmx_set_read(
     article_id: int,
     request: Request,
     state: bool = Query(True),
+    story_unfolded: bool = Form(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    article = await update_article_state(user, article_id, ArticleStateUpdate(is_read=state), db)
+    article = await update_article_state(
+        user, article_id, ArticleStateUpdate(is_read=state), db,
+        close_story=not story_unfolded,
+    )
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     return _read_response(request, article)

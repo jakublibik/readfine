@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -20,11 +21,17 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
 from app.schemas.article import ArticleListItem
-from app.services.article import list_articles
+from app.services.article import (
+    list_articles,
+    mark_articles_read_batch,
+    toggle_article_state,
+)
 from app.services.story_service import (
     MAX_SHOWN_STORIES,
+    row_count,
     annotate,
     collapse_page,
+    mark_group_read,
     next_shown,
     parse_shown,
 )
@@ -338,3 +345,171 @@ class TestListingOneStory:
         head, _, _, _ = await _story(pg, user)
 
         assert await list_articles(user=stranger, db=pg, story_id=head.story_id) == []
+
+
+class TestMarkGroupRead:
+    """Reading one article of a story settles the story.
+
+    The row in the list stands for the event, so once the reader is done with it the
+    rest must not come back as unread somewhere the list does not fold them — a label
+    view, a feed, the next fetch. What must not happen is the other direction: an
+    article the reader read themselves keeps its own read, because that is what the
+    suppression rule (phase 4) triggers on and what retention counts as engagement.
+    """
+
+    async def _state(self, pg, user, article):
+        return await pg.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id == article.id,
+            )
+        )
+
+    async def test_the_rest_of_the_group_is_marked_read(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        closed = await mark_group_read(user.id, [head.id], pg)
+
+        assert closed == [second.id]
+        state = await self._state(pg, user, second)
+        assert state.is_read is True
+
+    async def test_they_are_marked_as_closed_on_the_reader_s_behalf(self, pg):
+        """suppressed_at is what stops this from cascading: the machine closed these,
+        so they can never themselves be the "you have seen this" a later article is
+        suppressed against."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await mark_group_read(user.id, [head.id], pg)
+
+        assert (await self._state(pg, user, second)).suppressed_at is not None
+
+    async def test_an_article_read_properly_keeps_its_own_read(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        read_at = NOW - timedelta(hours=2)
+        pg.add(UserArticleState(user_id=user.id, article_id=second.id,
+                                is_read=True, read_at=read_at))
+        await pg.flush()
+
+        closed = await mark_group_read(user.id, [head.id], pg)
+
+        assert closed == []
+        state = await self._state(pg, user, second)
+        assert state.suppressed_at is None
+        assert state.read_at == read_at
+
+    async def test_a_feed_the_reader_does_not_take_is_not_touched(self, pg):
+        user = await _user(pg)
+        head, _, _, theirs = await _story(pg, user)
+        outsider = (await pg.execute(
+            select(Article).where(Article.feed_id == theirs.id)
+        )).scalars().first()
+
+        await mark_group_read(user.id, [head.id], pg)
+
+        assert await self._state(pg, user, outsider) is None
+
+    async def test_a_trimmed_member_is_not_touched(self, pg):
+        user = await _user(pg)
+        head, _, mine, _ = await _story(pg, user)
+        stub = await _article(pg, mine, story_id=head.story_id, title="Old", trimmed=True)
+
+        closed = await mark_group_read(user.id, [head.id], pg)
+
+        assert stub.id not in closed
+
+    async def test_an_article_with_no_story_closes_nothing(self, pg):
+        user = await _user(pg)
+        mine = await _feed(pg, user)
+        alone = await _article(pg, mine, title="Alone")
+        other = await _article(pg, mine, title="Unrelated")
+
+        assert await mark_group_read(user.id, [alone.id], pg) == []
+        assert await self._state(pg, user, other) is None
+
+    async def test_nobody_else_s_state_is_written(self, pg):
+        user = await _user(pg)
+        stranger = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await mark_group_read(user.id, [head.id], pg)
+
+        assert await self._state(pg, stranger, second) is None
+
+    async def test_the_scroll_batch_closes_the_group_too(self, pg):
+        """The path that marks most articles read in practice, so the wiring matters
+        as much as the rule."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await mark_articles_read_batch(user, [head.id], pg)
+
+        assert (await self._state(pg, user, second)).is_read is True
+
+    async def test_an_unfolded_story_is_left_alone(self, pg):
+        """The members are rows of their own on screen then, and they are read one by
+        one like any other row. Closing what the reader just asked to see would be the
+        opposite of what unfolding meant."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await mark_articles_read_batch(user, [head.id], pg, unfolded_ids=[head.id])
+
+        assert await self._state(pg, user, second) is None
+
+    async def test_the_read_button_closes_a_folded_story(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        assert (await self._state(pg, user, second)).is_read is True
+
+    async def test_the_read_button_leaves_an_unfolded_one(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+
+        await toggle_article_state(user, head.id, "is_read", pg, close_story=False)
+
+        assert await self._state(pg, user, second) is None
+
+
+class TestRowCount:
+    """What the badges count. A badge stands above a list, so it counts what that list
+    draws: one row per story, one per article without one."""
+
+    async def _count(self, pg, user, *extra):
+        from app.services.article import add_article_access_joins, article_access_predicate
+        return await pg.scalar(
+            add_article_access_joins(select(row_count()), user.id).where(
+                Article.trimmed_at.is_(None), article_access_predicate(), *extra
+            )
+        )
+
+    async def test_a_story_counts_once_however_many_sources(self, pg):
+        user = await _user(pg)
+        head, _, mine, _ = await _story(pg, user)
+        # Two members in feeds this reader takes, one in a feed they do not.
+        assert await self._count(pg, user, Article.story_id == head.story_id) == 1
+
+    async def test_articles_without_a_story_count_one_each(self, pg):
+        user = await _user(pg)
+        mine = await _feed(pg, user)
+        a = await _article(pg, mine, title="One")
+        b = await _article(pg, mine, title="Two")
+
+        assert await self._count(pg, user, Article.id.in_([a.id, b.id])) == 2
+
+    async def test_a_story_and_a_loose_article_do_not_collide(self, pg):
+        """coalesce(story_id, -id) keys the two halves apart; ids being positive is
+        what makes that safe."""
+        user = await _user(pg)
+        head, second, mine, _ = await _story(pg, user)
+        loose = await _article(pg, mine, title="Loose")
+
+        assert await self._count(
+            pg, user, Article.id.in_([head.id, second.id, loose.id])
+        ) == 2
