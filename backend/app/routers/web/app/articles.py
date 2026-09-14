@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import delete as sa_delete, func, select, update as sa_update
+from sqlalchemy import case, delete as sa_delete, func, null, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -29,6 +29,7 @@ from app.services.article import (
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.story_service import (
+    ENGAGED_DWELL_SECONDS,
     MEMBER_LIMIT,
     row_count,
     annotate as annotate_stories,
@@ -1083,7 +1084,16 @@ async def htmx_article_dwell(
         .values(user_id=user.id, article_id=article_id, dwell_seconds=seconds)
         .on_conflict_do_update(
             index_elements=["user_id", "article_id"],
-            set_={"dwell_seconds": UserArticleState.dwell_seconds + seconds},
+            set_={
+                "dwell_seconds": UserArticleState.dwell_seconds + seconds,
+                # Half a minute in front of an article the machine had closed on the
+                # reader's behalf means they read it themselves after all, so the
+                # machine mark goes away and the article can count as seen.
+                "suppressed_at": case(
+                    (UserArticleState.dwell_seconds + seconds >= ENGAGED_DWELL_SECONDS, null()),
+                    else_=UserArticleState.suppressed_at,
+                ),
+            },
         )
     )
     await db.execute(stmt)
@@ -1105,6 +1115,9 @@ async def htmx_article_link_opened(
     )
     if state is not None and not state.link_opened:
         state.link_opened = True
+        # Opening the link is the reader doing something with the article, so a
+        # machine mark on it no longer stands (see the dwell handler above).
+        state.suppressed_at = None
         await db.commit()
     return HTMLResponse("", status_code=204)
 

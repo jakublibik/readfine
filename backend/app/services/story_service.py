@@ -22,6 +22,11 @@ from app.services.article import add_article_access_joins, article_access_predic
 # against a pathological cluster, not a page size. Nothing paginates the footer.
 MEMBER_LIMIT = 25
 
+# Time in front of an article that counts as having read it. Same number the stats and
+# the retention pass use for the same question; it lives here because this is where it
+# decides something — it clears the machine's ``suppressed_at``.
+ENGAGED_DWELL_SECONDS = 30
+
 
 def _members_query(columns, user_id: int, story_id: int, exclude_article_id: int):
     """Members of one story that this user may see, minus the article being read.
