@@ -1233,7 +1233,20 @@ document.addEventListener('click', function (e) {
 
   var row = document.getElementById('article-row-' + id);
   if (!row) return;
+  // Disabled at once, so a second click cannot send the same request again, but the
+  // look of being busy is held back. The rows are one indexed query and a few hundred
+  // bytes, so the round trip is over well inside the tenth of a second that reads as
+  // instant, and a chip that dims and undims inside two frames reads as a fault rather
+  // than as progress. Past this point the wait is long enough to want an answer, and
+  // still far short of the second or so where a reader starts to wonder.
   btn.disabled = true;
+  var dimming = setTimeout(function () { btn.classList.add('opacity-60'); }, 300);
+
+  function done() {
+    clearTimeout(dimming);
+    btn.classList.remove('opacity-60');
+    btn.disabled = false;
+  }
   // Density travels with the request: the row knows which one it was rendered at, and
   // a member drawn at a different one would break the rhythm of the list it lands in.
   var url = '/htmx/articles/' + id + '/story-rows'
@@ -1241,11 +1254,11 @@ document.addEventListener('click', function (e) {
   var loaded = htmx.ajax('GET', url, { target: '#article-row-' + id, swap: 'afterend' });
   if (loaded && loaded.then) {
     loaded.then(function () {
-      btn.disabled = false;
+      done();
       setState(document.querySelector('[data-story-parent="' + id + '"]') !== null);
-    });
+    }, done);
   } else {
-    btn.disabled = false;
+    done();
   }
 }, true);
 

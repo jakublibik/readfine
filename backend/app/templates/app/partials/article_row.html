@@ -82,8 +82,12 @@
     <div class="mt-1 pl-[26px]">
       <button type="button" data-stop-propagation
               data-story-toggle="{{ article.id }}" aria-expanded="false"
+              {#- No disabled: styling here. The button is disabled the instant it is
+                  clicked, to keep a second click from repeating the request, and that
+                  is far too early to say anything about it: app.js dims it on a timer
+                  instead, so an unfold that arrives at once never flashes. -#}
               class="story-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs
-                     cursor-pointer disabled:opacity-60">
+                     cursor-pointer transition-opacity">
         <span aria-hidden="true">⧉</span>
         <span>
           {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
@@ -108,20 +112,28 @@
 
 {#- story_child is the id of the row this one was unfolded from.
 
-    It indents the row, far enough that the star lands in the column of the ⧉ on the row
-    above, the marker the group was unfolded from. Indentation alone, deliberately:
-    everything tried on top of it collided with something the list already does — a rule
-    at the indent crossed every horizontal separator into a grid, the same rule at the
-    left edge landed in the channel the open article's marker uses, a recessed
-    background needed a whole set of states of its own, and a bullet in the gutter was
-    one mark too many.
+    It indents the row by 20px net (pl-7 against the list's pl-2), which puts the
+    member's title 20px to the right of the title above it. Titles are what the eye runs
+    down a list, so that is the pair worth relating; an earlier version indented far
+    enough to stand the member's star under the parent's title instead, which is a
+    relationship nobody reads, cost another 8px of title width on a phone, and was 2px
+    out anyway. Members keep a star column of their own either way, so there are two
+    columns of stars whatever the indent is.
+
+    Indentation alone, deliberately: everything tried on top of it collided with
+    something the list already does — a rule at the indent crossed every horizontal
+    separator into a grid, the same rule at the left edge landed in the channel the open
+    article's marker uses, a recessed background needed a whole set of states of its
+    own, and a bullet in the gutter was one mark too many. Nothing else keys off the
+    indent: the band that closes a group is a full-width border-top on the row after it,
+    and the open article's marker is an inset shadow on the row's edge (input.css).
 
     It also takes away the row's own story marker: the group is named by the row above,
     and a marker here would invite unfolding a group from inside itself. -#}
 {% set child_of = story_child | default(none) %}
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
-     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if child_of %}pl-9{% else %}pl-2{% endif %} {% if d == 'compact' %}pr-4 pt-1 pb-1.5{% else %}pr-4 pt-1.5 pb-2.5{% endif %}"
+     class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if child_of %}pl-7{% else %}pl-2{% endif %} {% if d == 'compact' %}pr-4 pt-1 pb-1.5{% else %}pr-4 pt-1.5 pb-2.5{% endif %}"
      {% if child_of %}data-story-parent="{{ child_of }}"{% endif %}
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
