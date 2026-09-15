@@ -93,28 +93,3 @@ test('the scroll batch carries the unfolded rows with the ids', async () => {
   assert.deepEqual(sent.body.unfolded, [2]);
 });
 
-test('a member the list already shows is dropped on the way in', () => {
-  // Starred, Saved and Archive fold nothing, so two members of one story can both be
-  // in the list. The server answers with the group whole, and the second copy would
-  // otherwise arrive under an id the first one already holds.
-  const w = browser(list(
-    row(1), row(5), row(2, { parent: 1 }), row(5, { parent: 1 }),
-  ));
-  w._dropDuplicateStoryRows(1);
-
-  const members = w.document.querySelectorAll('[data-story-parent="1"]');
-  assert.deepEqual(Array.from(members, (el) => el.dataset.articleId), ['2']);
-  assert.equal(w.document.querySelectorAll('.article-row[data-article-id="5"]').length, 1);
-});
-
-test('the inline reader is not counted as a second row', () => {
-  // It sits inside the list and carries the id of the article it is showing, so a
-  // check on the attribute alone would drop a member the reader has open.
-  const w = browser(list(
-    '<div id="inline-article-detail" data-article-id="2"></div>',
-    row(1), row(2, { parent: 1 }),
-  ));
-  w._dropDuplicateStoryRows(1);
-
-  assert.equal(w.document.querySelectorAll('[data-story-parent="1"]').length, 1);
-});

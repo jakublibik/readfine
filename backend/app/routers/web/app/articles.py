@@ -492,13 +492,12 @@ async def render_list(
     # has_more counts what the query returned, not what survives collapsing: a full
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
+    collapses = _collapses_stories(
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only,
+    )
     articles, shown_stories = await _apply_story_collapse(
-        rows, user, db,
-        collapse=_collapses_stories(
-            story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-            archived_only=archived_only, saved_only=saved_only,
-        ),
-        story_dedup=story_dedup,
+        rows, user, db, collapse=collapses, story_dedup=story_dedup,
     )
 
     # Title bar count for mobile hideable mode
@@ -594,6 +593,9 @@ async def render_list(
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
+        # A row offers to unfold its story only where the list folded one — see
+        # _collapses_stories. Everywhere else the row keeps the quiet marker instead.
+        story_unfoldable=collapses,
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
         more_qs=_build_more_qs(filter_params, rows, q, len(rows), shown_stories),
@@ -669,13 +671,12 @@ async def htmx_article_list_more(
     )
 
     has_more = len(rows) >= articles_per_page
+    collapses = _collapses_stories(
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only,
+    )
     articles, next_stories = await _apply_story_collapse(
-        rows, user, db,
-        collapse=_collapses_stories(
-            story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-            archived_only=archived_only, saved_only=saved_only,
-        ),
-        story_dedup=story_dedup,
+        rows, user, db, collapse=collapses, story_dedup=story_dedup,
         shown_stories=parse_shown_stories(shown_stories),
     )
     filter_params = _build_filter_params(
@@ -698,6 +699,8 @@ async def htmx_article_list_more(
         "density": density,
         "label_display": label_display,
         "show_ai_score": settings.ai_score_show_in_list if settings else False,
+        # Same rule as the first page, see render_list.
+        "story_unfoldable": collapses,
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
         "more_qs": _build_more_qs(

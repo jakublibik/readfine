@@ -46,9 +46,13 @@
 
     Says the number rather than the sources themselves: the list is a list of stories
     once collapsing is on, and the reader is one click away from the same articles in
-    the "Same story" block at the bottom of the article. In the views that do not
-    collapse (a single feed, starred, saved, archive, search) it stays as the quiet
-    hint that this row has company somewhere else.
+    the "Same story" block at the bottom of the article.
+
+    The compact form, for the one density with no room for a line of its own. Squeezed
+    into the meta line it competes with the feed name, the date, the labels and the
+    score, and the feed name is what gives way — which is the whole reason the other
+    two densities put this under the row instead. At compact the row is one line by
+    definition and there is nowhere else for it to go.
 
     story_read says how many of them are already read, which is the one thing the row
     itself cannot show: those members are usually not in the list at all, unread views
@@ -63,23 +67,42 @@
   {%- endif -%}
 {% endmacro %}
 
-{#- The same thing where there is room to write it out: a line of its own under the
-    row, indented to the text column like the summary snippet.
+{#- The roomy form: a line of its own under the row, indented to the text column like
+    the summary snippet.
 
     In the meta line it would be competing with the feed name, the date, the labels and
     the score, and on a phone the feed name is what loses. A line costs height on the
     few rows that have a story and nothing on the rest, which is the better trade, and
     it is where aggregators put this anyway (Google News "Full Coverage", Techmeme's
-    "More:" line). It is also the only place in a row wide enough for a word, which is
-    why the unfold control sits here. -#}
-{% macro story_line(article) %}
+    "More:" line). It is also the only place in a row wide enough for a word.
+
+    ``interactive`` is whether this view folded the group away, and so whether there is
+    anything to give back. Where it did, the line is the control that unfolds it. Where
+    it did not — a single feed, starred, saved, archive — the same words are a
+    statement and nothing more: unfolding there would push articles from other feeds
+    into a list the reader either assembled by hand or opened to see one feed, and
+    those rows mark themselves read on scroll like every other row, so the reader would
+    come away having read through something they never asked to see. The group is still
+    one click off, at the foot of the article.
+
+    Same place either way, on purpose. The line is where this belongs at these
+    densities whatever it does, and moving it into the meta line for some views would
+    cost the feed name exactly the width the layout was arranged to protect. That it is
+    a control in some lists and not in others is the honest shape of the thing: the
+    lists that fold are the ones with something folded. -#}
+{% macro story_line(article, interactive) %}
   {%- if article.story_others -%}
-    {#- Tinted around the words only, not across the row: a band the full width of the
-        list would turn two neighbouring stories into stripes, and a filled panel is
-        spoken for by the AI blocks (blue, amber), which is why the same section in the
-        reader is a neutral rule. Sized to the text, it is the control that unfolds the
-        rest of the group under this row. -#}
+    {%- set words %}
+      {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
+      {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
+    {% endset -%}
     <div class="mt-1 pl-[26px]">
+      {%- if interactive -%}
+      {#- Tinted around the words only, not across the row: a band the full width of the
+          list would turn two neighbouring stories into stripes, and a filled panel is
+          spoken for by the AI blocks (blue, amber), which is why the same section in the
+          reader is a neutral rule. Sized to the text, it is the control that unfolds the
+          rest of the group under this row. -#}
       <button type="button" data-stop-propagation
               data-story-toggle="{{ article.id }}" aria-expanded="false"
               {#- No disabled: styling here. The button is disabled the instant it is
@@ -89,12 +112,18 @@
               class="story-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs
                      cursor-pointer transition-opacity">
         <span aria-hidden="true">⧉</span>
-        <span>
-          {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
-          {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
-        </span>
+        <span>{{ words | trim }}</span>
         <span data-story-caret aria-hidden="true">▾</span>
       </button>
+      {%- else -%}
+      {#- No border and no padding, so it reads as a note rather than as a control that
+          has stopped working. The outline is what says "press me" on the chip above,
+          and a bordered box that does nothing is worse than plain words. -#}
+      <span class="inline-flex items-center gap-1 text-xs text-gray-500">
+        <span aria-hidden="true">⧉</span>
+        <span>{{ words | trim }}</span>
+      </span>
+      {%- endif -%}
     </div>
   {%- endif -%}
 {% endmacro %}
@@ -131,6 +160,10 @@
     It also takes away the row's own story marker: the group is named by the row above,
     and a marker here would invite unfolding a group from inside itself. -#}
 {% set child_of = story_child | default(none) %}
+{#- Whether this view folded stories, and so whether a row may offer to unfold
+    one. Default off: a render path that does not know which view it is in must
+    not guess, and the marker is right everywhere. -#}
+{% set can_unfold = story_unfoldable | default(false) %}
 <div id="article-row-{{ article.id }}"
      {% if oob %}hx-swap-oob="outerHTML"{% endif %}
      class="article-row border-b border-gray-100 cursor-pointer {% if article.is_read %}opacity-75{% endif %} {% if child_of %}pl-7{% else %}pl-2{% endif %} {% if d == 'compact' %}pr-4 pt-1 pb-1.5{% else %}pr-4 pt-1.5 pb-2.5{% endif %}"
@@ -306,7 +339,7 @@
   {% if d == "summary" and article.snippet %}
     <p class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
-  {% if not child_of %}{{ story_line(article) }}{% endif %}
+  {% if not child_of %}{{ story_line(article, can_unfold) }}{% endif %}
   {% endif %}
 
 </div>

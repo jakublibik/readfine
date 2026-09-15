@@ -28,6 +28,9 @@ from app.services.article import (
     update_article_state,
 )
 from app.services.story_service import (
+    DEDUP_COLLAPSE,
+    DEDUP_OFF,
+    DEDUP_SUPPRESS,
     MAX_SHOWN_STORIES,
     row_count,
     annotate,
@@ -121,6 +124,41 @@ class TestParseShown:
     def test_the_length_is_capped(self):
         raw = ",".join(str(i) for i in range(MAX_SHOWN_STORIES + 50))
         assert len(parse_shown(raw)) == MAX_SHOWN_STORIES
+
+
+class TestWhichViewsFold:
+    """Which views fold a story into one row, which is the same answer as whether a
+    row there may offer to unfold one.
+
+    One rule, two consequences, which is why it is worth pinning down. A view that
+    folds hid something, so it can give it back, and its members are guaranteed not to
+    be in the list already. A view that folds nothing has neither property: unfolding
+    would push articles from other feeds into a list the reader assembled by hand or
+    opened to see one feed, and those rows mark themselves read on scroll.
+    """
+
+    def _folds(self, **kw):
+        from app.routers.web.app.articles import _collapses_stories
+        opts = {"story_dedup": DEDUP_COLLAPSE, "feed_id": None, "starred_only": False,
+                "archived_only": False, "saved_only": False}
+        return _collapses_stories(**{**opts, **kw})
+
+    def test_the_reading_views_fold(self):
+        """All articles, a folder and a label all arrive here with nothing set."""
+        assert self._folds() is True
+
+    def test_a_single_feed_does_not(self):
+        assert self._folds(feed_id=7) is False
+
+    def test_the_hand_assembled_lists_do_not(self):
+        assert self._folds(starred_only=True) is False
+        assert self._folds(archived_only=True) is False
+        assert self._folds(saved_only=True) is False
+
+    def test_the_setting_overrules_the_view(self):
+        """Off means the list looks like it did before any of this existed."""
+        assert self._folds(story_dedup=DEDUP_OFF) is False
+        assert self._folds(story_dedup=DEDUP_SUPPRESS) is True
 
 
 @pytest_asyncio.fixture

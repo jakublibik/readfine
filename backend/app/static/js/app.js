@@ -1273,7 +1273,6 @@ document.addEventListener('click', function (e) {
   var loaded = htmx.ajax('GET', url, { target: '#article-row-' + id, swap: 'afterend' });
   if (loaded && loaded.then) {
     loaded.then(function () {
-      _dropDuplicateStoryRows(id);
       done();
       setState(document.querySelector('[data-story-parent="' + id + '"]') !== null);
     }, done);
@@ -1281,31 +1280,6 @@ document.addEventListener('click', function (e) {
     done();
   }
 }, true);
-
-// A member the list was already showing gets dropped again on the way in.
-//
-// Where the view folds stories this cannot happen — the page that kept the row this
-// group hangs from dropped its other members, and the pages after it are told which
-// stories already have a row. The lists that fold nothing are the gap: Starred, Saved
-// and Archive are assembled out of articles the reader marked one by one, and two of
-// them can easily be the same story from two feeds. The server answers with the group
-// whole, knowing nothing of what is on screen, so the second copy would arrive under
-// the id the first one already holds — and two elements sharing an id is how a row
-// starts opening somebody else's article.
-//
-// Matched on .article-row, not on the attribute alone: the inline reader carries the
-// id of the article it is showing too, and it is a child of the list.
-//
-// The count on the chip is left saying what the group holds, which is the honest
-// number, so unfolding one of these shows one row fewer than it promises.
-function _dropDuplicateStoryRows(id) {
-  document.querySelectorAll('.article-row[data-story-parent="' + id + '"]').forEach(function (el) {
-    var aid = el.dataset.articleId;
-    if (document.querySelectorAll('.article-row[data-article-id="' + aid + '"]').length > 1) {
-      el.remove();
-    }
-  });
-}
 
 // ── The row whose article is open in the detail pane ──────────────────────────
 // Read off the detail rather than set where the click happens. Every way an article
