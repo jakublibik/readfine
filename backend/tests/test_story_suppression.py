@@ -22,7 +22,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
-from app.fetcher.stories import assign_stories, assign_stories_global
+from app.fetcher.stories import (
+    assign_stories,
+    assign_stories_global,
+    reads_as_follow_up,
+)
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User, UserSettings
@@ -271,6 +275,12 @@ SEEN_TITLE = "city council approves the new tram line"
 REPEAT_TITLE = "new tram line approved by the city council"
 # 0.35: enough to fold the two together in the list, not enough to take one away.
 RELATED_TITLE = "new tram line to open next year"
+# 0.82, so the score is not what stops this one: the "why" is. An explainer written off
+# the back of the report is the same news and a different piece of writing.
+FOLLOW_UP_TITLE = "why the city council approved the new tram line"
+# Both of these ask "how", so the word is not what tells them apart (0.78).
+HOW_SEEN_TITLE = "how the city council approves the new tram line"
+HOW_REPEAT_TITLE = "how the new tram line was approved by the city council"
 
 
 async def _settings(pg, user, mode) -> UserSettings:
@@ -457,5 +467,54 @@ class TestHidingARepeat:
                                  hours_ago=1)
 
         await assign_stories_global(NOW - timedelta(hours=2), pg)
+
+        assert (await _state(pg, user, arrival)).suppressed_by == "similar"
+
+
+class TestAFollowUpIsNotARepeat:
+    """An explainer or a second actor doing the same thing covers the news the reader
+    read and is still something they have not read.
+
+    The cue words were measured, not invented: a wide list of framing words was tried
+    against a labelled corpus and against our own, and it cost more right decisions than
+    it saved. What survived is the short list of words that carry the framing themselves.
+    See scripts/BENCHMARKS.md.
+    """
+
+    def test_a_cue_on_one_side_reads_as_a_follow_up(self):
+        assert reads_as_follow_up("why the tram line was approved",
+                                  "the tram line was approved") is True
+        assert reads_as_follow_up("apple maps joins google maps in renaming the lake",
+                                  "google maps renames the lake") is True
+
+    def test_the_same_cue_on_both_sides_tells_them_apart_from_nothing(self):
+        assert reads_as_follow_up("how to watch the launch",
+                                  "how to watch tonight's launch") is False
+
+    def test_a_plain_pair_carries_no_cue(self):
+        assert reads_as_follow_up("city council approves the tram line",
+                                  "tram line approved by the city council") is False
+
+    async def test_an_explainer_is_grouped_but_not_hidden(self, pg, nonce):
+        """0.82 against the article they read, so the score is not what stops it."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, FOLLOW_UP_TITLE, nonce=nonce)
+
+        assert await _story_of(pg, arrival) == seen.id
+        assert await _state(pg, user, arrival) is None
+
+    async def test_two_explainers_still_hide_each_other(self, pg, nonce):
+        """The cue only means something when it is what distinguishes the two."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {HOW_SEEN_TITLE}",
+                              hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, HOW_REPEAT_TITLE, nonce=nonce)
 
         assert (await _state(pg, user, arrival)).suppressed_by == "similar"

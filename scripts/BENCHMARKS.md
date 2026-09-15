@@ -195,3 +195,43 @@ each of them measures, they are. Telling them apart needs a notion of event iden
 rather than similarity, which is where HLGD's own reported ceiling of 0.75 F1 comes from.
 Until something addresses that, the right answers stay the ones already shipped: hiding
 is opt-in, and a hidden article is marked read rather than removed.
+
+### The follow-up cue list, 2026-09-15
+
+A later idea, and the one thing so far that both corpora agreed was worth shipping:
+words that mark a headline as a different piece rather than another account of the same
+moment. It went through three forms.
+
+**Learning the list from the data does not work.** Ranking tokens by how often a pair
+carrying them on exactly one side turns out to be a different event pulls out
+`commuting`, `commute`, `commutation`, `sentence`, `exit`, `repeal`, `irish`,
+`landslide`. That is the vocabulary of HLGD's particular timelines, not of follow-ups,
+and it proves it: a list learned on train fires on **zero** pairs in the test split.
+
+**A wide hand-written list has a real but unusable signal.** Thirty-seven framing words
+lift the not-same-event rate by 6.8, 8.9 and 13.7 points across the three splits, which
+replicates but is not enough to act on: the base rate is 27-41 %, so even when a cue
+fires the pair is still more likely than not to be the same story. As a veto it stopped
+two to ten right decisions for every wrong one. Raising the threshold instead of vetoing
+was about break-even at best, and never as good as simply moving the threshold.
+
+**On our own corpus the picture is different, and for a structural reason.** HLGD's pairs
+are curated inside one news event, so it contains no explainers; our feeds are full of
+them. Splitting the wide list by word on our 537 hidden pairs concentrates the signal
+almost entirely in the words that carry the framing themselves: `how` was right 7 times
+in 10, `joins` 4 in 5, `why` 2 in 2, `replace` 1 in 1, against `amid` 3 in 7, `instead`
+2 in 6, `more` 1 in 4, `latest` 1 in 4, `update` and `means` 0 in 1.
+
+The short list of survivors stops 18 of our 537 hides, of which about 13 look right to
+me, so roughly 40 % fewer wrong hides for about 1 % of the right ones. It catches two of
+the three known errors. On HLGD it does almost nothing, which is what it should do on a
+corpus with nothing to catch.
+
+Shipped as `FOLLOW_UP_CUES` in `app/fetcher/stories.py`, applied to hiding only: folding
+an explainer under the story it belongs to is useful, hiding it is not.
+
+**The weakness to fix with the next export.** The list was chosen by reading the same 40
+pairs it was then scored on, so the 13-of-18 is a fit to that sample and will be
+optimistic. The mechanism is sound and the failure mode is the benign one (an article
+stays in the list that could have gone), which is why it shipped before the confirmation
+rather than after. Run it against a fresh export and record the honest number here.

@@ -16,7 +16,9 @@ The grouping is global, shared by every user. A group can therefore contain arti
 feeds a given reader doesn't subscribe to, so anything user-facing has to filter members
 through ``article_access_predicate``.
 """
+import re
 from datetime import datetime, timedelta, timezone
+from typing import NamedTuple
 
 from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -44,6 +46,54 @@ SUPPRESS_THRESHOLD = 0.40
 # trigrams swings wildly, and the fetcher's own "Untitled" placeholder (rss.py) would
 # otherwise group every title-less item in the database into one story.
 MIN_TITLE_CHARS = 12
+
+# Words that mark a headline as a different piece from the one it resembles rather than
+# another outlet's account of it: an explainer written off the back of the news ("how",
+# "why", "what happens"), or a second actor doing the thing that was already reported
+# ("joins", "replace"). Where one headline has such a word and the other does not, the
+# pair still groups, but it is not evidence the reader has seen this news.
+#
+# Short and specific on purpose. A wider list was measured and it was worse than nothing:
+# vague framing words ("amid", "latest", "more", "instead", "update") fire about as often
+# on genuine duplicates as on these, and vetoing on them cost two to ten right decisions
+# for every wrong one they caught. English only, because that is the only vocabulary the
+# measurement covered; guessing at a Czech or German list is how the thresholds went
+# wrong the first time. See scripts/BENCHMARKS.md.
+FOLLOW_UP_CUES = frozenset({
+    "how", "why", "happens", "explainer", "explained", "explains", "guide",
+    "joins", "replace", "successor",
+})
+
+_WORD_SPLIT = re.compile(r"[^a-z0-9]+")
+
+
+def reads_as_follow_up(title_norm: str, other_norm: str) -> bool:
+    """Does exactly one of the two headlines frame itself as a later, separate piece?
+
+    Both sides are checked because the cue has to be what distinguishes them. Two
+    how-to guides about the same launch both say "how", which says nothing about whether
+    they are the same piece, and the reader who read one has in every meaningful sense
+    seen the other.
+    """
+    words = set(_WORD_SPLIT.split(title_norm))
+    other = set(_WORD_SPLIT.split(other_norm))
+    return bool((words ^ other) & FOLLOW_UP_CUES)
+
+
+class Pair(NamedTuple):
+    """One near-duplicate match, carrying everything both callers read off it.
+
+    Grouping and hiding are decided from the same match but not on the same terms, so
+    the pair holds the score and the cue verdict rather than either caller recomputing
+    them: ``_link`` groups on similarity alone, ``suppress_seen`` also wants to know
+    whether the two headlines are the same piece of writing.
+    """
+
+    new_id: int
+    cand_id: int
+    cand_story: int | None
+    similarity: float
+    follow_up: bool
 
 
 async def assign_stories(articles: list[Article], db: AsyncSession) -> int:
@@ -108,12 +158,12 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
 
     members: set[int] = set()
     old_stories: set[int] = set()
-    for new_id, cand_id, cand_story, _similarity in rows:
-        union(new_id, cand_id)
-        members.update((new_id, cand_id))
-        if cand_story is not None:
-            union(cand_id, cand_story)
-            old_stories.add(cand_story)
+    for pair in rows:
+        union(pair.new_id, pair.cand_id)
+        members.update((pair.new_id, pair.cand_id))
+        if pair.cand_story is not None:
+            union(pair.cand_id, pair.cand_story)
+            old_stories.add(pair.cand_story)
 
     # Groups that got absorbed into an older one: their other members are not in
     # `members` (they were never candidates here), so they have to move by story_id.
@@ -138,16 +188,16 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
     return len(members & set(new_ids))
 
 
-async def suppress_seen(
-    rows: list[tuple[int, int, int | None, float]], db: AsyncSession
-) -> int:
+async def suppress_seen(rows: list[Pair], db: AsyncSession) -> int:
     """Hide a new article from readers who have already read the same news.
 
     Opt-in (``UserSettings.story_dedup == 'collapse_suppress'``), and decided against
     one article the reader read themselves, never against the group. Group membership
     is transitive at 0.30, which builds clusters of up to 13 where the two ends are not
     the same story at all — fine for folding a list, not for taking an article away. So
-    the pair has to clear 0.40 directly.
+    the pair has to clear 0.40 directly, and it has to not read as a follow-up: an
+    explainer written off the back of a report covers the same news and is still
+    something the reader has not read.
 
     "Read it themselves" is ``is_read`` with no ``suppressed_at``: a read written by the
     URL dedup, by a filter, or by finishing another story cannot hide anything, or one
@@ -158,9 +208,9 @@ async def suppress_seen(
     article) pairs were hidden.
     """
     seen_by_article: dict[int, list[int]] = {}
-    for new_id, cand_id, _story, similarity in rows:
-        if similarity >= SUPPRESS_THRESHOLD:
-            seen_by_article.setdefault(new_id, []).append(cand_id)
+    for pair in rows:
+        if pair.similarity >= SUPPRESS_THRESHOLD and not pair.follow_up:
+            seen_by_article.setdefault(pair.new_id, []).append(pair.cand_id)
     if not seen_by_article:
         return 0
 
@@ -216,9 +266,7 @@ async def suppress_seen(
     return hidden
 
 
-async def _find_pairs(
-    new_ids: list[int], db: AsyncSession
-) -> list[tuple[int, int, int | None, float]]:
+async def _find_pairs(new_ids: list[int], db: AsyncSession) -> list[Pair]:
     """Near-duplicate (new article, candidate) pairs, with the candidate's story.
 
     One query per new article rather than a single self-join. The self-join measured
@@ -243,12 +291,13 @@ async def _find_pairs(
         )
     )).all()
 
-    pairs: list[tuple[int, int, int | None, float]] = []
+    pairs: list[Pair] = []
     for article_id, feed_id, title_norm, ts in new_rows:
         candidates = await db.execute(_candidate_stmt(article_id, feed_id, title_norm, ts))
         pairs.extend(
-            (article_id, cand_id, story, similarity)
-            for cand_id, story, similarity in candidates
+            Pair(article_id, cand_id, story, similarity,
+                 reads_as_follow_up(title_norm, cand_norm))
+            for cand_id, story, similarity, cand_norm in candidates
         )
     return pairs
 
@@ -257,12 +306,15 @@ def _candidate_stmt(article_id: int, feed_id: int | None, title_norm: str, ts: d
     """Articles that cover the same story as one given article.
 
     The score comes back with the pair because the two thresholds are read off the same
-    match: 0.30 folds the coverage together, 0.40 is what ``suppress_seen`` needs.
+    match: 0.30 folds the coverage together, 0.40 is what ``suppress_seen`` needs. The
+    candidate's own title comes back for the same reason, since hiding also asks whether
+    the two headlines read as the same piece of writing.
     """
     window = timedelta(hours=WINDOW_HOURS)
     cand_ts = func.coalesce(Article.published_at, Article.fetched_at)
     return select(
-        Article.id, Article.story_id, func.similarity(Article.title_norm, title_norm)
+        Article.id, Article.story_id,
+        func.similarity(Article.title_norm, title_norm), Article.title_norm,
     ).where(
         Article.id != article_id,
         # Same-feed near-duplicates are a newsroom reposting or correcting itself, which
