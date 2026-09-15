@@ -5,7 +5,7 @@
   "scripts": {
     "build": "tailwindcss -i input.css -o backend/app/static/css/tailwind.css --minify",
     "dev": "tailwindcss -i input.css -o backend/app/static/css/tailwind.css --watch",
-    "test": "node --test \"tests/js/*.test.mjs\""
+    "test": "node --test tests/js/*.test.mjs"
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",
