@@ -9,6 +9,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Story grouping needs the PostgreSQL **`pg_trgm`** extension. The upgrade installs it, which works out of the box in the Docker setup; on a managed PostgreSQL where the application's role is not allowed to create extensions, run `CREATE EXTENSION pg_trgm;` as a superuser first, or the upgrade stops there.
+
+- The upgrade adds a stored column to `articles`, which rewrites the table and rebuilds its indexes. On a large instance the container takes that much longer to come up: measured at 40 seconds for 135 000 articles. Postgres holds a copy of the table while it does this, so there has to be free disk space of about twice the size of that table.
+
+- Articles already in the database are not grouped by the upgrade, and grouping starts with the next fetch. To group what is already there as well, run `docker compose exec app python -m app.scripts.backfill_stories --days 7` once the app is back up. It is optional, safe to run twice, and can be stopped part way; `--days 30` reaches further back. It is a separate command because on a busy instance it takes minutes to half an hour, and anything the upgrade does is downtime.
+
 ### Added
 
 - A feed's address can be changed. Until now it was the one thing about a feed that was fixed for good, so a feed that moved without leaving a redirect, or one whose address needed a small fix, meant unsubscribing and subscribing again, which throws away every article of that feed along with what you had read, starred and saved. The address is now a field in Settings → Feeds → the feed, and changing it keeps everything: only where the articles are fetched from moves. The new address is fetched once before it is saved, so a typo comes back as a message on the field rather than as a feed that quietly stops working, and if it redirects, the address it redirects to is what gets stored. Anything the old address left behind, an error, a counter, a wait imposed after a refusal, is cleared at the same time, and the feed is picked up on the next round rather than at its usual interval. A username and password written into the address are moved into the feed's credential fields, as they are when subscribing.
