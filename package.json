@@ -7,6 +7,9 @@
     "dev": "tailwindcss -i input.css -o backend/app/static/css/tailwind.css --watch",
     "test": "node --test tests/js/*.test.mjs"
   },
+  "engines": {
+    "node": ">=22.22.2"
+  },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.15",
     "jsdom": "^30.0.1",
