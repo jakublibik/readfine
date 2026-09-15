@@ -89,10 +89,12 @@ class UserArticleState(Base):
     # it and cascade into suppressing coverage nobody ever laid eyes on.
     suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Which machine wrote it: 'url' (same link in two feeds), 'filter' (a mark_read
-    # action), 'story' (the reader finished the story this belongs to), 'similar' (it
-    # repeats a story they had already read). Only the last one is the opt-in
-    # suppression, and the settings counter has to show that one alone, or the number
-    # the reader watches the threshold by counts three other things as well.
+    # action), 'story' (the reader finished the story this belongs to), 'bulk' (mark
+    # everything in a view read, which says they will not read these rather than that
+    # they have), 'similar' (it repeats a story they had already read). Only the last
+    # one is the opt-in suppression, and the settings counter has to show that one
+    # alone, or the number the reader watches the threshold by counts four other
+    # things as well.
     suppressed_by: Mapped[str | None] = mapped_column(String(12))
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

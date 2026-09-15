@@ -540,6 +540,15 @@ async def mark_scope_read(
 
     Starred/archived/saved scopes only UPDATE (state row is guaranteed to exist).
     All other scopes upsert to handle articles with and without existing state rows.
+
+    Everything written here is stamped ``suppressed_by='bulk'``. Clearing a backlog is
+    the reader saying they are not going to read these, which is the opposite of what
+    the story suppression needs to hear: it hides an article for repeating one the
+    reader read themselves, and without the stamp one press of "mark all read" over a
+    few hundred articles would arm it against everything those articles were about.
+    Reading one properly afterwards takes the stamp off again (the dwell and
+    link-opened handlers do that), so this only ever withholds a signal that was never
+    given.
     """
     now = datetime.now(timezone.utc)
 
@@ -569,7 +578,7 @@ async def mark_scope_read(
                 UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
-            .values(is_read=True, read_at=now, suppressed_at=null(), suppressed_by=null())
+            .values(is_read=True, read_at=now, suppressed_at=now, suppressed_by="bulk")
         )
         await db.commit()
         return
@@ -606,14 +615,16 @@ async def mark_scope_read(
     insert_select = scoped_select(
         literal(user.id), Article.id,
         literal(True), literal(False), literal(False), literal(now),
+        literal(now), literal("bulk"),
     )
     stmt = pg_insert(UserArticleState).from_select(
-        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at"],
+        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at",
+         "suppressed_at", "suppressed_by"],
         insert_select,
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
         set_={"is_read": True, "read_at": now,
-              "suppressed_at": null(), "suppressed_by": null()},
+              "suppressed_at": now, "suppressed_by": "bulk"},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
@@ -658,6 +669,18 @@ async def _close_stories(user_id: int, article_ids: list[int], db: AsyncSession)
     """
     from app.services.story_service import mark_group_read
     await mark_group_read(user_id, article_ids, db)
+
+
+async def _reopen_story(user_id: int, article_id: int, db: AsyncSession) -> None:
+    """The other half of ``_close_stories``: un-read the row, un-read the story.
+
+    Only the members closed on the reader's behalf come back — see
+    ``story_service.reopen_group``. Gated by the same ``close_story`` flag as closing
+    is, so a group the reader has unfolded is left alone in both directions: its
+    members are rows of their own then, and each answers for itself.
+    """
+    from app.services.story_service import reopen_group
+    await reopen_group(user_id, article_id, db)
 
 
 async def mark_articles_read_batch(
@@ -784,7 +807,8 @@ async def toggle_article_state(
     """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip.
 
     ``close_story=False`` when the article's story is unfolded on screen — see
-    ``_close_stories``."""
+    ``_close_stories``. It governs both directions: reading a folded row finishes the
+    story, un-reading it brings the story back."""
     assert field in {"is_read", "is_starred", "is_archived"}
     loaded = await _load_article_for_write(user, article_id, db)
     if loaded is None:
@@ -792,15 +816,21 @@ async def toggle_article_state(
     article, state, feed_title, custom_title, extract_readable = loaded
 
     new_value = not getattr(state, field, False)
+    # Read before the stamp is cleared below: only a read the reader made themselves
+    # can have closed a story, so only taking that one back reopens one.
+    was_machine_read = state.suppressed_at is not None
     setattr(state, field, new_value)
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
         state.suppressed_at = None
         state.suppressed_by = None
-        if new_value and close_story and article.story_id is not None:
+        if close_story and article.story_id is not None:
             await db.flush()
-            await _close_stories(user.id, [article_id], db)
+            if new_value:
+                await _close_stories(user.id, [article_id], db)
+            elif not was_machine_read:
+                await _reopen_story(user.id, article_id, db)
 
     if field == "is_starred":
         _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
@@ -827,13 +857,18 @@ async def update_article_state(
     article, state, feed_title, custom_title, extract_readable = loaded
 
     if payload.is_read is not None:
+        # See toggle_article_state: the stamp says whether this read was the reader's.
+        was_machine_read = state.suppressed_at is not None
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
         state.suppressed_at = None
         state.suppressed_by = None
-        if payload.is_read and close_story and article.story_id is not None:
+        if close_story and article.story_id is not None:
             await db.flush()
-            await _close_stories(user.id, [article_id], db)
+            if payload.is_read:
+                await _close_stories(user.id, [article_id], db)
+            elif not was_machine_read:
+                await _reopen_story(user.id, article_id, db)
 
     if payload.is_starred is not None:
         was_starred = bool(state.is_starred)

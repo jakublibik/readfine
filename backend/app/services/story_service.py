@@ -9,7 +9,7 @@ other article read path, and nothing outside this module should query members it
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,11 @@ DEDUP_OFF = "off"
 DEDUP_COLLAPSE = "collapse"
 DEDUP_SUPPRESS = "collapse_suppress"
 DEDUP_VALUES = (DEDUP_OFF, DEDUP_COLLAPSE, DEDUP_SUPPRESS)
+
+# The value ``suppressed_by`` carries when the machine read is "the reader finished the
+# story this belongs to". Named because two functions have to agree on it exactly:
+# ``mark_group_read`` writes it and ``reopen_group`` is allowed to undo nothing else.
+SUPPRESSED_BY_STORY = "story"
 
 # Time in front of an article that counts as having read it. Same number the stats and
 # the retention pass use for the same question; it lives here because this is where it
@@ -299,16 +304,59 @@ async def mark_group_read(
         .values([
             {"user_id": user_id, "article_id": aid, "is_read": True,
              "is_starred": False, "is_archived": False,
-             "read_at": now, "suppressed_at": now, "suppressed_by": "story"}
+             "read_at": now, "suppressed_at": now, "suppressed_by": SUPPRESSED_BY_STORY}
             for aid in members
         ])
         .on_conflict_do_update(
             index_elements=["user_id", "article_id"],
             set_={"is_read": True, "read_at": now, "suppressed_at": now,
-                  "suppressed_by": "story"},
+                  "suppressed_by": SUPPRESSED_BY_STORY},
             # The row may have been read between the select above and here; the guard
             # is what makes sure this never restamps somebody's own reading.
             where=(UserArticleState.__table__.c.is_read.is_not(True)),
         )
+    )
+    return list(members)
+
+
+async def reopen_group(user_id: int, article_id: int, db: AsyncSession) -> list[int]:
+    """Undo ``mark_group_read``: the reader says they have not read this after all.
+
+    Closing a story is the one part of reading a folded row that reaches articles the
+    reader never opened, so taking the read mark off that row has to reach them back.
+    Otherwise the undo is not one: five articles stay read because of a click that has
+    since been taken back, and nothing in the list says why.
+
+    Only members still carrying ``suppressed_by='story'`` are touched, so a member the
+    reader went on to read properly keeps its own read mark — spending time on an
+    article clears the stamp (the dwell and link-opened handlers), and so does marking
+    it read by hand.
+
+    Does not commit; the caller owns the transaction, which is what keeps this atomic
+    with the un-read that caused it.
+    """
+    stories = select(Article.story_id).where(
+        Article.id == article_id, Article.story_id.is_not(None)
+    )
+    members = (await db.execute(
+        add_article_access_joins(select(Article.id), user_id).where(
+            Article.story_id.in_(stories),
+            Article.id != article_id,
+            Article.trimmed_at.is_(None),
+            article_access_predicate(),
+            UserArticleState.is_read.is_(True),
+            UserArticleState.suppressed_by == SUPPRESSED_BY_STORY,
+        )
+    )).scalars().all()
+    if not members:
+        return []
+
+    await db.execute(
+        update(UserArticleState)
+        .where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id.in_(members),
+        )
+        .values(is_read=False, read_at=None, suppressed_at=None, suppressed_by=None)
     )
     return list(members)

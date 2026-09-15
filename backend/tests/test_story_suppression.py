@@ -169,16 +169,6 @@ class TestAHumanReadClearsTheMark:
 
         assert await _stamp(pg, user, article) is None
 
-    async def test_mark_all_read_clears_it_on_what_it_flips(self, pg):
-        user = await _user(pg)
-        feed = await _feed(pg, user)
-        article = await _article(pg, feed)
-        await _unread(pg, user, article)
-
-        await mark_scope_read(user, pg, before=NOW, feed_id=feed.id)
-
-        assert await _stamp(pg, user, article) is None
-
     async def test_mark_all_read_does_not_promote_a_machine_read(self, pg):
         """Clearing the deck is not reading. The article was already read, so mark all
         read passes over it, and it must stay a machine read — nothing new was seen."""
@@ -190,6 +180,71 @@ class TestAHumanReadClearsTheMark:
         await mark_scope_read(user, pg, before=NOW, feed_id=feed.id)
 
         assert await _stamp(pg, user, article) == LONG_AGO
+
+
+class TestMarkAllReadIsNotReading:
+    """Clearing a backlog says the reader will not read these, not that they have.
+
+    Without the stamp one press over a few hundred articles would arm the suppression
+    against everything they were about, and the reader would spend the following days
+    not being shown news they never saw in the first place.
+    """
+
+    async def _reason(self, pg, user, article):
+        return await pg.scalar(
+            select(UserArticleState.suppressed_by).where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id == article.id,
+            )
+        )
+
+    async def test_an_article_it_flips_is_stamped(self, pg):
+        user = await _user(pg)
+        feed = await _feed(pg, user)
+        article = await _article(pg, feed)
+
+        await mark_scope_read(user, pg, before=NOW, feed_id=feed.id)
+
+        assert await _stamp(pg, user, article) is not None
+        assert await self._reason(pg, user, article) == "bulk"
+
+    async def test_it_is_stamped_over_an_existing_row_too(self, pg):
+        """The state row already being there (unread, previously stamped) is the same
+        gesture and must not come out of it looking like a read."""
+        user = await _user(pg)
+        feed = await _feed(pg, user)
+        article = await _article(pg, feed)
+        await _unread(pg, user, article)
+
+        await mark_scope_read(user, pg, before=NOW, feed_id=feed.id)
+
+        assert await self._reason(pg, user, article) == "bulk"
+
+    async def test_the_starred_scope_stamps_as_well(self, pg):
+        """That branch is a plain UPDATE rather than an upsert, so it is a second
+        place the stamp has to be written."""
+        user = await _user(pg)
+        article = await _article(pg, await _feed(pg, user))
+        pg.add(UserArticleState(user_id=user.id, article_id=article.id,
+                                is_read=False, is_starred=True))
+        await pg.flush()
+
+        await mark_scope_read(user, pg, before=NOW, starred_only=True)
+
+        assert await self._reason(pg, user, article) == "bulk"
+
+    async def test_reading_one_afterwards_takes_the_stamp_off(self, pg):
+        """The stamp withholds a signal that was never given; it does not stand in the
+        way of one that is."""
+        user = await _user(pg)
+        feed = await _feed(pg, user)
+        article = await _article(pg, feed)
+        await mark_scope_read(user, pg, before=NOW, feed_id=feed.id)
+
+        await toggle_article_state(user, article.id, "is_read", pg)   # unread
+        await toggle_article_state(user, article.id, "is_read", pg)   # read, by hand
+
+        assert await _stamp(pg, user, article) is None
 
     async def test_a_plain_read_is_not_stamped(self, pg):
         user = await _user(pg)

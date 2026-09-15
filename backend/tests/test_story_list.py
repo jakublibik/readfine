@@ -25,6 +25,7 @@ from app.services.article import (
     list_articles,
     mark_articles_read_batch,
     toggle_article_state,
+    update_article_state,
 )
 from app.services.story_service import (
     MAX_SHOWN_STORIES,
@@ -475,6 +476,105 @@ class TestMarkGroupRead:
         await toggle_article_state(user, head.id, "is_read", pg, close_story=False)
 
         assert await self._state(pg, user, second) is None
+
+
+class TestReopenGroup:
+    """Taking the read back takes the story back.
+
+    Closing a story is the one part of reading a row that reaches articles the reader
+    never opened, so the undo has to reach them too. What it must not do is undo a
+    read somebody actually made, or undo anything at all when the article being
+    un-read was not what closed the group in the first place.
+    """
+
+    async def _state(self, pg, user, article):
+        return await pg.scalar(
+            select(UserArticleState).where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id == article.id,
+            )
+        )
+
+    async def test_the_members_come_back_unread(self, pg):
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        await toggle_article_state(user, head.id, "is_read", pg)
+        assert (await self._state(pg, user, second)).is_read is True
+
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        state = await self._state(pg, user, second)
+        assert state.is_read is False
+        assert state.read_at is None
+        assert state.suppressed_at is None
+        assert state.suppressed_by is None
+
+    async def test_the_api_takes_it_back_the_same_way(self, pg):
+        from app.schemas.article import ArticleStateUpdate
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        await update_article_state(user, head.id, ArticleStateUpdate(is_read=True), pg)
+
+        await update_article_state(user, head.id, ArticleStateUpdate(is_read=False), pg)
+
+        assert (await self._state(pg, user, second)).is_read is False
+
+    async def test_a_member_read_properly_keeps_its_read(self, pg):
+        """It was never closed on anyone's behalf, so there is nothing here to undo."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        read_at = NOW - timedelta(hours=2)
+        pg.add(UserArticleState(user_id=user.id, article_id=second.id,
+                                is_read=True, read_at=read_at))
+        await pg.flush()
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        state = await self._state(pg, user, second)
+        assert state.is_read is True
+        assert state.read_at == read_at
+
+    async def test_un_reading_a_closed_member_reopens_nothing(self, pg):
+        """The reader is saying they have not read this one. That says nothing about
+        its siblings, and this member was not what closed them."""
+        user = await _user(pg)
+        head, second, mine, _ = await _story(pg, user)
+        third = await _article(pg, mine, story_id=head.story_id, title="Third")
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        await toggle_article_state(user, second.id, "is_read", pg)
+
+        assert (await self._state(pg, user, second)).is_read is False
+        assert (await self._state(pg, user, third)).is_read is True
+
+    async def test_an_unfolded_group_is_left_alone(self, pg):
+        """Same flag as closing, and for the same reason: unfolded, the members are
+        rows of their own and each answers for itself."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        await toggle_article_state(user, head.id, "is_read", pg, close_story=False)
+
+        assert (await self._state(pg, user, second)).is_read is True
+
+    async def test_a_feed_the_reader_does_not_take_is_not_touched(self, pg):
+        user = await _user(pg)
+        stranger = await _user(pg)
+        head, _, _, theirs = await _story(pg, user)
+        outsider = (await pg.execute(
+            select(Article).where(Article.feed_id == theirs.id)
+        )).scalars().first()
+        pg.add(UserArticleState(user_id=stranger.id, article_id=outsider.id,
+                                is_read=True, suppressed_by="story",
+                                suppressed_at=NOW))
+        await pg.flush()
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        await toggle_article_state(user, head.id, "is_read", pg)
+
+        assert (await self._state(pg, stranger, outsider)).is_read is True
 
 
 class TestRowCount:
