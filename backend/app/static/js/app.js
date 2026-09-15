@@ -957,8 +957,16 @@ function _flushMarkRead() {
 // that, see _close_stories); reading one that is unfolded finishes only itself, since
 // the rest are right there and the reader asked to see them. Only the browser knows
 // which it is, so every human mark-as-read carries the answer.
+//
+// Both ends of the group have to answer yes. The row the group hangs from is the one
+// with members under it; a member is a row carrying data-story-parent. Asking only the
+// first question is how this went wrong once: a member's own id has nothing hanging
+// under it, so reading one of them looked like reading a folded row and closed the
+// whole group the reader had just opened.
 function _storyUnfolded(id) {
-  return document.querySelector('[data-story-parent="' + id + '"]') !== null;
+  if (document.querySelector('[data-story-parent="' + id + '"]')) return true;
+  var row = document.getElementById('article-row-' + id);
+  return !!(row && row.hasAttribute('data-story-parent'));
 }
 
 function _queueMarkRead(id) {
@@ -1113,11 +1121,17 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
         swap: 'innerHTML'
       });
     } else {
-      // Article no longer in view — mark as read server-side only, skip UI swap
+      // Article no longer in view — mark as read server-side only, skip UI swap.
+      // Hand-built, so the htmx:configRequest hook further down never sees it: the
+      // unfolded answer has to be put in the body here.
       var csrfToken = getCsrfToken();
       fetch('/htmx/articles/' + articleId + '/set-read?state=true', {
         method: 'POST',
-        headers: { 'x-csrftoken': csrfToken },
+        headers: {
+          'x-csrftoken': csrfToken,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'story_unfolded=' + (_storyUnfolded(articleId) ? 'true' : 'false'),
       }).then(function (r) {
         if (!r.ok) console.warn('mark-as-read fallback failed: ' + r.status);
       }).catch(function () {});
@@ -1191,8 +1205,13 @@ document.addEventListener('click', function (e) {
 // The read button and the set-read endpoint carry the same answer as the scroll batch:
 // htmx builds these requests from attributes in the template, and whether a story is
 // unfolded is not something a template can know, so it is added here on the way out.
+//
+// The path arrives exactly as the caller wrote it, query string and all, so the match
+// has to end at the '?' as readily as at the end of the string: every set-read call in
+// this file carries ?state=true, and an end-anchored pattern quietly matched none of
+// them. The one hand-built set-read request is above and adds the parameter itself.
 document.body.addEventListener('htmx:configRequest', function (e) {
-  var m = /\/htmx\/articles\/(\d+)\/(read|set-read)$/.exec(e.detail.path || '');
+  var m = /\/htmx\/articles\/(\d+)\/(read|set-read)(?:\?|$)/.exec(e.detail.path || '');
   if (m && _storyUnfolded(m[1])) e.detail.parameters.story_unfolded = 'true';
 });
 
@@ -1254,6 +1273,7 @@ document.addEventListener('click', function (e) {
   var loaded = htmx.ajax('GET', url, { target: '#article-row-' + id, swap: 'afterend' });
   if (loaded && loaded.then) {
     loaded.then(function () {
+      _dropDuplicateStoryRows(id);
       done();
       setState(document.querySelector('[data-story-parent="' + id + '"]') !== null);
     }, done);
@@ -1261,6 +1281,31 @@ document.addEventListener('click', function (e) {
     done();
   }
 }, true);
+
+// A member the list was already showing gets dropped again on the way in.
+//
+// Where the view folds stories this cannot happen — the page that kept the row this
+// group hangs from dropped its other members, and the pages after it are told which
+// stories already have a row. The lists that fold nothing are the gap: Starred, Saved
+// and Archive are assembled out of articles the reader marked one by one, and two of
+// them can easily be the same story from two feeds. The server answers with the group
+// whole, knowing nothing of what is on screen, so the second copy would arrive under
+// the id the first one already holds — and two elements sharing an id is how a row
+// starts opening somebody else's article.
+//
+// Matched on .article-row, not on the attribute alone: the inline reader carries the
+// id of the article it is showing too, and it is a child of the list.
+//
+// The count on the chip is left saying what the group holds, which is the honest
+// number, so unfolding one of these shows one row fewer than it promises.
+function _dropDuplicateStoryRows(id) {
+  document.querySelectorAll('.article-row[data-story-parent="' + id + '"]').forEach(function (el) {
+    var aid = el.dataset.articleId;
+    if (document.querySelectorAll('.article-row[data-article-id="' + aid + '"]').length > 1) {
+      el.remove();
+    }
+  });
+}
 
 // ── The row whose article is open in the detail pane ──────────────────────────
 // Read off the detail rather than set where the click happens. Every way an article

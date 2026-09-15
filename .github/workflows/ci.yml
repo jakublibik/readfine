@@ -66,6 +66,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run JS tests
+        run: npm test
+
       - name: Build CSS
         run: npm run build
 
