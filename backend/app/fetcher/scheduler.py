@@ -443,11 +443,13 @@ async def _fetch_due_feeds() -> None:
                     await fetch_scrape_feed(
                         feed_in_session, session,
                         published_cutoff=cutoff_by_feed.get(feed_id),
+                        defer_stories=True,
                     )
                 else:
                     await fetch_feed(
                         feed_in_session, session,
                         published_cutoff=cutoff_by_feed.get(feed_id),
+                        defer_stories=True,
                     )
                 # Pace the host after this fetch: a scheduler breather at the learned
                 # gap, plus a manual-visible cooldown when a real limit was learned (so
