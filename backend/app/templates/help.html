@@ -159,17 +159,67 @@
       {# ── FAQ ─────────────────────────────────────────────────────────────── #}
       <section>
         <h2 class="text-base font-semibold text-gray-900 mb-4 dark:text-gray-100">FAQ</h2>
+
+        {#- Open by default: a contents list that has to be found first does not do
+            its job. It folds because on a phone the groups stack into one column and
+            eighteen links is a long way to scroll past. <details> rather than a script,
+            so it needs no nonce and works with Ctrl+F and a deep link either way.
+
+            Columns rather than a grid. A grid gives every row the height of its tallest
+            cell, so a four-item group sitting beside a six-item one left a hole under it
+            and the whole list read as ragged. Columns flow and balance themselves;
+            break-inside-avoid is what stops a group being split down the middle. -#}
+        <details open class="mb-8">
+          <summary class="cursor-pointer select-none text-sm font-medium text-gray-700 marker:text-gray-400 dark:text-gray-300">Jump to a question</summary>
+          <div class="mt-3 text-sm sm:columns-2 sm:gap-x-8">
+            <div class="break-inside-avoid mb-4">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">Setting up</div>
+              <a href="#import" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I import from another reader?</a>
+              <a href="#scrape" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What's a scrape feed?</a>
+              <a href="#filters" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do filters work?</a>
+              <a href="#regex" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do I use regex in a filter?</a>
+            </div>
+            <div class="break-inside-avoid mb-4">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">Reading</div>
+              <a href="#layout" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do I customize the layout?</a>
+              <a href="#stories" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Several of my feeds carry the same story</a>
+              <a href="#saved" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What is Saved?</a>
+              <a href="#install" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I install Readfine as an app?</a>
+              <a href="#share" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I share an article?</a>
+              <a href="#stats" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Where do I see how I'm reading?</a>
+            </div>
+            <div class="break-inside-avoid mb-4">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">AI</div>
+              <a href="#ai-key" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Where do I get an AI key?</a>
+              <a href="#custom-endpoint" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I use my own model or another provider?</a>
+              <a href="#scoring" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What is relevance scoring?</a>
+              <a href="#catchup" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do Catch me up &amp; briefings work?</a>
+            </div>
+            <div class="break-inside-avoid mb-4">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">Your data</div>
+              <a href="#purge" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How long are articles kept?</a>
+              <a href="#api" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Is there an API?</a>
+              <a href="#privacy" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Is my data private?</a>
+            </div>
+            <div class="break-inside-avoid mb-4">
+              <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">When something goes wrong</div>
+              <a href="#feed-error" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">A feed shows a red marker. What now?</a>
+            </div>
+          </div>
+        </details>
+
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 dark:text-gray-500">Setting up</h3>
         <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
 
           <div id="import" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I import from another reader?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I import from another reader?</h4>
             <p>Yes. Export an OPML file from your current reader and import it in
               <a href="/settings/opml" class="text-blue-600 hover:underline dark:text-blue-400">Settings → OPML</a>. You can also
               export your Readfine subscriptions there.</p>
           </div>
 
           <div id="scrape" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What's a scrape feed?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What's a scrape feed?</h4>
             <p>When a website has no RSS feed, Readfine can read its listing page directly. You point it at
               the page and give a <strong>CSS selector</strong> that matches the article links; Readfine then
               checks that page on a schedule, just like an RSS feed. If you have an AI key, it can suggest the
@@ -178,7 +228,7 @@
           </div>
 
           <div id="filters" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do filters work?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do filters work?</h4>
             <p>A filter is a set of <strong>conditions</strong> (match on title, content, author, score… with
               AND/OR and optional regex) plus <strong>actions</strong> that run when an article matches: add a
               label, mark as read, or star. You can scope a filter to specific feeds or folders. Filters run on
@@ -191,7 +241,7 @@
           </div>
 
           <div id="regex" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I use regex in a filter?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I use regex in a filter?</h4>
             <p>When a condition's operator is <strong>regex</strong>, the value is treated as a regular
               expression (Python syntax). The pattern is matched <strong>anywhere in the field</strong> and is
               <strong>case-insensitive</strong>, so <code class="font-mono">einstein</code> also matches “Einstein”.
@@ -226,8 +276,12 @@
               Pick the <strong>Python</strong> flavor to match how Readfine evaluates them.</p>
           </div>
 
+        </div>
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-8 dark:text-gray-500">Reading</h3>
+        <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
+
           <div id="layout" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I customize the layout?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I customize the layout?</h4>
             <p>Open <a href="/settings/preferences" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Preferences</a>
               to choose a <strong>2- or 3-panel</strong> layout (separately for medium and large screens),
               the <strong>list density</strong> (compact, comfortable or summary, separately for desktop and
@@ -243,7 +297,7 @@
           </div>
 
           <div id="stories" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Several of my feeds carry the same story. What does Readfine do?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Several of my feeds carry the same story. What does Readfine do?</h4>
             <p>It keeps one row for the story instead of five. Readfine compares the headlines of
               articles that arrive <strong>within 72 hours of each other and from different feeds</strong>,
               which catches the same event written up by five newsrooms under five addresses and five
@@ -278,7 +332,7 @@
           </div>
 
           <div id="saved" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is Saved?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is Saved?</h4>
             <p><strong>Saved</strong> is for articles that aren't in any of your feeds. Open it in the sidebar, paste a
               link into the bar at the top of the list, and Readfine fetches the page and runs it through the same
               readable extraction as a normal article. Saved articles stay until you remove them, so
@@ -287,7 +341,7 @@
           </div>
 
           <div id="install" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I install Readfine as an app?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I install Readfine as an app?</h4>
             <p>Yes, on a phone and on a desktop alike. In Chrome or Edge it is <strong>Install app</strong> in the
               browser menu; on an iPhone or iPad it is <strong>Share</strong>, then <strong>Add to Home Screen</strong>.
               It opens in its own window with no address bar, and it is the same Readfine, with nothing stored offline.
@@ -304,7 +358,7 @@
           </div>
 
           <div id="share" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I share an article?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I share an article?</h4>
             <p>Yes. <strong>Share</strong> in the article's <strong>···</strong> menu creates a link that works without
               signing in, so you can send it to someone who has no Readfine account. Anyone holding the link can read
               that one article, so treat it as public. The same menu shows the link once it exists, along with
@@ -312,21 +366,8 @@
               article is shared until you ask for it.</p>
           </div>
 
-          <div id="feed-error" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">A feed shows a red marker. What now?</h3>
-            <p>That means the last fetch failed. Hover the marker to see why: a site that moved, a feed URL that no
-              longer exists, a temporary outage. Hit <strong>↻</strong> on the feed row to retry right away; if it
-              succeeds, the marker disappears. When the address has genuinely changed, correct it in
-              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>:
-              open the feed and edit <strong>Feed address</strong>. Everything the feed already holds stays where it is,
-              articles included, and the new address is fetched once before it is saved. On an instance where somebody
-              else follows the same feed, the address is the administrator's to change. The same page is where you set a
-              custom title, move the feed into a folder, adjust how often it's checked, and store credentials for a feed
-              that sits behind a login.</p>
-          </div>
-
           <div id="stats" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I see how I'm reading?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I see how I'm reading?</h4>
             <p><a href="/settings/stats" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Stats</a>
               shows what you actually get through: read rate, reading streak, how long you spend on an article, and
               your most active day and hour. With an AI key it also checks how well relevance scores line up with your
@@ -334,8 +375,12 @@
               estimates what your AI usage costs.</p>
           </div>
 
+        </div>
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-8 dark:text-gray-500">AI</h3>
+        <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
+
           <div id="ai-key" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I get an AI key?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I get an AI key?</h4>
             <p>Readfine is bring-your-own-key: you create a key with one of the providers and paste it into
               <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>. It's stored
               encrypted and used only for your own requests.</p>
@@ -349,7 +394,7 @@
           </div>
 
           <div id="custom-endpoint" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I use my own model or another provider?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Can I use my own model or another provider?</h4>
             <p>Yes. Pick <strong>Custom (OpenAI-compatible)</strong> as the provider in
               <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a> and fill in the
               <strong>Endpoint</strong> field. Anything that speaks the OpenAI API works: Ollama, llama.cpp's server,
@@ -379,7 +424,7 @@
           </div>
 
           <div id="scoring" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is relevance scoring?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is relevance scoring?</h4>
             <p>With an AI key, Readfine scores incoming articles against your <strong>interest profile</strong>:
               a short description of what you care about, which you write yourself or have the AI generate from
               the articles you've read, in
@@ -388,14 +433,18 @@
           </div>
 
           <div id="catchup" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do Catch me up &amp; briefings work?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do Catch me up &amp; briefings work?</h4>
             <p><strong>Catch me up</strong> generates an on-demand digest of articles from a period and scope
               you choose. A <strong>briefing</strong> is the same thing on a schedule, delivered to your inbox.
               Both need an AI key. Set them up under Catch me up &amp; briefings in the reader.</p>
           </div>
 
+        </div>
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-8 dark:text-gray-500">Your data</h3>
+        <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
+
           <div id="purge" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How long are articles kept?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How long are articles kept?</h4>
             <p>Old articles are cleaned up automatically so the archive doesn't grow forever. The exact window is set
               by whoever runs the instance and is written out at the bottom of
               <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>.
@@ -405,17 +454,34 @@
           </div>
 
           <div id="api" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is there an API?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is there an API?</h4>
             <p>Yes, a JSON API for scripts and integrations. Create a token in
               <a href="/settings/tokens" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Tokens</a>
               and send it as a bearer token.</p>
           </div>
 
           <div id="privacy" class="py-5 first:pt-0 last:pb-0">
-            <h3 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is my data private?</h3>
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Is my data private?</h4>
             <p>Your account, feeds and API keys are yours alone; keys are stored encrypted. See the
               <a href="/privacy" class="text-blue-600 hover:underline dark:text-blue-400">Privacy Policy</a> for details on what
               data is held and your rights.</p>
+          </div>
+
+        </div>
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-2 mt-8 dark:text-gray-500">When something goes wrong</h3>
+        <div class="divide-y divide-gray-200 text-sm text-gray-700 dark:divide-gray-800 dark:text-gray-300">
+
+          <div id="feed-error" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">A feed shows a red marker. What now?</h4>
+            <p>That means the last fetch failed. Hover the marker to see why: a site that moved, a feed URL that no
+              longer exists, a temporary outage. Hit <strong>↻</strong> on the feed row to retry right away; if it
+              succeeds, the marker disappears. When the address has genuinely changed, correct it in
+              <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>:
+              open the feed and edit <strong>Feed address</strong>. Everything the feed already holds stays where it is,
+              articles included, and the new address is fetched once before it is saved. On an instance where somebody
+              else follows the same feed, the address is the administrator's to change. The same page is where you set a
+              custom title, move the feed into a folder, adjust how often it's checked, and store credentials for a feed
+              that sits behind a login.</p>
           </div>
 
         </div>
