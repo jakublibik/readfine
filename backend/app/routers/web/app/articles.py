@@ -154,6 +154,9 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
         select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
     )
     rows_drawn = row_count(story_dedup != DEDUP_OFF)
+    # Every one of these carries trimmed_at IS NULL, the filter list_articles applies
+    # and the sidebar counters already had: a retention stub is gone from the list, so
+    # a badge that still counted it would stand above fewer rows than it claims.
     if label_id:
         lu = (await db.scalar(
             select(rows_drawn)
@@ -165,6 +168,7 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
             .where(
                 ArticleLabel.user_id == user_id,
                 ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
         )) or 0
@@ -172,7 +176,11 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
             select(rows_drawn)
             .select_from(ArticleLabel)
             .join(Article, Article.id == ArticleLabel.article_id)
-            .where(ArticleLabel.user_id == user_id, ArticleLabel.label_id == label_id)
+            .where(
+                ArticleLabel.user_id == user_id,
+                ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
+            )
         )) or 0
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
@@ -181,7 +189,10 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
-        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+        .where(
+            Article.trimmed_at.is_(None),
+            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+        )
     )) or 0
     all_total = (await db.scalar(
         select(rows_drawn)
@@ -505,6 +516,7 @@ async def render_list(
             .where(
                 ArticleLabel.user_id == user.id,
                 ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
         )).scalar() or 0
@@ -515,7 +527,10 @@ async def render_list(
             .select_from(Article)
             .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
             .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-            .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+            .where(
+                Article.trimmed_at.is_(None),
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
         )).scalar() or 0
         title_bar_count_type = "unread"
     elif starred_only:
@@ -783,6 +798,20 @@ async def htmx_article_detail(
     })
 
 
+async def _story_dedup_off(user_id: int, db: AsyncSession) -> bool:
+    """Has this reader turned story grouping off?
+
+    The two unfold endpoints ask before answering. Nothing in the page offers the
+    control when the feature is off, so this is not a gate anybody reaches by clicking;
+    it is there so the setting means the same thing everywhere, and a stale page left
+    open across a change in Settings cannot unfold a group the reader has said they do
+    not want.
+    """
+    return (await db.scalar(
+        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
+    )) == DEDUP_OFF
+
+
 @router.get("/htmx/articles/{article_id}/related", response_class=HTMLResponse)
 async def htmx_article_related(
     article_id: int,
@@ -800,7 +829,7 @@ async def htmx_article_related(
         add_article_access_joins(select(Article.story_id), user.id)
         .where(Article.id == article_id, article_access_predicate())
     )).scalar_one_or_none()
-    if story_id is None:
+    if story_id is None or await _story_dedup_off(user.id, db):
         return HTMLResponse("")
 
     members = await list_members(user.id, story_id, article_id, db)
@@ -840,6 +869,8 @@ async def htmx_article_story_rows(
         return HTMLResponse("")
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if settings is not None and settings.story_dedup == DEDUP_OFF:
+        return HTMLResponse("")
     members = await list_articles(
         user=user, db=db, story_id=story_id,
         sort_order=settings.default_sort_order if settings else "newest",
@@ -902,6 +933,11 @@ async def htmx_row_poll(
     request: Request,
     density: str | None = Query(None),
     label_display: str | None = Query(None),
+    # The row this one was unfolded from, when it is a member of a story rather than a
+    # row of the list proper. Carried by the poller so the rebuilt row keeps its indent
+    # and its data-story-parent; without it a member whose extraction finished would
+    # jump back to the left margin and stop counting as part of the group.
+    story_parent: int | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -923,7 +959,9 @@ async def htmx_row_poll(
         # The same element the row rendered, so the loop carries on unchanged.
         macros = templates.env.get_template("app/partials/row_poll.html").module
         return HTMLResponse(
-            str(macros.row_poll(article_id, density or "", label_display or ""))
+            str(macros.row_poll(
+                article_id, density or "", label_display or "", story_parent or ""
+            ))
         )
 
     # Rebuilding the row means rebuilding everything on it, the story marker included,
@@ -937,6 +975,7 @@ async def htmx_row_poll(
         density=density or (settings.list_density_web if settings else "comfortable"),
         label_display=label_display or (settings.label_display if settings else "indicator"),
         show_ai_score=settings.ai_score_show_in_list if settings else False,
+        story_child=story_parent,
     )
     response = HTMLResponse(row_html)
     response.headers["HX-Retarget"] = f"#article-row-{article_id}"

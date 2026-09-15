@@ -146,7 +146,7 @@
      hx-swap="innerHTML">
 
   {% if article.readable_active and not article.feed_id %}
-  {{ row_poll(article.id, d, ld) }}
+  {{ row_poll(article.id, d, ld, child_of or "") }}
   {% endif %}
 
   {% if d == "compact" %}
