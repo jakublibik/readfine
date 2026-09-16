@@ -29,6 +29,10 @@ export function browser(bodyHtml = '') {
     ajax() { return Promise.resolve(); },
   };
   w.fetch = function () { return Promise.resolve({ ok: true }); };
+  // jsdom lays nothing out, so it ships neither of these; app.js calls them on paths a
+  // test can reach, some of them from a timer where the throw lands outside the test.
+  w.Element.prototype.scrollIntoView = function () {};
+  w.Element.prototype.scrollTo = function () {};
   w.eval(fs.readFileSync(APP_JS, 'utf8'));
   return w;
 }
@@ -45,6 +49,33 @@ export function row(id, { parent = null } = {}) {
 
 export function list(...rows) {
   return '<div id="article-list">' + rows.join('') + '</div>';
+}
+
+// The right panel, which every layout has in the DOM even where CSS hides it. `article`
+// is the id of the article sitting in it, or null for the empty panel of a layout that
+// reads inline.
+export function detail(article = null) {
+  return (
+    '<main id="article-detail">'
+    + (article === null ? '' : '<div id="article-detail-root" data-article-id="' + article
+       + '"><article class="reading-area" data-article-id="' + article + '"></article></div>')
+    + '</main>'
+  );
+}
+
+// A title in the story footer, as story_members.html draws it.
+export function memberLink(id) {
+  return '<a href="#" data-open-story-member="' + id + '">covered elsewhere</a>';
+}
+
+// Records what app.js asked htmx to load, instead of loading it.
+export function captureAjax(w) {
+  const calls = [];
+  w.htmx.ajax = function (verb, path, opts) {
+    calls.push({ verb: verb, path: path, target: opts && opts.target });
+    return Promise.resolve();
+  };
+  return calls;
 }
 
 // The request htmx would have made: fire configRequest the way htmx does and report

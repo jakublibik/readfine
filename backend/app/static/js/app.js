@@ -1165,41 +1165,70 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
 });
 
 // ── Story block: open another article covering the same story ─────────────────
-// Not plain hx-get on the link. The reader lives in two different containers — the
-// inline shell when a row is expanded (2-panel and small/inline), the right panel
-// otherwise — and in the 2-panel layout #article-detail is display:none, so a link
-// aimed at it would look like nothing happened. Detect by the shell's presence, the
-// same way hideDuplicateH1 does, rather than by layout.
+// Not plain hx-get on the link: in every layout but the 3-panel one #article-detail is
+// display:none, so a link aimed at it would look like a dead click.
+//
+// Where the reader sits in the inline shell (2-panel, and the small bucket in inline
+// mode) the member gets a surface of its own rather than the shell. Swapping the shell
+// left the list row above it describing one article and the content below it another,
+// which on a short article looked like nothing had happened at all. The surface is
+// #article-detail raised over the list, the same overlay the deep-link path already uses
+// in those layouts (.deeplink-detail-open in base.html); the list stays in the DOM
+// underneath with its scroll position, so closing is removing a class.
+//
+// Elsewhere there is nothing to raise: the 3-panel layout has the panel open beside the
+// list, and the small bucket in fullscreen mode is already in this overlay, where a
+// member replaces the article the same way the next one does.
+function _openStoryMember(link, id) {
+  var cl = document.documentElement.classList;
+  // Anything already covering the list is a surface of its own: the phone's fullscreen
+  // reader, a deep-linked article, or this overlay one member deep. On all of them the
+  // member replaces the article the way the next one does, and raising a second overlay
+  // over the first would only add a press of Back per article looked at.
+  var raised = cl.contains('story-detail-open') || cl.contains('deeplink-detail-open') ||
+               cl.contains('mobile-detail-open');
+  // The link goes along as the request's source. An inline layout turns every request
+  // aimed at the panel into a row expansion (the beforeRequest guard further down this
+  // file), and that guard needs something on the request to tell this one apart —
+  // without it the request is cancelled and the window comes up empty.
+  htmx.ajax('GET', '/htmx/articles/' + id, {
+    source: link, target: '#article-detail', swap: 'innerHTML'
+  });
+  if (!_shouldUseInline() || raised) return;
+  cl.add('story-detail-open');
+  // No URL: a reload should land on the list, not on an article opened for its coverage.
+  history.pushState({ storyDetailOpen: true }, '');
+}
+
+// Closing empties the panel as well as lowering it. #article-detail is the first place
+// currentDetailArticleEl and the share lookups look, ahead of the inline shell, so a
+// member left behind in a hidden panel would answer for the article the reader is
+// actually on. Dwell is flushed before that and re-armed after, else the rest of the
+// reading session on the underlying article is lost.
+function _closeStoryOverlay() {
+  if (!document.documentElement.classList.contains('story-detail-open')) return false;
+  if (window._dwellSend) window._dwellSend();
+  document.documentElement.classList.remove('story-detail-open');
+  var panel = document.getElementById('article-detail');
+  if (panel) panel.innerHTML = '';
+  if (window._dwellResume) window._dwellResume();
+  return true;
+}
+window._closeStoryOverlay = _closeStoryOverlay;
+
 document.addEventListener('click', function (e) {
   var link = e.target.closest('[data-open-story-member]');
   if (!link) return;
   e.preventDefault();
-  var id = link.dataset.openStoryMember;
-  var inline = document.getElementById('inline-article-detail-content');
-  var loaded = htmx.ajax('GET', '/htmx/articles/' + id, {
-    target: inline ? '#inline-article-detail-content' : '#article-detail',
-    swap: 'innerHTML'
-  });
-  // The shell's id is what "remove from Saved" and the collapse-on-reclick check read
-  // to decide which article is expanded, so it has to follow the content.
-  //
-  // Provisional where the reader is inline: swapping in place leaves the list row above
-  // it describing a different article than the content below. The alternative is to give
-  // the related article a surface of its own, which the small bucket already has in the
-  // fullscreen overlay (mobile-detail-open, further down this file) and the 2-panel
-  // layout does not. Worth revisiting once the story feature is finished and there is
-  // something to try in a browser.
-  var shell = document.getElementById('inline-article-detail');
-  if (shell) shell.dataset.articleId = id;
-  // And the scroll has to be taken back to the top of it. The click comes from the end
-  // of an article, and the inline shell sits in the list, which keeps its scroll
-  // position across the swap: a shorter article lands entirely above where the reader is
-  // looking, leaving them on the blank space past its end with nothing appearing to have
-  // happened. The right panel resets its own scroll on swap (htmx:afterSwap, above), the
-  // list does not.
-  if (shell && loaded && loaded.then) {
-    loaded.then(function () { shell.scrollIntoView({ block: 'start' }); });
-  }
+  _openStoryMember(link, link.dataset.openStoryMember);
+});
+
+// Hardware Back and the browser's Back button. Not folded into the mobile popstate
+// handler further down this file: that one returns early off the small bucket, and this
+// overlay opens in the 2-panel layout on a desktop too.
+window.addEventListener('popstate', function (e) {
+  if ((e.state || {}).storyDetailOpen) return;
+  _closeStoryOverlay();
 });
 
 // The read button and the set-read endpoint carry the same answer as the scroll batch:
@@ -1512,7 +1541,12 @@ function closeFeedbackModal() {
 
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') { closeSearchModal(); closeFeedbackModal(); return; }
+  if (e.key === 'Escape') {
+    // The story overlay owns Escape while it is up: it is the thing over everything else,
+    // and it has a history entry to go back through rather than just a class to drop.
+    if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
+    closeSearchModal(); closeFeedbackModal(); return;
+  }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
   if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
     e.preventDefault();
@@ -1666,10 +1700,27 @@ document.addEventListener('click', function (e) {
   }
 });
 
+// A control in the ··· menu of one article's detail, asked for by article rather than
+// taken as the first in the document. The panel and the inline shell each carry a
+// detail, and while the story overlay is up they carry different articles: the update
+// went to the menu under the overlay, so the article being read kept the state it was
+// opened with and the one underneath took a change it never got.
+// Found by walking up from each control rather than down from an id: the two details
+// share every fixed id in article_detail.html, and a selector starting at one of those
+// ids is exactly what an engine is free to answer from its id map, first match only.
+function _detailMenuControl(articleId, attr) {
+  var controls = document.querySelectorAll('[' + attr + ']');
+  for (var i = 0; i < controls.length; i++) {
+    var root = controls[i].closest('[data-article-id]');
+    if (root && root.dataset.articleId === String(articleId)) return controls[i];
+  }
+  return null;
+}
+
 // ── Article read state (class toggle, no DOM swap) ────────────────────────
 document.addEventListener('articleReadChanged', function (e) {
   var detail = e.detail;
-  var headerRead = document.querySelector('[data-header-read]');
+  var headerRead = _detailMenuControl(detail.id, 'data-header-read');
   if (headerRead) {
     var hrSvg = headerRead.querySelector('svg');
     if (hrSvg) {
@@ -1723,7 +1774,7 @@ document.addEventListener('articleStarChanged', function (e) {
       bsBtn.title = detail.isStarred ? 'Remove star' : 'Star';
     }
   }
-  var headerStar = document.querySelector('[data-header-star]');
+  var headerStar = _detailMenuControl(detail.id, 'data-header-star');
   if (headerStar) {
     var hsSvg = headerStar.querySelector('svg');
     if (hsSvg) hsSvg.setAttribute('fill', detail.isStarred ? 'currentColor' : 'none');
@@ -1776,7 +1827,11 @@ function _starArticleId(btn) {
   if (row) return row.dataset.articleId ? parseInt(row.dataset.articleId, 10) : NaN;
   var bar = btn.closest('.article-bottom-bar');
   if (bar) return bar.dataset.articleId ? parseInt(bar.dataset.articleId, 10) : NaN;
-  // header-menu star: the id lives on the visible detail element
+  // header-menu star: the id is on the article this button belongs to. Asked of the
+  // document instead, the answer is whichever detail comes first in it, and the panel
+  // and the inline shell can hold different articles at once (the story overlay).
+  var own = btn.closest('[data-article-id]');
+  if (own) return own.dataset.articleId ? parseInt(own.dataset.articleId, 10) : NaN;
   var el = document.querySelector('#article-detail [data-article-id], #inline-article-detail-content [data-article-id]');
   return el ? parseInt(el.dataset.articleId, 10) : NaN;
 }
@@ -1838,7 +1893,7 @@ document.addEventListener('articleArchiveChanged', function (e) {
       baBtn.title = detail.isArchived ? 'Unarchive' : 'Archive';
     }
   }
-  var headerArchive = document.querySelector('[data-header-archive]');
+  var headerArchive = _detailMenuControl(detail.id, 'data-header-archive');
   if (headerArchive) {
     var haSvg = headerArchive.querySelector('svg');
     if (haSvg) {
@@ -2125,6 +2180,9 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     // Deep-link (?open_article_id=…) loads the detail panel directly (handled as a
     // fullscreen overlay), bypassing inline expansion which needs an .article-row.
     if (e.detail.elt && e.detail.elt.hasAttribute && e.detail.elt.hasAttribute('data-deeplink-open')) return;
+    // A source from the story footer, which is opened over the list rather than in a row
+    // of it: there is no row to expand, and the article is usually not in the list at all.
+    if (e.detail.elt && e.detail.elt.closest && e.detail.elt.closest('[data-open-story-member]')) return;
     // Skip action buttons (star, etc.) — hx-target="#article-detail" is inherited from parent row
     if (e.detail.elt && e.detail.elt.closest('[data-stop-propagation]')) return;
 
@@ -2677,6 +2735,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   // Detail back button: close fullscreen detail
   document.addEventListener('click', function (e) {
     if (!e.target.closest('#mobile-detail-back-btn')) return;
+    // The story overlay flushes dwell and empties the panel itself, and it pushed one
+    // entry however many members were read on it, so Back returns to the list either way.
+    if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
     // Flush dwell + stop the clock, else list-browsing time gets attributed to this article.
     if (window._dwellSend) window._dwellSend();
     document.documentElement.classList.remove('mobile-detail-open', 'deeplink-detail-open');
@@ -2684,9 +2745,12 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   });
 
   // Sync detail topbar star/archive indicators from article body buttons
+  // Everything here is asked of the panel, never of the document: article_detail.html
+  // carries this bar wherever it renders, so the inline shell in the list holds a second
+  // one under the same ids, and getElementById would answer with that one.
   function syncDetailTopbar() {
     var starContainer = document.querySelector('#article-detail [id^="star-btn-"]');
-    var topStar = document.getElementById('detail-topbar-star');
+    var topStar = document.querySelector('#article-detail #detail-topbar-star');
     if (starContainer && topStar) {
       var isStarred = !!starContainer.querySelector('span.text-gray-900');
       topStar.querySelector('svg').setAttribute('fill', isStarred ? 'currentColor' : 'none');
@@ -2694,7 +2758,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
       topStar.classList.toggle('text-gray-400', !isStarred);
     }
     var archiveContainer = document.querySelector('#article-detail [id^="archive-btn-"]');
-    var topArchive = document.getElementById('detail-topbar-archive');
+    var topArchive = document.querySelector('#article-detail #detail-topbar-archive');
     if (archiveContainer && topArchive) {
       var archiveBtn = archiveContainer.querySelector('button');
       var isArchived = !!(archiveBtn && archiveBtn.classList.contains('bg-gray-100'));
@@ -2705,7 +2769,13 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   // After article loads into #article-detail: sync topbar + open fullscreen if needed
   document.body.addEventListener('htmx:afterSettle', function (e) {
-    if (!isMobile() || e.detail.target.id !== 'article-detail') return;
+    if (e.detail.target.id !== 'article-detail') return;
+    // The story overlay shows this same bar outside the small bucket, so its star and
+    // archive need the sync there too; the fullscreen dance below stays the phone's.
+    if (!isMobile()) {
+      if (document.documentElement.classList.contains('story-detail-open')) syncDetailTopbar();
+      return;
+    }
     syncDetailTopbar();
     try { if (localStorage.getItem('detail_mode_small') !== 'fullscreen') return; } catch (err) { return; }
     var articleEl = e.detail.target.querySelector('[data-article-id]');
@@ -2997,7 +3067,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   // Bottom action bar: always visible when article is loaded
   function _syncBottomBar() {
-    var inInline = _shouldUseInline();
+    // The story overlay puts an article in the panel in layouts that otherwise read
+    // inline, and its bar is the one on screen — asking the layout alone would sync the
+    // shell underneath and leave the overlay's bar hidden.
+    var inInline = _shouldUseInline() && !document.documentElement.classList.contains('story-detail-open');
     var containerId = inInline ? 'inline-article-detail-content' : 'article-detail';
     var container = document.getElementById(containerId);
     if (!container) return;
@@ -3005,7 +3078,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!bar) return;
     bar.classList.remove('hidden');
     var nextBtn = bar.querySelector('[data-bottom-next]');
-    if (nextBtn) nextBtn.classList.toggle('hidden', !(isMobile() && !inInline));
+    // Next walks the list, and on the story overlay the reader is not in it — the same
+    // reason the bar above hides its own next there (base.html).
+    var inStory = document.documentElement.classList.contains('story-detail-open');
+    if (nextBtn) nextBtn.classList.toggle('hidden', inStory || !(isMobile() && !inInline));
   }
   document.body.addEventListener('htmx:afterSettle', function (e) {
     var id = e.detail.target.id;
