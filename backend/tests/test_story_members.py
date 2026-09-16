@@ -164,6 +164,21 @@ class TestContent:
         members = await list_members(user.id, head.story_id, head.id, pg)
         read_member = next(m for m in members if m.title == "Read one")
         assert read_member.is_read is True
+        assert read_member.read_by_reader is True
+
+    async def test_a_member_closed_with_the_story_is_read_but_not_by_the_reader(self, pg):
+        """The footer says "read" of the first and nothing of the second: one of them
+        the reader met, the other was closed for them when they finished the story."""
+        user = await _user(pg)
+        head, mine, _ = await _story(pg, user)
+        closed = await _article(pg, mine, story_id=head.story_id, title="Closed for me")
+        await _state(pg, user, closed, is_read=True, suppressed_at=NOW,
+                     suppressed_by="story")
+
+        members = await list_members(user.id, head.story_id, head.id, pg)
+        member = next(m for m in members if m.title == "Closed for me")
+        assert member.is_read is True
+        assert member.read_by_reader is False
 
     async def test_newest_first(self, pg):
         user = await _user(pg)

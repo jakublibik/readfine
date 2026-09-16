@@ -304,6 +304,39 @@ class TestAnnotate:
         assert row.story_others == 0
         assert row.story_read == 0
 
+    async def test_a_sibling_closed_on_the_readers_behalf_does_not_count(self, pg):
+        """Finishing a story marks the rest of it read, and counting those would make
+        the badge say all of them the moment the reader opened one article."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        pg.add(UserArticleState(
+            user_id=user.id, article_id=second.id, is_read=True,
+            suppressed_at=NOW, suppressed_by="story",
+        ))
+        await pg.flush()
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg)
+
+        assert row.story_read == 0
+
+    async def test_a_row_the_machine_closed_takes_nothing_off_the_count(self, pg):
+        """The row subtracts itself only when it is one of the reads being counted.
+        Here it is not, so the sibling the reader did read has to survive it."""
+        user = await _user(pg)
+        head, second, _, _ = await _story(pg, user)
+        pg.add(UserArticleState(
+            user_id=user.id, article_id=head.id, is_read=True,
+            suppressed_at=NOW, suppressed_by="story",
+        ))
+        pg.add(UserArticleState(user_id=user.id, article_id=second.id, is_read=True))
+        await pg.flush()
+
+        row = _item(head.id, story_id=head.story_id, is_read=True)
+        await annotate([row], user.id, pg)
+
+        assert row.story_read == 1
+
     async def test_rows_without_a_story_are_left_alone(self, pg):
         user = await _user(pg)
         rows = [_item(1), _item(2)]

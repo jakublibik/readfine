@@ -144,6 +144,12 @@ class StoryMember(BaseModel):
     feed_title: str | None
     published_at: datetime | None
     is_read: bool = False
+    # Read, and read by this reader rather than closed on their behalf. Finishing a
+    # story marks the rest of it read (story_service.mark_group_read), so is_read alone
+    # says almost nothing in the footer: it is true of every member the moment the
+    # reader is done with the article the footer hangs from. This is the one the footer
+    # says "read" for, so the word answers "did I actually meet this one".
+    read_by_reader: bool = False
     is_starred: bool = False
 
     model_config = {"from_attributes": False}

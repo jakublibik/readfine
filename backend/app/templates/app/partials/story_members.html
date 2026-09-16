@@ -56,11 +56,18 @@
           read through and through, and then there is nothing to compare against. Set
           between the source and the date it read as a label for the date, as though
           the time given were when the article was read. -#}
-      {#- Always rendered, hidden while unread, so reading the article in the window can
-          bring it back without re-fetching the list. Wrapped in one item that repeats the
-          row's own gap inside itself, so the spacing is what two items gave. -#}
+      {#- Said only of an article this reader met themselves, never of one that was
+          closed on their behalf when they finished the story (read_by_reader, see
+          story_service.mark_group_read). Both are read, and both are therefore grey
+          above, but the word is the answer to "have I actually seen this one", and
+          said of all of them it would only ever be said of all of them.
+
+          Always rendered, hidden while it does not apply, so reading the article in
+          the window can bring it back without re-fetching the list. Wrapped in one
+          item that repeats the row's own gap inside itself, so the spacing is what
+          two items gave. -#}
       <span data-story-member-read
-            class="flex-shrink-0 {% if not member.is_read %}hidden {% endif %}inline-flex items-center gap-1.5">
+            class="flex-shrink-0 {% if not member.read_by_reader %}hidden {% endif %}inline-flex items-center gap-1.5">
         <span aria-hidden="true">·</span><span>read</span>
       </span>
       {% if member.url %}

@@ -95,6 +95,7 @@ async def list_members(
                 Feed.title.label("feed_title"),
                 UserFeed.custom_title,
                 UserArticleState.is_read,
+                UserArticleState.suppressed_at,
                 UserArticleState.is_starred,
             ],
             user_id, story_id, article_id,
@@ -115,6 +116,7 @@ async def list_members(
             feed_title=r.custom_title or r.feed_title,
             published_at=r.published_at or r.fetched_at,
             is_read=bool(r.is_read),
+            read_by_reader=bool(r.is_read) and r.suppressed_at is None,
             is_starred=bool(r.is_starred),
         )
         for r in rows
@@ -222,6 +224,14 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
     ``list_articles``. Counting on the page itself would not do: a read member is
     absent from an unread-only page and a collapsed group can reach past the page
     boundary, so the badge has to ask the group, not the page.
+
+    "Read" here means read by this reader. Finishing a story marks the rest of it read
+    on their behalf (``mark_group_read``), so counting those would make the badge say
+    "3 read" the moment the reader opened one article and nothing after that: a number
+    that is either 0 or all of them tells nobody anything. Counted off the rows rather
+    than as an aggregate, because the row doing the counting is a member of its own
+    group and has to take itself out of the number, which needs its own answer to the
+    same question.
     """
     story_ids = {item.story_id for item in items if item.story_id is not None}
     if not story_ids:
@@ -229,11 +239,8 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
 
     rows = (await db.execute(
         add_article_access_joins(
-            select(
-                Article.story_id,
-                func.count(Article.id),
-                func.count(Article.id).filter(UserArticleState.is_read.is_(True)),
-            ),
+            select(Article.id, Article.story_id,
+                   UserArticleState.is_read, UserArticleState.suppressed_at),
             user_id,
         )
         .where(
@@ -241,9 +248,16 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
             Article.trimmed_at.is_(None),
             article_access_predicate(),
         )
-        .group_by(Article.story_id)
     )).all()
-    stats = {story_id: (total, read) for story_id, total, read in rows}
+
+    totals: dict[int, int] = {}
+    reads: dict[int, int] = {}
+    read_by_reader: set[int] = set()
+    for r in rows:
+        totals[r.story_id] = totals.get(r.story_id, 0) + 1
+        if r.is_read and r.suppressed_at is None:
+            reads[r.story_id] = reads.get(r.story_id, 0) + 1
+            read_by_reader.add(r.id)
 
     for item in items:
         if item.story_id is None:
@@ -251,9 +265,10 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
         # The row itself is one of the members it just counted, hence the subtraction
         # on both numbers. It is always in there: it came out of a list query behind
         # the same access gate.
-        total, read = stats.get(item.story_id, (0, 0))
-        item.story_others = max(total - 1, 0)
-        item.story_read = max(read - (1 if item.is_read else 0), 0)
+        item.story_others = max(totals.get(item.story_id, 0) - 1, 0)
+        item.story_read = max(
+            reads.get(item.story_id, 0) - (1 if item.id in read_by_reader else 0), 0
+        )
 
 
 async def mark_group_read(

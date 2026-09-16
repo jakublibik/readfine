@@ -1576,10 +1576,10 @@ function _anyModalOpen() {
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') {
     // Whatever is on top answers for it. The story overlay is over the list, but the two
-    // modals are over the overlay (z-50 against z-40) and '/' opens the search one from
-    // there, so taking the overlay first left the modal hanging over a window that had
-    // gone. The overlay is next in line, and it has a history entry to go back through
-    // rather than just a class to drop.
+    // modals are drawn over the overlay (one z-index higher) and '/' opens the search one
+    // from there, so taking the overlay first left the modal hanging over a window that
+    // had gone. The overlay is next in line, and it has a history entry to go back
+    // through rather than just a class to drop.
     if (_anyModalOpen()) { closeSearchModal(); closeFeedbackModal(); return; }
     if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
     closeSearchModal(); closeFeedbackModal(); return;
