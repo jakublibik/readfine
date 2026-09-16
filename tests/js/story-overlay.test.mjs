@@ -63,6 +63,23 @@ test('a member of the member costs one press of Back, not two', () => {
   assert.equal(w.history.length, before + 1);
 });
 
+test('the article open in the list is not opened over itself', () => {
+  // A and B cover one story, so each names the other, and going back and forth between
+  // them used to end with both of them being B: one in the window, one in the shell
+  // under it. Every id B's detail renders then existed twice, and htmx aims at the
+  // first, so B's own footer unfolded into the copy nobody could see.
+  const w = reader(browser(
+    list(row(1)) + '<div id="inline-article-detail" data-article-id="7"></div>'
+    + detail() + memberLink(8) + memberLink(7),
+  ));
+  open(w, 8);
+  assert.equal(raised(w), true);
+  const calls = captureAjax(w);
+  open(w, 7);
+  assert.equal(raised(w), false);
+  assert.deepEqual(calls, []);
+});
+
 test('Back lowers the window and empties the panel', () => {
   const w = reader(browser(list(row(1)) + detail() + memberLink(7)));
   open(w, 7);

@@ -1187,6 +1187,19 @@ function _openStoryMember(link, id) {
   // over the first would only add a press of Back per article looked at.
   var raised = cl.contains('story-detail-open') || cl.contains('deeplink-detail-open') ||
                cl.contains('mobile-detail-open');
+  // Never the article the list already has open, over itself. Every id in a detail but a
+  // handful is built from the article's own id, so two details of one article mean two of
+  // each: two #star-btn-N, two #read-btn-N, two #story-members-N. htmx resolves an
+  // hx-target to the first in the document, which is the copy under the window, so the
+  // window's own controls would work on something nobody can see, and its footer would
+  // unfold into the dark. Asking for that article is asking to go back to it, since it is
+  // the one the window was opened from, so that is what this does.
+  var shell = document.getElementById('inline-article-detail');
+  if (shell && shell.dataset.articleId === String(id)) {
+    if (_closeStoryOverlay()) history.back();
+    shell.scrollIntoView({ block: 'start' });
+    return;
+  }
   // The link goes along as the request's source. An inline layout turns every request
   // aimed at the panel into a row expansion (the beforeRequest guard further down this
   // file), and that guard needs something on the request to tell this one apart —
