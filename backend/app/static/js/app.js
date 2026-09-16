@@ -156,6 +156,12 @@ document.body.addEventListener('htmx:configRequest', function (e) {
     } else {
       html.classList.remove('mobile-sidebar-open', 'mobile-detail-open');
     }
+    // The story window belongs to the layouts that read in the list, and its CSS is not
+    // tied to a bucket, so resized into the 3-panel layout it kept the panel fixed over
+    // the whole window. There the panel is beside the list already: drop the class and
+    // the article it was carrying simply stays in it. Every other layout keeps the
+    // window, which is where it still makes sense.
+    if (layout === '3') html.classList.remove('story-detail-open');
   }
 
   window._getLayout = getLayout;
@@ -394,16 +400,7 @@ function articleHeadingMatchesTitle(headingText, titleText) {
   return false;
 }
 
-function hideDuplicateH1() {
-  // The article title is always shown outside the body — in the article list beside
-  // the content (inline view) or in the detail header (single-column + 3-panel) —
-  // so a body heading repeating it is redundant in every layout. The content lives in
-  // a different container depending on how the article was opened: the inline shell when
-  // expanded in the list (medium 2-panel AND small/mobile inline mode), the right panel
-  // otherwise. Detect by presence of the inline shell rather than by layout alone, since
-  // the small bucket uses inline expansion driven by detail_mode_small, not layout==='2'.
-  var container = document.getElementById('inline-article-detail-content')
-    || document.getElementById('article-detail');
+function _hideDuplicateH1In(container) {
   if (!container) return;
   // data-title lives on the inner <article>, not on the outer [data-article-id] root.
   var articleEl = container.querySelector('[data-title]');
@@ -418,6 +415,22 @@ function hideDuplicateH1() {
       break;
     }
   }
+}
+
+function hideDuplicateH1() {
+  // The article title is always shown outside the body — in the article list beside
+  // the content (inline view) or in the detail header (single-column + 3-panel) —
+  // so a body heading repeating it is redundant in every layout. The content lives in
+  // the inline shell when a row is expanded in the list (medium 2-panel AND small/mobile
+  // inline mode), and in the right panel otherwise.
+  //
+  // Both, rather than whichever comes first: the story window puts an article in the
+  // panel while the shell underneath still holds the one it was opened from, and
+  // preferring the shell left the article actually on screen wearing its title twice.
+  // A container holding nothing is skipped, so this costs a lookup where it does not
+  // apply, and hiding is idempotent where it does.
+  _hideDuplicateH1In(document.getElementById('inline-article-detail-content'));
+  _hideDuplicateH1In(document.getElementById('article-detail'));
 }
 document.addEventListener('DOMContentLoaded', hideDuplicateH1);
 document.body.addEventListener('htmx:afterSettle', hideDuplicateH1);
@@ -1552,11 +1565,22 @@ function closeFeedbackModal() {
   if (overlay) overlay.classList.add('hidden');
 }
 
+// Is either modal up? Asked before Escape is handed to anything underneath them.
+function _anyModalOpen() {
+  if (document.documentElement.classList.contains('search-modal-open')) return true;
+  var feedback = document.getElementById('feedback-modal-overlay');
+  return !!(feedback && !feedback.classList.contains('hidden'));
+}
+
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') {
-    // The story overlay owns Escape while it is up: it is the thing over everything else,
-    // and it has a history entry to go back through rather than just a class to drop.
+    // Whatever is on top answers for it. The story overlay is over the list, but the two
+    // modals are over the overlay (z-50 against z-40) and '/' opens the search one from
+    // there, so taking the overlay first left the modal hanging over a window that had
+    // gone. The overlay is next in line, and it has a history entry to go back through
+    // rather than just a class to drop.
+    if (_anyModalOpen()) { closeSearchModal(); closeFeedbackModal(); return; }
     if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
     closeSearchModal(); closeFeedbackModal(); return;
   }
@@ -3445,7 +3469,13 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   // General (non-article) chat modal
   function syncGeneralChatContext() {
-    var root = document.getElementById('article-detail-root');
+    // The panel first while the story window is up: article_detail.html brings its
+    // #article-detail-root wherever it renders, so the shell in the list has one too,
+    // and by id the chat would attach the article underneath the window instead of the
+    // one being read.
+    var root = (document.documentElement.classList.contains('story-detail-open')
+                && document.querySelector('#article-detail [data-article-id]'))
+      || document.getElementById('article-detail-root');
     var artId = root ? (root.getAttribute('data-article-id') || '') : '';
     var artInput = document.getElementById('general-chat-article-id');
     if (artInput) artInput.value = artId;

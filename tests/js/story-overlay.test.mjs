@@ -204,3 +204,59 @@ test('Escape with nothing raised is left to the search modal', () => {
   const w = reader(browser(list(row(1)) + detail()));
   assert.equal(w._closeStoryOverlay(), false);
 });
+
+test('a modal over the window answers for Escape first', () => {
+  // '/' opens the search modal from the window too, and it is drawn over it, so closing
+  // the window underneath left the modal hanging over a list it had not been opened from.
+  const w = reader(browser(
+    list(row(1)) + detail() + memberLink(7)
+    + '<div id="search-modal-overlay"></div><div id="search-modal-content"></div>',
+  ));
+  open(w, 7);
+  w.document.documentElement.classList.add('search-modal-open');
+
+  const escape = () => w.document.dispatchEvent(
+    new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+  );
+  escape();
+  assert.equal(w.document.documentElement.classList.contains('search-modal-open'), false);
+  assert.equal(raised(w), true);
+  escape();
+  assert.equal(raised(w), false);
+});
+
+// The article's own title is always drawn above the body, so a heading repeating it is
+// hidden. Both containers can hold an article while the window is up, and the one on
+// screen is the panel's.
+function articleWithHeading(id, title) {
+  return (
+    '<article data-article-id="' + id + '" data-title="' + title + '">'
+    + '<div id="article-content-' + id + '"><div class="prose"><h1>' + title + '</h1>'
+    + '</div></div></article>'
+  );
+}
+
+test('the heading is hidden in the window, not only under it', () => {
+  const w = reader(browser(
+    '<div id="article-list"><div id="inline-article-detail-content">'
+    + articleWithHeading(1, 'The one in the list') + '</div></div>'
+    + '<main id="article-detail">' + articleWithHeading(7, 'The one in the window') + '</main>',
+  ));
+  w.document.documentElement.classList.add('story-detail-open');
+  w.hideDuplicateH1();
+  const [shell, panel] = [...w.document.querySelectorAll('.prose h1')];
+  assert.equal(shell.style.display, 'none');
+  assert.equal(panel.style.display, 'none');
+});
+
+test('resized into three panels, the window hands the article to the panel', () => {
+  const w = reader(browser(
+    '<meta name="app-buckets" data-small="10" data-medium="100">'
+    + list(row(1)) + detail() + memberLink(7),
+  ));
+  open(w, 7);
+  assert.equal(raised(w), true);
+  w._applyBucket();
+  assert.equal(w.document.documentElement.dataset.layout, '3');
+  assert.equal(raised(w), false);
+});
