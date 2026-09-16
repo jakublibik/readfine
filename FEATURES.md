@@ -12,11 +12,11 @@ _Get content in, from anywhere._
 - **Finds the feed for you:** Hand it the address of a site rather than a feed and it looks for the feeds on the page, then offers them by name so you can tell them apart. Where a site declares nothing, the usual addresses are tried anyway, and a YouTube channel address becomes that channel's feed. If there is genuinely no feed, it offers to scrape the page instead.
 - **Web-scraping feeds:** Follow sites that have no feed. Point Readfine at a listing page and a CSS selector that matches the article links; with an AI key it can suggest the selector for you.
 - **Authenticated feeds:** Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own fields or written into the address. Either way the credentials are stored encrypted, per feed.
-- **Shared & private feeds:** On an instance with several accounts, everyone following the same feed shares one fetch, so a site is polled once however many subscribers it has. Mark a feed private and it is kept to your account, with its own fetch and its own copy of the articles.
-- **Change a feed's address:** A feed that moves, or whose address needs a fix, can be pointed somewhere else without re-subscribing, so every article and every read state stays where it is. The new address is fetched once before it is saved. On a feed somebody else also follows, the address is the administrator's to change.
 - **Folders:** Group feeds into folders for organizing and for scoping filters. Folders are listed alphabetically, or in an order you arrange yourself in Settings → Feeds.
 - **Scheduled background fetching:** New articles are pulled automatically on a schedule, with adaptive per-feed intervals that back off quiet feeds and check busy ones more often. Any feed can be pinned to a fixed interval instead.
 - **Feed health:** A feed that stops working says so instead of just going quiet: a red marker in the sidebar, the reason on hover, and a retry button. Sites that rate-limit get backed off automatically, and readable extraction switches itself off for a site that blocks it rather than filling the reader with empty articles.
+- **Change a feed's address:** A feed that moves, or whose address needs a fix, can be pointed somewhere else without re-subscribing, so every article and every read state stays where it is. The new address is fetched once before it is saved. On a feed somebody else also follows, the address is the administrator's to change.
+- **Shared & private feeds:** On an instance with several accounts, everyone following the same feed shares one fetch, so a site is polled once however many subscribers it has. Mark a feed private and it is kept to your account, with its own fetch and its own copy of the articles.
 - **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS.
 
 ## Reading experience
@@ -29,14 +29,14 @@ _A clean reader that adapts to your screen._
 - **Adaptive layout:** Choose a 2- or 3-panel view per screen size, with breakpoints you set yourself.
 - **Dedicated mobile layout:** A real small-screen layout with a collapsible sidebar and inline or full-screen article view, not a squeezed-down desktop.
 - **Install it as an app:** Put Readfine on a phone's home screen or a desktop, where it opens in its own window with no address bar. On Android it also joins the share sheet, so a link shared from any other app lands in Saved. Needs HTTPS, which browsers require before offering to install anything.
-- **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
 - **Dark mode:** Light, dark, or follow your system preference.
 - **Reading typography:** Choose the font family and text size for the reading view.
-- **Number & date format:** Pick how numbers and dates are written (decimal separator and date order) independently of the interface language, so English can pair with `1 234,56` and `25.06.2026`.
 - **List density:** Compact, comfortable, or summary, set separately for desktop and mobile.
-- **Mark read on scroll:** Optionally mark articles read as they scroll past.
+- **Number & date format:** Pick how numbers and dates are written (decimal separator and date order) independently of the interface language, so English can pair with `1 234,56` and `25.06.2026`.
 - **Article states:** Mark articles read, star favourites, and archive what you want out of the way.
 - **Labels:** Your own colour-coded tags for sorting articles by hand.
+- **Mark read on scroll:** Optionally mark articles read as they scroll past.
+- **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
 - **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it. Also in the API, so a phone shortcut or a bookmarklet can save a link without opening the app.
 - **Share by link:** Hand a single article to someone with no Readfine account. The link reads without signing in and stays live until you revoke it.
 
@@ -48,8 +48,8 @@ _Trim the stream down to what matters._
 - **Regex and AND/OR:** Combine conditions with AND/OR and match with regular expressions (Python syntax) when plain "contains" is not enough.
 - **Feed & folder scoping:** Restrict any filter to specific feeds or folders.
 - **Retroactive apply:** Run a filter over existing articles, not just new ones.
-- **Duplicates across feeds:** A story that two of your feeds both carry is not put in front of you twice. The first copy stays unread and the later one arrives already marked read, so it is still there if you want it.
 - **One story, several sources:** Headlines are matched across your feeds, so the same event covered by five newsrooms under five addresses is one row saying how many sources filed it. Open the rest in place or from the foot of the article; reading the row finishes the story. Optionally, an article that repeats one you have already read is kept out of the list altogether.
+- **Duplicates across feeds:** A story that two of your feeds both carry is not put in front of you twice. The first copy stays unread and the later one arrives already marked read, so it is still there if you want it.
 - **Relevance scoring:** With an AI key, each incoming article is scored against your interest profile, so you can surface or hide articles by score (a filter can mark anything below a threshold as read).
 
 ## AI (bring your own key)
@@ -82,11 +82,11 @@ _Multi-user, with the operator controls to match._
 - **Per-user accounts:** Every account has its own feeds, filters, labels, and preferences.
 - **Your account is yours to manage:** Change your name, password, or email address (a new address is confirmed before it takes effect), and close the account whenever you want. Deleting it takes your feeds, articles, filters and keys with it, right away and for good.
 - **Admin panel:** Manage users and instance-wide settings.
-- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
 - **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
-- **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.
+- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
 - **Retention & purge:** Tiered retention rules that purge old articles automatically.
+- **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.
 
 ## Privacy & self-hosting
 
