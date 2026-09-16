@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -37,7 +37,14 @@ from app.services.article import (
     toggle_article_state,
     update_article_state,
 )
-from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, DEDUP_SUPPRESS
+from app.services.story_service import (
+    DEDUP_COLLAPSE,
+    DEDUP_OFF,
+    DEDUP_SUPPRESS,
+    SUPPRESSED_BY_STORY,
+    count_suppressed,
+    list_suppressed,
+)
 
 NOW = datetime.now(timezone.utc)
 LONG_AGO = NOW - timedelta(days=3)
@@ -573,3 +580,163 @@ class TestAFollowUpIsNotARepeat:
         arrival = await _arrives(pg, user, HOW_REPEAT_TITLE, nonce=nonce)
 
         assert (await _state(pg, user, arrival)).suppressed_by == "similar"
+
+
+class TestTheListOfWhatWasHidden:
+    """Settings shows how many articles were hidden; this is what is behind the number.
+
+    The list is the only account the reader gets of what the third setting did on their
+    behalf, so it has to hold to the same two rules the counter does: only what the
+    similarity rule hid, and only what the reader could still open. It also has to say
+    what each article was hidden for, and that is not stored anywhere — it is found
+    again from the story the two share, which is what most of these are about.
+    """
+
+    async def _hidden(self, pg, user):
+        return await list_suppressed(user.id, pg)
+
+    async def test_a_hidden_article_says_what_it_lost_out_to(self, pg, nonce):
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        hidden = await self._hidden(pg, user)
+        assert [h.id for h in hidden] == [arrival.id]
+        assert hidden[0].instead_of == seen.title
+        assert hidden[0].match >= 0.40
+        assert hidden[0].still_hidden is True
+        assert await count_suppressed(user.id, pg) == 1
+
+    async def test_the_other_machine_reads_are_not_in_it(self, pg, nonce):
+        """The column carries four kinds of machine read and the setting is about one.
+        A story closed behind the reader is not something that was kept from them."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        article = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}")
+        state = await _machine_read(pg, user, article)
+        state.suppressed_by = SUPPRESSED_BY_STORY
+        await pg.flush()
+
+        assert await self._hidden(pg, user) == []
+        assert await count_suppressed(user.id, pg) == 0
+
+    async def test_the_window_ends_it(self, pg, nonce):
+        """Seven days, the same seven the counter above the list is made of."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        state = await _state(pg, user, arrival)
+        state.hidden_at = NOW - timedelta(days=8)
+        await pg.flush()
+
+        assert await self._hidden(pg, user) == []
+        assert await count_suppressed(user.id, pg) == 0
+
+    async def test_reading_one_leaves_the_row_and_says_so(self, pg, nonce):
+        """The whole reason the record has a column of its own.
+
+        Checking whether a call was right means opening the article, and opening it is
+        reading it, which is what lifts the hiding. On the live columns the row would
+        take itself off the list and off the counter at exactly the moment the reader
+        went to look at it — the wrong ones most of all, since those are the ones worth
+        opening.
+        """
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        # The reader opens it from the list and reads it, which clears the stamp the
+        # decision stands on (half a minute in front of it does the same).
+        await update_article_state(user, arrival.id, ArticleStateUpdate(is_read=True), pg)
+
+        assert await _stamp(pg, user, arrival) is None
+        hidden = await self._hidden(pg, user)
+        assert [h.id for h in hidden] == [arrival.id]
+        assert hidden[0].still_hidden is False
+        assert await count_suppressed(user.id, pg) == 1
+
+    async def test_unsubscribing_takes_the_article_out_of_the_list(self, pg, nonce):
+        """The list goes through the same access gate as every other read path, so a
+        feed the reader has dropped takes what it hid with it. The counter is built on
+        the same query, which is what keeps the number and the list saying one thing."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        feed = await _feed(pg, user)
+        await _arrives(pg, user, nonce=nonce, feed=feed)
+        assert await count_suppressed(user.id, pg) == 1
+
+        await pg.execute(
+            delete(UserFeed).where(UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)
+        )
+
+        assert await self._hidden(pg, user) == []
+        assert await count_suppressed(user.id, pg) == 0
+
+    async def test_the_reason_is_left_out_when_that_article_is_gone(self, pg, nonce):
+        """The row stands on its own: the article was hidden, and the counter counts it,
+        whether or not the article it lost out to can still be pointed at."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen_feed = await _feed(pg, user)
+        seen = await _article(pg, seen_feed, f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        await pg.execute(
+            delete(UserFeed).where(
+                UserFeed.user_id == user.id, UserFeed.feed_id == seen_feed.id
+            )
+        )
+
+        hidden = await self._hidden(pg, user)
+        assert [h.id for h in hidden] == [arrival.id]
+        assert hidden[0].instead_of is None
+        assert hidden[0].match is None
+
+    async def test_a_read_the_reader_did_not_make_is_not_offered_as_the_reason(self, pg, nonce):
+        """Only a read the reader made themselves can hide anything, so only one can be
+        the reason. A member closed on their behalf is read, and explains nothing.
+
+        The one that must not win is the closer match of the two (0.89 against 0.84), so
+        this fails if the question ever quietly becomes "which is most alike"."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce)
+        # A third article in the same story, hidden in its turn. It is the closest match
+        # to the second of the three, and being read is still not an answer for it.
+        await _arrives(pg, user, f"{REPEAT_TITLE} today", nonce=nonce)
+
+        hidden = {h.id: h for h in await self._hidden(pg, user)}
+        assert len(hidden) == 2
+        assert hidden[arrival.id].instead_of == seen.title
+
+    async def test_an_explainer_is_not_offered_as_the_reason(self, pg, nonce):
+        """Same rule as the hiding itself: a headline the rule would never have hidden
+        anything for cannot be why this one went.
+
+        The explainer is the closer match here too (0.84 against 0.84, by a hair), which
+        is what makes the cue and not the score the thing being tested."""
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        arrival = await _arrives(pg, user, nonce=nonce)
+        explainer = await _article(pg, await _feed(pg, user), f"{nonce} {FOLLOW_UP_TITLE}",
+                                   hours_ago=2)
+        await assign_stories([explainer], pg)
+        await _read_by_hand(pg, user, explainer)
+
+        hidden = await self._hidden(pg, user)
+        assert hidden[0].instead_of == seen.title

@@ -28,7 +28,7 @@ from sqlalchemy.orm import aliased
 from app.models.article import Article, UserArticleState
 from app.models.feed import UserFeed
 from app.models.user import UserSettings
-from app.services.story_service import DEDUP_SUPPRESS
+from app.services.story_service import DEDUP_SUPPRESS, SUPPRESSED_BY_SIMILAR
 
 # Measured, not chosen: see scripts/survey_dedup.py and the plan behind it. At 0.30 the
 # production corpus collapses ~11 articles a day out of ~240; the precision cliff sits
@@ -249,13 +249,17 @@ async def suppress_seen(rows: list[Pair], db: AsyncSession) -> int:
             .values([
                 {"user_id": uid, "article_id": new_id, "is_read": True,
                  "is_starred": False, "is_archived": False,
-                 "read_at": now, "suppressed_at": now, "suppressed_by": "similar"}
+                 "read_at": now, "suppressed_at": now,
+                 "suppressed_by": SUPPRESSED_BY_SIMILAR, "hidden_at": now}
                 for uid in readers
             ])
             .on_conflict_do_update(
                 index_elements=["user_id", "article_id"],
+                # hidden_at is written here and nowhere else, and nothing ever clears
+                # it: the reader's own reading takes the two columns beside it off, and
+                # the record of what was hidden has to survive that. See 0101.
                 set_={"is_read": True, "read_at": now, "suppressed_at": now,
-                      "suppressed_by": "similar"},
+                      "suppressed_by": SUPPRESSED_BY_SIMILAR, "hidden_at": now},
                 where=(
                     UserArticleState.__table__.c.is_read.is_not(True)
                     & UserArticleState.__table__.c.is_starred.is_not(True)

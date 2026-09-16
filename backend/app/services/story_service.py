@@ -7,15 +7,16 @@ this reader doesn't subscribe to. Everything here goes through
 ``add_article_access_joins`` + ``article_access_predicate``, the same gate as every
 other article read path, and nothing outside this module should query members itself.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.schemas.article import ArticleListItem, StoryMember
+from app.schemas.article import ArticleListItem, StoryMember, SuppressedArticle
 from app.services.article import add_article_access_joins, article_access_predicate
 
 # A group is small by construction (measured median 2, largest 13), so this is a guard
@@ -34,6 +35,18 @@ DEDUP_VALUES = (DEDUP_OFF, DEDUP_COLLAPSE, DEDUP_SUPPRESS)
 # story this belongs to". Named because two functions have to agree on it exactly:
 # ``mark_group_read`` writes it and ``reopen_group`` is allowed to undo nothing else.
 SUPPRESSED_BY_STORY = "story"
+
+# And the one the suppression rule writes (fetcher.stories.suppress_seen): this article
+# repeats news the reader has already read. The same column also carries reads written
+# by the URL dedup, by a filter and by finishing a story, so everything the settings
+# page says about suppression keys on this value alone.
+SUPPRESSED_BY_SIMILAR = "similar"
+
+# How far back the list of hidden articles in settings reaches. The same 7 days as the
+# counter above it on purpose: the list is meant to be that number, not something near
+# it. Reaching further would also promise more than retention keeps — a hidden article
+# has no engagement by definition, so nothing holds it back from the age delete.
+SUPPRESSED_DAYS = 7
 
 # Time in front of an article that counts as having read it. Same number the stats and
 # the retention pass use for the same question; it lives here because this is where it
@@ -121,6 +134,144 @@ async def list_members(
         )
         for r in rows
     ]
+
+
+def _suppressed_query(columns, user_id: int, days: int):
+    """Articles the suppression rule hid from this reader inside the window.
+
+    Asked of ``hidden_at``, which is written once and never cleared, and not of the
+    ``suppressed_at`` the decision itself stands on. Every human read takes that one
+    off, and checking a hidden article is reading it, so a list built on it emptied
+    itself as it was read — including the entries the reader had just decided were
+    wrong. What the feature did is a different question from what it is still doing,
+    and this is the first one.
+
+    Behind the same access gate as everything else here, so a feed the reader has since
+    dropped takes its hidden articles with it, and trimmed articles are left out for the
+    reason the footer leaves them out: the row offers to open the article, and there is
+    no longer an article there to open. The counter in settings is built on this too, so
+    the number and the list under it can never disagree.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    return add_article_access_joins(select(*columns), user_id).where(
+        article_access_predicate(),
+        Article.trimmed_at.is_(None),
+        UserArticleState.hidden_at >= cutoff,
+    )
+
+
+async def count_suppressed(
+    user_id: int, db: AsyncSession, days: int = SUPPRESSED_DAYS
+) -> int:
+    """How many articles the suppression rule hid from this reader lately."""
+    return await db.scalar(
+        _suppressed_query([func.count(Article.id)], user_id, days)
+    ) or 0
+
+
+async def list_suppressed(
+    user_id: int, db: AsyncSession, days: int = SUPPRESSED_DAYS
+) -> list[SuppressedArticle]:
+    """The hidden articles themselves, newest first, with what each lost out to.
+
+    This is the only way to see what the third setting actually did. Unpaginated on
+    purpose: it is a week of a handful a day, and a reader for whom it runs long is
+    being told something worth knowing by the length itself.
+    """
+    rows = (await db.execute(
+        _suppressed_query(
+            [
+                Article.id,
+                Article.title,
+                Article.story_id,
+                Feed.title.label("feed_title"),
+                UserFeed.custom_title,
+                UserArticleState.hidden_at,
+                UserArticleState.suppressed_by,
+            ],
+            user_id, days,
+        )
+        .outerjoin(Feed, Feed.id == Article.feed_id)
+        .order_by(UserArticleState.hidden_at.desc(), Article.id.desc())
+    )).all()
+    if not rows:
+        return []
+
+    against = await _suppressed_against([r.id for r in rows], user_id, db)
+    return [
+        SuppressedArticle(
+            id=r.id,
+            title=r.title,
+            feed_title=r.custom_title or r.feed_title,
+            hidden_at=r.hidden_at,
+            # Still out of the list, or has the reader been at it since. Reading one is
+            # what undoes the hiding, so a list that says nothing about it would look
+            # like it was ignoring what the reader had just done.
+            still_hidden=r.suppressed_by == SUPPRESSED_BY_SIMILAR,
+            instead_of=against.get(r.id, (None, None))[0],
+            match=against.get(r.id, (None, None))[1],
+        )
+        for r in rows
+    ]
+
+
+async def _suppressed_against(
+    article_ids: list[int], user_id: int, db: AsyncSession
+) -> dict[int, tuple[str, float]]:
+    """For each hidden article, the read headline it most likely lost out to.
+
+    Reconstructed, not recalled. What ``suppress_seen`` writes is that the article was
+    hidden, not which article decided it, and adding a column for that would have to be
+    kept true through unsubscribes, retention and the reader changing their mind about
+    what they have read. So the counterpart is found again the same way it was found the
+    first time: it shares the story, the reader read it themselves, and the two headlines
+    clear the suppression threshold. Where several qualify, the closest wins.
+
+    Follow-up cues are applied for the same reason the rule applies them — a headline
+    the rule would never have hidden anything for cannot be the reason this one went.
+
+    The answer can therefore differ from what really happened: the reader may since have
+    un-read that article, or it may be gone. Then the row simply says less, which is why
+    the score and the headline travel together and are both optional.
+    """
+    # Imported here rather than at the top: fetcher.stories imports this module, and the
+    # matching rules live with the thresholds they were measured against.
+    from app.fetcher.stories import SUPPRESS_THRESHOLD, reads_as_follow_up
+
+    hidden = aliased(Article)
+    match = func.similarity(hidden.title_norm, Article.title_norm).label("match")
+    rows = (await db.execute(
+        add_article_access_joins(
+            select(
+                hidden.id.label("hidden_id"),
+                hidden.title_norm.label("hidden_norm"),
+                Article.title,
+                Article.title_norm,
+                match,
+            ).select_from(Article),
+            user_id,
+        )
+        .join(hidden, hidden.story_id == Article.story_id)
+        .where(
+            hidden.id.in_(article_ids),
+            Article.id != hidden.id,
+            Article.trimmed_at.is_(None),
+            article_access_predicate(),
+            UserArticleState.is_read.is_(True),
+            UserArticleState.suppressed_at.is_(None),
+            match >= SUPPRESS_THRESHOLD,
+        )
+        .order_by(hidden.id, match.desc())
+    )).all()
+
+    best: dict[int, tuple[str, float]] = {}
+    for r in rows:
+        if r.hidden_id in best:
+            continue
+        if reads_as_follow_up(r.hidden_norm or "", r.title_norm or ""):
+            continue
+        best[r.hidden_id] = (r.title, float(r.match))
+    return best
 
 
 def row_count(collapsing: bool = True):

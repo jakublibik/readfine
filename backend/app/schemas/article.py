@@ -153,3 +153,28 @@ class StoryMember(BaseModel):
     is_starred: bool = False
 
     model_config = {"from_attributes": False}
+
+
+class SuppressedArticle(BaseModel):
+    """One article the suppression rule kept out of the list, for the settings list.
+
+    ``instead_of`` and ``match`` are reconstructed at render time rather than stored:
+    what is kept is that the article was hidden, not which article decided it, and the
+    counterpart is found again through the story the two share. So both are the best
+    available account of what happened, not a record of it — see
+    ``story_service.list_suppressed``.
+    """
+    id: int
+    title: str
+    feed_title: str | None
+    hidden_at: datetime
+    # False once the reader has read it after all, which is what takes the hiding off.
+    # The row stays either way: it is a record of what was done, not of what still is.
+    still_hidden: bool = True
+    # The headline this was hidden for repeating, and how alike the two are. None when
+    # that article is gone (unsubscribed, or taken by retention) — the row still stands,
+    # because the counter above the list counts it either way.
+    instead_of: str | None = None
+    match: float | None = None
+
+    model_config = {"from_attributes": False}

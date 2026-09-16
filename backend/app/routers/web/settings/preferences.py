@@ -1,17 +1,17 @@
 """Web routes for reading/display preferences in settings."""
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
-from app.models.article import UserArticleState
 from app.models.user import User, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
-from app.services.story_service import DEDUP_COLLAPSE, DEDUP_VALUES
+from app.services.story_service import (
+    DEDUP_COLLAPSE, DEDUP_SUPPRESS, DEDUP_VALUES,
+    SUPPRESSED_DAYS, count_suppressed, list_suppressed,
+)
 from app.templating import templates
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.formats import is_valid_format
@@ -25,25 +25,6 @@ _DENSITY_VALUES = {"compact", "comfortable", "summary"}
 _SORT_VALUES = {"newest", "oldest"}
 _FONT_SIZE_VALUES = {"sm", "md", "lg"}
 _FONT_FAMILY_VALUES = {"sans", "serif"}
-
-
-async def _suppressed_this_week(user_id: int, db: AsyncSession) -> int:
-    """How many articles the story dedup hid from this reader in the last 7 days.
-
-    Counts only what the similarity rule hid. The same column also carries reads
-    written by the URL dedup, by a filter action and by finishing a story, and mixing
-    those in would leave the reader watching a number that has little to do with the
-    setting they are looking at.
-    """
-    return await db.scalar(
-        select(func.count())
-        .select_from(UserArticleState)
-        .where(
-            UserArticleState.user_id == user_id,
-            UserArticleState.suppressed_by == "similar",
-            UserArticleState.suppressed_at >= datetime.now(timezone.utc) - timedelta(days=7),
-        )
-    ) or 0
 
 
 async def _reschedule_briefings(user_id: int, tz_str: str, db: AsyncSession) -> None:
@@ -70,7 +51,34 @@ async def settings_preferences(
     s = await _get_or_create_settings(user, db)
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
-        "suppressed_week": await _suppressed_this_week(user.id, db),
+        "suppressed_week": await count_suppressed(user.id, db),
+        "suppressed_days": SUPPRESSED_DAYS,
+    })
+
+
+@router.get("/preferences/hidden", response_class=HTMLResponse)
+async def settings_preferences_hidden(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The articles behind the "hidden in the last 7 days" counter.
+
+    Fetched when the reader asks for it rather than with the page: most readers have
+    the setting off, and for the rest the number answers the question until it doesn't.
+
+    Read-only by design. There is no button here to bring an article back, because the
+    article itself already has one: the title opens it in the reader, where un-reading
+    it works the way it does for every other article. A control here would be a second
+    way to do that, on a page nobody visits twice.
+    """
+    s = await _get_or_create_settings(user, db)
+    hidden = (
+        await list_suppressed(user.id, db) if s.story_dedup == DEDUP_SUPPRESS else []
+    )
+    return templates.TemplateResponse(request, "settings/partials/hidden_stories.html", {
+        "hidden": hidden,
+        "suppressed_days": SUPPRESSED_DAYS,
     })
 
 

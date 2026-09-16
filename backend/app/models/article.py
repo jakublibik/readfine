@@ -96,6 +96,12 @@ class UserArticleState(Base):
     # alone, or the number the reader watches the threshold by counts four other
     # things as well.
     suppressed_by: Mapped[str | None] = mapped_column(String(12))
+    # When the suppression rule took this article out of the reader's unread list. The
+    # two columns above are the live decision and every human read clears them, which
+    # makes them no record of anything: checking a hidden article is reading it, and it
+    # would erase its own entry. This one is written once and never cleared, so the list
+    # in settings can say what the feature did rather than only what it is still doing.
+    hidden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     user_starred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

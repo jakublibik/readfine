@@ -160,10 +160,34 @@
                 </span>
               </span>
             </label>
+            {#- The counter is the only account the reader gets of what this setting did
+                for them, so it opens onto the articles behind it. <details> rather than
+                a script (the pattern the help page uses): no nonce, and the list stays
+                closed until asked for. The fetch is hung off the toggle so the page
+                itself never pays for it.
+
+                Nothing to open at zero, so then it is the bare sentence it was. -#}
             {% if s.story_dedup == "collapse_suppress" %}
+            {% if suppressed_week %}
+            <details class="group mt-1 pl-[26px]"
+                     hx-get="/settings/preferences/hidden"
+                     hx-trigger="toggle once"
+                     hx-target="#hidden-stories"
+                     hx-swap="innerHTML">
+              <summary class="cursor-pointer select-none text-xs text-gray-500 marker:text-gray-400">
+                Kept out of unread in the last {{ suppressed_days }} days:
+                <span class="font-medium text-gray-700">{{ suppressed_week }}</span>.
+                <span class="text-blue-600 group-open:hidden">Show them</span>
+                <span class="hidden text-blue-600 group-open:inline">Hide them</span>
+              </summary>
+              <div id="hidden-stories"></div>
+            </details>
+            {% else %}
             <p class="text-xs text-gray-500 mt-1 pl-[26px]">
-              Hidden in the last 7 days: <span class="font-medium text-gray-700">{{ suppressed_week }}</span>.
+              Kept out of unread in the last {{ suppressed_days }} days:
+              <span class="font-medium text-gray-700">0</span>.
             </p>
+            {% endif %}
             {% endif %}
           </div>
 

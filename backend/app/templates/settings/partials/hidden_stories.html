@@ -1,0 +1,72 @@
+{#- The articles the suppression rule kept out of the reader's unread list, under the
+    counter that says how many there were. The one place a reader can check what the
+    third setting did for them, rather than take the number on trust.
+
+    "Kept out" throughout rather than "hidden": nothing is hidden anywhere. Such an
+    article arrives already marked as read, so it misses the unread list and is in All,
+    in search and at the foot of the article it repeats, like any other read article.
+
+    Read-only: the title opens the article in the reader, which is where un-reading it
+    already works. See the route for why there is no control here.
+
+    hx-boost is off for the whole block. The settings page is one boosted form, which
+    would otherwise catch these links and swap the app into the settings page's body
+    without the reader's app ever starting up. -#}
+{% if hidden %}
+<ul hx-boost="false" class="mt-2 space-y-3 border-l-2 border-gray-200 pl-3">
+  {% for item in hidden %}
+  <li class="text-sm leading-snug">
+    {#- When it was kept out, not when it was published: this list is the week the
+        counter above it counts, so the dates in it have to be the same dates that
+        number is made of. Said in a word for the same reason — a bare date on a row
+        about two articles reads as belonging to whichever one the eye landed on. -#}
+    {#- One line, and only the feed name gives way when it runs out of room: the same
+        rule the story footer follows, and for the same reason. A wrapping line put the
+        date on one row and the score on the next, which read as two facts about two
+        different things. min-w-0 is what lets truncate cut a flex item at all. -#}
+    <div class="flex items-center gap-x-1.5 text-xs text-gray-400">
+      <span class="flex-shrink-0">kept out</span>
+      <time class="flex-shrink-0 whitespace-nowrap"
+            datetime="{{ item.hidden_at.isoformat() }}">{{ item.hidden_at | localtime('short') }}</time>
+      {% if item.feed_title %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <span class="truncate min-w-0">{{ item.feed_title }}</span>
+      {% endif %}
+      {% if item.match %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      {#- The score the decision was made on, to two places, next to the threshold it
+          had to clear. Shown because this list exists to be second-guessed, and "how
+          close were they" is the question the answer turns on. -#}
+      <span class="flex-shrink-0 whitespace-nowrap"
+            title="Headline similarity; 0.40 and above is kept out">match {{ '%.2f'|format(item.match) }}</span>
+      {% endif %}
+      {#- Every article here is read — that is how it was kept out. This says the reader
+          read it themselves, which is the same thing the word answers in the story
+          footer (story_members.html), and the same thing that ends the keeping out:
+          once they have met the article, it counts as seen from then on.
+
+          Starring it and going to the source say it too. They are rarer than reading
+          one, and all three mean the reader has been at this article, so one word
+          covers them. -#}
+      {% if not item.still_hidden %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <span class="flex-shrink-0">read</span>
+      {% endif %}
+    </div>
+    <a href="/app?open_article_id={{ item.id }}"
+       class="block text-gray-700 hover:text-gray-900 hover:underline">{{ item.title }}</a>
+    {#- Left out rather than guessed at when the counterpart is gone: the reader
+        unsubscribed from its feed, retention took it, or they have since said they had
+        not read it after all. The row stays either way, because the article above it
+        was still kept out and the counter still counts it. -#}
+    {% if item.instead_of %}
+    <div class="text-xs text-gray-500 mt-0.5">instead of: {{ item.instead_of }}</div>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+{#- Reachable even with a counter above zero: it counts what was kept out, and this list
+    only shows what the reader can still open. -#}
+<p class="mt-2 text-xs text-gray-500">Nothing kept out in the last {{ suppressed_days }} days.</p>
+{% endif %}
