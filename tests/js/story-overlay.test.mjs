@@ -138,6 +138,51 @@ test('the star in the menu follows the article it belongs to', () => {
   assert.equal(panel.getAttribute('fill'), 'currentColor');
 });
 
+test('a star given in the window reaches the footer it was opened from', () => {
+  const w = reader(browser(
+    '<ul><li data-story-member="7"><span data-story-member-star></span>'
+    + memberLink(7) + '</li></ul>',
+  ));
+  const gutter = w.document.querySelector('[data-story-member-star]');
+  w.document.dispatchEvent(new w.CustomEvent('articleStarChanged', {
+    detail: { id: 7, isStarred: true },
+  }));
+  assert.equal(gutter.textContent, '★');
+  w.document.dispatchEvent(new w.CustomEvent('articleStarChanged', {
+    detail: { id: 7, isStarred: false },
+  }));
+  assert.equal(gutter.textContent, '');
+  assert.equal(gutter.hasAttribute('title'), false);
+});
+
+test('reading a member writes back to the line it was opened from', () => {
+  const w = reader(browser(
+    '<ul><li data-story-member="7">'
+    + '<a href="#" data-open-story-member="7" class="min-w-0 hover:underline '
+    + 'text-gray-900 dark:text-gray-100 font-medium">Covered elsewhere</a>'
+    + '<span data-story-member-read class="hidden inline-flex">· read</span></li></ul>',
+  ));
+  const line = w.document.querySelector('[data-story-member="7"]');
+  const title = line.querySelector('[data-open-story-member]');
+  const mark = line.querySelector('[data-story-member-read]');
+
+  w.document.dispatchEvent(new w.CustomEvent('articleReadChanged', {
+    detail: { id: 7, isRead: true },
+  }));
+  assert.equal(mark.classList.contains('hidden'), false);
+  assert.equal(title.classList.contains('font-medium'), false);
+  assert.equal(title.classList.contains('text-gray-500'), true);
+
+  // Un-reading it puts the line back, which is the half that has no other way of
+  // showing: the reader does it in the window and comes straight back to this list.
+  w.document.dispatchEvent(new w.CustomEvent('articleReadChanged', {
+    detail: { id: 7, isRead: false },
+  }));
+  assert.equal(mark.classList.contains('hidden'), true);
+  assert.equal(title.classList.contains('font-medium'), true);
+  assert.equal(title.classList.contains('text-gray-500'), false);
+});
+
 test('Escape with nothing raised is left to the search modal', () => {
   const w = reader(browser(list(row(1)) + detail()));
   assert.equal(w._closeStoryOverlay(), false);

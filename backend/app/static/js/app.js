@@ -1717,9 +1717,27 @@ function _detailMenuControl(articleId, attr) {
   return null;
 }
 
+// A line in the story footer, wherever one names this article. The list is rendered
+// once, when it is unfolded, so what happens to an article in the window opened from it
+// has to be written back here or the reader returns to the state they left.
+// The class names mirror story_members.html.
+function _syncStoryFooterLine(articleId, isRead) {
+  var READ = ['text-gray-500', 'dark:text-gray-400'];
+  var UNREAD = ['text-gray-900', 'dark:text-gray-100', 'font-medium'];
+  document.querySelectorAll('[data-story-member="' + articleId + '"]').forEach(function (item) {
+    var mark = item.querySelector('[data-story-member-read]');
+    if (mark) mark.classList.toggle('hidden', !isRead);
+    var title = item.querySelector('[data-open-story-member]');
+    if (!title) return;
+    READ.forEach(function (c) { title.classList.toggle(c, isRead); });
+    UNREAD.forEach(function (c) { title.classList.toggle(c, !isRead); });
+  });
+}
+
 // ── Article read state (class toggle, no DOM swap) ────────────────────────
 document.addEventListener('articleReadChanged', function (e) {
   var detail = e.detail;
+  _syncStoryFooterLine(detail.id, detail.isRead);
   var headerRead = _detailMenuControl(detail.id, 'data-header-read');
   if (headerRead) {
     var hrSvg = headerRead.querySelector('svg');
@@ -1774,6 +1792,17 @@ document.addEventListener('articleStarChanged', function (e) {
       bsBtn.title = detail.isStarred ? 'Remove star' : 'Star';
     }
   }
+  // The story footer, where this article may well have been opened from. Its list is
+  // rendered once, when it is unfolded, so without this the star it was given in the
+  // window over it is missing from the line the reader comes back to. All of them, not
+  // the first: two articles of one story each have a footer naming the rest.
+  document.querySelectorAll(
+    '[data-story-member="' + detail.id + '"] [data-story-member-star]'
+  ).forEach(function (el) {
+    el.textContent = detail.isStarred ? '★' : '';
+    if (detail.isStarred) el.setAttribute('title', 'Starred');
+    else el.removeAttribute('title');
+  });
   var headerStar = _detailMenuControl(detail.id, 'data-header-star');
   if (headerStar) {
     var hsSvg = headerStar.querySelector('svg');

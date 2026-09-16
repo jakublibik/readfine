@@ -19,17 +19,24 @@
     table, gray-100 was not there at all against the panel. -#}
 <ul class="mt-3 divide-y divide-[#ecedf1] dark:divide-[#353535]">
   {% for member in members %}
-  <li class="text-sm leading-snug py-2.5 first:pt-0 last:pb-0">
+  {#- data-story-member is what the star below is found by when the article is starred
+      somewhere else: from the window this list opens, most of all. -#}
+  <li class="text-sm leading-snug py-2.5 first:pt-0 last:pb-0" data-story-member="{{ member.id }}">
     {#- The star sits in a gutter beside the title, where the list keeps it and where
         the eye goes looking for it. Held open on every item so the titles line up,
         marked only on the ones that carry a star: an empty outline on each of them
         would read as a button, and this one is a statement, not a control. -#}
     <div class="flex items-baseline gap-1">
-      <span class="flex-shrink-0 w-3.5 text-center text-gray-500 dark:text-gray-400"
+      <span data-story-member-star
+            class="flex-shrink-0 w-3.5 text-center text-gray-500 dark:text-gray-400"
             {% if member.is_starred %}title="Starred"{% endif %}>{% if member.is_starred %}★{% endif %}</span>
+      {#- The read colours here and the word below are swapped by app.js when the article
+          is read or un-read in the window this list opens. Keep the class names in step
+          with it (articleReadChanged). -#}
       <a href="#" data-open-story-member="{{ member.id }}"
-         class="min-w-0 {% if member.is_read %}text-gray-500 dark:text-gray-400{% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}
-                hover:underline">{{ member.title }}</a>
+         class="min-w-0 hover:underline
+                {% if member.is_read %}text-gray-500 dark:text-gray-400
+                {% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}">{{ member.title }}</a>
     </div>
     {#- Only the source name gives way when the line runs out of room. It carries
         min-w-0 so truncate can actually cut it (a flex item will not shrink below its
@@ -49,10 +56,13 @@
           read through and through, and then there is nothing to compare against. Set
           between the source and the date it read as a label for the date, as though
           the time given were when the article was read. -#}
-      {% if member.is_read %}
-      <span class="flex-shrink-0" aria-hidden="true">·</span>
-      <span class="flex-shrink-0">read</span>
-      {% endif %}
+      {#- Always rendered, hidden while unread, so reading the article in the window can
+          bring it back without re-fetching the list. Wrapped in one item that repeats the
+          row's own gap inside itself, so the spacing is what two items gave. -#}
+      <span data-story-member-read
+            class="flex-shrink-0 {% if not member.is_read %}hidden {% endif %}inline-flex items-center gap-1.5">
+        <span aria-hidden="true">·</span><span>read</span>
+      </span>
       {% if member.url %}
       <a href="{{ member.url }}" target="_blank" rel="noopener noreferrer"
          class="flex-shrink-0 hover:text-gray-600 dark:hover:text-gray-300" title="Open at the source">↗</a>
