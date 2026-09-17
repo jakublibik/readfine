@@ -127,7 +127,7 @@ categories:
       - title: Labels
         desc: Your own colour-coded tags for sorting articles by hand.
       - title: Mark read on scroll
-        desc: Optionally mark articles read as they scroll past.
+        desc: Optionally mark articles read as they scroll past. Search results are left alone.
       - title: Search
         desc: >-
           Full-text search across your articles, scoped by feed, folder, status,

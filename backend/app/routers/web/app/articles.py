@@ -584,12 +584,12 @@ async def render_list(
         saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
-        # Text search uses offset pagination (ts_rank can't be keyset-paged). With a
-        # read-status filter, marking rows read on scroll shrinks the result set
-        # under the offset and skips articles, so disable mark-read-on-scroll for
-        # that case only. Plain text search (status=all) and the empty-query filter
-        # view (keyset pagination) are unaffected and keep it.
-        mark_read_on_scroll=mark_read_on_scroll and not (q and q.strip() and read_status),
+        # Search never marks rows read on scroll. Looking something up is not
+        # reading it: the reader scans the results for the one they want, and the
+        # rest should keep the state they had. It also sidesteps a pagination bug,
+        # since text search pages by offset (ts_rank can't be keyset-paged) and a
+        # read-status filter shrinking the result set under that offset skips rows.
+        mark_read_on_scroll=mark_read_on_scroll and not is_search,
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,

@@ -31,6 +31,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Search results are no longer marked as read when you scroll past them, even with "Mark as read on scroll" on. Searching is looking something up, not reading: you scan the results for the one article you came for, and the rest should still be there, unread, when you go back to your list. This covers everything the search panel returns, including the filter-only views (scope, labels, status) that submit without a search term.
+
 - Unread counters above the views that fold stories together count rows rather than articles, so a badge says what the list under it will show. A folder therefore no longer adds up to the sum of its feeds: several sources covering one event are one row in the folder and one row in each feed they came from. Counters for a single feed, Starred, Saved and Archive are unchanged, since those lists show every article they have.
 
 - Creating a folder through the API without naming a position now puts it at the end of your folder order rather than at the front. Folder positions are also renumbered by the upgrade to match the alphabetical order they were displayed in, and again by every move, so positions set through the API before this release are not kept. Nothing in Readfine displayed those positions until now, so nothing you could see changes.

@@ -1010,7 +1010,16 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     window._articleListMutationObserver.disconnect();
     window._articleListMutationObserver = null;
   }
-  window._articleReadObserver = null;
+  // Disconnected, not just dropped. The mutation observer below hands every row the
+  // swap adds to whatever _articleReadObserver points at, and it runs as a microtask,
+  // so it has already fed the new list's rows to the previous observer by the time
+  // this settle handler gets to run. Letting go of the reference leaves that observer
+  // watching them, which is how a search still marked its results read after the
+  // server had said not to.
+  if (window._articleReadObserver) {
+    window._articleReadObserver.disconnect();
+    window._articleReadObserver = null;
+  }
 
   if (!cfg.markReadOnScroll) return;
 
@@ -1074,13 +1083,17 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     observer.observe(el);
   });
 
-  // Watch for article rows appended by infinite scroll sentinel swaps
+  // Watch for article rows appended by infinite scroll sentinel swaps. It hands them
+  // to this observer, the one it was made alongside, rather than to whatever
+  // _articleReadObserver happens to point at when it runs: it fires as a microtask,
+  // which on a list swap is before the settle handler above has replaced anything, so
+  // the two can disagree about which list is on screen.
   var mutObs = new MutationObserver(function (mutations) {
     mutations.forEach(function (mutation) {
       mutation.addedNodes.forEach(function (node) {
         if (node.nodeType !== 1) return;
         if (node.classList.contains('article-row')) {
-          window._articleReadObserver.observe(node);
+          observer.observe(node);
         }
       });
     });
