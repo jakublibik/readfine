@@ -160,8 +160,8 @@ categories:
         desc: Run a filter over existing articles, not just new ones.
       - title: One story, several sources
         desc: >-
-          Headlines are matched across your feeds, so the same event covered by five
-          newsrooms under five addresses is one row saying how many sources filed it.
+          Headlines are matched across your feeds, so an event several newsrooms cover
+          under as many addresses is one row saying how many sources filed it.
           Open the rest in place or from the foot of the article; reading the row
           finishes the story. Optionally, an article that repeats one you have already
           read is kept out of the list altogether.
