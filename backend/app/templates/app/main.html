@@ -83,6 +83,14 @@
 
   window._dwellSend = _send;
 
+  // Picking the clock back up on the article that was underneath. A flush leaves
+  // _articleId null, so without this the rest of a reading session is lost whenever
+  // something was opened over the article and closed again (the story overlay).
+  window._dwellResume = function () {
+    _rearm();
+    if (_articleId && document.visibilityState !== 'hidden') _start = Date.now();
+  };
+
   document.body.addEventListener('htmx:before-request', _onHtmxRequest);
   window.addEventListener('beforeunload', _send);
 
@@ -90,10 +98,13 @@
     var targetId = e.detail && e.detail.target && e.detail.target.id;
     // 3-panel loads into #article-detail; 2-panel expands inline into
     // #inline-article-detail-content — track both, else dwell is never recorded.
+    //
+    // Asked of the target, not of the document: article_detail.html brings its
+    // #article-detail-root wherever it renders, so the two containers can hold one of
+    // those each (the story overlay over the list), and the panel's article would then
+    // be timed against the one in the shell underneath.
     var root = null;
-    if (targetId === 'article-detail') {
-      root = document.getElementById('article-detail-root');
-    } else if (targetId === 'inline-article-detail-content') {
+    if (targetId === 'article-detail' || targetId === 'inline-article-detail-content') {
       root = e.detail.target.querySelector('[data-article-id]');
     }
     if (root) {
@@ -104,9 +115,13 @@
   });
 
   // Re-detect the article currently on screen (used when resuming after a flush).
+  // The story overlay covers the shell, so what is on screen is the panel's article
+  // even in a layout that otherwise reads inline.
   function _rearm() {
     if (_articleId) return;
-    var el = document.querySelector('#inline-article-detail-content [data-article-id]')
+    var overlay = document.documentElement.classList.contains('story-detail-open');
+    var el = (overlay ? document.querySelector('#article-detail [data-article-id]') : null)
+          || document.querySelector('#inline-article-detail-content [data-article-id]')
           || document.getElementById('article-detail-root');
     if (el) { _articleId = el.dataset.articleId || null; _accumulated = 0; }
   }

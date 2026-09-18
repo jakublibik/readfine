@@ -114,6 +114,86 @@
         </select>
       </div>
 
+      <div>
+        <label class="text-sm font-medium text-gray-700">One story, several sources</label>
+        <p class="text-xs text-gray-500 mt-0.5">
+          What to do when several of your feeds file the same piece of news.
+          <a href="/help#stories" class="text-blue-600 hover:underline">Learn more</a>.
+        </p>
+        <div class="mt-2.5 space-y-3">
+
+          <label class="flex gap-2.5 items-start cursor-pointer">
+            <input type="radio" name="story_dedup" value="off"
+                   {% if s.story_dedup == "off" %}checked{% endif %}
+                   class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+            <span class="min-w-0">
+              <span class="block text-sm text-gray-700">Off</span>
+              <span class="block text-xs text-gray-500 mt-0.5">Every article gets its own row.</span>
+            </span>
+          </label>
+
+          <label class="flex gap-2.5 items-start cursor-pointer">
+            <input type="radio" name="story_dedup" value="collapse"
+                   {% if s.story_dedup != "off" and s.story_dedup != "collapse_suppress" %}checked{% endif %}
+                   class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+            <span class="min-w-0">
+              <span class="block text-sm text-gray-700">Fold into one row</span>
+              <span class="block text-xs text-gray-500 mt-0.5">
+                The coverage becomes a single row that says how many sources filed it.
+                Open the rest under it, or at the foot of the article.
+              </span>
+            </span>
+          </label>
+
+          <div>
+            <label class="flex gap-2.5 items-start cursor-pointer">
+              <input type="radio" name="story_dedup" value="collapse_suppress"
+                     {% if s.story_dedup == "collapse_suppress" %}checked{% endif %}
+                     class="w-3.5 h-3.5 mt-[3px] flex-shrink-0 text-blue-600 border-gray-300">
+              <span class="min-w-0">
+                <span class="block text-sm text-gray-700">Fold, and don't show a story I've read again</span>
+                <span class="block text-xs text-gray-500 mt-0.5">
+                  A later article about a story you have already read arrives marked as read,
+                  so it stays out of your unread list. It is not deleted: you find it under the
+                  article you read and in All. Matching is on the headline, so now and then it
+                  catches a follow-up rather than a repeat.
+                </span>
+              </span>
+            </label>
+            {#- The counter is the only account the reader gets of what this setting did
+                for them, so it opens onto the articles behind it. <details> rather than
+                a script (the pattern the help page uses): no nonce, and the list stays
+                closed until asked for. The fetch is hung off the toggle so the page
+                itself never pays for it.
+
+                Nothing to open at zero, so then it is the bare sentence it was. -#}
+            {% if s.story_dedup == "collapse_suppress" %}
+            {% if suppressed_week %}
+            <details class="group mt-1 pl-[26px]"
+                     hx-get="/settings/preferences/hidden"
+                     hx-trigger="toggle once"
+                     hx-target="#hidden-stories"
+                     hx-swap="innerHTML">
+              <summary class="cursor-pointer select-none text-xs text-gray-500 marker:text-gray-400">
+                Kept out of unread in the last {{ suppressed_days }} days:
+                <span class="font-medium text-gray-700">{{ suppressed_week }}</span>.
+                <span class="text-blue-600 group-open:hidden">Show them</span>
+                <span class="hidden text-blue-600 group-open:inline">Hide them</span>
+              </summary>
+              <div id="hidden-stories"></div>
+            </details>
+            {% else %}
+            <p class="text-xs text-gray-500 mt-1 pl-[26px]">
+              Kept out of unread in the last {{ suppressed_days }} days:
+              <span class="font-medium text-gray-700">0</span>.
+            </p>
+            {% endif %}
+            {% endif %}
+          </div>
+
+        </div>
+      </div>
+
     </div>
   </section>
 
@@ -124,7 +204,7 @@
       <div class="flex items-center justify-between">
         <div>
           <label class="text-sm font-medium text-gray-700">Mark as read on scroll</label>
-          <p class="text-xs text-gray-500 mt-0.5">Automatically mark articles as read when scrolled past</p>
+          <p class="text-xs text-gray-500 mt-0.5">Automatically mark articles as read when scrolled past. Search results are left alone.</p>
         </div>
         <input type="checkbox" name="mark_read_on_scroll" {% if s.mark_read_on_scroll %}checked{% endif %}
                class="w-4 h-4 text-blue-600 rounded border-gray-300">

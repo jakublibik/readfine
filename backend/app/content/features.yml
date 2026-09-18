@@ -1,11 +1,17 @@
 # Single source of truth for the Readfine feature list.
 #
 # Rendered in-app at /features and generated into FEATURES.md at the repo root.
-# After editing this file, regenerate the Markdown:
+# After editing this file, regenerate the Markdown from the repo root:
 #
-#     uv run python scripts/gen_features.py
+#     uv run --project backend python scripts/gen_features.py
 #
 # CI regenerates it and fails if the committed FEATURES.md is out of date.
+#
+# Order within a category carries meaning, so a new feature does not simply go at the
+# end: what defines the category comes first, then its variants and details, and the
+# operational or edge cases last. Anything two features share a subject with sits next
+# to them — the reader is scanning, and a list they have to reassemble in their head
+# reads as a pile rather than an argument.
 
 intro: >-
   Everything Readfine does, grouped by area. Reading works out of the box; the
@@ -36,18 +42,6 @@ categories:
           Subscribe to feeds and scrape pages behind HTTP Basic Auth, in their own
           fields or written into the address. Either way the credentials are stored
           encrypted, per feed.
-      - title: Shared & private feeds
-        desc: >-
-          On an instance with several accounts, everyone following the same feed shares
-          one fetch, so a site is polled once however many subscribers it has. Mark a
-          feed private and it is kept to your account, with its own fetch and its own
-          copy of the articles.
-      - title: Change a feed's address
-        desc: >-
-          A feed that moves, or whose address needs a fix, can be pointed somewhere
-          else without re-subscribing, so every article and every read state stays
-          where it is. The new address is fetched once before it is saved. On a feed
-          somebody else also follows, the address is the administrator's to change.
       - title: Folders
         desc: >-
           Group feeds into folders for organizing and for scoping filters. Folders
@@ -65,6 +59,18 @@ categories:
           rate-limit get backed off automatically, and readable extraction switches
           itself off for a site that blocks it rather than filling the reader with
           empty articles.
+      - title: Change a feed's address
+        desc: >-
+          A feed that moves, or whose address needs a fix, can be pointed somewhere
+          else without re-subscribing, so every article and every read state stays
+          where it is. The new address is fetched once before it is saved. On a feed
+          somebody else also follows, the address is the administrator's to change.
+      - title: Shared & private feeds
+        desc: >-
+          On an instance with several accounts, everyone following the same feed shares
+          one fetch, so a site is polled once however many subscribers it has. Mark a
+          feed private and it is kept to your account, with its own fetch and its own
+          copy of the articles.
       - title: OPML import & export
         desc: >-
           Move your subscriptions in and out, including files compatible with
@@ -103,29 +109,29 @@ categories:
           own window with no address bar. On Android it also joins the share sheet,
           so a link shared from any other app lands in Saved. Needs HTTPS, which
           browsers require before offering to install anything.
-      - title: Search
-        desc: >-
-          Full-text search across your articles, scoped by feed, folder, status,
-          or label. Open it from anywhere with the `/` shortcut.
       - title: Dark mode
         desc: Light, dark, or follow your system preference.
       - title: Reading typography
         desc: Choose the font family and text size for the reading view.
+      - title: List density
+        desc: >-
+          Compact, comfortable, or summary, set separately for desktop and
+          mobile.
       - title: Number & date format
         desc: >-
           Pick how numbers and dates are written (decimal separator and date
           order) independently of the interface language, so English can pair
           with `1 234,56` and `25.06.2026`.
-      - title: List density
-        desc: >-
-          Compact, comfortable, or summary, set separately for desktop and
-          mobile.
-      - title: Mark read on scroll
-        desc: Optionally mark articles read as they scroll past.
       - title: Article states
         desc: Mark articles read, star favourites, and archive what you want out of the way.
       - title: Labels
         desc: Your own colour-coded tags for sorting articles by hand.
+      - title: Mark read on scroll
+        desc: Optionally mark articles read as they scroll past. Search results are left alone.
+      - title: Search
+        desc: >-
+          Full-text search across your articles, scoped by feed, folder, status,
+          or label. Open it from anywhere with the `/` shortcut.
       - title: Save by URL
         desc: >-
           Paste a link to keep an article that is not in any of your feeds. It goes
@@ -152,6 +158,13 @@ categories:
         desc: Restrict any filter to specific feeds or folders.
       - title: Retroactive apply
         desc: Run a filter over existing articles, not just new ones.
+      - title: One story, several sources
+        desc: >-
+          Headlines are matched across your feeds, so an event several newsrooms cover
+          under as many addresses is one row saying how many sources filed it.
+          Open the rest in place or from the foot of the article; reading the row
+          finishes the story. Optionally, an article that repeats one you have already
+          read is kept out of the list altogether.
       - title: Duplicates across feeds
         desc: >-
           A story that two of your feeds both carry is not put in front of you twice.
@@ -216,6 +229,12 @@ categories:
         desc: >-
           Your read rate, reading streak, average dwell time, and your single
           most active day and hour.
+      - title: How much actually came at you
+        desc: >-
+          A month's articles and what became of each one: what a filter took, what
+          was a repeat of a story you had read, what arrived twice under two links,
+          what story grouping folded into one row, and how many rows were left for
+          you to go past. Beside it, the same month cut by relevance score.
       - title: Scoring calibration
         desc: >-
           Check how well AI relevance scores match what you actually read, and
@@ -236,12 +255,6 @@ categories:
           good.
       - title: Admin panel
         desc: Manage users and instance-wide settings.
-      - title: Public page traffic
-        desc: >-
-          Optional visitor counts for the pages anyone can reach, shown in the admin
-          panel. No analytics service, no cookie, no stored IP address: the database
-          holds counts per hour and per day and nothing else. Signed-in traffic is
-          left out.
       - title: Invite-only registration
         desc: >-
           Keep sign-ups closed and hand out invitation links instead. Each one works
@@ -249,10 +262,16 @@ categories:
           can be revoked before anyone uses it.
       - title: Email (SMTP)
         desc: Address verification, password reset, and briefing delivery.
-      - title: API tokens
-        desc: A JSON API authenticated with JWT tokens, for scripts and integrations.
+      - title: Public page traffic
+        desc: >-
+          Optional visitor counts for the pages anyone can reach, shown in the admin
+          panel. No analytics service, no cookie, no stored IP address: the database
+          holds counts per hour and per day and nothing else. Signed-in traffic is
+          left out.
       - title: Retention & purge
         desc: Tiered retention rules that purge old articles automatically.
+      - title: API tokens
+        desc: A JSON API authenticated with JWT tokens, for scripts and integrations.
 
   - name: Privacy & self-hosting
     summary: Self-hosted and fully open source.

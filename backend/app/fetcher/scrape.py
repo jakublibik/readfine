@@ -191,7 +191,8 @@ def extract_article_links(
 
 
 async def fetch_scrape_feed(
-    feed: Feed, db: AsyncSession, published_cutoff: datetime | None = None
+    feed: Feed, db: AsyncSession, published_cutoff: datetime | None = None,
+    defer_stories: bool = False,
 ) -> int:
     """Fetch a scrape-type feed via CSS selector. Returns number of new articles.
 
@@ -226,7 +227,9 @@ async def fetch_scrape_feed(
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
 
-        new_count = await _save_scrape_articles(feed, links, fetched_at, db, published_cutoff)
+        new_count = await _save_scrape_articles(
+            feed, links, fetched_at, db, published_cutoff, defer_stories=defer_stories
+        )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = fetched_at
@@ -284,6 +287,7 @@ async def _save_scrape_articles(
     fetched_at: datetime,
     db: AsyncSession,
     published_cutoff: datetime | None = None,
+    defer_stories: bool = False,
 ) -> int:
     urls = [url for url, *_ in links]
     guid_hash_map = {url: hashlib.sha256(url.encode()).hexdigest() for url in urls}
@@ -354,5 +358,12 @@ async def _save_scrape_articles(
         await db.flush()
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        # See rss._save_articles: inside a scheduler round the post-gather pass does
+        # this once for every feed, and doing it here as well only pays for the trigram
+        # probes twice.
+        if not defer_stories:
+            from app.fetcher.stories import assign_stories
+            await assign_stories(new_articles, db)
 
     return len(new_articles)

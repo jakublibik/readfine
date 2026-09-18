@@ -158,12 +158,16 @@ async def fetch_feed(
     initial_limit: int | None = None,
     published_cutoff: datetime | None = None,
     prefetched: feedparser.FeedParserDict | None = None,
+    defer_stories: bool = False,
 ) -> int:
     """Fetch a feed and store new articles. Returns number of new articles saved.
 
     *prefetched*: an already-fetched+parsed feed (e.g. from the subscribe/test step)
     to reuse instead of downloading again — keeps the subscribe flow to a single
     network request for rate-limited sites.
+
+    *defer_stories*: skip the per-feed story grouping because the caller runs the
+    post-gather pass over the whole round anyway — see ``_save_articles``.
     """
     start_ms = int(time.monotonic() * 1000)
     feed_id = feed.id
@@ -218,7 +222,10 @@ async def fetch_feed(
             reason = unparseable_reason(resp.text) if resp is not None else None
             raise ValueError(reason or f"Feed parse error: {parsed.bozo_exception}")
 
-        new_count = await _save_articles(feed, parsed, db, limit=initial_limit, published_cutoff=published_cutoff)
+        new_count = await _save_articles(
+            feed, parsed, db, limit=initial_limit, published_cutoff=published_cutoff,
+            defer_stories=defer_stories,
+        )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
         feed.last_fetched_at = datetime.now(timezone.utc)
@@ -291,6 +298,7 @@ async def _save_articles(
     db: AsyncSession,
     limit: int | None = None,
     published_cutoff: datetime | None = None,
+    defer_stories: bool = False,
 ) -> int:
     """Insert new articles from parsed feed, apply filters. Returns count of inserted articles."""
     entries = parsed.entries[:limit] if limit is not None else parsed.entries
@@ -415,6 +423,22 @@ async def _save_articles(
 
         await _dedup_cross_feed(feed.id, new_articles, db)
 
+        # Skipped inside a scheduler round, where assign_stories_global covers the same
+        # articles once the round is over. Unlike the URL dedup above, whose per-feed
+        # pass is an indexed lookup, this one probes the trigram index once per new
+        # article — measured at 23 ms a probe against 29k articles — so running it
+        # twice a round costs seconds of fetch latency for a result the global pass
+        # reaches anyway. A manual refresh has no global pass behind it and still needs
+        # its grouping here and now.
+        #
+        # The price is that a round which never reaches its end (a restart mid-fetch)
+        # leaves its articles ungrouped for good, since nothing rescans. Accepted: the
+        # grouping is best-effort by construction, and the alternative is paying for
+        # every article twice, every round, against that.
+        if not defer_stories:
+            from app.fetcher.stories import assign_stories
+            await assign_stories(new_articles, db)
+
         # Auto-detect full-content feed and disable readable extraction if warranted
         from app.services.readable_service import maybe_disable_readable_for_feed
         await maybe_disable_readable_for_feed(feed.id, db)
@@ -464,7 +488,7 @@ async def dedup_cross_feed_global(since: datetime, db: AsyncSession) -> int:
 
     await db.execute(
         pg_insert(UserArticleState)
-        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .values([_dedup_state(r) for r in rows])
         .on_conflict_do_nothing()
     )
 
@@ -513,9 +537,25 @@ async def _dedup_cross_feed(
 
     await db.execute(
         pg_insert(UserArticleState)
-        .values([{"user_id": r.user_id, "article_id": r.article_id, "is_read": True} for r in rows])
+        .values([_dedup_state(r) for r in rows])
         .on_conflict_do_nothing()
     )
+
+
+def _dedup_state(row) -> dict:
+    """State row for an article the dedup marked read.
+
+    suppressed_at says the machine wrote this is_read, not the user. Story dedup reads
+    "already seen" off is_read, so without the marker a deduped article would count as
+    seen and suppress coverage the reader never had in front of them.
+    """
+    return {
+        "user_id": row.user_id,
+        "article_id": row.article_id,
+        "is_read": True,
+        "suppressed_at": datetime.now(timezone.utc),
+        "suppressed_by": "url",
+    }
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

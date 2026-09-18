@@ -1,0 +1,58 @@
+{#- Other coverage of the same story, folded until asked for.
+
+    Rendered only when the reader can actually open something: the route counts the
+    members it may see, so a group whose other members sit in feeds this reader does not
+    subscribe to, or that retention has taken away, produces no footer at all rather than
+    a button that unfolds to nothing.
+
+    The list is fetched on click, not with the article. Most articles have no story, an
+    unfolded footer is the exception, and the count already answers the only question the
+    reader has before opening it.
+
+    Drawn as a labelled block with a left rule, the shape ai_blocks.html established for
+    "a section that belongs to this article but is not its text". As a plain grey line
+    under a plain rule it read as something left behind rather than as a section of its
+    own. Neutral grey on purpose: blue and amber are spoken for by the AI blocks, and
+    this is not one.
+
+    Placed last in the article but ahead of the bottom action bar: that bar closes
+    everything you can do with this article, so anything after it reads as belonging to
+    another part of the page.
+
+    Included from article_content.html, which the readable poll also renders on its own.
+    Both render paths therefore have to pass related_count, or the block would vanish the
+    moment an extraction finished and the content block was swapped. -#}
+{% if related_count %}
+{#- scroll-mb-16 is breathing room for the scroll only, not layout: app.js brings the
+    unfolded list into view and without it the scroll would stop exactly on the last
+    source, at the very bottom edge. The margin is wide enough to bring the action bar
+    below along, which gives the eye a visible end of the article to stop on. -#}
+<div id="story-block-{{ article.id }}" class="mt-5 scroll-mb-16">
+  <div class="border-l-2 border-gray-300 dark:border-gray-600 pl-4">
+    <div class="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">Same story</div>
+    <button id="story-toggle-{{ article.id }}"
+            class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300
+                   hover:text-gray-900 dark:hover:text-gray-100"
+            hx-get="/htmx/articles/{{ article.id }}/related"
+            hx-target="#story-members-{{ article.id }}"
+            hx-swap="innerHTML"
+            hx-disabled-elt="this"
+            hx-indicator="#story-spinner-{{ article.id }}">
+      <span aria-hidden="true">⧉</span>
+      <span>
+        {%- if related_count == 1 -%}
+          1 other source covered this
+        {%- else -%}
+          {{ related_count }} other sources covered this
+        {%- endif -%}
+      </span>
+      <svg id="story-spinner-{{ article.id }}" class="htmx-indicator animate-spin h-3.5 w-3.5"
+           fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+      </svg>
+    </button>
+    <div id="story-members-{{ article.id }}"></div>
+  </div>
+</div>
+{% endif %}

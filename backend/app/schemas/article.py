@@ -71,6 +71,16 @@ class ArticleListItem(BaseModel):
     is_saved: bool = False
     ai_score: float | None = None
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
+    # Story group this article belongs to, or None when nothing else covered it.
+    story_id: int | None = None
+    # How many other members of the group this reader may open, and how many of those
+    # they have already read. Both are filled in by services.story_service while the
+    # list renders, never by _to_list_item: they take a user-scoped query over the
+    # whole group, and the group reaches past the page (a read member is missing from
+    # an unread-only page, and the group can straddle the page boundary). Excluded
+    # from API JSON, where nothing fills them in and a 0 would read as a fact.
+    story_others: int = Field(default=0, exclude=True)
+    story_read: int = Field(default=0, exclude=True)
     # coalesce(published_at, fetched_at) used for keyset pagination cursor;
     # excluded from API JSON (internal pagination concern only)
     sort_ts: datetime | None = Field(default=None, exclude=True)
@@ -113,5 +123,58 @@ class ArticleResponse(BaseModel):
     ai_summary_truncated: bool = False
     ai_context: str | None = None
     labels: list[dict] = []
+    # Story group this article belongs to, or None when nothing else covered it. Only
+    # says a group exists — how much of it this reader may see is a separate question
+    # (services.story_service), since the grouping is global and feeds are not.
+    story_id: int | None = None
+
+    model_config = {"from_attributes": False}
+
+
+class StoryMember(BaseModel):
+    """One other article covering the same story, as the reader footer shows it.
+
+    Deliberately narrow: the footer lists coverage, it does not re-render article rows,
+    and a member comes from a group built across all feeds, so anything selected here
+    is one access mistake away from leaking another reader's subscriptions.
+    """
+    id: int
+    title: str
+    url: str | None
+    feed_title: str | None
+    published_at: datetime | None
+    is_read: bool = False
+    # Read, and read by this reader rather than closed on their behalf. Finishing a
+    # story marks the rest of it read (story_service.mark_group_read), so is_read alone
+    # says almost nothing in the footer: it is true of every member the moment the
+    # reader is done with the article the footer hangs from. This is the one the footer
+    # says "read" for, so the word answers "did I actually meet this one".
+    read_by_reader: bool = False
+    is_starred: bool = False
+
+    model_config = {"from_attributes": False}
+
+
+class SuppressedArticle(BaseModel):
+    """One article the suppression rule kept out of the list, for the settings list.
+
+    ``instead_of`` and ``match`` are reconstructed at render time rather than stored:
+    what is kept is that the article was hidden, not which article decided it, and the
+    counterpart is found again through the story the two share. So both are the best
+    available account of what happened, not a record of it — see
+    ``story_service.list_suppressed``.
+    """
+    id: int
+    title: str
+    feed_title: str | None
+    hidden_at: datetime
+    # False once the reader has read it after all, which is what takes the hiding off.
+    # The row stays either way: it is a record of what was done, not of what still is.
+    still_hidden: bool = True
+    # The headline this was hidden for repeating, and how alike the two are. None when
+    # that article is gone (unsubscribed, or taken by retention) — the row still stands,
+    # because the counter above the list counts it either way.
+    instead_of: str | None = None
+    match: float | None = None
 
     model_config = {"from_attributes": False}

@@ -80,6 +80,88 @@
   </div>
   {% endif %}
 
+  {# Intake — what arrived this month and what became of it. The first five bars
+     partition the fetched count exactly, so this is a funnel that has to add up, not
+     a set of independent shares like Engagement above it.
+
+     Each of the three machine reads is drawn only where it took something: a reader
+     with no filters, or with story grouping off, should not have to read a row of
+     zeroes to learn that nothing happened. #}
+  {% if intake.fetched > 0 %}
+  <div class="mb-6">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
+      Intake <span class="normal-case font-normal text-gray-400">({{ intake.rows_shown|num }} rows to go past)</span>
+    </h3>
+    <div class="space-y-1.5">
+      {% set steps = [
+        {"count": intake.fetched, "label": "Fetched", "note": none},
+        {"count": intake.suppressed, "label": "Hidden as a repeat", "note": "of a story you had read"},
+        {"count": intake.filtered, "label": "Taken by a filter", "note": "marked read on arrival"},
+        {"count": intake.url_dupes, "label": "Same link twice", "note": "already in another feed"},
+        {"count": intake.folded, "label": "Folded into a row", "note": "other coverage of one story"},
+        {"count": intake.rows_shown, "label": "Rows you went past", "note": none},
+      ] %}
+      {% for step in steps %}
+      {% if step.count > 0 or loop.first or loop.last %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if step.count %}{{ [[step.count / intake.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
+        </div>
+        <div class="w-52 text-xs text-gray-500">
+          {{ step.label }}
+          {% if step.note %}<span class="text-gray-400">({{ step.note }})</span>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# Score spread — over everything fetched, read or not, which is a different
+     question from what is left to read and answers what the scorer made of the month.
+     Drawn only where there is something scored to draw. #}
+  {% if ai_enabled and intake.scored > 0 %}
+  <div class="mb-6">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
+      Score spread <span class="normal-case font-normal text-gray-400">(everything fetched)</span>
+    </h3>
+    <div class="space-y-1.5">
+      {# A band of a handful against a month of thousands rounds to nothing, and an
+         empty track beside a count that says 3 reads as broken rather than as small.
+         Anything that is there at all gets a sliver; only a real zero gets nothing. #}
+      {% for band in intake.bands %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ band.articles|num }}</div>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if band.articles %}{{ [[band.articles / intake.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
+        </div>
+        <div class="w-52 text-xs text-gray-500">
+          {% if band.ceiling is none %}Score {{ band.floor }} and up
+          {% elif band.floor is none %}Score {{ band.ceiling }} and below
+          {% else %}Score {{ band.floor }} to {{ band.ceiling }}{% endif %}
+          {# Cumulative only where it adds something: the top band already is its own
+             total, and the bottom one is what you skip rather than what is left. #}
+          {% if band.floor is not none and not loop.first %}
+          <span class="text-gray-400">({{ band.at_floor_or_better|num }} at {{ band.floor }}+)</span>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+      {% if intake.unscored > 0 %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ intake.unscored|num }}</div>
+        <div class="flex-1 bg-gray-100 rounded-full h-2">
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [[intake.unscored / intake.fetched * 100, 1]|max, 100]|min|round|int }}%"></div>
+        </div>
+        <div class="w-52 text-xs text-gray-500">Not scored</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
   {# TODO: Read-per-day table hidden — consider expanding the shown metrics
      (e.g. read vs. opened, dwell time, trend) before bringing it back. #}
 

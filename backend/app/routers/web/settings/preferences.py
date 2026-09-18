@@ -8,6 +8,10 @@ from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User, UserCatchupConfig
 from app.services.briefing_service import compute_next_send_at
+from app.services.story_service import (
+    DEDUP_COLLAPSE, DEDUP_SUPPRESS, DEDUP_VALUES,
+    SUPPRESSED_DAYS, count_suppressed, list_suppressed,
+)
 from app.templating import templates
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.formats import is_valid_format
@@ -45,7 +49,37 @@ async def settings_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     s = await _get_or_create_settings(user, db)
-    return templates.TemplateResponse(request, "settings/preferences.html", {"s": s})
+    return templates.TemplateResponse(request, "settings/preferences.html", {
+        "s": s,
+        "suppressed_week": await count_suppressed(user.id, db),
+        "suppressed_days": SUPPRESSED_DAYS,
+    })
+
+
+@router.get("/preferences/hidden", response_class=HTMLResponse)
+async def settings_preferences_hidden(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The articles behind the "hidden in the last 7 days" counter.
+
+    Fetched when the reader asks for it rather than with the page: most readers have
+    the setting off, and for the rest the number answers the question until it doesn't.
+
+    Read-only by design. There is no button here to bring an article back, because the
+    article itself already has one: the title opens it in the reader, where un-reading
+    it works the way it does for every other article. A control here would be a second
+    way to do that, on a page nobody visits twice.
+    """
+    s = await _get_or_create_settings(user, db)
+    hidden = (
+        await list_suppressed(user.id, db) if s.story_dedup == DEDUP_SUPPRESS else []
+    )
+    return templates.TemplateResponse(request, "settings/partials/hidden_stories.html", {
+        "hidden": hidden,
+        "suppressed_days": SUPPRESSED_DAYS,
+    })
 
 
 @router.post("/preferences", response_class=HTMLResponse)
@@ -80,6 +114,11 @@ async def settings_preferences_save(
     s.mark_read_on_scroll = form.get("mark_read_on_scroll") == "on"
     s.mark_read_auto_advance = form.get("mark_read_auto_advance") == "on"
     s.open_original_when_empty = form.get("open_original_when_empty") == "on"
+
+    story_dedup = form.get("story_dedup", DEDUP_COLLAPSE)
+    if story_dedup not in DEDUP_VALUES:
+        story_dedup = DEDUP_COLLAPSE
+    s.story_dedup = story_dedup
 
     label_display = form.get("label_display", "indicator")
     if label_display not in {"none", "indicator", "dots"}:
@@ -121,4 +160,6 @@ async def settings_preferences_save(
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
         "saved": True,
+        "suppressed_week": await count_suppressed(user.id, db),
+        "suppressed_days": SUPPRESSED_DAYS,
     })

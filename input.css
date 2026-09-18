@@ -299,6 +299,51 @@ html.dark[data-layout="3"] .article-row.article-active {
   box-shadow: inset 2px 0 0 0 #60a5fa;
 }
 
+/* The "other sources covered this" chip on a row. An outline rather than a fill, and
+   kept here with the row backgrounds above because that is what settled it: the row
+   is white, #f3f4f6 under the pointer and #f3f8ff when its article is open, so a fill
+   light enough to stay quiet on white disappears on the other two, and one dark enough
+   to survive them shouts on a list where most rows have nothing. There is no shade
+   left in between. A line owes the background nothing, so it holds across all three
+   states and in both themes at a fraction of the ink. */
+.story-chip {
+  border: 1px solid #e5e7eb;
+  color: #6b7280;
+}
+.dark .story-chip {
+  border-color: #3a3a3a;
+  color: #9ca3af;
+}
+/* It is a button (it unfolds the group), so it answers the pointer. One step, no
+   fill: the row underneath is already changing colour on hover and two moving
+   backgrounds read as a flicker. */
+.story-chip:hover {
+  border-color: #cbd0d6;
+  color: #4b5563;
+}
+.dark .story-chip:hover {
+  border-color: #4d4d4d;
+  color: #d1d5db;
+}
+
+/* Where a story's unfolded rows end. The group is held together by the indent alone
+   (see article_row.html for what else was tried and why none of it held), and the
+   indent says where it starts, since the first member sits tight under the row it came
+   from. The end had nothing: in a run of headlines about the same event, one row
+   starting further left is easy to read past.
+
+   A band closes it, the way a grouped list on iOS separates one section from the next.
+   Whitespace was tried first and read as a hole in the list rather than as an end.
+   Drawn on the row that follows, so it cannot collide with anything the group's own
+   rows carry, and nothing is drawn above the group: a break there would cut it off from
+   the row it belongs to. */
+.article-row[data-story-parent] + .article-row:not([data-story-parent]) {
+  border-top: 4px solid #eef0f3;
+}
+.dark .article-row[data-story-parent] + .article-row:not([data-story-parent]) {
+  border-top-color: #383838;
+}
+
 /* A row that was just added to Saved. The list is ordered by publication date, so the
    row can land anywhere in it; the fade says which one of them is the article you
    pasted. It ends on its own, leaving the row's normal (and hover) background. */

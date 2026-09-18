@@ -28,7 +28,8 @@
     <div class="text-sm text-gray-500 mt-1">Feeds in error <span class="text-gray-400">now</span></div>
   </a>
   {% if traffic_views_7d is not none %}
-  <a href="/admin/traffic" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
+  {# ?days=7 so the page opens on the window this card counts; the nav item keeps the 30-day default. #}
+  <a href="/admin/traffic?days=7" class="bg-white border border-gray-200 rounded-lg p-4 hover:border-blue-300 hover:shadow-sm transition-all">
     <div class="text-2xl font-bold text-gray-900">{{ traffic_views_7d|num }}</div>
     <div class="text-sm text-gray-500 mt-1">Page views <span class="text-gray-400">last 7 days</span></div>
   </a>

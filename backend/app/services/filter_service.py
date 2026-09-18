@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 _AI_CONDITION_FIELDS = frozenset({"ai_score"})
 _AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 
+# The value ``suppressed_by`` carries when a filter's mark-read action wrote the read.
+# Named because two places have to agree on it exactly: the action below writes it and
+# the backlog stats count it to say how much reading the filters took off the pile.
+SUPPRESSED_BY_FILTER = "filter"
+
 # Canonical filter ordering. Every place that lists or executes filters must use
 # this same ordering, so the settings list shows filters in the exact order they
 # run (position ties are common — the form defaults to 0 — and `stop_on_match`
@@ -488,6 +493,11 @@ async def _execute_actions(
                 if action.action_type == "mark_read" and not state.is_read:
                     state.is_read = True
                     state.read_at = datetime.now(timezone.utc)
+                    # Stamped as a machine read (same reasoning as the is_starred note
+                    # below): story dedup treats is_read as "the reader has seen this
+                    # news", and a filter firing is not the reader seeing anything.
+                    state.suppressed_at = state.read_at
+                    state.suppressed_by = SUPPRESSED_BY_FILTER
                     changed = True
                 elif action.action_type == "star" and not state.is_starred:
                     # Filter star sets is_starred ONLY — deliberately not the

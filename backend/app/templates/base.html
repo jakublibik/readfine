@@ -283,17 +283,19 @@
         padding-bottom: var(--sab); padding-left: var(--sal); padding-right: var(--sar);
       }
       #mobile-detail-back-bar { display: none; }
-      html[data-bucket="small"].mobile-detail-open #article-detail article { padding-top: 0.75rem; }
-      html[data-bucket="small"].mobile-detail-open #article-detail article header { margin-bottom: 0.75rem; }
+      /* The story overlay below is the same surface for a different reason, so on a
+         phone it gets the same trimming: one star and one menu, not two of each. */
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail article { padding-top: 0.75rem; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail article header { margin-bottom: 0.75rem; }
       html[data-bucket="small"] #inline-article-detail-content article header { margin-bottom: 0.75rem; }
-      html[data-bucket="small"].mobile-detail-open #article-detail [id^="star-btn-"] { display: none; }
-      html[data-bucket="small"].mobile-detail-open #article-detail .article-detail-menu { display: none; }
-      html[data-bucket="small"].mobile-detail-open #article-detail .article-detail-meta { padding-left: 0; }
-      html[data-bucket="small"].mobile-detail-open #article-detail .detail-meta-feed,
-      html[data-bucket="small"].mobile-detail-open #article-detail .detail-meta-author-sep,
-      html[data-bucket="small"].mobile-detail-open #article-detail .detail-meta-date-sep,
-      html[data-bucket="small"].mobile-detail-open #article-detail .detail-meta-date { display: none; }
-      html[data-bucket="small"].mobile-detail-open #article-detail .flex:not(:has(.detail-meta-author)) .detail-meta-readtime-sep { display: none; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail [id^="star-btn-"] { display: none; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .article-detail-menu { display: none; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .article-detail-meta { padding-left: 0; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-feed,
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-author-sep,
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-date-sep,
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-date { display: none; }
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .flex:not(:has(.detail-meta-author)) .detail-meta-readtime-sep { display: none; }
       html[data-bucket="small"].mobile-detail-open #mobile-detail-back-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; top: 0; left: 0; right: 0; z-index: 41;
@@ -303,20 +305,37 @@
       }
 
       /* Deep-link (?open_article_id=…) detail as a fullscreen overlay in non-large
-         layouts, where #article-detail is otherwise hidden. */
-      html.deeplink-detail-open #article-detail {
+         layouts, where #article-detail is otherwise hidden. The same treatment carries
+         a story member opened from the footer (.story-detail-open): the list it was
+         opened from stays underneath with its scroll, and closing is removing the class.
+         Both are bucket-agnostic, unlike .mobile-detail-open above, because both happen
+         in the 2-panel layout as well, where the reader otherwise sits in the list. */
+      html.deeplink-detail-open #article-detail,
+      html.story-detail-open #article-detail {
         display: block !important; position: fixed; inset: 0; z-index: 40;
         background: white; overflow-y: auto;
         padding-top: calc(var(--mobile-bar-h) + var(--sat));
         padding-bottom: var(--sab); padding-left: var(--sal); padding-right: var(--sar);
       }
-      html.deeplink-detail-open #mobile-detail-back-bar {
+      /* Scoped to the panel: article_detail.html carries this bar wherever it is
+         rendered, so the inline shell in the list has a copy of it under the same id.
+         Unscoped, raising the overlay raised that copy as well. */
+      html.deeplink-detail-open #article-detail #mobile-detail-back-bar,
+      html.story-detail-open #article-detail #mobile-detail-back-bar {
         display: flex; align-items: center; gap: 0.5rem;
         position: fixed; top: 0; left: 0; right: 0; z-index: 41;
         height: calc(var(--mobile-bar-h) + var(--sat)); background: #f9fafb;
         border-bottom: 1px solid #e5e7eb;
         padding: var(--sat) calc(0.75rem + var(--sar)) 0 calc(0.75rem + var(--sal));
       }
+      /* Next article is the one control that makes no sense here: it walks the list the
+         reader is not in, and the article they are on is not a row of it. */
+      html.story-detail-open #article-detail #detail-topbar-next { display: none; }
+      /* The reading column is left-aligned everywhere else because it sits in a panel
+         about its own width. Full-bleed over a wide window it would sit against the left
+         edge with the rest of the screen empty. The deep-link overlay is left as it is:
+         it is reached from outside the app and this change belongs to the story work. */
+      html.story-detail-open #article-detail .reading-area { margin-left: auto; margin-right: auto; }
 
       /* ── AI score indicator ── */
       .ai-score-high { color: #16a34a; font-variant-numeric: tabular-nums; }
@@ -434,8 +453,8 @@
         background: #141414 !important; border-color: #2a2a2a !important;
       }
       html.dark[data-bucket="small"].mobile-detail-open #article-detail { background: #141414 !important; }
-      html.dark.deeplink-detail-open #article-detail { background: #141414 !important; }
-      html.dark.deeplink-detail-open #mobile-detail-back-bar { background: #141414 !important; border-color: #2a2a2a !important; }
+      html.dark:is(.deeplink-detail-open, .story-detail-open) #article-detail { background: #141414 !important; }
+      html.dark:is(.deeplink-detail-open, .story-detail-open) #article-detail #mobile-detail-back-bar { background: #141414 !important; border-color: #2a2a2a !important; }
     </style>
     <meta name="csp-nonce" content="{{ request.state.csp_nonce | default('') }}">
     <script src="{{ static_url('js/init.js') }}"></script>

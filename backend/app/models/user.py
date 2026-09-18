@@ -77,6 +77,12 @@ class UserSettings(Base):
     bucket_medium_max: Mapped[int] = mapped_column(SmallInteger, default=1100)
     reading_font_size: Mapped[str] = mapped_column(String(10), nullable=False, default="md")
     reading_font_family: Mapped[str] = mapped_column(String(10), nullable=False, default="sans")
+    # What to do when several feeds cover the same story. 'collapse' (the default) folds
+    # the coverage into one row and says so; 'collapse_suppress' additionally hides an
+    # article that repeats one the reader has already read; 'off' leaves the list alone.
+    # Suppression is opt-in because the match is lexical: it cannot tell "another source
+    # on the same event" from "the next development in it". See app/fetcher/stories.py.
+    story_dedup: Mapped[str] = mapped_column(String(20), nullable=False, default="collapse")
 
     # AI settings
     #

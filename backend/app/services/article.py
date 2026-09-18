@@ -2,7 +2,7 @@
 import logging
 from datetime import date, datetime, timezone
 
-from sqlalchemy import func, literal, literal_column, or_, select, tuple_, update
+from sqlalchemy import func, literal, literal_column, null, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -151,6 +151,7 @@ async def list_articles(
     archived_only: bool = False,
     saved_only: bool = False,
     labeled_only: bool = False,
+    story_id: int | None = None,
     q: str | None = None,
     sort_order: str = "newest",
     limit: int = 50,
@@ -175,10 +176,16 @@ async def list_articles(
     # be found by search at all (it has no feed, so the inner join drops it), which
     # defeats the point of saving it; the same was quietly true of starred/archived
     # articles left orphaned by an unsubscribe.
+    #
+    # Asking for one story's members is the third kind. Like search it has no anchor
+    # of its own — a story is global, built across every feed in the instance — so it
+    # carries ``article_access_predicate`` below and must keep the optional joins, or
+    # a member the reader keeps only through a star would drop out of its own group.
     searching = bool(q and q.strip())
     feed_optional = (
         starred_only or archived_only or saved_only
         or label_id is not None or labeled_only or searching
+        or story_id is not None
     )
     stmt = select(
         Article,
@@ -208,11 +215,15 @@ async def list_articles(
             .outerjoin(UserArticleState, uas_join)
         )
 
-    if searching:
-        # The one branch above that has no anchor of its own. This is what keeps
-        # search user-scoped, so it must not be dropped or narrowed: the joins are
-        # outer here, and without it search would match every article in the table.
+    if searching or story_id is not None:
+        # The branches above with no anchor of their own. This is what keeps them
+        # user-scoped, so it must not be dropped or narrowed: the joins are outer
+        # here, and without it search would match every article in the table and a
+        # story would hand over the feeds this reader never subscribed to.
         stmt = stmt.where(article_access_predicate())
+
+    if story_id is not None:
+        stmt = stmt.where(Article.story_id == story_id)
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
     # profile — never shown in the UI.
@@ -397,6 +408,9 @@ def _to_list_item(
         is_saved=bool(state and state.saved_at),
         ai_score=state.ai_score if state else None,
         labels=labels,
+        # Only the group's identity. What the row says about it (how many other
+        # sources, whether one was read) is user-scoped and gets annotated later.
+        story_id=article.story_id,
         sort_ts=article.published_at or article.fetched_at,
     )
 
@@ -494,6 +508,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         ai_summary=state.ai_summary if state else None,
         ai_summary_truncated=state.ai_summary_truncated if state else False,
         ai_context=state.ai_context if state else None,
+        story_id=article.story_id,
         labels=[
             {"id": r.id, "name": r.name, "color": r.color}
             for r in (await db.execute(
@@ -525,6 +540,15 @@ async def mark_scope_read(
 
     Starred/archived/saved scopes only UPDATE (state row is guaranteed to exist).
     All other scopes upsert to handle articles with and without existing state rows.
+
+    Everything written here is stamped ``suppressed_by='bulk'``. Clearing a backlog is
+    the reader saying they are not going to read these, which is the opposite of what
+    the story suppression needs to hear: it hides an article for repeating one the
+    reader read themselves, and without the stamp one press of "mark all read" over a
+    few hundred articles would arm it against everything those articles were about.
+    Reading one properly afterwards takes the stamp off again (the dwell and
+    link-opened handlers do that), so this only ever withholds a signal that was never
+    given.
     """
     now = datetime.now(timezone.utc)
 
@@ -554,7 +578,7 @@ async def mark_scope_read(
                 UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
-            .values(is_read=True, read_at=now)
+            .values(is_read=True, read_at=now, suppressed_at=now, suppressed_by="bulk")
         )
         await db.commit()
         return
@@ -591,13 +615,16 @@ async def mark_scope_read(
     insert_select = scoped_select(
         literal(user.id), Article.id,
         literal(True), literal(False), literal(False), literal(now),
+        literal(now), literal("bulk"),
     )
     stmt = pg_insert(UserArticleState).from_select(
-        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at"],
+        ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at",
+         "suppressed_at", "suppressed_by"],
         insert_select,
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
-        set_={"is_read": True, "read_at": now},
+        set_={"is_read": True, "read_at": now,
+              "suppressed_at": now, "suppressed_by": "bulk"},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)
@@ -625,13 +652,52 @@ async def filter_accessible_article_ids(
     return [r[0] for r in rows.all()]
 
 
-async def mark_articles_read_batch(user: User, article_ids: list[int], db: AsyncSession) -> None:
-    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read."""
+async def _close_stories(user_id: int, article_ids: list[int], db: AsyncSession) -> None:
+    """Read one article of a story, be done with the story.
+
+    A folded row stands for the whole story, so finishing with it finishes with the
+    rest. Unfolding it takes that back: the members are then rows of their own on
+    screen, and closing the ones the reader just asked to see, while they are looking
+    at them, is the opposite of what the gesture meant. Which of the two it is, only
+    the browser knows, so it says so on the request and the callers pass it on.
+
+    Imported here rather than at module level because story_service imports the access
+    helpers from this module. Kept as one call so every human way of marking an article
+    read — the scroll batch, the button, the API — closes a group the same way; the
+    machine ways (URL dedup, the filter action) deliberately do not, or a filter could
+    close stories nobody had looked at.
+    """
+    from app.services.story_service import mark_group_read
+    await mark_group_read(user_id, article_ids, db)
+
+
+async def _reopen_story(user_id: int, article_id: int, db: AsyncSession) -> None:
+    """The other half of ``_close_stories``: un-read the row, un-read the story.
+
+    Only the members closed on the reader's behalf come back — see
+    ``story_service.reopen_group``. Gated by the same ``close_story`` flag as closing
+    is, so a group the reader has unfolded is left alone in both directions: its
+    members are rows of their own then, and each answers for itself.
+    """
+    from app.services.story_service import reopen_group
+    await reopen_group(user_id, article_id, db)
+
+
+async def mark_articles_read_batch(
+    user: User, article_ids: list[int], db: AsyncSession,
+    unfolded_ids: list[int] | None = None,
+) -> None:
+    """Mark specific articles as read in one upsert. Used by scroll-based batch mark-read.
+
+    ``unfolded_ids`` are the ones whose story is open on screen, and they keep their
+    story to themselves — see ``_close_stories``.
+    """
     if not article_ids:
         return
     article_ids = await filter_accessible_article_ids(user.id, article_ids, db)
     if not article_ids:
         return
+    folded = [aid for aid in article_ids if aid not in set(unfolded_ids or ())]
     now = datetime.now(timezone.utc)
     stmt = pg_insert(UserArticleState).values([
         {"user_id": user.id, "article_id": aid, "is_read": True,
@@ -639,10 +705,15 @@ async def mark_articles_read_batch(user: User, article_ids: list[int], db: Async
         for aid in article_ids
     ]).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
-        set_={"is_read": True, "read_at": now},
+        # suppressed_at goes with the read it belongs to: a machine mark that the
+        # reader has since undone and then read for real is a human read now, and
+        # leaving the stamp behind would let it pass as a machine one forever.
+        set_={"is_read": True, "read_at": now,
+              "suppressed_at": null(), "suppressed_by": null()},
         where=(UserArticleState.__table__.c.is_read.is_not(True)),
     )
     await db.execute(stmt)
+    await _close_stories(user.id, folded, db)
     await db.commit()
 
 
@@ -658,6 +729,10 @@ def _apply_star_side_effects(state, article, *, starred: bool, extract_readable:
         state.user_starred = True
         state.ever_starred = True
         state.starred_at = datetime.now(timezone.utc)
+        # Starring something the machine had closed says the guess was wrong about
+        # this one, so it stops being a machine read and counts as seen for real.
+        state.suppressed_at = None
+        state.suppressed_by = None
         if extract_readable and article.readable_status == "skipped":
             article.readable_status = "pending"
     else:
@@ -727,8 +802,13 @@ async def toggle_article_state(
     article_id: int,
     field: str,
     db: AsyncSession,
+    close_story: bool = True,
 ) -> ArticleResponse | None:
-    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip."""
+    """Toggle a single boolean field (is_read/is_starred/is_archived) in one DB round-trip.
+
+    ``close_story=False`` when the article's story is unfolded on screen — see
+    ``_close_stories``. It governs both directions: reading a folded row finishes the
+    story, un-reading it brings the story back."""
     assert field in {"is_read", "is_starred", "is_archived"}
     loaded = await _load_article_for_write(user, article_id, db)
     if loaded is None:
@@ -736,10 +816,21 @@ async def toggle_article_state(
     article, state, feed_title, custom_title, extract_readable = loaded
 
     new_value = not getattr(state, field, False)
+    # Read before the stamp is cleared below: only a read the reader made themselves
+    # can have closed a story, so only taking that one back reopens one.
+    was_machine_read = state.suppressed_at is not None
     setattr(state, field, new_value)
 
     if field == "is_read":
         state.read_at = datetime.now(timezone.utc) if new_value else None
+        state.suppressed_at = None
+        state.suppressed_by = None
+        if close_story and article.story_id is not None:
+            await db.flush()
+            if new_value:
+                await _close_stories(user.id, [article_id], db)
+            elif not was_machine_read:
+                await _reopen_story(user.id, article_id, db)
 
     if field == "is_starred":
         _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
@@ -755,6 +846,7 @@ async def update_article_state(
     article_id: int,
     payload: ArticleStateUpdate,
     db: AsyncSession,
+    close_story: bool = True,
 ) -> ArticleResponse | None:
     """Set is_read / is_starred / is_archived / is_saved from a payload. Creates
     UserArticleState if needed. One round-trip: load, apply, commit, respond from
@@ -765,8 +857,18 @@ async def update_article_state(
     article, state, feed_title, custom_title, extract_readable = loaded
 
     if payload.is_read is not None:
+        # See toggle_article_state: the stamp says whether this read was the reader's.
+        was_machine_read = state.suppressed_at is not None
         state.is_read = payload.is_read
         state.read_at = datetime.now(timezone.utc) if payload.is_read else None
+        state.suppressed_at = None
+        state.suppressed_by = None
+        if close_story and article.story_id is not None:
+            await db.flush()
+            if payload.is_read:
+                await _close_stories(user.id, [article_id], db)
+            elif not was_machine_read:
+                await _reopen_story(user.id, article_id, db)
 
     if payload.is_starred is not None:
         was_starred = bool(state.is_starred)

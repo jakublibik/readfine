@@ -61,10 +61,17 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          # Must satisfy the engines field in package.json: jsdom, which the JS tests
+          # run the page in, needs 22.22+ and pulls an undici that calls Node APIs
+          # absent before then. Kept at the version used for development, so a test
+          # that passes locally means something here.
+          node-version: "24"
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Run JS tests
+        run: npm test
 
       - name: Build CSS
         run: npm run build

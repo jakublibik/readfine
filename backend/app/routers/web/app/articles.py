@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import delete as sa_delete, func, select, update as sa_update
+from sqlalchemy import case, delete as sa_delete, func, null, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -28,6 +28,19 @@ from app.services.article import (
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
+from app.services.story_service import (
+    DEDUP_COLLAPSE,
+    DEDUP_OFF,
+    ENGAGED_DWELL_SECONDS,
+    MEMBER_LIMIT,
+    row_count,
+    annotate as annotate_stories,
+    collapse_page,
+    count_members,
+    list_members,
+    next_shown as next_shown_stories,
+    parse_shown as parse_shown_stories,
+)
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html
@@ -121,7 +134,11 @@ async def htmx_set_read_batch(
 ):
     data = await request.json()
     ids = [int(i) for i in (data.get("ids") or [])[:500] if str(i).isdigit()]
-    await mark_articles_read_batch(user, ids, db)
+    # Rows whose story is unfolded in the list right now. They are read one by one
+    # like any other row and do not close the rest of their group; the browser is the
+    # only place that knows which those are.
+    unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
 
@@ -130,35 +147,58 @@ async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: boo
     if not label_id and not labeled_only:
         return ""
     oob = ""
+    # Rows, not articles: a label view folds a story into one row like the other
+    # reading views, and these badges stand above it (story_service.row_count). Unless
+    # the reader has the feature off, in which case their list folds nothing.
+    story_dedup = await db.scalar(
+        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
+    )
+    rows_drawn = row_count(story_dedup != DEDUP_OFF)
+    # Every one of these carries trimmed_at IS NULL, the filter list_articles applies
+    # and the sidebar counters already had: a retention stub is gone from the list, so
+    # a badge that still counted it would stand above fewer rows than it claims.
     if label_id:
         lu = (await db.scalar(
-            select(func.count(ArticleLabel.article_id))
+            select(rows_drawn)
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &
                 (UserArticleState.user_id == user_id))
             .where(
                 ArticleLabel.user_id == user_id,
                 ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
         )) or 0
         lt = (await db.scalar(
-            select(func.count(ArticleLabel.article_id))
-            .where(ArticleLabel.user_id == user_id, ArticleLabel.label_id == label_id)
+            select(rows_drawn)
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
+            .where(
+                ArticleLabel.user_id == user_id,
+                ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
+            )
         )) or 0
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
     all_unread = (await db.scalar(
-        select(func.count(Article.id.distinct()))
+        select(rows_drawn)
         .select_from(Article)
         .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
         .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
-        .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+        .where(
+            Article.trimmed_at.is_(None),
+            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+        )
     )) or 0
     all_total = (await db.scalar(
-        select(func.count()).select_from(
-            select(ArticleLabel.article_id).where(ArticleLabel.user_id == user_id).distinct().subquery()
-        )
+        select(rows_drawn)
+        .select_from(ArticleLabel)
+        .join(Article, Article.id == ArticleLabel.article_id)
+        .where(ArticleLabel.user_id == user_id, Article.trimmed_at.is_(None))
     )) or 0
     oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
     return oob
@@ -235,13 +275,27 @@ def _build_filter_params(
     return params
 
 
-def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: int) -> str:
+def _build_more_qs(
+    filter_params: dict, articles, q: str | None, next_offset: int,
+    shown_stories: list[int] | None = None,
+) -> str:
     """Query string for the infinite-scroll "load more" sentinel.
 
     Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
     and search isn't unread-filtered). Everything else uses a keyset cursor on
     (sort_ts, id) so marking articles read mid-scroll can't shift the window and
     skip rows — see ix_articles_sort_ts.
+
+    ``articles`` has to be the page as the query returned it, before story collapsing
+    drops the folded-away rows. Taking the cursor off the last row still on screen
+    would ask the next page to start again in the middle of the page just rendered,
+    and the members that folded into a row here would come back as rows of their own
+    there — the representative they belong under is no longer in the window.
+
+    ``shown_stories`` travels with the cursor for the same reason and is the other half
+    of it: the cursor says where to read on, this says which stories already have a row
+    above. Carrying it in the address keeps the server out of it — the state belongs to
+    one scroll through one list, and a reload starts a fresh one.
     """
     params = dict(filter_params)
     if q and q.strip():
@@ -249,7 +303,63 @@ def _build_more_qs(filter_params: dict, articles, q: str | None, next_offset: in
     elif articles:
         params["cursor_ts"] = articles[-1].sort_ts.isoformat()
         params["cursor_id"] = articles[-1].id
+    if shown_stories:
+        params["shown_stories"] = ",".join(str(i) for i in shown_stories)
     return urlencode(params)
+
+
+def _collapses_stories(
+    *, story_dedup: str, feed_id: int | None, starred_only: bool,
+    archived_only: bool, saved_only: bool,
+) -> bool:
+    """Whether this view folds the other coverage of a story into one row.
+
+    Nothing folds when the reader has the feature off: the setting is what decides
+    whether the list is theirs to shape at all, and the view only decides where that
+    shaping makes sense.
+
+    The reading views do, search included: a search for a story that five newsrooms
+    filed answered with five rows saying the same thing, and folding only ever hides a
+    row that did match, under the best-matching one, with the marker saying it is
+    there. That last part is why search waited for the list to be able to unfold a
+    group — until then the only way to the folded article led through the article
+    above it, which is too far for a view whose job is to answer "is this in here".
+
+    Starred, saved and archive do not: those are lists the reader assembled by hand,
+    and a row missing from one of them is a row they put there themselves. Nor does a
+    single feed, which is a question about that feed, and hiding one of its articles
+    because another source filed first answers a different one.
+    """
+    if story_dedup == DEDUP_OFF:
+        return False
+    return not (feed_id is not None or starred_only or archived_only or saved_only)
+
+
+async def _apply_story_collapse(
+    rows: list, user: User, db: AsyncSession, *, collapse: bool,
+    story_dedup: str = DEDUP_COLLAPSE, shown_stories: list[int] | None = None,
+) -> tuple[list, list[int]]:
+    """Fold the page's stories (when the view does that) and annotate what is left.
+
+    Returns the rows to render and the story list for the next page's address.
+
+    The annotation runs either way: a view that does not collapse still marks a row
+    that has other coverage behind it, so the reader can tell before opening it. The
+    story list is only kept where the view folds, since that is the only place a later
+    page has to know what came before.
+
+    With the feature off the rows come back untouched and unmarked. Off means the list
+    looks like it did before any of this existed, not "folds nothing but still points
+    at what it would have folded".
+    """
+    if story_dedup == DEDUP_OFF:
+        return rows, []
+    if not collapse:
+        await annotate_stories(rows, user.id, db)
+        return rows, []
+    articles = collapse_page(rows, shown_stories)
+    await annotate_stories(articles, user.id, db)
+    return articles, next_shown_stories(shown_stories or [], articles)
 
 
 @router.get("/htmx/articles", response_class=HTMLResponse)
@@ -331,6 +441,7 @@ async def render_list(
     articles_per_page = settings.articles_per_page if settings else 50
     mark_read_on_scroll = settings.mark_read_on_scroll if settings else True
     label_display = settings.label_display if settings else "indicator"
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
     is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
@@ -358,7 +469,7 @@ async def render_list(
             )
             effective_unread_only = len(probe) > 0
 
-    articles = await list_articles(
+    rows = await list_articles(
         user=user,
         db=db,
         feed_id=feed_id,
@@ -378,31 +489,47 @@ async def render_list(
         offset=offset,
     )
 
-    has_more = len(articles) >= articles_per_page
+    # has_more counts what the query returned, not what survives collapsing: a full
+    # page means there is more behind it even if half of it folded into one row.
+    has_more = len(rows) >= articles_per_page
+    collapses = _collapses_stories(
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only,
+    )
+    articles, shown_stories = await _apply_story_collapse(
+        rows, user, db, collapse=collapses, story_dedup=story_dedup,
+    )
 
     # Title bar count for mobile hideable mode
+    rows_drawn = row_count(story_dedup != DEDUP_OFF)
     title_bar_count: int | None = None
     title_bar_count_type: str | None = None
     if label_id is not None:
         title_bar_count = (await db.execute(
-            select(func.count(ArticleLabel.article_id))
+            select(rows_drawn)
+            .select_from(ArticleLabel)
+            .join(Article, Article.id == ArticleLabel.article_id)
             .outerjoin(UserArticleState,
                 (UserArticleState.article_id == ArticleLabel.article_id) &
                 (UserArticleState.user_id == user.id))
             .where(
                 ArticleLabel.user_id == user.id,
                 ArticleLabel.label_id == label_id,
+                Article.trimmed_at.is_(None),
                 (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
             )
         )).scalar() or 0
         title_bar_count_type = "unread"
     elif labeled_only:
         title_bar_count = (await db.execute(
-            select(func.count(Article.id.distinct()))
+            select(rows_drawn)
             .select_from(Article)
             .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
             .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-            .where((UserArticleState.is_read == None) | (UserArticleState.is_read == False))
+            .where(
+                Article.trimmed_at.is_(None),
+                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
+            )
         )).scalar() or 0
         title_bar_count_type = "unread"
     elif starred_only:
@@ -457,17 +584,21 @@ async def render_list(
         saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
-        # Text search uses offset pagination (ts_rank can't be keyset-paged). With a
-        # read-status filter, marking rows read on scroll shrinks the result set
-        # under the offset and skips articles, so disable mark-read-on-scroll for
-        # that case only. Plain text search (status=all) and the empty-query filter
-        # view (keyset pagination) are unaffected and keep it.
-        mark_read_on_scroll=mark_read_on_scroll and not (q and q.strip() and read_status),
+        # Search never marks rows read on scroll. Looking something up is not
+        # reading it: the reader scans the results for the one they want, and the
+        # rest should keep the state they had. It also sidesteps a pagination bug,
+        # since text search pages by offset (ts_rank can't be keyset-paged) and a
+        # read-status filter shrinking the result set under that offset skips rows.
+        mark_read_on_scroll=mark_read_on_scroll and not is_search,
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
+        # A row offers to unfold its story only where the list folded one — see
+        # _collapses_stories. Everywhere else the row keeps the quiet marker instead.
+        story_unfoldable=collapses,
         has_more=has_more,
-        more_qs=_build_more_qs(filter_params, articles, q, len(articles)),
+        # Cursor off the raw page, see _build_more_qs.
+        more_qs=_build_more_qs(filter_params, rows, q, len(rows), shown_stories),
         title_bar_count=title_bar_count,
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
@@ -495,6 +626,10 @@ async def htmx_article_list_more(
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
+    # Stories the pages above already have a row for, put there by the sentinel this
+    # request came from. Kept as a string and parsed in the service: it is a list the
+    # client hands back, so its length and contents are checked rather than declared.
+    shown_stories: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -511,8 +646,9 @@ async def htmx_article_list_more(
     is_mobile = _is_mobile(request)
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
     label_display = settings.label_display if settings else "indicator"
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
 
-    articles = await list_articles(
+    rows = await list_articles(
         user=user,
         db=db,
         feed_id=feed_id,
@@ -534,7 +670,15 @@ async def htmx_article_list_more(
         cursor_id=cursor_id,
     )
 
-    has_more = len(articles) >= articles_per_page
+    has_more = len(rows) >= articles_per_page
+    collapses = _collapses_stories(
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
+        archived_only=archived_only, saved_only=saved_only,
+    )
+    articles, next_stories = await _apply_story_collapse(
+        rows, user, db, collapse=collapses, story_dedup=story_dedup,
+        shown_stories=parse_shown_stories(shown_stories),
+    )
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
         label_id=label_id, unread_only=unread_only,
@@ -555,8 +699,13 @@ async def htmx_article_list_more(
         "density": density,
         "label_display": label_display,
         "show_ai_score": settings.ai_score_show_in_list if settings else False,
+        # Same rule as the first page, see render_list.
+        "story_unfoldable": collapses,
         "has_more": has_more,
-        "more_qs": _build_more_qs(filter_params, articles, q, offset + len(articles)),
+        # Cursor off the raw page, see _build_more_qs.
+        "more_qs": _build_more_qs(
+            filter_params, rows, q, offset + len(rows), next_stories
+        ),
         **extra_ctx,
     })
 
@@ -636,6 +785,11 @@ async def htmx_article_detail(
         )
         if existing_chat and existing_chat.messages:
             chat_messages = list(existing_chat.messages)
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
+    related_count = (
+        0 if story_dedup == DEDUP_OFF
+        else await count_members(user.id, article.story_id, article_id, db)
+    )
     return templates.TemplateResponse(request, "app/partials/article_detail.html", {
         "article": article,
         "mark_read_on_scroll": mark_read_on_scroll,
@@ -643,6 +797,104 @@ async def htmx_article_detail(
         "summary_pending": summary_pending,
         "chat_available": chat_available,
         "chat_messages": chat_messages,
+        "related_count": related_count,
+    })
+
+
+async def _story_dedup_off(user_id: int, db: AsyncSession) -> bool:
+    """Has this reader turned story grouping off?
+
+    The two unfold endpoints ask before answering. Nothing in the page offers the
+    control when the feature is off, so this is not a gate anybody reaches by clicking;
+    it is there so the setting means the same thing everywhere, and a stale page left
+    open across a change in Settings cannot unfold a group the reader has said they do
+    not want.
+    """
+    return (await db.scalar(
+        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
+    )) == DEDUP_OFF
+
+
+@router.get("/htmx/articles/{article_id}/related", response_class=HTMLResponse)
+async def htmx_article_related(
+    article_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The rest of the coverage of this article's story, unfolded on click.
+
+    Access is checked twice on purpose: once for the article being read, and again, per
+    member, inside the service. The group is global, so the second check is the one that
+    keeps a feed the reader never subscribed to out of the footer.
+    """
+    story_id = (await db.execute(
+        add_article_access_joins(select(Article.story_id), user.id)
+        .where(Article.id == article_id, article_access_predicate())
+    )).scalar_one_or_none()
+    if story_id is None or await _story_dedup_off(user.id, db):
+        return HTMLResponse("")
+
+    members = await list_members(user.id, story_id, article_id, db)
+    return templates.TemplateResponse(request, "app/partials/story_members.html", {
+        "article_id": article_id,
+        "members": members,
+    })
+
+
+@router.get("/htmx/articles/{article_id}/story-rows", response_class=HTMLResponse)
+async def htmx_article_story_rows(
+    article_id: int,
+    request: Request,
+    density: str | None = Query(None),
+    label_display: str | None = Query(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The rest of this article's story as list rows, to sit under the row it came from.
+
+    Rows rather than the footer's short entries: a member opens from the list the way
+    every other row opens, into the detail panel, so the list needs nothing of its own
+    to open articles with. That is also why these are real ``.article-row`` elements,
+    marked read on scroll like their neighbours — the rule against that applies to rows
+    that are in the DOM without being on screen, and these are only ever inserted
+    because the reader asked to see them.
+
+    State is deliberately ignored: a group is shown whole, read members included, even
+    where the view around it is filtered to unread. The count on the row promised that
+    many, and a group is usually read in pieces, which is the reason to look at it.
+    """
+    story_id = (await db.execute(
+        add_article_access_joins(select(Article.story_id), user.id)
+        .where(Article.id == article_id, article_access_predicate())
+    )).scalar_one_or_none()
+    if story_id is None:
+        return HTMLResponse("")
+
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    if settings is not None and settings.story_dedup == DEDUP_OFF:
+        return HTMLResponse("")
+    members = await list_articles(
+        user=user, db=db, story_id=story_id,
+        sort_order=settings.default_sort_order if settings else "newest",
+        limit=MEMBER_LIMIT + 1,
+    )
+    rows = [m for m in members if m.id != article_id]
+    if not rows:
+        return HTMLResponse("")
+
+    extra_ctx: dict = {}
+    if settings and getattr(settings, "ai_chat_enabled", False):
+        extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
+            user.id, [r.id for r in rows], db
+        )
+    return templates.TemplateResponse(request, "app/partials/story_rows.html", {
+        "articles": rows,
+        "parent_id": article_id,
+        "density": density or (settings.list_density_web if settings else "comfortable"),
+        "label_display": label_display or (settings.label_display if settings else "indicator"),
+        "show_ai_score": settings.ai_score_show_in_list if settings else False,
+        **extra_ctx,
     })
 
 
@@ -669,8 +921,9 @@ async def htmx_readable_poll(
                 request=request, article=article
             )
         )
-    response = _content_with_readtime_oob(
-        request, article, extra_oob=await _summary_refresh_oob(article, user, db)
+    response = await _content_with_readtime_oob(
+        request, article, user, db,
+        extra_oob=await _summary_refresh_oob(article, user, db),
     )
     response.headers["HX-Retarget"] = f"#article-content-{article.id}"
     response.headers["HX-Reswap"] = "outerHTML"
@@ -683,6 +936,11 @@ async def htmx_row_poll(
     request: Request,
     density: str | None = Query(None),
     label_display: str | None = Query(None),
+    # The row this one was unfolded from, when it is a member of a story rather than a
+    # row of the list proper. Carried by the poller so the rebuilt row keeps its indent
+    # and its data-story-parent; without it a member whose extraction finished would
+    # jump back to the left margin and stop counting as part of the group.
+    story_parent: int | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -704,8 +962,14 @@ async def htmx_row_poll(
         # The same element the row rendered, so the loop carries on unchanged.
         macros = templates.env.get_template("app/partials/row_poll.html").module
         return HTMLResponse(
-            str(macros.row_poll(article_id, density or "", label_display or ""))
+            str(macros.row_poll(
+                article_id, density or "", label_display or "", story_parent or ""
+            ))
         )
+
+    # Rebuilding the row means rebuilding everything on it, the story marker included,
+    # or finishing an extraction would silently take the marker away.
+    await annotate_stories([item], user.id, db)
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     row_html = templates.env.get_template("app/partials/article_row.html").render(
@@ -714,6 +978,7 @@ async def htmx_row_poll(
         density=density or (settings.list_density_web if settings else "comfortable"),
         label_display=label_display or (settings.label_display if settings else "indicator"),
         show_ai_score=settings.ai_score_show_in_list if settings else False,
+        story_child=story_parent,
     )
     response = HTMLResponse(row_html)
     response.headers["HX-Retarget"] = f"#article-row-{article_id}"
@@ -755,10 +1020,27 @@ async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
     ))
 
 
-def _content_with_readtime_oob(request: Request, article, extra_oob: str = "") -> HTMLResponse:
-    """Return article_content.html + OOB span to update the reading-time metadata."""
+async def _content_with_readtime_oob(
+    request: Request, article, user: User, db: AsyncSession, extra_oob: str = ""
+) -> HTMLResponse:
+    """Return article_content.html + OOB span to update the reading-time metadata.
+
+    The story block lives inside that template, so its count has to be worked out here
+    too: this render replaces the whole content block, and without it the block would
+    disappear the moment an extraction finished.
+    """
+    related_count = 0
+    if article.story_id is not None:
+        # Only then is the setting worth a query: without a story there is no block to
+        # draw either way.
+        story_dedup = await db.scalar(
+            select(UserSettings.story_dedup).where(UserSettings.user_id == user.id)
+        )
+        if story_dedup != DEDUP_OFF:
+            related_count = await count_members(user.id, article.story_id, article.id, db)
     content_html = templates.env.get_template("app/partials/article_content.html").render(
-        request=request, article=article, chat_available=False
+        request=request, article=article, chat_available=False,
+        related_count=related_count,
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (
@@ -829,10 +1111,16 @@ def _archive_response(request: Request, article) -> HTMLResponse:
 async def htmx_toggle_read(
     article_id: int,
     request: Request,
+    # Set by app.js when this article's story is unfolded in the list: the members are
+    # then rows of their own on screen and are read one by one, so this one keeps its
+    # story to itself.
+    story_unfolded: bool = Form(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    article = await toggle_article_state(user, article_id, "is_read", db)
+    article = await toggle_article_state(
+        user, article_id, "is_read", db, close_story=not story_unfolded
+    )
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     return _read_response(request, article)
@@ -843,10 +1131,14 @@ async def htmx_set_read(
     article_id: int,
     request: Request,
     state: bool = Query(True),
+    story_unfolded: bool = Form(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    article = await update_article_state(user, article_id, ArticleStateUpdate(is_read=state), db)
+    article = await update_article_state(
+        user, article_id, ArticleStateUpdate(is_read=state), db,
+        close_story=not story_unfolded,
+    )
     if not article:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
     return _read_response(request, article)
@@ -872,7 +1164,20 @@ async def htmx_article_dwell(
         .values(user_id=user.id, article_id=article_id, dwell_seconds=seconds)
         .on_conflict_do_update(
             index_elements=["user_id", "article_id"],
-            set_={"dwell_seconds": UserArticleState.dwell_seconds + seconds},
+            set_={
+                "dwell_seconds": UserArticleState.dwell_seconds + seconds,
+                # Half a minute in front of an article the machine had closed on the
+                # reader's behalf means they read it themselves after all, so the
+                # machine mark goes away and the article can count as seen.
+                "suppressed_at": case(
+                    (UserArticleState.dwell_seconds + seconds >= ENGAGED_DWELL_SECONDS, null()),
+                    else_=UserArticleState.suppressed_at,
+                ),
+                "suppressed_by": case(
+                    (UserArticleState.dwell_seconds + seconds >= ENGAGED_DWELL_SECONDS, null()),
+                    else_=UserArticleState.suppressed_by,
+                ),
+            },
         )
     )
     await db.execute(stmt)
@@ -894,6 +1199,10 @@ async def htmx_article_link_opened(
     )
     if state is not None and not state.link_opened:
         state.link_opened = True
+        # Opening the link is the reader doing something with the article, so a
+        # machine mark on it no longer stands (see the dwell handler above).
+        state.suppressed_at = None
+        state.suppressed_by = None
         await db.commit()
     return HTMLResponse("", status_code=204)
 
@@ -1132,7 +1441,7 @@ async def htmx_extract_readable(
     article_resp = await get_article(user, article_id, db)
     if article_resp is None:
         return HTMLResponse("")
-    return _content_with_readtime_oob(request, article_resp)
+    return await _content_with_readtime_oob(request, article_resp, user, db)
 
 
 @router.post("/htmx/articles/save-url", response_class=HTMLResponse)
