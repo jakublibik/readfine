@@ -205,7 +205,7 @@ def provider_requires_key(provider: str | None) -> bool:
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
-# Last updated: 2026-08-12
+# Last updated: 2026-09-18
 # Anthropic: https://www.anthropic.com/pricing
 # OpenAI:    https://openai.com/api/pricing
 # Gemini:    https://ai.google.dev/gemini-api/docs/pricing
@@ -223,10 +223,16 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
     "claude-opus-4-5": 5.00,
+    "claude-fable-5-1": 10.00,
     "claude-fable-5": 10.00,
     # OpenAI
     "gpt-4o-mini": 0.15,
     "gpt-4o": 2.50,
+    "gpt-6-astra": 10.00,
+    # Promotional price, held at least until 2026-11-21.
+    "gpt-5.6-sol": 4.00,
+    "gpt-5.6-terra": 2.00,
+    "gpt-5.6-luna": 0.20,
     "gpt-5.5": 5.00,
     "gpt-5.4": 2.50,
     "gpt-5.4-mini": 0.75,
@@ -239,7 +245,11 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "gemini-2.5-pro": 1.25,
     "gemini-2.5-flash": 0.30,
     "gemini-2.5-flash-lite": 0.10,
-    "gemini-3.6-flash": 1.50,
+    # The three current Flash models run at half price through 2026-12-31 and go
+    # to $1.50 / $7.50 on 2027-01-01.
+    "gemini-3.8-flash": 0.75,
+    "gemini-3.7-flash": 0.75,
+    "gemini-3.6-flash": 0.75,
     "gemini-3.5-flash": 1.50,
     "gemini-3.5-flash-lite": 0.30,
     "gemini-3.1-flash-lite": 0.25,
@@ -267,9 +277,14 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
     "claude-opus-4-5": 5.00,
+    "claude-fable-5-1": 5.00,
     "claude-fable-5": 5.00,
     "gpt-4o-mini": 4.00,
     "gpt-4o": 4.00,
+    "gpt-6-astra": 5.00,  # $10.00 in / $50.00 out
+    "gpt-5.6-sol": 5.00,  # $4.00 in / $20.00 out
+    "gpt-5.6-terra": 6.00,  # $2.00 in / $12.00 out
+    "gpt-5.6-luna": 6.00,  # $0.20 in / $1.20 out
     "gpt-5.5": 6.00,  # $5.00 in / $30.00 out
     "gpt-5.4": 6.00,  # $2.50 in / $15.00 out
     "gpt-5.4-mini": 6.00,  # $0.75 in / $4.50 out
@@ -281,7 +296,9 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gemini-2.5-pro": 8.00,
     "gemini-2.5-flash": 2.50 / 0.30,  # $0.30 in / $2.50 out
     "gemini-2.5-flash-lite": 4.00,  # $0.10 in / $0.40 out
-    "gemini-3.6-flash": 5.00,  # $1.50 in / $7.50 out
+    "gemini-3.8-flash": 5.00,  # $0.75 in / $3.75 out
+    "gemini-3.7-flash": 5.00,  # $0.75 in / $3.75 out
+    "gemini-3.6-flash": 5.00,  # $0.75 in / $3.75 out
     "gemini-3.5-flash": 6.00,  # $1.50 in / $9.00 out
     "gemini-3.5-flash-lite": 2.50 / 0.30,  # $0.30 in / $2.50 out
     "gemini-3.1-flash-lite": 6.00,  # $0.25 in / $1.50 out
@@ -1385,13 +1402,13 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
 
 # ── internal ──────────────────────────────────────────────────────────────────
 
-# OpenAI's o-series and gpt-5 family are reasoning models: reasoning tokens
+# OpenAI's o-series and the gpt-5 and gpt-6 families are reasoning models: tokens
 # count against max_completion_tokens and are spent before any visible output,
 # so a tight cap (e.g. 10 for scoring) can yield an empty response. Give them
 # extra headroom on top of the desired output length. max_completion_tokens is
 # only a ceiling — unused tokens are not billed — so this is free for short
 # outputs on non-reasoning models, which keep their original cap unchanged.
-_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+_OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5", "gpt-6")
 _OPENAI_REASONING_BUDGET = 8000
 
 

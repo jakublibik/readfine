@@ -35,6 +35,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 - Search results are no longer marked as read when you scroll past them, even with "Mark as read on scroll" on. Searching is looking something up, not reading: you scan the results for the one article you came for, and the rest should still be there, unread, when you go back to your list. This covers everything the search panel returns, including the filter-only views (scope, labels, status) that submit without a search term.
 
+- The cost figures under AI are priced off this month's price lists. The catalogue now knows Claude Fable 5.1, GPT-6 Astra and the GPT-5.6 models (Sol, Terra, Luna), and Gemini 3.7 and 3.8 Flash. Gemini's current Flash models are running at half price until the end of the year, which is what they are now costed at rather than the standard rate. A model Readfine does not know is still estimated from a mid-range model of that provider and marked with a "~". GPT-6 also gets the same room to reason as the GPT-5 models, so a scoring call to it no longer risks coming back empty.
+
 - Creating a folder through the API without naming a position now puts it at the end of your folder order rather than at the front. Folder positions are also renumbered by the upgrade to match the alphabetical order they were displayed in, and again by every move, so positions set through the API before this release are not kept. Nothing in Readfine displayed those positions until now, so nothing you could see changes.
 
 ### Fixed

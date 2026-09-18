@@ -184,6 +184,7 @@ class TestOpenAIMaxTokens:
     @pytest.mark.parametrize("model", [
         "o1", "o1-mini", "o3-mini", "o4-mini",
         "gpt-5", "GPT-5-mini", "gpt-5.4", "gpt-5.5", "gpt-5.1-mini",
+        "gpt-5.6-terra", "gpt-6-astra",
     ])
     def test_reasoning_models_get_headroom(self, model):
         assert _openai_max_tokens(model, 10) == 10 + _OPENAI_REASONING_BUDGET
