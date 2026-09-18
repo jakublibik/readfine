@@ -160,5 +160,6 @@ async def settings_preferences_save(
     return templates.TemplateResponse(request, "settings/preferences.html", {
         "s": s,
         "saved": True,
-        "suppressed_week": await _suppressed_this_week(user.id, db),
+        "suppressed_week": await count_suppressed(user.id, db),
+        "suppressed_days": SUPPRESSED_DAYS,
     })
