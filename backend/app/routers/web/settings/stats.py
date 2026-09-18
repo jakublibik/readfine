@@ -11,9 +11,11 @@ from app.services.stats_service import (
     get_ai_cost_stats,
     get_ai_stats,
     get_feed_stats,
+    get_intake_stats,
     get_label_stats,
     get_reading_stats,
 )
+from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF
 from app.templating import templates
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -26,15 +28,21 @@ async def settings_stats(
     db: AsyncSession = Depends(get_db),
 ):
     from app.models.settings import AppSettings as _AS
+    from app.models.user import UserSettings
     app_ai_on = await db.scalar(select(_AS.ai_enabled).where(_AS.id == 1))
+    story_dedup = await db.scalar(
+        select(UserSettings.story_dedup).where(UserSettings.user_id == user.id)
+    ) or DEDUP_COLLAPSE
     reading = await get_reading_stats(user.id, db)
     labels = await get_label_stats(user.id, db)
     ai = await get_ai_stats(user.id, db) if app_ai_on else None
+    intake = await get_intake_stats(user.id, db, collapsing=story_dedup != DEDUP_OFF)
     return templates.TemplateResponse(request, "settings/stats.html", {
         "reading": reading,
         "labels": labels,
         "ai": ai,
         "ai_enabled": bool(app_ai_on),
+        "intake": intake,
     })
 
 

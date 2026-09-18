@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
+from app.services.filter_service import SUPPRESSED_BY_FILTER
 from app.utils.datetime_format import current_viewer_tz, resolve_tz
 
 
@@ -51,6 +52,34 @@ class ReadingStats:
     avg_time_to_read_hours: float | None
     avg_dwell_seconds: float | None
     top_feeds_by_dwell: list[TopFeedDwell]
+
+
+@dataclass
+class ScoreBand:
+    floor: int | None     # inclusive, None on the bottom band
+    ceiling: int | None   # inclusive, None on the top band
+    articles: int
+    at_floor_or_better: int   # this band plus every band above it
+
+
+@dataclass
+class IntakeStats:
+    """A month's worth of articles and what became of them, article by article.
+
+    The first five numbers partition the window exactly: every article fetched either
+    never reached the reader (one of the three machine reads), reached them folded into
+    somebody else's row, or was a row of its own. They add up to ``fetched``, which is
+    the point of the block, so nothing here may be counted twice or left out.
+    """
+    fetched: int
+    suppressed: int       # hidden as a repeat of a story already read
+    filtered: int         # a filter's mark-read action took it
+    url_dupes: int        # the same link had already arrived in another feed
+    folded: int           # folded into another row of the same story
+    rows_shown: int       # what was actually there to go past
+    bands: list[ScoreBand]
+    scored: int
+    unscored: int
 
 
 @dataclass
@@ -181,6 +210,133 @@ async def get_feed_stats(user_id: int, db: AsyncSession, days: int = 30) -> list
             signal=round(signal, 2),
         ))
     return stats
+
+
+# ── Intake (for Settings → Stats) ────────────────────────────────────────────
+
+# The bands the month's articles are cut into, as (floor, ceiling) in the 0–100 the
+# UI shows. Both ends are inclusive, so an article scored 75 is in the top band and
+# one scored 25 is in the bottom one: the reader who skips "25 and below" is skipping
+# the 25s too, and a band whose edge meant something else would be read wrong.
+SCORE_BANDS = ((75, None), (50, 74), (26, 49), (None, 25))
+
+# The value the cross-feed URL dedup stamps (fetcher.rss._dedup_state). Named here
+# rather than imported because importing the fetcher into the stats service to read one
+# string is not worth the dependency; ``SUPPRESSED_BY_FILTER`` comes from the service
+# that writes it, which is next door.
+_SUPPRESSED_BY_URL = "url"
+
+# How an article that arrived in the window ended up, in the order the block lists
+# them. The three machine reads never reached the reader at all; what is left either
+# sat under another article's row or was a row itself.
+_INTAKE_BUCKETS = """
+    CASE WHEN uas.hidden_at IS NOT NULL         THEN 'suppressed'
+         WHEN uas.suppressed_by = :by_filter    THEN 'filtered'
+         WHEN uas.suppressed_by = :by_url       THEN 'url_dupe'
+         ELSE 'shown' END
+"""
+
+
+async def get_intake_stats(
+    user_id: int, db: AsyncSession, *, collapsing: bool, days: int = 30,
+) -> IntakeStats:
+    """A month of articles and what became of each one.
+
+    Counts every article fetched in the window whatever state it is in now, which is
+    what makes the numbers add up to a month's intake rather than to a leftover pile.
+    The reader wants to know how much actually came at them and how much of it they
+    were spared, and an article they have since read was still one they went past.
+
+    Three things take an article before it is ever seen, and each is a line of its own
+    because they are different favours: suppression hides a repeat of a story already
+    read, a filter's mark-read action takes what the reader told it to take, and the
+    URL dedup drops a link that had already arrived in another feed. All three are
+    machine reads, stamped as such, so none of them is mistaken for reading.
+
+    What remains is split by whether story grouping put it under somebody else's row.
+    Folding is the one step here with no record behind it: it is derived from the
+    article's story and the reader's setting as they stand now, so it answers "how
+    much of this month would fold today". The three above are stamped when they happen
+    and answer what did happen. With grouping off nothing folds and every article that
+    reached the reader is a row.
+
+    The bands cover everything fetched, unread or not: they say what the scorer made
+    of the month, which is a different question from what is left to read.
+
+    Retention is the limit on all of it. An article nobody engaged with is deleted
+    outright once its feed's horizon passes, so on an instance keeping less than the
+    window these numbers read as a floor. ``get_reading_stats`` counts "Fetched" the
+    same way, so the two at least understate together.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # The group key: a story for a grouped article, the article itself for an ungrouped
+    # one, the expression the sidebar badge counts by (story_service.row_count). With
+    # grouping off every article is its own partition, so the rank is always 1 and the
+    # same statement counts articles without a second branch to keep in step.
+    key = "COALESCE(a.story_id, -a.id)" if collapsing else "a.id"
+
+    row = (await db.execute(
+        text(f"""
+            WITH classed AS (
+                SELECT a.id, a.story_id, a.published_at, a.fetched_at,
+                       ROUND(uas.ai_score * 100)::int AS pct,
+                       {_INTAKE_BUCKETS} AS bucket
+                FROM articles a
+                JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
+                LEFT JOIN user_article_states uas
+                       ON uas.article_id = a.id AND uas.user_id = :uid
+                WHERE a.fetched_at >= :cutoff
+            ), ranked AS (
+                SELECT ROW_NUMBER() OVER (
+                           PARTITION BY {key}
+                           ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC
+                       ) AS member_rank
+                FROM classed a
+                WHERE bucket = 'shown'
+            )
+            SELECT
+                (SELECT COUNT(*) FROM classed)                                     AS fetched,
+                (SELECT COUNT(*) FROM classed WHERE bucket = 'suppressed')         AS suppressed,
+                (SELECT COUNT(*) FROM classed WHERE bucket = 'filtered')           AS filtered,
+                (SELECT COUNT(*) FROM classed WHERE bucket = 'url_dupe')           AS url_dupes,
+                (SELECT COUNT(*) FROM ranked WHERE member_rank > 1)                AS folded,
+                (SELECT COUNT(*) FROM ranked WHERE member_rank = 1)                AS rows_shown,
+                (SELECT COUNT(*) FROM classed WHERE pct >= 75)                     AS b_top,
+                (SELECT COUNT(*) FROM classed WHERE pct >= 50 AND pct < 75)        AS b_mid,
+                (SELECT COUNT(*) FROM classed WHERE pct > 25 AND pct < 50)         AS b_low,
+                (SELECT COUNT(*) FROM classed WHERE pct <= 25)                     AS b_bottom,
+                (SELECT COUNT(*) FROM classed WHERE pct IS NULL)                   AS b_unscored
+        """),
+        {
+            "uid": user_id, "cutoff": cutoff,
+            "by_filter": SUPPRESSED_BY_FILTER, "by_url": _SUPPRESSED_BY_URL,
+        },
+    )).one()
+
+    counts = [row.b_top, row.b_mid, row.b_low, row.b_bottom]
+    bands: list[ScoreBand] = []
+    running = 0
+    for (floor, ceiling), count in zip(SCORE_BANDS, counts):
+        running += int(count or 0)
+        bands.append(ScoreBand(
+            floor=floor, ceiling=ceiling,
+            articles=int(count or 0), at_floor_or_better=running,
+        ))
+
+    fetched = int(row.fetched or 0)
+    unscored = int(row.b_unscored or 0)
+    return IntakeStats(
+        fetched=fetched,
+        suppressed=int(row.suppressed or 0),
+        filtered=int(row.filtered or 0),
+        url_dupes=int(row.url_dupes or 0),
+        folded=int(row.folded or 0),
+        rows_shown=int(row.rows_shown or 0),
+        bands=bands,
+        scored=fetched - unscored,
+        unscored=unscored,
+    )
 
 
 # ── Reading stats (for Settings → Stats) ─────────────────────────────────────

@@ -72,6 +72,7 @@ _Optional AI on your own provider key._
 _See how you actually read._
 
 - **Reading stats:** Your read rate, reading streak, average dwell time, and your single most active day and hour.
+- **How much actually came at you:** A month's articles and what became of each one: what a filter took, what was a repeat of a story you had read, what arrived twice under two links, what story grouping folded into one row, and how many rows were left for you to go past. Beside it, the same month cut by relevance score.
 - **Scoring calibration:** Check how well AI relevance scores match what you actually read, and surface "missed gems" the AI rated highly but you never opened.
 - **AI usage & cost:** An estimate of your AI spend per provider over time.
 
