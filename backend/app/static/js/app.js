@@ -681,6 +681,20 @@ function listStickyOffset() {
   return listHeader ? listHeader.getBoundingClientRect().height : 0;
 }
 
+// Bring a list row to the top of the list. Not scrollIntoView: that knows nothing about
+// a sticky list header, so the row it aligns to the top can end up underneath one.
+function scrollListRowToTop(row, behavior) {
+  if (!row) return;
+  var list = document.getElementById('article-list');
+  if (!list) {
+    row.scrollIntoView({ behavior: behavior || 'instant', block: 'start' });
+    return;
+  }
+  var target = list.scrollTop + row.getBoundingClientRect().top
+    - list.getBoundingClientRect().top - listStickyOffset();
+  list.scrollTo({ top: Math.max(0, target), behavior: behavior || 'instant' });
+}
+
 // An article was added to Saved. The list is ordered by publication date, so the row
 // rarely lands on top — a video from a feed you follow carries the date it was
 // published and can sit far down. Bring it into view and flash it, so saving doesn't
@@ -1223,7 +1237,12 @@ function _openStoryMember(link, id) {
   var shell = document.getElementById('inline-article-detail');
   if (shell && shell.dataset.articleId === String(id)) {
     if (_closeStoryOverlay()) history.back();
-    shell.scrollIntoView({ block: 'start' });
+    // The row, not the shell. The shell is only the body, hung under the row the article
+    // was opened from, and the title inside it is hidden as a duplicate of the row's own
+    // (hideDuplicateH1), so putting the shell at the top leaves the article headless.
+    var row = document.querySelector('#article-list .article-row[data-article-id="' + id + '"]');
+    if (row) scrollListRowToTop(row);
+    else shell.scrollIntoView({ block: 'start' });
     return;
   }
   // The link goes along as the request's source. An inline layout turns every request
@@ -2305,23 +2324,9 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     // leave the "Loading…" shell spinning forever.
     _loadInlineContent(articleId);
 
-    // Scroll the row into view, clearing anything pinned above it: the mobile top
-    // panel sits outside the list, and a sticky list header (the Saved URL box, the
-    // search-results strip) sits inside it and stays put while the list scrolls, so
-    // a row aligned to the list's top would slide underneath it.
-    setTimeout(function () {
-      var topOffset = listStickyOffset();
-      if (topOffset > 0) {
-        var list = document.getElementById('article-list');
-        if (list) {
-          var scrollTarget = list.scrollTop + row.getBoundingClientRect().top
-            - list.getBoundingClientRect().top - topOffset;
-          list.scrollTo({ top: Math.max(0, scrollTarget), behavior: 'smooth' });
-        }
-      } else {
-        row.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 50);
+    // Scroll the row into view, clearing anything pinned above it (see
+    // scrollListRowToTop). The delay lets the shell take its height first.
+    setTimeout(function () { scrollListRowToTop(row, 'smooth'); }, 50);
   });
 
   // Close inline when article list reloads (nav change)
