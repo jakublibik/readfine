@@ -289,35 +289,62 @@ group has a finite life. Replayed over the six worst groups in arrival order:
 Pairs and triples are untouched by this, which matters because they are 2 693 of the
 3 358 groups: half of a group of two is one member, which is the old rule exactly.
 
+### The survey was measuring a different algorithm, 2026-09-19
+
+Found while reading pair samples from the export below, and it invalidates every number
+this file ever produced for a non-Latin feed. `survey_dedup.py` reimplements `pg_trgm`
+so it can run against a CSV without a database, and its word split was `[^a-z0-9]+`,
+which deletes Cyrillic and CJK outright. In a UTF-8 database `pg_trgm` treats both as
+alphanumeric and keeps them.
+
+The symptom: two unrelated Chinese forum posts sharing only the word "gpt" scored
+**1.000** in the survey and **0.068** in Postgres. 42 % of the production corpus has a
+title the old split mangles.
+
+Fixed, and `--check-trgm` now scores sample pairs both ways and reports the drift,
+sampling by script rather than uniformly, because a uniform sample of a mostly-Latin
+corpus is how this survived. After the fix: mean drift 0.0001 over 399 pairs, nothing
+off by more than 0.05. **Run it after touching normalisation**, and treat any number in
+this file produced before this date on a multilingual corpus as unreliable.
+
+One limit stays, measured rather than assumed: the token prefilter compares two articles
+only if they share a significant token, and Chinese has no spaces, so a headline can be
+one token. On a CJK-heavy slice the prefilter finds 16 pairs against 20 by brute force,
+so it loses about **20 % of CJK pairs**. The absolute numbers are small, but the survey
+undercounts that part of the corpus and Postgres does not.
+
 ### Confirmed on a full production export, 2026-09-19
 
 62 240 articles, 269 feeds, 67 days, with no read state in it, so the file carries
-nothing belonging to anybody. Run through `survey_dedup.py --from-csv`, which now prints
-both membership rules side by side:
+nothing belonging to anybody. Run through `survey_dedup.py --from-csv`, which prints both
+membership rules side by side (all figures post-fix):
 
 | at 0.30 | transitive closure | half the group + root window |
 |---|---|---|
-| groups | 3 961 | 5 899 |
-| articles grouped | 21 598 | 19 024 |
-| in groups of 10+ | 11 694 (54 %) | 2 998 (16 %) |
-| largest group | **10 036** | 40 |
+| groups | 6 143 | 6 856 |
+| largest group | **1 243** | 35 |
+| folded away | — | 9 647 (144/day) |
+| groups of 10+ | — | 18, holding 301 articles |
 
-The closure's largest group is 10 036 articles over 430 hours, and its first four
-members are `Claude Fable 5.1 and Claude Mythos 5.1`, a Russian book listing,
-`Modaal for Android` and `GPT-6 Astra`. Production never showed anything that large only
-because the live path works forward in windows rather than taking the closure of the
-whole corpus at once; 514 was the same failure, caught early.
+Production never showed a group of 1 243 only because the live path works forward in
+windows rather than taking the closure of the whole corpus at once. 514 was the same
+failure, caught early.
 
-Grouping 2 574 fewer articles is what the rule costs, and against a 10 036-member group
-it is not a cost worth arguing about.
+**What survives is mostly correct, which is the real news.** The largest remaining
+groups are a 22-member Macklemore story across 8 feeds, a 21-member foldable iPhone
+launch across 13, a 19-member Anthropic story across 15. That is the feature working.
+Across 67 days only 18 groups reach 10 members at all, holding 301 articles between
+them, so the fold is no longer where the damage is.
 
-**Still open, and now with a target.** The new rule's largest groups sit exactly on
-`MAX_GROUP_SIZE`, which was supposed to be a guard that never fires, so the rule alone
-is not enough. The 180 surviving groups of 10+ hold 2 998 articles, and **76 % of them
-come from ten feeds**: V2EX (468), IXBT.GAMES (411), NodeSeek (405), a Habr subscription
-feed (238), 3DNews (165). Two of those are discussion boards, where a "headline" is a
-post title (`[iPhone] 想给 iPhone 14 PM 更换电池`, `【出】出一个 VMISS US.LA.9929.Basic`)
-and posts about one recurring subject are not one piece of news by any definition. This
-is a feed-shaped problem, not a threshold-shaped one, which is the useful thing to know
-before step 2: the answer is likely to be keeping such feeds out of matching rather than
-scoring their titles more cleverly.
+**What is left for step 2, and it is small.** Two feeds of AI model releases contribute
+88 of those 301 articles (`AI & Trending now`, `AI & Tech Top day`, carrying names like
+`DeepSeek-V4-Flash-0731-JANG-CRACK`), and the discussion boards V2EX and NodeSeek
+another 39. Those are the only groups where the members are genuinely not one piece of
+news. It is a handful of feeds rather than a scoring problem, so per-feed exclusion is
+worth more here than any cleverer comparison.
+
+**Hiding is untouched by all of this** and is worth keeping separate in the head. It is
+pairwise at 0.40 against an article the reader read themselves, so the group rule never
+enters into it. The ceiling on the export is 14 445 articles (216/day) with a pair over
+0.40, but production hid 2 in a day, because it also needs the reader to subscribe to
+both feeds and to have read the counterpart.
