@@ -79,7 +79,15 @@ class ArticleListItem(BaseModel):
     # whole group, and the group reaches past the page (a read member is missing from
     # an unread-only page, and the group can straddle the page boundary). Excluded
     # from API JSON, where nothing fills them in and a 0 would read as a fact.
+    #
+    # story_others counts what this view would give back on unfolding, which in a
+    # filtered list is not the whole group: a label view unfolds the members carrying
+    # that label and nothing else. story_total counts the group as it stands, which is
+    # a fact about the news rather than about the filter, and is what tells a reader
+    # that the one article their label caught is part of something bigger. The two are
+    # equal in an unfiltered list.
     story_others: int = Field(default=0, exclude=True)
+    story_total: int = Field(default=0, exclude=True)
     story_read: int = Field(default=0, exclude=True)
     # coalesce(published_at, fetched_at) used for keyset pagination cursor;
     # excluded from API JSON (internal pagination concern only)

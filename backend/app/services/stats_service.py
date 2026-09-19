@@ -7,6 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
 from app.services.filter_service import SUPPRESSED_BY_FILTER
+# The same number everywhere it is asked: half a minute in front of an article is what
+# counts as having read it. It decides something in story_service (it clears the
+# machine's suppressed_at), which is why that is where it lives.
+from app.services.story_service import ENGAGED_DWELL_SECONDS
 from app.utils.datetime_format import current_viewer_tz, resolve_tz
 
 
@@ -42,10 +46,6 @@ class ReadingStats:
     streak: int
     labeled_backlog: int    # unread + has label (all time)
     starred_backlog: int    # starred (all time)
-    total_articles: int     # last 30d
-    labeled_count: int
-    read_count: int         # dwell >= 30s OR link opened
-    starred_count: int      # ever_starred
     per_day: list[DailyRead]
     active_hour: int | None      # 0-23, None if < 7 records
     active_day: int | None       # 0=Mon … 6=Sun, None if < 7 records
@@ -63,13 +63,19 @@ class ScoreBand:
 
 
 @dataclass
-class IntakeStats:
-    """A month's worth of articles and what became of them, article by article.
+class IntakeColumn:
+    """One reading of the month: everything, or only what carries a label.
 
-    The first five numbers partition the window exactly: every article fetched either
-    never reached the reader (one of the three machine reads), reached them folded into
-    somebody else's row, or was a row of its own. They add up to ``fetched``, which is
-    the point of the block, so nothing here may be counted twice or left out.
+    The first five numbers partition ``fetched`` exactly: every article either never
+    reached the reader (one of the three machine reads), reached them folded into
+    somebody else's row, or was a row of its own. Nothing here may be counted twice or
+    left out, which is the point of the block.
+
+    ``read`` and ``starred`` are not a sixth and seventh step and must not be drawn as
+    one. They are counted over everything that reached the reader, folded rows
+    included, because a folded article is one unfold away and gets read that way all
+    the time. In the block they sit under the funnel without a bar, which is what says
+    they do not nest inside the row above them.
     """
     fetched: int
     suppressed: int       # hidden as a repeat of a story already read
@@ -77,6 +83,25 @@ class IntakeStats:
     url_dupes: int        # the same link had already arrived in another feed
     folded: int           # folded into another row of the same story
     rows_shown: int       # what was actually there to go past
+    read: int             # dwell >= 30s OR link opened
+    starred: int          # ever starred
+
+
+@dataclass
+class IntakeStats:
+    """A month's worth of articles and what became of them, article by article.
+
+    Two readings of the same month, because they answer different questions and the
+    reader who works through labels is asking the second one. ``labeled`` is not
+    ``all`` with a smaller first number: a label changes every line of the funnel, and
+    it changes ``folded`` the most, since a list filtered to one label folds the
+    members carrying that label and nothing else.
+
+    ``labeled`` is None for a reader with no labels in the window, where a second
+    column of zeroes would be noise.
+    """
+    all: IntakeColumn
+    labeled: IntakeColumn | None
     bands: list[ScoreBand]
     scored: int
     unscored: int
@@ -281,17 +306,34 @@ async def get_intake_stats(
             WITH classed AS (
                 SELECT a.id, a.story_id, a.published_at, a.fetched_at,
                        ROUND(uas.ai_score * 100)::int AS pct,
-                       {_INTAKE_BUCKETS} AS bucket
+                       {_INTAKE_BUCKETS} AS bucket,
+                       (COALESCE(uas.dwell_seconds, 0) >= :dwell
+                        OR COALESCE(uas.link_opened, false))                AS engaged,
+                       COALESCE(uas.ever_starred, false)                    AS starred,
+                       (al.article_id IS NOT NULL)                          AS labeled
                 FROM articles a
                 JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
                 LEFT JOIN user_article_states uas
                        ON uas.article_id = a.id AND uas.user_id = :uid
+                LEFT JOIN (
+                    SELECT DISTINCT article_id
+                    FROM article_labels WHERE user_id = :uid
+                ) al ON al.article_id = a.id
                 WHERE a.fetched_at >= :cutoff
             ), ranked AS (
-                SELECT ROW_NUMBER() OVER (
+                -- Two ranks, because the two columns fold differently. The first is the
+                -- list as it stands; the second is the list filtered to one reader's
+                -- labels, where a group folds only the members carrying one, so a
+                -- labelled article whose siblings are unlabelled is a row of its own.
+                SELECT labeled, engaged, starred,
+                       ROW_NUMBER() OVER (
                            PARTITION BY {key}
                            ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC
-                       ) AS member_rank
+                       ) AS member_rank,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY {key}, labeled
+                           ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.id DESC
+                       ) AS labeled_rank
                 FROM classed a
                 WHERE bucket = 'shown'
             )
@@ -302,6 +344,25 @@ async def get_intake_stats(
                 (SELECT COUNT(*) FROM classed WHERE bucket = 'url_dupe')           AS url_dupes,
                 (SELECT COUNT(*) FROM ranked WHERE member_rank > 1)                AS folded,
                 (SELECT COUNT(*) FROM ranked WHERE member_rank = 1)                AS rows_shown,
+                (SELECT COUNT(*) FROM classed
+                  WHERE bucket = 'shown' AND engaged)                              AS read,
+                (SELECT COUNT(*) FROM classed
+                  WHERE bucket = 'shown' AND starred)                              AS starred,
+                (SELECT COUNT(*) FROM classed WHERE labeled)                       AS l_fetched,
+                (SELECT COUNT(*) FROM classed
+                  WHERE labeled AND bucket = 'suppressed')                         AS l_suppressed,
+                (SELECT COUNT(*) FROM classed
+                  WHERE labeled AND bucket = 'filtered')                           AS l_filtered,
+                (SELECT COUNT(*) FROM classed
+                  WHERE labeled AND bucket = 'url_dupe')                           AS l_url_dupes,
+                (SELECT COUNT(*) FROM ranked
+                  WHERE labeled AND labeled_rank > 1)                              AS l_folded,
+                (SELECT COUNT(*) FROM ranked
+                  WHERE labeled AND labeled_rank = 1)                              AS l_rows_shown,
+                (SELECT COUNT(*) FROM classed
+                  WHERE labeled AND bucket = 'shown' AND engaged)                  AS l_read,
+                (SELECT COUNT(*) FROM classed
+                  WHERE labeled AND bucket = 'shown' AND starred)                  AS l_starred,
                 (SELECT COUNT(*) FROM classed WHERE pct >= 75)                     AS b_top,
                 (SELECT COUNT(*) FROM classed WHERE pct >= 50 AND pct < 75)        AS b_mid,
                 (SELECT COUNT(*) FROM classed WHERE pct > 25 AND pct < 50)         AS b_low,
@@ -309,7 +370,7 @@ async def get_intake_stats(
                 (SELECT COUNT(*) FROM classed WHERE pct IS NULL)                   AS b_unscored
         """),
         {
-            "uid": user_id, "cutoff": cutoff,
+            "uid": user_id, "cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS,
             "by_filter": SUPPRESSED_BY_FILTER, "by_url": _SUPPRESSED_BY_URL,
         },
     )).one()
@@ -326,13 +387,28 @@ async def get_intake_stats(
 
     fetched = int(row.fetched or 0)
     unscored = int(row.b_unscored or 0)
+    labeled_fetched = int(row.l_fetched or 0)
     return IntakeStats(
-        fetched=fetched,
-        suppressed=int(row.suppressed or 0),
-        filtered=int(row.filtered or 0),
-        url_dupes=int(row.url_dupes or 0),
-        folded=int(row.folded or 0),
-        rows_shown=int(row.rows_shown or 0),
+        all=IntakeColumn(
+            fetched=fetched,
+            suppressed=int(row.suppressed or 0),
+            filtered=int(row.filtered or 0),
+            url_dupes=int(row.url_dupes or 0),
+            folded=int(row.folded or 0),
+            rows_shown=int(row.rows_shown or 0),
+            read=int(row.read or 0),
+            starred=int(row.starred or 0),
+        ),
+        labeled=IntakeColumn(
+            fetched=labeled_fetched,
+            suppressed=int(row.l_suppressed or 0),
+            filtered=int(row.l_filtered or 0),
+            url_dupes=int(row.l_url_dupes or 0),
+            folded=int(row.l_folded or 0),
+            rows_shown=int(row.l_rows_shown or 0),
+            read=int(row.l_read or 0),
+            starred=int(row.l_starred or 0),
+        ) if labeled_fetched else None,
         bands=bands,
         scored=fetched - unscored,
         unscored=unscored,
@@ -403,30 +479,6 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
         {"uid": user_id},
     )
     starred_backlog = int(starred_backlog_result.scalar() or 0)
-
-    # Funnel counts (last 30d)
-    funnel_result = await db.execute(
-        text("""
-            SELECT
-                COUNT(DISTINCT a.id) AS total,
-                COUNT(DISTINCT al_sub.article_id) AS labeled,
-                COUNT(DISTINCT CASE WHEN uas.dwell_seconds >= 30 OR uas.link_opened THEN a.id END) AS read,
-                COUNT(DISTINCT CASE WHEN uas.ever_starred THEN a.id END) AS starred
-            FROM articles a
-            JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
-            LEFT JOIN user_article_states uas ON uas.article_id = a.id AND uas.user_id = :uid
-            LEFT JOIN (
-                SELECT DISTINCT article_id FROM article_labels WHERE user_id = :uid
-            ) al_sub ON al_sub.article_id = a.id
-            WHERE a.fetched_at >= :cutoff
-        """),
-        {"uid": user_id, "cutoff": cutoff},
-    )
-    f = funnel_result.one()
-    total_articles = int(f.total or 0)
-    labeled_count = int(f.labeled or 0)
-    read_count = int(f.read or 0)
-    starred_count = int(f.starred or 0)
 
     # Per-day reads (last 7 days, dwell >= 30s), grouped by the viewer's local date.
     # Widened to 8 absolute days so the oldest visible local day isn't truncated at
@@ -555,10 +607,6 @@ async def get_reading_stats(user_id: int, db: AsyncSession, days: int = 30) -> R
         streak=streak,
         labeled_backlog=labeled_backlog,
         starred_backlog=starred_backlog,
-        total_articles=total_articles,
-        labeled_count=labeled_count,
-        read_count=read_count,
-        starred_count=starred_count,
         per_day=per_day,
         active_hour=active_hour,
         active_day=active_day,

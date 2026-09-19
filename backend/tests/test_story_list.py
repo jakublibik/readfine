@@ -364,6 +364,56 @@ class TestAnnotate:
         assert [r.story_others for r in rows] == [1, 2]
 
 
+class TestScopedCounts:
+    """What a filtered list promises must be what unfolding gives back.
+
+    A label list folds the members carrying that label, so those are the ones it may
+    unfold. Handing back the rest would put articles in the list that were never in it,
+    and since unfolded rows mark themselves read on scroll, it would quietly take them
+    off the reader's unread list too.
+
+    The group is still worth naming in full, which is why the row carries both numbers:
+    one article caught by a label can be part of something much bigger, and that is a
+    fact about the news rather than about the filter.
+    """
+
+    async def test_scope_splits_the_two_numbers(self, pg):
+        user = await _user(pg)
+        head, second, mine, _ = await _story(pg, user)
+        # A third member the reader can open, so that the filter has something to
+        # exclude that is not already excluded by the access gate. Without it both
+        # numbers come out 1 and the test passes whether scoping works or not.
+        await _article(pg, mine, story_id=head.id, title="Mine as well", minutes_ago=5)
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg, in_scope={head.id, second.id})
+
+        assert row.story_others == 1   # what unfolding would give back
+        assert row.story_total == 2    # what the reader could open in the footer
+
+    async def test_a_lone_member_offers_nothing_but_still_says_how_big(self, pg):
+        """The case that decided the design: a feed labels everything, its
+        counterpart feed is not labelled at all."""
+        user = await _user(pg)
+        head, _, _, _ = await _story(pg, user)
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg, in_scope={head.id})
+
+        assert row.story_others == 0   # nothing to unfold: the line goes quiet
+        assert row.story_total == 1    # but the story is still bigger than this row
+
+    async def test_no_scope_means_the_whole_group(self, pg):
+        """The unfiltered list, which must behave exactly as it did before."""
+        user = await _user(pg)
+        head, _, _, _ = await _story(pg, user)
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg)
+
+        assert row.story_others == row.story_total == 1
+
+
 class TestListingOneStory:
     """``list_articles(story_id=...)`` feeds the rows the list unfolds under a group.
 

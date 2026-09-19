@@ -59,10 +59,19 @@
     having filtered them out. Worth writing down, since it is the reason to skip the
     row without opening it. -#}
 {% macro story_marker(article) %}
-  {%- if article.story_others -%}
+  {%- set total = article.story_total or article.story_others -%}
+  {%- if total -%}
+    {#- Two numbers where the view's filters hold back part of the group: the first is
+        what unfolding gives, the second how big the story is. Written "2/7" here and
+        "2 of 7" on the roomy line, because this is the one density with no room for a
+        word. Where they agree, which is the whole unfiltered list, only one is drawn
+        and the marker looks exactly as it always has. -#}
     <span class="text-xs text-gray-500 flex-shrink-0 whitespace-nowrap"
-          title="{% if article.story_others == 1 %}1 other source covered this{% else %}{{ article.story_others }} other sources covered this{% endif %}{% if article.story_read %}, {{ article.story_read }} of them read{% endif %}">
-      <span aria-hidden="true">⧉</span> +{{ article.story_others }}{% if article.story_read %} · {{ article.story_read }} read{% endif %}
+          title="{% if total == 1 %}1 other source covered this{% else %}{{ total }} other sources covered this{% endif %}{% if article.story_others != total %}, {{ article.story_others }} of them in this view{% endif %}{% if article.story_read %}, {{ article.story_read }} of them read{% endif %}">
+      <span aria-hidden="true">⧉</span>
+      {%- if article.story_others != total %} +{{ article.story_others }}/{{ total }}
+      {%- else %} +{{ total }}{% endif -%}
+      {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
     </span>
   {%- endif -%}
 {% endmacro %}
@@ -91,13 +100,25 @@
     a control in some lists and not in others is the honest shape of the thing: the
     lists that fold are the ones with something folded. -#}
 {% macro story_line(article, interactive) %}
-  {%- if article.story_others -%}
+  {%- set total = article.story_total or article.story_others -%}
+  {%- if total -%}
+    {#- "2 of 7 other sources" where the view's filters hold part of the group back,
+        "7 other sources" where they do not. The second number is the story, the first
+        is what this list will give back, and saying only one of them either lies about
+        the unfold or throws away the fact that the one article a label caught belongs
+        to something much bigger.
+
+        With nothing left to unfold the line falls through to the plain form below,
+        which is the same words the starred and saved lists have always shown. -#}
+    {%- set can_open = interactive and article.story_others -%}
     {%- set words %}
-      {%- if article.story_others == 1 %}1 other source{% else %}{{ article.story_others }} other sources{% endif -%}
+      {%- if article.story_others and article.story_others != total -%}
+        {{ article.story_others }} of {{ total }} other sources
+      {%- elif total == 1 %}1 other source{% else %}{{ total }} other sources{% endif -%}
       {%- if article.story_read %} · {{ article.story_read }} read{% endif -%}
     {% endset -%}
     <div class="mt-1 pl-[26px]">
-      {%- if interactive -%}
+      {%- if can_open -%}
       {#- Tinted around the words only, not across the row: a band the full width of the
           list would turn two neighbouring stories into stripes, and a filled panel is
           spoken for by the AI blocks (blue, amber), which is why the same section in the
@@ -170,6 +191,11 @@
      {% if child_of %}data-story-parent="{{ child_of }}"{% endif %}
      data-article-id="{{ article.id }}"
      data-density="{{ d }}"
+     {#- The filters this list stands in, so unfolding gives back the members that
+         belong in it and not the whole group. Travels on the row for the same reason
+         density does: rows arrive from two endpoints and through "load more", and the
+         container they land in was rendered before any of them. -#}
+     {% if story_scope_qs %}data-story-scope="{{ story_scope_qs }}"{% endif %}
      data-is-read="{{ 'true' if article.is_read else 'false' }}"
      data-url="{{ article.url or '' }}"
      {% if article.body_permanently_empty %}data-no-body="1"{% endif %}

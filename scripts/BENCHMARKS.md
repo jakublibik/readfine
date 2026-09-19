@@ -235,3 +235,116 @@ pairs it was then scored on, so the 13-of-18 is a fit to that sample and will be
 optimistic. The mechanism is sound and the failure mode is the benign one (an article
 stays in the list that could have gone), which is why it shipped before the confirmation
 rather than after. Run it against a fresh export and record the honest number here.
+
+### What the deployment found, 2026-09-19
+
+Everything above measures whether two headlines are the same story. None of it measures
+what a group does once it has more than two members, and that is where the shipped
+version broke: on eight days of production it produced groups of **407 and 514
+articles**, spanning ten days inside a 72 hour rule.
+
+The corpus is the reason it was never seen. The thresholds were measured on an export of
+23 feeds belonging to one account; production runs the grouping globally over 351 feeds,
+and grouping is not a per-feed property. Where the survey said 11 articles a day out of
+240 would collapse (4.6 %), production grouped about 1 500 out of 5 000 (30 %).
+
+Rebuilding the similarity graph of the two large groups offline says plainly what they
+were: of the 131 841 possible pairs inside the 514-member group, **1 341 were over the
+threshold**, a density of 1 %, and plenty of members scored 0.000 against each other. It
+was never a group, it was a chain. Single-link membership plus transitive merging is
+enough on its own: each merge makes a group easier to match, so the next bridge is
+likelier than the last.
+
+Two ingredients fed it, and only the first is a matching problem:
+
+1. **Template and periodic titles**, which are lexically near-identical and are not news:
+   `New York Post - September 11, 2026` against `Grazia UK - 28 September 2026`,
+   `eBay Coupons: 20% Off in September 2026`, `2026 09 19 HackerNews`, and model names
+   like `Qwen3.8-Flash-Next-APEX-GGUF`. These match each other correctly and should not
+   be compared at all.
+2. **Non-English coverage**, where shared administrative phrasing carries a lot of
+   trigrams (`В Архангельской области`), and the English-only cue list has nothing to
+   say.
+
+**Source suffixes were a false lead**, and the correction is worth recording because the
+first write-up of this listed them as a third cause on the strength of one group held
+together by ` - HuffPost`. Measured on the full export below, stripping them changes
+120 815 pairs to 120 646, which is 0.14 %, and the survey's own detector finds a suffix
+on 1 feed out of 269. Point 4 of the previous section stands after all: the discrepancy
+between `title_norm` and `survey_dedup.py` is real and still harmless.
+
+**What was changed** (see `app/fetcher/stories.py`): membership now requires matching at
+least `MEMBERSHIP_SHARE` of a group's members rather than any one of them, groups never
+merge through a shared article, and the window is measured from the group's root so a
+group has a finite life. Replayed over the six worst groups in arrival order:
+
+| rule | 514 members became | largest survivor |
+|---|---|---|
+| single-link + transitive (shipped) | 1 group | 514 |
+| cap of 12 only | 196 groups | 12, full of unrelated articles |
+| two links required | 283 groups | 46 |
+| anchor to root | 286 groups | 22 |
+| **half the group + root window** | **277 groups** | **15**, max span 70 h |
+
+Pairs and triples are untouched by this, which matters because they are 2 693 of the
+3 358 groups: half of a group of two is one member, which is the old rule exactly.
+
+### The survey was measuring a different algorithm, 2026-09-19
+
+Found while reading pair samples from the export below, and it invalidates every number
+this file ever produced for a non-Latin feed. `survey_dedup.py` reimplements `pg_trgm`
+so it can run against a CSV without a database, and its word split was `[^a-z0-9]+`,
+which deletes Cyrillic and CJK outright. In a UTF-8 database `pg_trgm` treats both as
+alphanumeric and keeps them.
+
+The symptom: two unrelated Chinese forum posts sharing only the word "gpt" scored
+**1.000** in the survey and **0.068** in Postgres. 42 % of the production corpus has a
+title the old split mangles.
+
+Fixed, and `--check-trgm` now scores sample pairs both ways and reports the drift,
+sampling by script rather than uniformly, because a uniform sample of a mostly-Latin
+corpus is how this survived. After the fix: mean drift 0.0001 over 399 pairs, nothing
+off by more than 0.05. **Run it after touching normalisation**, and treat any number in
+this file produced before this date on a multilingual corpus as unreliable.
+
+One limit stays, measured rather than assumed: the token prefilter compares two articles
+only if they share a significant token, and Chinese has no spaces, so a headline can be
+one token. On a CJK-heavy slice the prefilter finds 16 pairs against 20 by brute force,
+so it loses about **20 % of CJK pairs**. The absolute numbers are small, but the survey
+undercounts that part of the corpus and Postgres does not.
+
+### Confirmed on a full production export, 2026-09-19
+
+62 240 articles, 269 feeds, 67 days, with no read state in it, so the file carries
+nothing belonging to anybody. Run through `survey_dedup.py --from-csv`, which prints both
+membership rules side by side (all figures post-fix):
+
+| at 0.30 | transitive closure | half the group + root window |
+|---|---|---|
+| groups | 6 143 | 6 856 |
+| largest group | **1 243** | 35 |
+| folded away | — | 9 647 (144/day) |
+| groups of 10+ | — | 18, holding 301 articles |
+
+Production never showed a group of 1 243 only because the live path works forward in
+windows rather than taking the closure of the whole corpus at once. 514 was the same
+failure, caught early.
+
+**What survives is mostly correct, which is the real news.** The largest remaining
+groups are a 22-member Macklemore story across 8 feeds, a 21-member foldable iPhone
+launch across 13, a 19-member Anthropic story across 15. That is the feature working.
+Across 67 days only 18 groups reach 10 members at all, holding 301 articles between
+them, so the fold is no longer where the damage is.
+
+**What is left for step 2, and it is small.** Two feeds of AI model releases contribute
+88 of those 301 articles (`AI & Trending now`, `AI & Tech Top day`, carrying names like
+`DeepSeek-V4-Flash-0731-JANG-CRACK`), and the discussion boards V2EX and NodeSeek
+another 39. Those are the only groups where the members are genuinely not one piece of
+news. It is a handful of feeds rather than a scoring problem, so per-feed exclusion is
+worth more here than any cleverer comparison.
+
+**Hiding is untouched by all of this** and is worth keeping separate in the head. It is
+pairwise at 0.40 against an article the reader read themselves, so the group rule never
+enters into it. The ceiling on the export is 14 445 articles (216/day) with a pair over
+0.40, but production hid 2 in a day, because it also needs the reader to subscribe to
+both feeds and to have read the counterpart.

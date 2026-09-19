@@ -46,71 +46,83 @@
 <section class="mb-8">
   <h2 class="text-sm font-medium text-gray-700 mb-4 pb-1 border-b border-gray-200">Reading</h2>
 
-  {# Engagement — each bar is % of fetched (independent dimensions, not nested funnel stages) #}
-  {% if reading.total_articles > 0 %}
-  <div class="mb-6">
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Engagement</h3>
-    <div class="space-y-1.5">
-      {% set steps = [
-        {"count": reading.labeled_count, "label": "Labeled"},
-        {"count": reading.starred_count, "label": "Starred"},
-        {"count": reading.read_count, "label": "Read / opened"},
-      ]|sort(attribute="count", reverse=true) %}
-      {# Fetched = 100% reference #}
-      <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ reading.total_articles|num }}</div>
-        <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:100%"></div>
-        </div>
-        <div class="w-28 text-xs text-gray-500">Fetched</div>
-      </div>
-      {% for step in steps %}
-      <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
-        <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [step.count / reading.total_articles * 100, 100]|min|round }}%"></div>
-        </div>
-        <div class="w-28 text-xs text-gray-500">
-          {{ step.label }}
-          <span class="text-gray-400">({{ (step.count / reading.total_articles * 100)|num(1) }}%)</span>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
+  {# Intake — the month and what became of it. One block, not two: the old Engagement
+     bars counted labeled / starred / read as independent shares of the same fetched
+     number this funnel starts from, so the two said overlapping things about one month
+     and the reader had to hold both in their head.
 
-  {# Intake — what arrived this month and what became of it. The first five bars
-     partition the fetched count exactly, so this is a funnel that has to add up, not
-     a set of independent shares like Engagement above it.
+     The first five rows partition `fetched` exactly, so this has to add up. Read and
+     starred hang under it as "of which" rather than continuing the funnel: they are
+     counted over everything that reached the reader, folded rows included, because a
+     folded article is one unfold away and gets read that way all the time.
 
-     Each of the three machine reads is drawn only where it took something: a reader
-     with no filters, or with story grouping off, should not have to read a row of
-     zeroes to learn that nothing happened. #}
-  {% if intake.fetched > 0 %}
+     Two columns where the reader uses labels, because a label changes every line, not
+     just the first: a list filtered to one label folds only the members carrying it.
+     Where nothing is labeled the column is absent entirely rather than a row of zeroes. #}
+  {% if intake.all.fetched > 0 %}
+  {% set two = intake.labeled is not none %}
   <div class="mb-6">
     <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
-      Intake <span class="normal-case font-normal text-gray-400">({{ intake.rows_shown|num }} rows to go past)</span>
+      Intake <span class="normal-case font-normal text-gray-400">(last 30 days)</span>
     </h3>
+
+    {% if two %}
+    <div class="flex items-center gap-3 mb-1 text-[11px] text-gray-400">
+      <div class="w-20 text-right">all</div>
+      <div class="w-16 text-right">labeled</div>
+      <div class="flex-1"></div>
+      <div class="w-52"></div>
+    </div>
+    {% endif %}
+
     <div class="space-y-1.5">
       {% set steps = [
-        {"count": intake.fetched, "label": "Fetched", "note": none},
-        {"count": intake.suppressed, "label": "Hidden as a repeat", "note": "of a story you had read"},
-        {"count": intake.filtered, "label": "Taken by a filter", "note": "marked read on arrival"},
-        {"count": intake.url_dupes, "label": "Same link twice", "note": "already in another feed"},
-        {"count": intake.folded, "label": "Folded into a row", "note": "other coverage of one story"},
-        {"count": intake.rows_shown, "label": "Rows you went past", "note": none},
+        {"key": "fetched", "label": "Fetched", "note": none},
+        {"key": "suppressed", "label": "Hidden as a repeat", "note": "of a story you had read"},
+        {"key": "filtered", "label": "Taken by a filter", "note": "marked read on arrival"},
+        {"key": "url_dupes", "label": "Same link twice", "note": "already in another feed"},
+        {"key": "folded", "label": "Folded into a row", "note": "other coverage of one story"},
+        {"key": "rows_shown", "label": "Rows you went past", "note": none},
       ] %}
       {% for step in steps %}
-      {% if step.count > 0 or loop.first or loop.last %}
-      <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ step.count|num }}</div>
+      {% set count = intake.all[step.key] %}
+      {# A reader with no filters, or with story grouping off, should not have to read a
+         row of zeroes to learn that nothing happened. The two ends always show. #}
+      {% if count > 0 or loop.first or loop.last %}
+      <div class="flex items-center gap-3 {% if loop.last %}pt-1.5 border-t border-gray-200{% endif %}">
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ count|num }}</div>
+        {% if two %}
+        <div class="w-16 text-right text-sm text-gray-500">{{ intake.labeled[step.key]|num }}</div>
+        {% endif %}
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if step.count %}{{ [[step.count / intake.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if count %}{{ [[count / intake.all.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
         </div>
         <div class="w-52 text-xs text-gray-500">
           {{ step.label }}
           {% if step.note %}<span class="text-gray-400">({{ step.note }})</span>{% endif %}
+        </div>
+      </div>
+      {% endif %}
+      {% endfor %}
+
+      {# Not funnel steps, and the missing bar is what says so: the rows above each draw
+         their share of the month, these two would have nothing to draw it against. What
+         reached the reader is their base, folded rows included, so they do not nest
+         under the row above them the way the funnel does. #}
+      {% for extra in [
+        {"key": "read", "label": "Read", "note": "half a minute or opened"},
+        {"key": "starred", "label": "Starred", "note": none},
+      ] %}
+      {% if intake.all[extra.key] > 0 %}
+      <div class="flex items-center gap-3">
+        <div class="w-20 text-right text-sm text-gray-600">{{ intake.all[extra.key]|num }}</div>
+        {% if two %}
+        <div class="w-16 text-right text-sm text-gray-500">{{ intake.labeled[extra.key]|num }}</div>
+        {% endif %}
+        <div class="flex-1"></div>
+        <div class="w-52 text-xs text-gray-500">
+          {{ extra.label }}
+          {% if extra.note %}<span class="text-gray-400">({{ extra.note }})</span>{% endif %}
         </div>
       </div>
       {% endif %}
@@ -135,7 +147,7 @@
       <div class="flex items-center gap-3">
         <div class="w-20 text-right text-sm font-medium text-gray-700">{{ band.articles|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if band.articles %}{{ [[band.articles / intake.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if band.articles %}{{ [[band.articles / intake.all.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
         </div>
         <div class="w-52 text-xs text-gray-500">
           {% if band.ceiling is none %}Score {{ band.floor }} and up
@@ -153,7 +165,7 @@
       <div class="flex items-center gap-3">
         <div class="w-20 text-right text-sm font-medium text-gray-700">{{ intake.unscored|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [[intake.unscored / intake.fetched * 100, 1]|max, 100]|min|round|int }}%"></div>
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [[intake.unscored / intake.all.fetched * 100, 1]|max, 100]|min|round|int }}%"></div>
         </div>
         <div class="w-52 text-xs text-gray-500">Not scored</div>
       </div>

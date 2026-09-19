@@ -403,6 +403,35 @@ class TestHidingARepeat:
         assert state is not None and state.is_read is True
         assert state.suppressed_by == "similar"
 
+    async def test_hiding_does_not_depend_on_the_grouping(self, pg, nonce):
+        """A repeat is hidden even in a round that groups nothing.
+
+        The two decisions come off the same match on different terms: hiding is
+        pairwise, against an article the reader read themselves, while joining asks
+        whether the article fits the group as a whole. Here the group holds three
+        articles and the newcomer resembles one, which is not enough to join it, and
+        says nothing about the fact that the reader has read that one.
+        """
+        user = await _user(pg)
+        await _settings(pg, user, DEDUP_SUPPRESS)
+        seen = await _article(pg, await _feed(pg, user), f"{nonce} {SEEN_TITLE}", hours_ago=5)
+        await _read_by_hand(pg, user, seen)
+        seen.story_id = seen.id
+        for filler in ("harvest festival draws record crowds",
+                       "central bank raises interest rates again"):
+            other = await _article(pg, await _feed(pg, user), f"{nonce} {filler}",
+                                   hours_ago=4)
+            other.story_id = seen.id
+        await pg.flush()
+
+        arrival = await _arrives(pg, user, nonce=nonce)
+
+        assert await pg.scalar(
+            select(Article.story_id).where(Article.id == arrival.id)
+        ) is None
+        state = await _state(pg, user, arrival)
+        assert state is not None and state.suppressed_by == "similar"
+
     async def test_folding_alone_hides_nothing(self, pg, nonce):
         """The default. The article is still grouped, it just stays in the list."""
         user = await _user(pg)

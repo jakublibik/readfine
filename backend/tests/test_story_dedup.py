@@ -178,11 +178,12 @@ class TestAssignStories:
         assert await _story_of(pg, third) == first.id
         assert await _story_of(pg, second) == first.id
 
-    async def test_merging_two_groups_moves_every_member(self, pg, nonce):
-        """The race the post-gather pass exists for: two groups meet through one article.
+    async def test_two_groups_do_not_merge_through_one_article(self, pg, nonce):
+        """One article resembling two groups joins one of them and moves neither.
 
-        The bystander is the point — it never matches the bridging article itself, so it
-        can only move if the merge follows story_id rather than the matched pairs.
+        This is the rule that keeps a stray match from being contagious. Merging on a
+        bridge is how a production group reached 514 articles: every merge makes the
+        result easier to match, so the next bridge is likelier than the last.
         """
         left = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=3)
         right = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}", hours_ago=2)
@@ -195,9 +196,63 @@ class TestAssignStories:
         bridge = await _article(pg, await _feed(pg), f"{nonce} {TRAM_THIRD}")
         await assign_stories([bridge], pg)
 
-        assert await _story_of(pg, bridge) == left.id
-        assert await _story_of(pg, right) == left.id
-        assert await _story_of(pg, bystander) == left.id
+        assert await _story_of(pg, bridge) in (left.id, right.id)
+        # Neither group was dragged into the other.
+        assert await _story_of(pg, left) == left.id
+        assert await _story_of(pg, right) == right.id
+        assert await _story_of(pg, bystander) == right.id
+
+    async def test_matching_one_member_of_a_larger_group_is_not_enough(self, pg, nonce):
+        """Half the group, not one lucky neighbour.
+
+        The group here is three articles with one thing in common that the newcomer
+        shares with exactly one of them, which is the shape every runaway group on
+        production turned out to have.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=3)
+        for title in (RATES, f"{nonce} harvest festival draws record crowds"):
+            member = await _article(pg, await _feed(pg), f"{nonce} {title}", hours_ago=2)
+            member.story_id = root.id
+        root.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) is None
+
+    async def test_matching_half_of_a_pair_is_enough(self, pg, nonce):
+        """The counterpart to the test above: two members, one match, still a join.
+
+        Pairs are the overwhelming majority of real groups (2 693 of 3 358 on the
+        production corpus), so the rule has to leave them exactly as they were.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=3)
+        other = await _article(pg, await _feed(pg), f"{nonce} {RATES}", hours_ago=2)
+        root.story_id = other.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) == root.id
+
+    async def test_a_group_stops_taking_members_72h_after_its_root(self, pg, nonce):
+        """The window is measured from the root, so a group cannot crawl forever.
+
+        The newcomer matches a member that is two hours old and would have been let in
+        by a window measured against that member. Measured against the root it is four
+        days late, and four days is a new story about the same subject.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=73)
+        recent = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}", hours_ago=2)
+        root.story_id = recent.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {TRAM_THIRD}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) is None
 
     async def test_short_titles_are_never_grouped(self, pg, nonce):
         """Two title-less items are not the same story, they are two missing titles."""
