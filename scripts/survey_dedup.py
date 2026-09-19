@@ -45,6 +45,25 @@ server, for the account whose read state is worth looking at::
 
 The file holds article titles and one account's reading history, so it must not land in
 the repository or in a synced folder, and it should be deleted once the run is done.
+
+To check the grouping rather than the thresholds, take the whole instance instead. The
+grouping is global, so one account's feeds are the wrong corpus for it: the shape of a
+group depends on how many feeds could have joined it, and that is what made the first
+version look fine on an export of 23 feeds and build 514-member groups on 351. Read
+state is not needed for this, so nothing in this export belongs to anybody::
+
+    docker exec -i readfine-db-1 psql -U readfine -d readfine -c "\\copy ( \\
+      SELECT a.id, a.feed_id, f.title AS feed_title, a.title, a.published_at, \\
+             a.fetched_at, a.url_normalized, \\
+             false AS is_read, NULL AS read_at, 0 AS dwell_seconds, \\
+             false AS link_opened, false AS ever_starred \\
+      FROM articles a JOIN feeds f ON f.id = a.feed_id \\
+      WHERE a.fetched_at > now() - interval '14 days' \\
+    ) TO STDOUT WITH CSV HEADER" > corpus.csv
+
+The report then prints both membership rules side by side, which is the comparison to
+read: the transitive closure is what the feature first shipped with, the other is what
+it ships with now.
 """
 from __future__ import annotations
 
@@ -74,6 +93,12 @@ THRESHOLDS = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65,
               0.70, 0.75, 0.80, 0.85]
 COLLAPSE_T = 0.30
 SUPPRESS_T = 0.45
+
+# Mirrors app.fetcher.stories, like the thresholds above: how much of a group an article
+# has to match to join it, and the runaway guard on group size. Copied rather than
+# imported so this stays runnable against a CSV without the application on the path.
+MEMBERSHIP_SHARE = 0.5
+MAX_GROUP_SIZE = 40
 
 # Pairs are only considered inside this window, matching the design: a story is a
 # burst, and coverage three weeks apart is a different story about the same subject.
@@ -416,6 +441,68 @@ def clusters_from(pairs: list[tuple[Art, Art, float]], t: float) -> dict[int, li
     return out
 
 
+def groups_from(
+    pairs: list[tuple[Art, Art, float]], arts: list[Art], t: float
+) -> dict[int, list[int]]:
+    """The shipped membership rule, replayed in arrival order.
+
+    The counterpart to ``clusters_from``, which is the transitive closure and is what
+    the first version of the feature shipped. This is what replaced it, and the two are
+    kept side by side because the difference between them is the whole point: on
+    production the closure built groups of 514 articles out of a graph whose density
+    was 1 %, and no threshold anywhere in this file would have shown that, because
+    every individual pair in the chain was a decent match.
+
+    Mirrors ``app.fetcher.stories._pick_group``: an article joins the group it matches
+    best, has to match at least MEMBERSHIP_SHARE of that group's members, cannot join a
+    group whose root is more than the window away, and two groups never merge.
+    """
+    edges: dict[int, list[tuple[int, float]]] = defaultdict(list)
+    for a, b, score in pairs:
+        if score >= t:
+            # b arrives after a (find_pairs walks the corpus in time order), so the
+            # decision belongs to b.
+            edges[b.id].append((a.id, score))
+
+    by_id = {a.id: a for a in arts}
+    story_of: dict[int, int] = {}
+    sizes: dict[int, int] = {}
+    window = timedelta(hours=WINDOW_HOURS)
+
+    for art in arts:
+        matches: dict[int, list[float]] = defaultdict(list)
+        for other_id, score in edges.get(art.id, ()):
+            matches[story_of.get(other_id, other_id)].append(score)
+
+        best, best_score = None, 0.0
+        for group_id, hits in matches.items():
+            size = sizes.get(group_id, 1)
+            if len(hits) < size * MEMBERSHIP_SHARE or size >= MAX_GROUP_SIZE:
+                continue
+            if abs(art.ts - by_id[group_id].ts) > window:
+                continue
+            score = sum(hits) / len(hits)
+            if score > best_score:
+                best, best_score = group_id, score
+        if best is None:
+            continue
+        story_of.setdefault(best, best)
+        story_of[art.id] = best
+        sizes[best] = sizes.get(best, 1) + 1
+
+    out: dict[int, list[int]] = defaultdict(list)
+    for article_id, group_id in story_of.items():
+        out[group_id].append(article_id)
+    return out
+
+
+def size_histogram(groups: dict[int, list[int]]) -> str:
+    counts = Counter(len(v) for v in groups.values())
+    biggest = max(counts) if counts else 0
+    head = ", ".join(f"{size}:{n}" for size, n in sorted(counts.items())[:6])
+    return f"{len(groups)} groups (sizes {head}...), largest {biggest}"
+
+
 def estimate_suppression_timed(
     pairs: list[tuple[Art, Art, float]], t: float, strict: bool
 ) -> tuple[int, int, int]:
@@ -536,6 +623,20 @@ def report(arts: list[Art], args, suffixes: dict[int, str]) -> dict:
         print(f"{t:>5.2f} {len(above):>7} {new:>6} {len(cl):>9} {collapsed:>10} "
               f"{collapsed / max(len(arts), 1) * 100:>7.1f}% "
               f"{collapsed / max(days, 1):>6.1f}")
+
+    # The sweep above counts what a threshold catches. It says nothing about the shape
+    # of what it builds, which is where the first shipped version went wrong, so the
+    # two membership rules are printed side by side at the collapse threshold.
+    closure = clusters_from(pairs, COLLAPSE_T)
+    shipped = groups_from(pairs, arts, COLLAPSE_T)
+    print(f"\nMembership at {COLLAPSE_T:.2f}")
+    print(f"  transitive closure : {size_histogram(closure)}")
+    print(f"  shipped rule       : {size_histogram(shipped)}")
+    sweep["membership"] = {
+        "closure_largest": max((len(v) for v in closure.values()), default=0),
+        "shipped_largest": max((len(v) for v in shipped.values()), default=0),
+        "closure_groups": len(closure), "shipped_groups": len(shipped),
+    }
 
     if any(a.is_read for a in arts):
         n_read = sum(1 for a in arts if a.is_read)
