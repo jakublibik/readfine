@@ -255,20 +255,23 @@ was never a group, it was a chain. Single-link membership plus transitive mergin
 enough on its own: each merge makes a group easier to match, so the next bridge is
 likelier than the last.
 
-Three ingredients fed it, and only the first is a matching problem:
+Two ingredients fed it, and only the first is a matching problem:
 
 1. **Template and periodic titles**, which are lexically near-identical and are not news:
    `New York Post - September 11, 2026` against `Grazia UK - 28 September 2026`,
    `eBay Coupons: 20% Off in September 2026`, `2026 09 19 HackerNews`, and model names
    like `Qwen3.8-Flash-Next-APEX-GGUF`. These match each other correctly and should not
    be compared at all.
-2. **Source suffixes in the title**, e.g. ` - HuffPost`. Point 4 of the section above
-   recorded that 0 of our 23 feeds did this, which is why `title_norm` never stripped
-   them while `survey_dedup.py` did. Across 351 feeds it is no longer true, and the
-   discrepancy between the two code paths stopped being harmless.
-3. **Non-English coverage**, where shared administrative phrasing carries a lot of
+2. **Non-English coverage**, where shared administrative phrasing carries a lot of
    trigrams (`В Архангельской области`), and the English-only cue list has nothing to
    say.
+
+**Source suffixes were a false lead**, and the correction is worth recording because the
+first write-up of this listed them as a third cause on the strength of one group held
+together by ` - HuffPost`. Measured on the full export below, stripping them changes
+120 815 pairs to 120 646, which is 0.14 %, and the survey's own detector finds a suffix
+on 1 feed out of 269. Point 4 of the previous section stands after all: the discrepancy
+between `title_norm` and `survey_dedup.py` is real and still harmless.
 
 **What was changed** (see `app/fetcher/stories.py`): membership now requires matching at
 least `MEMBERSHIP_SHARE` of a group's members rather than any one of them, groups never
@@ -286,8 +289,35 @@ group has a finite life. Replayed over the six worst groups in arrival order:
 Pairs and triples are untouched by this, which matters because they are 2 693 of the
 3 358 groups: half of a group of two is one member, which is the old rule exactly.
 
-**Still open.** None of this addresses ingredient 1 or 2. Template titles form genuinely
-dense clusters, so the membership rule only shrinks them: a group of 22 headed by
-`Chewy Promo Codes: $20 Off September 2026` survives it. That needs the titles kept out
-of matching in the first place, and the thresholds want re-measuring on a corpus that
-looks like production rather than like one account.
+### Confirmed on a full production export, 2026-09-19
+
+62 240 articles, 269 feeds, 67 days, with no read state in it, so the file carries
+nothing belonging to anybody. Run through `survey_dedup.py --from-csv`, which now prints
+both membership rules side by side:
+
+| at 0.30 | transitive closure | half the group + root window |
+|---|---|---|
+| groups | 3 961 | 5 899 |
+| articles grouped | 21 598 | 19 024 |
+| in groups of 10+ | 11 694 (54 %) | 2 998 (16 %) |
+| largest group | **10 036** | 40 |
+
+The closure's largest group is 10 036 articles over 430 hours, and its first four
+members are `Claude Fable 5.1 and Claude Mythos 5.1`, a Russian book listing,
+`Modaal for Android` and `GPT-6 Astra`. Production never showed anything that large only
+because the live path works forward in windows rather than taking the closure of the
+whole corpus at once; 514 was the same failure, caught early.
+
+Grouping 2 574 fewer articles is what the rule costs, and against a 10 036-member group
+it is not a cost worth arguing about.
+
+**Still open, and now with a target.** The new rule's largest groups sit exactly on
+`MAX_GROUP_SIZE`, which was supposed to be a guard that never fires, so the rule alone
+is not enough. The 180 surviving groups of 10+ hold 2 998 articles, and **76 % of them
+come from ten feeds**: V2EX (468), IXBT.GAMES (411), NodeSeek (405), a Habr subscription
+feed (238), 3DNews (165). Two of those are discussion boards, where a "headline" is a
+post title (`[iPhone] 想给 iPhone 14 PM 更换电池`, `【出】出一个 VMISS US.LA.9929.Basic`)
+and posts about one recurring subject are not one piece of news by any definition. This
+is a feed-shaped problem, not a threshold-shaped one, which is the useful thing to know
+before step 2: the answer is likely to be keeping such feeds out of matching rather than
+scoring their titles more cleverly.
