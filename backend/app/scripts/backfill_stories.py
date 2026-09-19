@@ -9,17 +9,22 @@ with the app up.
 
     docker compose exec app python -m app.scripts.backfill_stories --days 7
     uv run --project backend python -m app.scripts.backfill_stories --dry-run
+    docker compose exec app python -m app.scripts.backfill_stories --days 10 --reset
 
 Optional. Skip it and grouping simply starts from the next fetch; what it buys is the
 coverage already sitting in people's unread lists. Seven days is the default because
 that is roughly what a reader still has in front of them, and because the cost scales
 with the articles in the window, which on a busy instance is thousands a day.
 
+``--reset`` is the other reason to run it: when the matching rules themselves change,
+the groups already in the database were built by rules that no longer apply, and
+rebuilding on top of them would preserve exactly what the change was meant to undo.
+
 Nothing here needs the app stopped. The scan is read-only, and the writes at the end
 touch only ``articles.story_id``, which the reading path treats as a hint: a member it
 must not show is filtered out by the access gate regardless. Running it twice is safe
-and so is stopping it part way, because it only ever lowers a story_id toward the
-smallest id in its group, which is the same definition the live path uses.
+and so is stopping it part way: articles already grouped are left as they are, which
+is also what makes a second run agree with the first rather than reshuffle it.
 
 Deliberately does not suppress anything. ``app.fetcher.stories._link`` also hides an
 article from a reader who has already read the same news, which is right for an article
@@ -36,11 +41,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.fetcher.stories import COLLAPSE_THRESHOLD, MIN_TITLE_CHARS, WINDOW_HOURS
+from app.fetcher.stories import (
+    COLLAPSE_THRESHOLD,
+    MAX_GROUP_SIZE,
+    MEMBERSHIP_SHARE,
+    MIN_TITLE_CHARS,
+    WINDOW_HOURS,
+)
 
-# Label propagation converges in as many rounds as the longest chain in a group; the
-# measured largest group is 13, so this is a runaway guard rather than a real limit.
-MAX_ROUNDS = 50
+# Rows per UPDATE when writing the grouping back. The writes are one statement per
+# article because each one gets a different story_id; batching them keeps the round
+# trips down without building a CASE expression over a hundred thousand ids.
+WRITE_BATCH = 1000
 
 # The scan is cut into slices so progress is visible and each slice's pairs are
 # committed as they are found. A day at production volume is a few thousand articles,
@@ -68,7 +80,8 @@ async def _scan(conn, days: int, slice_hours: int, quiet: bool) -> int:
     """
     await conn.execute(text(f"DROP TABLE IF EXISTS {PAIRS}"))
     await conn.execute(text(
-        f"CREATE TABLE {PAIRS} (a_id BIGINT NOT NULL, b_id BIGINT NOT NULL)"
+        f"CREATE TABLE {PAIRS} (a_id BIGINT NOT NULL, b_id BIGINT NOT NULL, "
+        "sim REAL NOT NULL)"
     ))
     await conn.commit()
 
@@ -90,11 +103,11 @@ async def _scan(conn, days: int, slice_hours: int, quiet: bool) -> int:
             f"SET LOCAL pg_trgm.similarity_threshold = {COLLAPSE_THRESHOLD}"
         ))
         result = await conn.execute(text(f"""
-            INSERT INTO {PAIRS} (a_id, b_id)
-            SELECT a.id, b.id
+            INSERT INTO {PAIRS} (a_id, b_id, sim)
+            SELECT a.id, b.id, b.sim
             FROM articles a
             CROSS JOIN LATERAL (
-                SELECT b.id
+                SELECT b.id, similarity(a.title_norm, b.title_norm) AS sim
                 FROM articles b
                 WHERE b.id > a.id
                   AND b.feed_id IS DISTINCT FROM a.feed_id
@@ -126,78 +139,154 @@ async def _scan(conn, days: int, slice_hours: int, quiet: bool) -> int:
     return total
 
 
+async def _meta(conn, ids) -> dict[int, tuple]:
+    """(timestamp, story_id) for each article id, the two things a decision needs."""
+    if not ids:
+        return {}
+    return {
+        row.id: (row.ts, row.story_id)
+        for row in await conn.execute(text("""
+            SELECT id, COALESCE(published_at, fetched_at) AS ts, story_id
+            FROM articles WHERE id = ANY(:ids)
+        """), {"ids": list(ids)})
+    }
+
+
 async def _assign(conn) -> tuple[int, int]:
-    """Turn the pairs into story ids: the smallest id in a component wins.
+    """Replay the pairs in arrival order under the live membership rule.
 
-    Three steps, and the third is the one that is easy to miss.
+    Not label propagation any more, and it cannot be. Propagating the minimum along the
+    edges is the transitive closure by definition: it is exactly what ``_link`` used to
+    do and exactly what produced 514-member groups. The rule that replaced it asks how
+    much of a group an article matches, so the answer depends on what the group already
+    holds, and that depends on the order articles arrived in.
 
-    Seed every article that matched something with a group of its own, unless it
-    already has one. COALESCE, not a plain assignment: an article the live path has
-    grouped since the migration ran keeps its group, and resetting it to its own id
-    would tear apart everything the app has done in the meantime.
+    So this walks the articles oldest first and hands each one to the same decision the
+    fetcher makes, which also means a backfill and a week of live fetching land on the
+    same grouping rather than two different ones.
 
-    Then walk the minimum along the pair edges until nothing moves. Every edge is
-    present at once, which is what makes this land on the true smallest id of each
-    connected component rather than on whatever a slice happened to see.
-
-    Then repair the groups whose root moved underneath them. An article whose story_id
-    points at an article that has itself since joined a lower group has to follow it,
-    and no pair edge says so, because its own counterpart never changed. This is the
-    same case ``stories._link`` handles by moving a whole story_id at once, and it
-    comes up here for a group that straddles the edge of the window: the half inside
-    gets re-examined, the half outside does not.
+    In Python rather than SQL because the state being carried forward is a group's size
+    and root, which changes with every row. The edges are the expensive part and they
+    are already computed; what is left is a scan over a few hundred thousand pairs.
     """
-    await conn.execute(text(f"""
-        UPDATE articles SET story_id = COALESCE(story_id, id)
-        WHERE id IN (SELECT a_id FROM {PAIRS} UNION SELECT b_id FROM {PAIRS})
-    """))
+    edges: dict[int, list[tuple[int, float]]] = {}
+    rows = await conn.execute(text(f"SELECT a_id, b_id, sim FROM {PAIRS}"))
+    article_ids: set[int] = set()
+    for a_id, b_id, sim in rows:
+        # a_id < b_id by construction (the scan only looks forward), so every edge is
+        # filed under the later article: that is the one making the decision.
+        edges.setdefault(b_id, []).append((a_id, sim))
+        article_ids.update((a_id, b_id))
+    if not article_ids:
+        return 0, 0
 
-    for _ in range(MAX_ROUNDS):
-        result = await conn.execute(text(f"""
-            UPDATE articles a SET story_id = m.sid
-            FROM (
-                SELECT id, MIN(sid) AS sid FROM (
-                    SELECT p.a_id AS id, other.story_id AS sid
-                      FROM {PAIRS} p
-                      JOIN articles other ON other.id = p.b_id
-                    UNION ALL
-                    SELECT p.b_id AS id, other.story_id AS sid
-                      FROM {PAIRS} p
-                      JOIN articles other ON other.id = p.a_id
-                ) edges GROUP BY id
-            ) m
-            WHERE a.id = m.id AND a.story_id > m.sid
-        """))
-        if not result.rowcount:
-            break
+    meta = await _meta(conn, article_ids)
 
-    for _ in range(MAX_ROUNDS):
-        result = await conn.execute(text("""
-            UPDATE articles a SET story_id = root.story_id
-            FROM articles root
-            WHERE a.story_id = root.id AND root.story_id < a.story_id
-        """))
-        if not result.rowcount:
-            break
+    # story_id of each article as this run decides it, plus the state of every group it
+    # builds. Seeded from what is already in the database so that a second run, or a run
+    # over a window the live path has already grouped, agrees with it instead of
+    # fighting it.
+    story_of = {
+        article_id: story_id
+        for article_id, (_, story_id) in meta.items()
+        if story_id is not None
+    }
+    # Sizes come from the database, not from what the scan saw: a group can perfectly
+    # well have members whose only counterpart sits outside this window, and counting
+    # only the ones in front of us would understate the group and let articles in that
+    # the live path would turn away.
+    sizes: dict[int, int] = {}
+    roots = set(story_of.values())
+    if roots:
+        for row in await conn.execute(text("""
+            SELECT story_id, count(*) AS n FROM articles
+            WHERE story_id = ANY(:ids) GROUP BY story_id
+        """), {"ids": list(roots)}):
+            sizes[row.story_id] = row.n
+        # A root can be older than anything the scan touched, and its timestamp is what
+        # the window is measured against.
+        meta.update(await _meta(conn, roots - set(meta)))
 
-    grouped = (await conn.execute(text(f"""
-        SELECT count(*) FROM articles
-        WHERE story_id IS NOT NULL
-          AND id IN (SELECT a_id FROM {PAIRS} UNION SELECT b_id FROM {PAIRS})
-    """))).scalar() or 0
-    stories = (await conn.execute(text(f"""
-        SELECT count(DISTINCT story_id) FROM articles
-        WHERE story_id IS NOT NULL
-          AND id IN (SELECT a_id FROM {PAIRS} UNION SELECT b_id FROM {PAIRS})
-    """))).scalar() or 0
+    window = WINDOW_HOURS * 3600
+    for article_id in sorted(article_ids):
+        if article_id in story_of:
+            continue
+        matches: dict[int, list[float]] = {}
+        for other_id, sim in edges.get(article_id, ()):
+            group_id = story_of.get(other_id, other_id)
+            matches.setdefault(group_id, []).append(sim)
+
+        best, best_score = None, 0.0
+        for group_id, hits in matches.items():
+            size = sizes.get(group_id, 1)
+            if len(hits) < size * MEMBERSHIP_SHARE or size >= MAX_GROUP_SIZE:
+                continue
+            root_ts = meta.get(group_id, (None, None))[0]
+            if root_ts is None:
+                continue
+            if abs((meta[article_id][0] - root_ts).total_seconds()) > window:
+                continue
+            score = sum(hits) / len(hits)
+            if score > best_score:
+                best, best_score = group_id, score
+        if best is None:
+            continue
+
+        if best not in story_of:  # the root naming a group for the first time
+            story_of[best] = best
+        story_of[article_id] = best
+        sizes[best] = sizes.get(best, 1) + 1
+
+    writes = [
+        {"id": article_id, "sid": story_id}
+        for article_id, story_id in story_of.items()
+        if meta.get(article_id, (None, None))[1] != story_id
+    ]
+    for start in range(0, len(writes), WRITE_BATCH):
+        await conn.execute(
+            text("UPDATE articles SET story_id = :sid WHERE id = :id"),
+            writes[start:start + WRITE_BATCH],
+        )
     await conn.commit()
-    return grouped, stories
+    grouped = len(story_of)
+    return grouped, len(set(story_of.values()))
 
 
-async def run(url: str, days: int, slice_hours: int, dry_run: bool, quiet: bool) -> None:
+async def _reset(conn) -> int:
+    """Undo every grouping decision, including the ones already acted on.
+
+    Three separate things, and only the first is obvious. The groups themselves go, and
+    so do the two kinds of read this feature writes: an article folded away under a
+    story the reader marked read, and one hidden because they had read something too
+    similar. Both are machine-written reads carrying suppressed_at, so clearing them
+    gives back articles nobody actually read.
+
+    ``hidden_at`` is deliberately left alone. It is the record that something was once
+    taken away, the reader's own reading already clears the columns beside it, and
+    nothing reads it back into a decision (see migration 0101). URL dedup is left alone
+    too: it keys on an identical address, it is not part of this, and it is right.
+
+    Does not commit; the caller owns the transaction.
+    """
+    await conn.execute(text("UPDATE articles SET story_id = NULL WHERE story_id IS NOT NULL"))
+    result = await conn.execute(text("""
+        UPDATE user_article_states
+        SET is_read = false, read_at = NULL, suppressed_at = NULL, suppressed_by = NULL
+        WHERE suppressed_by IN ('story', 'similar')
+    """))
+    return result.rowcount or 0
+
+
+async def run(url: str, days: int, slice_hours: int, dry_run: bool, quiet: bool,
+              reset: bool = False) -> None:
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
+            if reset and not dry_run:
+                given_back = await _reset(conn)
+                await conn.commit()
+                print(f"reset: groups cleared, {given_back} hidden articles given back",
+                      flush=True)
             probes = (await conn.execute(text(f"""
                 SELECT count(*) FROM articles
                 WHERE COALESCE(published_at, fetched_at)
@@ -235,6 +324,11 @@ def main() -> None:
                          "have unread")
     ap.add_argument("--slice-hours", type=int, default=SLICE_HOURS,
                     help=f"scan granularity (default {SLICE_HOURS})")
+    ap.add_argument("--reset", action="store_true",
+                    help="drop every existing group and give back every article this "
+                         "feature has hidden, then group again from scratch. For a "
+                         "change to the matching rules, where the old grouping is not "
+                         "something to build on")
     ap.add_argument("--dry-run", action="store_true",
                     help="say how much there is to do, write nothing")
     ap.add_argument("--quiet", action="store_true", help="no per-slice progress")
@@ -243,7 +337,7 @@ def main() -> None:
 
     asyncio.run(run(
         args.database_url or settings.database_url,
-        args.days, args.slice_hours, args.dry_run, args.quiet,
+        args.days, args.slice_hours, args.dry_run, args.quiet, args.reset,
     ))
 
 

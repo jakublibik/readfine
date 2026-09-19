@@ -235,3 +235,59 @@ pairs it was then scored on, so the 13-of-18 is a fit to that sample and will be
 optimistic. The mechanism is sound and the failure mode is the benign one (an article
 stays in the list that could have gone), which is why it shipped before the confirmation
 rather than after. Run it against a fresh export and record the honest number here.
+
+### What the deployment found, 2026-09-19
+
+Everything above measures whether two headlines are the same story. None of it measures
+what a group does once it has more than two members, and that is where the shipped
+version broke: on eight days of production it produced groups of **407 and 514
+articles**, spanning ten days inside a 72 hour rule.
+
+The corpus is the reason it was never seen. The thresholds were measured on an export of
+23 feeds belonging to one account; production runs the grouping globally over 351 feeds,
+and grouping is not a per-feed property. Where the survey said 11 articles a day out of
+240 would collapse (4.6 %), production grouped about 1 500 out of 5 000 (30 %).
+
+Rebuilding the similarity graph of the two large groups offline says plainly what they
+were: of the 131 841 possible pairs inside the 514-member group, **1 341 were over the
+threshold**, a density of 1 %, and plenty of members scored 0.000 against each other. It
+was never a group, it was a chain. Single-link membership plus transitive merging is
+enough on its own: each merge makes a group easier to match, so the next bridge is
+likelier than the last.
+
+Three ingredients fed it, and only the first is a matching problem:
+
+1. **Template and periodic titles**, which are lexically near-identical and are not news:
+   `New York Post - September 11, 2026` against `Grazia UK - 28 September 2026`,
+   `eBay Coupons: 20% Off in September 2026`, `2026 09 19 HackerNews`, and model names
+   like `Qwen3.8-Flash-Next-APEX-GGUF`. These match each other correctly and should not
+   be compared at all.
+2. **Source suffixes in the title**, e.g. ` - HuffPost`. Point 4 of the section above
+   recorded that 0 of our 23 feeds did this, which is why `title_norm` never stripped
+   them while `survey_dedup.py` did. Across 351 feeds it is no longer true, and the
+   discrepancy between the two code paths stopped being harmless.
+3. **Non-English coverage**, where shared administrative phrasing carries a lot of
+   trigrams (`В Архангельской области`), and the English-only cue list has nothing to
+   say.
+
+**What was changed** (see `app/fetcher/stories.py`): membership now requires matching at
+least `MEMBERSHIP_SHARE` of a group's members rather than any one of them, groups never
+merge through a shared article, and the window is measured from the group's root so a
+group has a finite life. Replayed over the six worst groups in arrival order:
+
+| rule | 514 members became | largest survivor |
+|---|---|---|
+| single-link + transitive (shipped) | 1 group | 514 |
+| cap of 12 only | 196 groups | 12, full of unrelated articles |
+| two links required | 283 groups | 46 |
+| anchor to root | 286 groups | 22 |
+| **half the group + root window** | **277 groups** | **15**, max span 70 h |
+
+Pairs and triples are untouched by this, which matters because they are 2 693 of the
+3 358 groups: half of a group of two is one member, which is the old rule exactly.
+
+**Still open.** None of this addresses ingredient 1 or 2. Template titles form genuinely
+dense clusters, so the membership rule only shrinks them: a group of 22 headed by
+`Chewy Promo Codes: $20 Off September 2026` survives it. That needs the titles kept out
+of matching in the first place, and the thresholds want re-measuring on a corpus that
+looks like production rather than like one account.
