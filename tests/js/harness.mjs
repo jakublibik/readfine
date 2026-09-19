@@ -39,11 +39,16 @@ export function browser(bodyHtml = '') {
 
 // One list row, as article_row.html draws it. `parent` is the id of the row a story
 // member was unfolded from, and is what marks this row as part of a group.
-export function row(id, { parent = null } = {}) {
+export function row(id, { parent = null, scope = null, toggle = false } = {}) {
   return (
     '<div id="article-row-' + id + '" class="article-row" data-article-id="' + id + '"'
     + (parent === null ? '' : ' data-story-parent="' + parent + '"')
-    + '></div>'
+    // The list's filters, which article_row.html puts on the row so that unfolding
+    // asks for the members this list folded rather than the whole group.
+    + (scope === null ? '' : ' data-story-scope="' + scope + '"')
+    + '>'
+    + (toggle ? '<button data-story-toggle="' + id + '"></button>' : '')
+    + '</div>'
   );
 }
 

@@ -152,6 +152,7 @@ async def list_articles(
     saved_only: bool = False,
     labeled_only: bool = False,
     story_id: int | None = None,
+    story_ids: list[int] | None = None,
     q: str | None = None,
     sort_order: str = "newest",
     limit: int = 50,
@@ -185,7 +186,7 @@ async def list_articles(
     feed_optional = (
         starred_only or archived_only or saved_only
         or label_id is not None or labeled_only or searching
-        or story_id is not None
+        or story_id is not None or bool(story_ids)
     )
     stmt = select(
         Article,
@@ -215,7 +216,7 @@ async def list_articles(
             .outerjoin(UserArticleState, uas_join)
         )
 
-    if searching or story_id is not None:
+    if searching or story_id is not None or story_ids:
         # The branches above with no anchor of their own. This is what keeps them
         # user-scoped, so it must not be dropped or narrowed: the joins are outer
         # here, and without it search would match every article in the table and a
@@ -224,6 +225,12 @@ async def list_articles(
 
     if story_id is not None:
         stmt = stmt.where(Article.story_id == story_id)
+
+    # The same question for a page's worth of stories at once, which is what lets the
+    # list find out how much of each group its own filters would give back without
+    # asking once per row.
+    if story_ids:
+        stmt = stmt.where(Article.story_id.in_(story_ids))
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
     # profile — never shown in the UI.

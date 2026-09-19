@@ -1355,8 +1355,12 @@ document.addEventListener('click', function (e) {
   }
   // Density travels with the request: the row knows which one it was rendered at, and
   // a member drawn at a different one would break the rhythm of the list it lands in.
+  // The list's own filters travel with it too, so what comes back is what this list
+  // folded rather than the whole group. Without them a label list would unfold
+  // articles that were never in it, and those rows mark themselves read on scroll.
   var url = '/htmx/articles/' + id + '/story-rows'
-    + '?density=' + encodeURIComponent(row.dataset.density || '');
+    + '?density=' + encodeURIComponent(row.dataset.density || '')
+    + (row.dataset.storyScope ? '&' + row.dataset.storyScope : '');
   var loaded = htmx.ajax('GET', url, { target: '#article-row-' + id, swap: 'afterend' });
   if (loaded && loaded.then) {
     loaded.then(function () {

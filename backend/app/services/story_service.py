@@ -368,13 +368,26 @@ def next_shown(already_shown: list[int], items: list[ArticleListItem]) -> list[i
     return shown[-MAX_SHOWN_STORIES:]
 
 
-async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession) -> None:
+async def annotate(
+    items: list[ArticleListItem],
+    user_id: int,
+    db: AsyncSession,
+    in_scope: set[int] | None = None,
+) -> None:
     """Fill in ``story_others`` / ``story_read`` on the rows of one rendered page.
 
     One batch query for the whole page, in the spirit of the label batch in
     ``list_articles``. Counting on the page itself would not do: a read member is
     absent from an unread-only page and a collapsed group can reach past the page
     boundary, so the badge has to ask the group, not the page.
+
+    ``in_scope`` is the article ids this view would actually give back on unfolding,
+    which in a filtered list is not the whole group: a label view unfolds the members
+    carrying that label, because those are the rows it folded and the only ones that
+    belong in it. Passing None means the view holds the whole group, which is the
+    unfiltered case and what every caller did before scoped views existed. The row ends
+    up with both numbers, so it can offer to unfold what it has and still say how big
+    the story is; see ``story_line`` in article_row.html.
 
     "Read" here means read by this reader. Finishing a story marks the rest of it read
     on their behalf (``mark_group_read``), so counting those would make the badge say
@@ -402,10 +415,13 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
     )).all()
 
     totals: dict[int, int] = {}
+    scoped: dict[int, int] = {}
     reads: dict[int, int] = {}
     read_by_reader: set[int] = set()
     for r in rows:
         totals[r.story_id] = totals.get(r.story_id, 0) + 1
+        if in_scope is None or r.id in in_scope:
+            scoped[r.story_id] = scoped.get(r.story_id, 0) + 1
         if r.is_read and r.suppressed_at is None:
             reads[r.story_id] = reads.get(r.story_id, 0) + 1
             read_by_reader.add(r.id)
@@ -414,9 +430,12 @@ async def annotate(items: list[ArticleListItem], user_id: int, db: AsyncSession)
         if item.story_id is None:
             continue
         # The row itself is one of the members it just counted, hence the subtraction
-        # on both numbers. It is always in there: it came out of a list query behind
-        # the same access gate.
-        item.story_others = max(totals.get(item.story_id, 0) - 1, 0)
+        # on every number. It is always in there: it came out of a list query behind
+        # the same access gate, and it is in scope by definition, since the view drew
+        # it. The exception is a row the caller passed no scope for, where the two
+        # counts are the same number by construction.
+        item.story_total = max(totals.get(item.story_id, 0) - 1, 0)
+        item.story_others = max(scoped.get(item.story_id, 0) - 1, 0)
         item.story_read = max(
             reads.get(item.story_id, 0) - (1 if item.id in read_by_reader else 0), 0
         )

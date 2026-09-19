@@ -11,7 +11,7 @@
 // string that an end-anchored pattern would not match.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { browser, list, row, sendHtmx } from './harness.mjs';
+import { browser, captureAjax, list, row, sendHtmx } from './harness.mjs';
 
 test('a row with no group under it is folded', () => {
   const w = browser(list(row(1), row(2)));
@@ -93,3 +93,32 @@ test('the scroll batch carries the unfolded rows with the ids', async () => {
   assert.deepEqual(sent.body.unfolded, [2]);
 });
 
+
+// ── What unfolding asks the server for ────────────────────────────────────────
+// The rows that come back are inserted as real .article-row elements and mark
+// themselves read on scroll. So in a filtered list, asking for the whole group does
+// not just show articles that were never in the list — it takes them off the reader's
+// unread list as they scroll past. The list's filters have to travel with the request.
+
+test('unfolding carries the list filters', () => {
+  const w = browser(list(row(1, { scope: 'label_id=7', toggle: true })));
+  const calls = captureAjax(w);
+
+  w.document.querySelector('[data-story-toggle]')
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].path, /^\/htmx\/articles\/1\/story-rows\?/);
+  assert.match(calls[0].path, /label_id=7/);
+});
+
+test('an unfiltered list asks for the whole group', () => {
+  const w = browser(list(row(1, { toggle: true })));
+  const calls = captureAjax(w);
+
+  w.document.querySelector('[data-story-toggle]')
+    .dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+
+  assert.equal(calls.length, 1);
+  assert.doesNotMatch(calls[0].path, /label_id|folder_id|&q=/);
+});

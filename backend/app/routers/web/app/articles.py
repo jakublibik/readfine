@@ -335,9 +335,70 @@ def _collapses_stories(
     return not (feed_id is not None or starred_only or archived_only or saved_only)
 
 
+def story_scope(
+    *, feed_id=None, folder_id=None, scope_include=None, label_id=None,
+    labeled_only=False, label_filter=None, q=None,
+) -> dict:
+    """The filters that decide which members of a story belong in this view.
+
+    Structure, not state. A label, a folder or a search term says what the list is
+    about, so a member that does not match is not this list's article and unfolding
+    one into it would be putting something there the reader did not ask for — and
+    those rows mark themselves read on scroll, so it would also quietly take it off
+    their unread list. Read/unread, starred, saved and archived are deliberately not
+    here: those describe what the reader has done with an article, and a group is
+    worth opening precisely because it is usually read in pieces.
+
+    Empty means the view holds whole groups, and the caller then skips the extra query
+    entirely. That is the common case, the main unread list.
+    """
+    scope = {}
+    if feed_id is not None:
+        scope["feed_id"] = feed_id
+    if folder_id is not None:
+        scope["folder_id"] = folder_id
+    if scope_include:
+        scope["scope_include"] = scope_include
+    if label_id is not None:
+        scope["label_id"] = label_id
+    elif labeled_only:
+        scope["labeled_only"] = True
+    if label_filter:
+        scope["label_filter"] = label_filter
+    if q and q.strip():
+        scope["q"] = q
+    return scope
+
+
+# Ceiling on the member lookup that scoped views do. A page is at most a few dozen
+# rows, only some of them carry a story, and a story is capped well below this, so it
+# is a guard against a pathological page rather than a limit anything reaches.
+_SCOPE_MEMBER_LIMIT = 1000
+
+
+async def _members_in_scope(
+    rows: list, user: User, db: AsyncSession, scope: dict
+) -> set[int] | None:
+    """Which members of this page's stories the view's own filters would give back.
+
+    None means "all of them", which is both the unfiltered case and the cheap one: no
+    scope, no query. Everything else asks the list itself, with the view's filters and
+    none of its state, so the answer cannot drift from what unfolding actually returns.
+    """
+    story_ids = {r.story_id for r in rows if r.story_id is not None}
+    if not story_ids or not scope:
+        return None
+    members = await list_articles(
+        user=user, db=db, story_ids=list(story_ids),
+        limit=_SCOPE_MEMBER_LIMIT, **scope,
+    )
+    return {m.id for m in members}
+
+
 async def _apply_story_collapse(
     rows: list, user: User, db: AsyncSession, *, collapse: bool,
     story_dedup: str = DEDUP_COLLAPSE, shown_stories: list[int] | None = None,
+    scope: dict | None = None,
 ) -> tuple[list, list[int]]:
     """Fold the page's stories (when the view does that) and annotate what is left.
 
@@ -355,10 +416,14 @@ async def _apply_story_collapse(
     if story_dedup == DEDUP_OFF:
         return rows, []
     if not collapse:
+        # A view that folds nothing still marks what has coverage behind it, and it
+        # says so about the whole group: there is no unfolding here to keep honest,
+        # and the footer of the article shows the group whole anyway.
         await annotate_stories(rows, user.id, db)
         return rows, []
     articles = collapse_page(rows, shown_stories)
-    await annotate_stories(articles, user.id, db)
+    in_scope = await _members_in_scope(articles, user, db, scope or {})
+    await annotate_stories(articles, user.id, db, in_scope)
     return articles, next_shown_stories(shown_stories or [], articles)
 
 
@@ -498,6 +563,10 @@ async def render_list(
     )
     articles, shown_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
+        scope=story_scope(
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, labeled_only=labeled_only, q=q,
+        ),
     )
 
     # Title bar count for mobile hideable mode
@@ -596,6 +665,10 @@ async def render_list(
         # A row offers to unfold its story only where the list folded one — see
         # _collapses_stories. Everywhere else the row keeps the quiet marker instead.
         story_unfoldable=collapses,
+        story_scope_qs=urlencode(story_scope(
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, labeled_only=labeled_only, q=q,
+        )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
         more_qs=_build_more_qs(filter_params, rows, q, len(rows), shown_stories),
@@ -678,6 +751,10 @@ async def htmx_article_list_more(
     articles, next_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
         shown_stories=parse_shown_stories(shown_stories),
+        scope=story_scope(
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, labeled_only=labeled_only, q=q,
+        ),
     )
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
@@ -701,6 +778,10 @@ async def htmx_article_list_more(
         "show_ai_score": settings.ai_score_show_in_list if settings else False,
         # Same rule as the first page, see render_list.
         "story_unfoldable": collapses,
+        "story_scope_qs": urlencode(story_scope(
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, labeled_only=labeled_only, q=q,
+        )),
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
         "more_qs": _build_more_qs(
@@ -848,6 +929,12 @@ async def htmx_article_story_rows(
     request: Request,
     density: str | None = Query(None),
     label_display: str | None = Query(None),
+    feed_id: int | None = Query(None),
+    folder_id: int | None = Query(None),
+    scope_include: str | None = Query(None),
+    label_id: int | None = Query(None),
+    labeled_only: bool = Query(False),
+    q: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -860,9 +947,16 @@ async def htmx_article_story_rows(
     that are in the DOM without being on screen, and these are only ever inserted
     because the reader asked to see them.
 
-    State is deliberately ignored: a group is shown whole, read members included, even
-    where the view around it is filtered to unread. The count on the row promised that
-    many, and a group is usually read in pieces, which is the reason to look at it.
+    **State** is deliberately ignored: a group is shown whole, read members included,
+    even where the view around it is filtered to unread. The count on the row promised
+    that many, and a group is usually read in pieces, which is the reason to look at it.
+
+    **Structure** is not, and the difference matters because of the paragraph above.
+    The view's own filters come along, so a label list gives back the members carrying
+    that label and a search the ones that match. Those are the rows it folded, so
+    unfolding is the exact inverse of folding; without it a label list would hand back
+    articles that were never in it and then mark them read as the reader scrolled past.
+    The whole group is still one click away, in the footer of the article.
     """
     story_id = (await db.execute(
         add_article_access_joins(select(Article.story_id), user.id)
@@ -878,6 +972,10 @@ async def htmx_article_story_rows(
         user=user, db=db, story_id=story_id,
         sort_order=settings.default_sort_order if settings else "newest",
         limit=MEMBER_LIMIT + 1,
+        **story_scope(
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, labeled_only=labeled_only, q=q,
+        ),
     )
     rows = [m for m in members if m.id != article_id]
     if not rows:
