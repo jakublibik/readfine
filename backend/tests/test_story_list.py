@@ -9,10 +9,12 @@ grouping itself is global and routinely reaches into feeds nobody here subscribe
 The counting half runs against the real database inside a transaction that is always
 rolled back.
 """
+import json
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest_asyncio
+from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -412,6 +414,70 @@ class TestScopedCounts:
         await annotate([row], user.id, pg)
 
         assert row.story_others == row.story_total == 1
+
+
+class TestUnfoldRespectsLabelFilter:
+    """The route that unfolds a story (``htmx_article_story_rows``) has to give back
+    exactly what a label-filtered search view folded, the same way it already does for
+    a single-label view (``label_id``). ``label_filter`` is the multi-label search
+    filter and is a separate code path; it regressed silently when ``story_scope()``
+    was introduced, because nothing called it with ``label_filter`` set.
+    """
+
+    def _request(self, qs: str = "") -> Request:
+        return Request({
+            "type": "http", "http_version": "1.1", "method": "GET",
+            "path": "/htmx/articles/1/story-rows", "query_string": qs.encode(),
+            "headers": [], "scheme": "http", "server": ("testserver", 80),
+            "client": ("127.0.0.1", 1234), "root_path": "", "app": None, "state": {},
+        })
+
+    async def test_unfold_excludes_a_member_outside_the_label_filter(self, pg):
+        from app.models.label import ArticleLabel, Label
+        from app.routers.web.app.articles import htmx_article_story_rows
+
+        user = await _user(pg)
+        head, second, mine, _ = await _story(pg, user)
+        outsider = await _article(pg, mine, story_id=head.id, title="Unlabelled",
+                                  minutes_ago=5)
+        label = Label(user_id=user.id, name="L")
+        pg.add(label)
+        await pg.flush()
+        pg.add(ArticleLabel(user_id=user.id, article_id=second.id, label_id=label.id))
+        await pg.flush()
+
+        response = await htmx_article_story_rows(
+            head.id, self._request(), density=None, label_display=None,
+            feed_id=None, folder_id=None, scope_include=None,
+            label_id=None, labeled_only=False,
+            label_filter=json.dumps([f"label:{label.id}"]), q=None,
+            user=user, db=pg,
+        )
+
+        body = response.body.decode()
+        assert second.title in body
+        assert outsider.title not in body
+
+    async def test_unfold_gives_back_the_whole_group_with_no_scope(self, pg):
+        """Baseline: nothing filtered, so unfolding is unchanged from before scoping
+        existed at all."""
+        from app.routers.web.app.articles import htmx_article_story_rows
+
+        user = await _user(pg)
+        head, second, mine, _ = await _story(pg, user)
+        outsider = await _article(pg, mine, story_id=head.id, title="Unlabelled",
+                                  minutes_ago=5)
+
+        response = await htmx_article_story_rows(
+            head.id, self._request(), density=None, label_display=None,
+            feed_id=None, folder_id=None, scope_include=None,
+            label_id=None, labeled_only=False, label_filter=None, q=None,
+            user=user, db=pg,
+        )
+
+        body = response.body.decode()
+        assert second.title in body
+        assert outsider.title in body
 
 
 class TestListingOneStory:
