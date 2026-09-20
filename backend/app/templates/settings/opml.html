@@ -10,8 +10,26 @@
 {% endif %}
 
 {% if import_result %}
-<div class="mb-8 p-4 bg-green-50 border border-green-200 rounded space-y-3">
-  <h2 class="text-sm font-semibold text-green-800">Import complete</h2>
+{# An import stopped by the feed cap is not a complete import, so it does not get to
+   look like one: the box turns amber and says how many feeds were left behind. Anything
+   quieter than this gets missed, which is how several migrations silently lost most of
+   their feeds. #}
+{% set over_limit = import_result.feeds_over_limit %}
+<div class="mb-8 p-4 rounded space-y-3 {{ 'bg-amber-50 border border-amber-200' if over_limit else 'bg-green-50 border border-green-200' }}">
+  <h2 class="text-sm font-semibold {{ 'text-amber-800' if over_limit else 'text-green-800' }}">
+    {{ 'Import stopped at the feed limit' if over_limit else 'Import complete' }}
+  </h2>
+  {% if over_limit %}
+  <p class="text-sm text-amber-700">
+    This account can hold {{ import_result.feed_limit|num }} feeds, so the last
+    {{ over_limit|num }} of
+    {{ (import_result.feeds_added + import_result.feeds_skipped + import_result.feeds_failed + over_limit)|num }}
+    feeds in the file were not imported. Everything below was. Ask the administrator of
+    this instance to raise the limit, or unsubscribe from feeds you no longer read and
+    import the same file again: feeds you already have are skipped, so a second run
+    carries on rather than starting over.
+  </p>
+  {% endif %}
   <table class="w-full text-sm text-gray-700">
     <thead>
       <tr class="text-xs text-gray-500 border-b border-gray-200">
@@ -49,7 +67,7 @@
     </tbody>
   </table>
   {% if import_result.warnings %}
-  <div class="pt-2 border-t border-green-200">
+  <div class="pt-2 border-t {{ 'border-amber-200' if over_limit else 'border-green-200' }}">
     <p class="text-xs font-medium text-gray-600 mb-1">Warnings</p>
     <ul class="text-xs text-gray-500 space-y-0.5 list-disc list-inside">
       {% for w in import_result.warnings %}

@@ -285,6 +285,13 @@ class ImportResult:
     filters_added: int = 0
     filters_skipped: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Set when the subscription cap stopped the import part way. feeds_over_limit is
+    # how many outlines were never even attempted, so it counts duplicates the import
+    # would have skipped anyway — it is "left out", not "would have been added". Kept
+    # as fields rather than a warning line because the number is the whole point: a
+    # migration cut from 180 feeds to 50 has to say so where it cannot be missed.
+    feeds_over_limit: int = 0
+    feed_limit: int | None = None
 
 
 async def import_opml(
@@ -353,7 +360,7 @@ async def import_opml(
         # Collect all top-level feed outlines, unwrapping TTRSS "All articles" wrapper
         feed_outlines = _collect_feed_outlines(body)
         next_folder_pos = await next_folder_position(db, user.id)
-        for outline, folder_name in feed_outlines:
+        for index, (outline, folder_name) in enumerate(feed_outlines):
             folder_id = None
             if folder_name:
                 folder_id, next_folder_pos = await _get_or_create_folder(
@@ -362,8 +369,10 @@ async def import_opml(
             xml_url = outline.get("xmlUrl", "")
             try:
                 added_id = await _import_feed(user, outline, folder_id, result, db)
-            except FeedLimitReached:
-                result.warnings.append("Feed limit reached — remaining feeds skipped")
+            except FeedLimitReached as exc:
+                # The one that raised was not imported either, so it counts as left out.
+                result.feeds_over_limit = len(feed_outlines) - index
+                result.feed_limit = exc.max_feeds
                 break
             if added_id and xml_url:
                 feed_url_to_id[xml_url] = added_id
