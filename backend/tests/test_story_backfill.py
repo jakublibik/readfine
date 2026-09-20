@@ -6,8 +6,16 @@ every read this feature has written. Getting its WHERE clause wrong would either
 articles hidden under rules that no longer exist, or mark a pile of genuinely read
 articles unread.
 
-The scan and the assignment are exercised through ``test_story_dedup.py``, which drives
-the same membership rule through the live path.
+The scan and the assignment are not covered, and that is a gap worth knowing about
+rather than a decision to be comfortable with: ``_scan`` and ``_assign`` commit as they
+go, so they cannot run inside the rolled-back transaction every test in this suite uses,
+and running them for real would leave fixtures in the development database where they
+would group with real articles. What stands in for a test is that ``_assign`` and
+``app.fetcher.stories._pick_group`` read the same thresholds out of
+``app.fetcher.story_params`` and are written to match step for step, and that the third
+copy of the rule in ``scripts/survey_dedup.py`` reproduces the same grouping on the
+production export as ``scripts/survey_story_groups.py`` does independently. The live
+path's half of the rule is covered by ``test_story_dedup.py``.
 """
 import uuid
 from datetime import datetime, timedelta, timezone

@@ -17,13 +17,20 @@ one match to any member let an article in, and two groups merged the moment one 
 resembled both. On the production corpus that produced groups of 407 and 514 articles
 spanning ten days, in which a thousandth of the pairs were over the threshold and plenty
 scored zero against each other. A group has to be more than the chain that built it, so
-an article now has to match at least half the members and arrive inside the window of
-the group's root; see ``_pick_group``.
+an article has to arrive inside the window of the group's root and then clear two tests
+at once: it has to match at least half the members, and its mean similarity to every
+member has to reach ``MEMBERSHIP_MEAN``. Counting matches alone lets a stock phrase
+("what you need to know about") carry an article from one story into another, because
+each step of the chain does satisfy the arithmetic. Taking the mean alone goes wrong the
+other way: it counts near misses as evidence, and a family of headlines differing in one
+name is nothing but near misses. Both tests, so both failures are covered; see
+``_pick_group`` and ``story_params``.
 
 The grouping is global, shared by every user. A group can therefore contain articles from
 feeds a given reader doesn't subscribe to, so anything user-facing has to filter members
 through ``article_access_predicate``.
 """
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,40 +41,21 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.fetcher.story_params import (
+    COLLAPSE_THRESHOLD,
+    MAX_GROUP_SIZE,
+    MEMBERSHIP_MEAN,
+    MEMBERSHIP_SHARE,
+    MIN_TITLE_CHARS,
+    SUPPRESS_THRESHOLD,
+    WINDOW_HOURS,
+)
 from app.models.article import Article, UserArticleState
 from app.models.feed import UserFeed
 from app.models.user import UserSettings
 from app.services.story_service import DEDUP_SUPPRESS, SUPPRESSED_BY_SIMILAR
 
-# Measured, not chosen: see scripts/survey_dedup.py and the plan behind it. At 0.30 the
-# production corpus collapses ~11 articles a day out of ~240; the precision cliff sits
-# between 0.25 and 0.30 and everything above 0.50 is effectively an exact-title match.
-COLLAPSE_THRESHOLD = 0.30
-WINDOW_HOURS = 72
-
-# Hiding an article outright is a stronger claim than folding it away, so it asks for a
-# stronger match, and one made directly against the article the reader read rather than
-# through the group. The same export puts this at ~2.4 articles a day hidden and 2 the
-# reader would have wanted over 87 days. Below 0.40 that regret climbs fast.
-SUPPRESS_THRESHOLD = 0.40
-
-# Titles shorter than this are not compared at all. A trigram score over a handful of
-# trigrams swings wildly, and the fetcher's own "Untitled" placeholder (rss.py) would
-# otherwise group every title-less item in the database into one story.
-MIN_TITLE_CHARS = 12
-
-# How much of a group an article has to match to join it, as a fraction of its members.
-# A half, which is the weakest rule that still says something about the group rather
-# than about one lucky neighbour: it leaves pairs and triples exactly as they were (for
-# a group of one or two, half of it is one member, which is the old rule) and bites from
-# three members up, where the chains start. Measured on the six worst production groups:
-# 514 members became 277 groups of at most 15.
-MEMBERSHIP_SHARE = 0.5
-
-# Runaway guard, not a mechanism. With the rule above the largest group measured on the
-# production corpus was 17, so this should never fire; it is here because the failure it
-# guards against was a 514-member group that nothing noticed for a week.
-MAX_GROUP_SIZE = 40
+logger = logging.getLogger(__name__)
 
 # Words that mark a headline as a different piece from the one it resembles rather than
 # another outlet's account of it: an explainer written off the back of the news ("how",
@@ -171,7 +159,7 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
     if not new_ids:
         return 0
 
-    rows, timestamps = await _find_pairs(new_ids, db)
+    rows, articles = await _find_pairs(new_ids, db)
     if not rows:
         return 0
 
@@ -201,11 +189,16 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
                 group_id = pair.cand_story if pair.cand_story is not None else pair.cand_id
             matches.setdefault(group_id, []).append(pair.similarity)
 
-        chosen = _pick_group(matches, groups, timestamps[new_id])
+        chosen = await _pick_group(matches, groups, articles[new_id], db)
         if chosen is None:
             continue
         joined[new_id] = chosen
-        groups[chosen].size += 1
+        # The group this article just joined is what the next article in the batch is
+        # measured against, and its story_id is not written until the end of _link, so
+        # the query in _load_groups would not find it. Carrying it here is the only
+        # thing that keeps a batch behaving like the same articles arriving one fetch
+        # apart, which is what the backfill replays and what the tests assert.
+        groups[chosen].members.append(new_id)
 
     if not joined:
         return 0
@@ -230,62 +223,82 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
 
 @dataclass
 class GroupState:
-    """What membership is decided against: how big the group is and when it started.
+    """What membership is decided against: who is in the group and when it started.
+
+    The members are ids rather than a count because the second test needs to compare
+    the newcomer against each of them, and the count is just their number.
 
     Mutable because the batch updates it as it goes — an article joining a group makes
     the group harder to join for the next one, which is the same arithmetic a later
     fetch would do.
     """
 
-    size: int
+    members: list[int]
     root_ts: datetime
+
+    @property
+    def size(self) -> int:
+        return len(self.members)
 
 
 async def _load_groups(group_ids: set[int], db: AsyncSession) -> dict[int, GroupState]:
-    """Size and starting time of every group the candidates belong to.
+    """Members and starting time of every group the candidates belong to.
 
     A group is identified by its root article, so the root's own timestamp is the
     group's, and a candidate with no story_id yet is a group of one that is about to get
-    a name. Both cases come out of the same query.
+    a name. Both cases come out of the same query: the outer join gives the lone
+    candidate a single NULL row, which becomes a membership of one.
     """
     if not group_ids:
         return {}
     root = Article.__table__.alias("root")
+    member = Article.__table__.alias("member")
     stmt = (
         select(
             root.c.id,
             func.coalesce(root.c.published_at, root.c.fetched_at),
-            select(func.count())
-            .select_from(Article.__table__)
-            .where(Article.__table__.c.story_id == root.c.id)
-            .scalar_subquery(),
+            member.c.id,
         )
-        .select_from(root)
+        .select_from(root.outerjoin(member, member.c.story_id == root.c.id))
         .where(root.c.id.in_(group_ids))
     )
-    return {
-        row[0]: GroupState(size=max(1, row[2]), root_ts=row[1])
-        for row in (await db.execute(stmt)).all()
-    }
+    groups: dict[int, GroupState] = {}
+    for root_id, root_ts, member_id in (await db.execute(stmt)).all():
+        group = groups.get(root_id)
+        if group is None:
+            group = groups[root_id] = GroupState(members=[], root_ts=root_ts)
+        if member_id is not None:
+            group.members.append(member_id)
+    for root_id, group in groups.items():
+        if not group.members:  # a candidate on its own is a group of one
+            group.members.append(root_id)
+    return groups
 
 
-def _pick_group(
+async def _pick_group(
     matches: dict[int, list[float]],
     groups: dict[int, "GroupState"],
-    ts: datetime,
+    article: "NewArticle",
+    db: AsyncSession,
 ) -> int | None:
     """Which group, if any, this article belongs to: the best one it truly matches.
 
-    Three things have to hold, and the first is the whole point. Matching half the
-    members means the article resembles the group, not one member of it; a chain of
-    pairwise matches can walk a group anywhere, and this is what stops it walking.
+    Four things have to hold, and the two in the middle are the whole point. Matching
+    half the members says the article resembles the group rather than one member of it,
+    and a mean similarity to *every* member says the members it did not match are at
+    least in the same neighbourhood. Either one alone has a failure mode the other
+    covers; the module docstring and ``story_params.MEMBERSHIP_MEAN`` say which.
 
     The window is measured from the root rather than from the member that matched,
     which gives a group a finite life: without it a group re-anchors on its newest
     member at every fetch and crawls forward indefinitely, which is how groups came to
     span ten days inside a 72 h rule.
+
+    The mean is left until last because it is the only test that costs a query, and by
+    then there is usually at most one candidate left to run it for.
     """
-    best, best_score = None, 0.0
+    shortlist: list[tuple[int, float]] = []
+    wanted: set[int] = set()
     for group_id, hits in matches.items():
         group = groups.get(group_id)
         if group is None:
@@ -295,13 +308,55 @@ def _pick_group(
         if len(hits) < group.size * MEMBERSHIP_SHARE:
             continue
         if group.size >= MAX_GROUP_SIZE:
+            # Documented as something that should never happen, so say when it does
+            # rather than let the article quietly stay on its own.
+            logger.warning(
+                "story %s is at the %s-member cap; article %s left ungrouped",
+                group_id, MAX_GROUP_SIZE, article.id,
+            )
             continue
-        if abs((ts - group.root_ts).total_seconds()) > WINDOW_HOURS * 3600:
+        if abs((article.ts - group.root_ts).total_seconds()) > WINDOW_HOURS * 3600:
             continue
-        score = sum(hits) / len(hits)
+        shortlist.append((group_id, sum(hits) / len(hits)))
+        wanted.update(group.members)
+
+    if not shortlist:
+        return None
+    sims = await _similarity_to(article.title_norm, wanted, db)
+
+    best, best_score = None, 0.0
+    for group_id, score in shortlist:
+        members = groups[group_id].members
+        mean = sum(sims.get(m, 0.0) for m in members) / len(members)
+        if mean < MEMBERSHIP_MEAN:
+            continue
         if score > best_score:
             best, best_score = group_id, score
     return best
+
+
+async def _similarity_to(
+    title_norm: str, ids: set[int], db: AsyncSession
+) -> dict[int, float]:
+    """Trigram similarity of one title against a set of articles, scored by Postgres.
+
+    Not computed in Python on purpose. Reimplementing pg_trgm here would mean two
+    definitions of the same number that have to agree forever, and the one place the
+    survey script does reimplement it needed a fix after it silently dropped every
+    non-Latin script (see ``survey_dedup.check_trgm``). There is a database in the
+    transaction already; it can answer.
+
+    No index is involved and none is wanted: the ids are known, so this is a handful of
+    primary-key lookups and a similarity() per row, unlike the candidate search which
+    has the whole table to narrow down.
+    """
+    if not ids:
+        return {}
+    rows = await db.execute(
+        select(Article.id, func.similarity(Article.title_norm, title_norm))
+        .where(Article.id.in_(ids))
+    )
+    return {article_id: float(score or 0.0) for article_id, score in rows}
 
 
 async def suppress_seen(rows: list[Pair], db: AsyncSession) -> int:
@@ -386,13 +441,26 @@ async def suppress_seen(rows: list[Pair], db: AsyncSession) -> int:
     return hidden
 
 
+class NewArticle(NamedTuple):
+    """The two things about a new article that the grouping decision reads.
+
+    Both are already loaded by ``_find_pairs`` on its way to the candidate search, so
+    they travel with it rather than being fetched again: the timestamp places the
+    article against a group's root, the normalised title scores it against the members.
+    """
+
+    id: int
+    ts: datetime
+    title_norm: str
+
+
 async def _find_pairs(
     new_ids: list[int], db: AsyncSession
-) -> tuple[list[Pair], dict[int, datetime]]:
+) -> tuple[list[Pair], dict[int, NewArticle]]:
     """Near-duplicate (new article, candidate) pairs, with the candidate's story.
 
-    Also returns each new article's timestamp, which the grouping needs to measure it
-    against the root of a group it might join, and which is already loaded here.
+    Also returns what the grouping needs to know about each new article itself, which
+    is already loaded here.
 
     One query per new article rather than a single self-join. The self-join measured
     forty times slower on the development corpus: the two plans cost almost the same on
@@ -417,16 +485,16 @@ async def _find_pairs(
     )).all()
 
     pairs: list[Pair] = []
-    timestamps: dict[int, datetime] = {}
+    articles: dict[int, NewArticle] = {}
     for article_id, feed_id, title_norm, ts in new_rows:
-        timestamps[article_id] = ts
+        articles[article_id] = NewArticle(article_id, ts, title_norm)
         candidates = await db.execute(_candidate_stmt(article_id, feed_id, title_norm, ts))
         pairs.extend(
             Pair(article_id, cand_id, story, similarity,
                  reads_as_follow_up(title_norm, cand_norm))
             for cand_id, story, similarity, cand_norm in candidates
         )
-    return pairs, timestamps
+    return pairs, articles
 
 
 def _candidate_stmt(article_id: int, feed_id: int | None, title_norm: str, ts: datetime):

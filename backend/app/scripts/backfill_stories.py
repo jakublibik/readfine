@@ -41,9 +41,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
-from app.fetcher.stories import (
+from app.fetcher.story_params import (
     COLLAPSE_THRESHOLD,
     MAX_GROUP_SIZE,
+    MEMBERSHIP_MEAN,
     MEMBERSHIP_SHARE,
     MIN_TITLE_CHARS,
     WINDOW_HOURS,
@@ -152,6 +153,24 @@ async def _meta(conn, ids) -> dict[int, tuple]:
     }
 
 
+async def _similarity_to(conn, article_id: int, member_ids: list[int]) -> dict[int, float]:
+    """Trigram similarity of one article's title against a set of others.
+
+    Scored by Postgres for the same reason as in ``app.fetcher.stories``: a Python
+    reimplementation of pg_trgm would be a second definition of the same number, and the
+    two would have to agree forever. One round trip per article that has a candidate
+    group left standing after the cheap tests, which on a 30-day production window is a
+    few thousand lookups by primary key. Measured at 0.86 ms each, so a few seconds
+    against a scan that takes a quarter to half an hour.
+    """
+    rows = await conn.execute(text("""
+        SELECT m.id, similarity(a.title_norm, m.title_norm)
+        FROM articles a, articles m
+        WHERE a.id = :aid AND m.id = ANY(:mids)
+    """), {"aid": article_id, "mids": list(member_ids)})
+    return {row[0]: float(row[1] or 0.0) for row in rows}
+
+
 async def _assign(conn) -> tuple[int, int]:
     """Replay the pairs in arrival order under the live membership rule.
 
@@ -165,9 +184,11 @@ async def _assign(conn) -> tuple[int, int]:
     fetcher makes, which also means a backfill and a week of live fetching land on the
     same grouping rather than two different ones.
 
-    In Python rather than SQL because the state being carried forward is a group's size
-    and root, which changes with every row. The edges are the expensive part and they
-    are already computed; what is left is a scan over a few hundred thousand pairs.
+    In Python rather than SQL because the state being carried forward is a group's
+    membership and root, which changes with every row. The edges are the expensive part
+    and they are already computed; what is left is a scan over a few hundred thousand
+    pairs, plus one similarity lookup per article that still has a candidate group after
+    the cheap tests.
     """
     edges: dict[int, list[tuple[int, float]]] = {}
     rows = await conn.execute(text(f"SELECT a_id, b_id, sim FROM {PAIRS}"))
@@ -191,18 +212,18 @@ async def _assign(conn) -> tuple[int, int]:
         for article_id, (_, story_id) in meta.items()
         if story_id is not None
     }
-    # Sizes come from the database, not from what the scan saw: a group can perfectly
-    # well have members whose only counterpart sits outside this window, and counting
-    # only the ones in front of us would understate the group and let articles in that
-    # the live path would turn away.
-    sizes: dict[int, int] = {}
+    # Membership comes from the database, not from what the scan saw: a group can
+    # perfectly well have members whose only counterpart sits outside this window, and
+    # counting only the ones in front of us would understate the group and let articles
+    # in that the live path would turn away. Ids rather than a count, because the mean
+    # test has to score the newcomer against each member.
+    members: dict[int, list[int]] = {}
     roots = set(story_of.values())
     if roots:
         for row in await conn.execute(text("""
-            SELECT story_id, count(*) AS n FROM articles
-            WHERE story_id = ANY(:ids) GROUP BY story_id
+            SELECT story_id, id FROM articles WHERE story_id = ANY(:ids)
         """), {"ids": list(roots)}):
-            sizes[row.story_id] = row.n
+            members.setdefault(row.story_id, []).append(row.id)
         # A root can be older than anything the scan touched, and its timestamp is what
         # the window is measured against.
         meta.update(await _meta(conn, roots - set(meta)))
@@ -216,26 +237,41 @@ async def _assign(conn) -> tuple[int, int]:
             group_id = story_of.get(other_id, other_id)
             matches.setdefault(group_id, []).append(sim)
 
-        best, best_score = None, 0.0
+        # Same order as app.fetcher.stories._pick_group, and for the same reason: the
+        # mean is the only test that costs a query, so it runs on what is left.
+        shortlist: list[tuple[int, float]] = []
+        wanted: set[int] = set()
         for group_id, hits in matches.items():
-            size = sizes.get(group_id, 1)
-            if len(hits) < size * MEMBERSHIP_SHARE or size >= MAX_GROUP_SIZE:
+            member_ids = members.get(group_id) or [group_id]
+            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
+                continue
+            if len(member_ids) >= MAX_GROUP_SIZE:
                 continue
             root_ts = meta.get(group_id, (None, None))[0]
             if root_ts is None:
                 continue
             if abs((meta[article_id][0] - root_ts).total_seconds()) > window:
                 continue
-            score = sum(hits) / len(hits)
-            if score > best_score:
-                best, best_score = group_id, score
+            shortlist.append((group_id, sum(hits) / len(hits)))
+            wanted.update(member_ids)
+
+        best, best_score = None, 0.0
+        if shortlist:
+            sims = await _similarity_to(conn, article_id, sorted(wanted))
+            for group_id, score in shortlist:
+                member_ids = members.get(group_id) or [group_id]
+                mean = sum(sims.get(m, 0.0) for m in member_ids) / len(member_ids)
+                if mean < MEMBERSHIP_MEAN:
+                    continue
+                if score > best_score:
+                    best, best_score = group_id, score
         if best is None:
             continue
 
         if best not in story_of:  # the root naming a group for the first time
             story_of[best] = best
         story_of[article_id] = best
-        sizes[best] = sizes.get(best, 1) + 1
+        members.setdefault(best, [best]).append(article_id)
 
     writes = [
         {"id": article_id, "sid": story_id}

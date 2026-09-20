@@ -348,3 +348,103 @@ pairwise at 0.40 against an article the reader read themselves, so the group rul
 enters into it. The ceiling on the export is 14 445 articles (216/day) with a pair over
 0.40, but production hid 2 in a day, because it also needs the reader to subscribe to
 both feeds and to have read the counterpart.
+
+### Group membership: the second condition, 2026-09-20
+
+The section above says the fold is no longer where the damage is. It is still where
+*some* of it is, and this is the measurement of the rest. Same export as above (62 240
+articles, 269 feeds, 13 July to 19 September), replayed with
+`scripts/survey_story_groups.py`.
+
+**The case that started it.** Production built a four-article group out of two stories:
+
+```
+240495 Forbes     Rep. Beatty Urges Court To Prevent Trump From Demolishing Kennedy Center  (root)
+240846 LA Times   Is Trump demolishing the Kennedy Center? What you need to know about...   0.337 to the root
+241199 Lifehacker What You Need to Know About Walmart's 'Fall Deals' Sale                    0.326 to the LA Times piece
+252545 Wired      What You Need to Know About the Foreign-Made Router Ban in the US          0.354 / 0.349
+```
+
+The LA Times article is a legitimate member and also a bridge: it carries a stock
+phrase, so it clears 0.30 against headlines it has nothing to do with. The share test
+was satisfied at every step (1 of 2, then 2 of 3) because it counts matches and nothing
+asks what the match was made of.
+
+**A label-free way to count the damage.** A group holding a member pair that scores
+under 0.15 was built by a chain, which is the defect itself rather than a proxy for it.
+On the export, **42 groups holding 214 articles** fail that test. The worst read like
+`Introducing the WIRED App || GNOME 51 释出` and `Mini EQ || pg-jev`.
+
+**Four things that did not work**, all rejected on measurement:
+
+| approach | why not |
+|---|---|
+| IDF cosine as a second opinion over the candidates | bands overlap: a boilerplate pair scores 0.221 against a correct pair's 0.239 |
+| stock phrases learned from the corpus (n-grams across several feeds) | kills 6 right pairs to catch 5 wrong ones; `strait of hormuz` looks exactly like `need to know` |
+| phrase burstiness (how many weeks a phrase recurs in) | boilerplate and a running story have the same statistics: 11 titles / 7 feeds / 7 weeks |
+| mean similarity to the group **instead of** the share test | see the trap below |
+
+**The trap, and the reason the rule has two conditions rather than one.** A mean counts
+sub-threshold similarity (0.25 to 0.29) as evidence, which the share test ignores. That
+is exactly what a template family is made of, so replacing one with the other trades one
+failure for another:
+
+| family | share test | mean 0.30 alone |
+|---|---|---|
+| `X проголосовал на выборах в Госдуму` | 1 member | 40 members |
+| `College EA Meetups Everywhere Fall 2026` (35 universities) | 3 members | 35 members |
+| magazine issues (`The Washington Post - September 11, 2026`) | 0 groups of 10+ | 11 groups, 283 articles |
+
+**The sweep** (walking the corpus in timestamp order):
+
+| rule | groups | grouped | lost | gained | incoherent | 10+ | of those date-template |
+|---|---|---|---|---|---|---|---|
+| share only | 6 856 | 16 536 | — | — | 42 (214) | 18 | 0 |
+| mean 0.30 only | 6 844 | 16 947 | 138 | 549 | 5 (34) | 41 | 11 (283) |
+| **share AND mean 0.30** | 6 906 | 16 463 | **121** | 48 | **3 (25)** | 19 | 0 |
+| share AND mean 0.32 | 6 717 | 15 777 | 839 | 80 | 2 (18) | 18 | 0 |
+| share AND mean 0.35 | 6 509 | 14 945 | 1 667 | 76 | 0 | 13 | 0 |
+
+0.30 is the knee, not a round number: 0.32 costs seven times as many articles to save
+one more group. The three that survive are mild (0.120 to 0.143, e.g. two articles about
+the same Samsung update). The floor is held by the Kennedy case itself, where the Wired
+headline comes out at 0.263.
+
+**Order does not change the answer.** The replay above walks by timestamp; production
+walks new ids in id order inside a fetch round. Re-run with `--order id`: 36 incoherent
+groups (159 articles) become **1** (6 articles), for 118 lost and 49 gained. Different
+absolute numbers, same conclusion, which is the point of checking.
+
+**Read by hand, because the metric is partly circular.** The incoherence metric
+thresholds the same similarity the rule thresholds, so "42 down to 3" cannot stand on
+its own. All 118 lost and all 49 gained decisions (`--dump-diff`) were read:
+
+- of the 118 lost, about **56 were right to lose** (date bridges, `X рассказала` and
+  other template pairs, deal listings, the Kennedy case itself) and about **62 were
+  genuine coverage** that no longer folds, e.g. `Emmy 2026, tutti i vincitori` next to
+  `„Widow's Bay" und „The Pitt" räumen bei Emmys ab`
+- of the 49 gained, about **30 are right**, and most of the rest are new two-member
+  template pairs (`The Economist UK - September 12, 2026` with `The Week UK - 12
+  September 2026`), which are harmless in the sense that they do not grow
+
+So the honest trade is roughly **62 correct folds given up to break 35 incoherent
+groups**, about one a day against half a group a day. It is worth taking because the two
+costs are not symmetric: a fold that does not happen shows the reader two rows instead of
+one, while a wrong group shows them a story that is not a story, and can pull an unread
+article under a headline they marked read. Hiding is not affected either way — it is
+pairwise at 0.40 against something the reader read themselves.
+
+**Blocking is not the reason for any of this.** `survey_dedup.py --check-blocking` on
+the first 1 500 articles: the token prefilter finds 260 pairs against 262 by brute
+force, 0.8 % lost. (The CJK caveat from 2026-09-19 still stands separately.)
+
+**Still unverified.** The 42-groups baseline is a replay, not a reading of production's
+own `articles.story_id`. Run the metric as SQL over the live column before and after the
+regroup; if the before matches 42, these numbers are absolute, and if it does not, only
+the comparison between rules holds.
+
+Shipped as `MEMBERSHIP_MEAN` in `app/fetcher/story_params.py`, alongside
+`MEMBERSHIP_SHARE` and not instead of it. The earlier finding "do not add IDF cosine as a
+second opinion" (2026-09-14) still stands and is about a different class of error: it was
+measured on the hiding branch, where the mistakes are same-topic-different-event rather
+than chains through a stock phrase.

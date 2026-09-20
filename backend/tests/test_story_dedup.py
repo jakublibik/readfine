@@ -30,6 +30,23 @@ TRAM_REWORDED = "new tram line approved by the city council"
 TRAM_THIRD = "council approved a new tram line, says the city"
 RATES = "central bank raises interest rates again"
 
+# The production group that the mean test was added for, in the order it was built.
+# BRIDGE is genuine coverage of KENNEDY and also carries a stock phrase, which is what
+# let the two after it in: each of them cleared 0.30 against the phrase alone.
+KENNEDY = "Rep. Beatty urges court to prevent Trump from demolishing Kennedy Center"
+BRIDGE = "Is Trump demolishing the Kennedy Center? What you need to know about the crisis"
+WALMART = "What you need to know about Walmart's Fall Deals sale"
+KENNEDY_THIRD = "Court weighs Trump plan to demolish the Kennedy Center"
+
+# Four headlines about trams, close enough to each other to be one family and far
+# enough from TRAM_REWORDED to score in the 0.24 to 0.28 band against it: below the
+# collapse threshold, above zero. That band is what a mean is made of.
+TRAM_FAMILY = (
+    "the new tram depot opens next spring",
+    "the old tram depot closes next winter",
+    "a new tram museum opens next autumn",
+)
+
 
 @pytest_asyncio.fixture
 async def pg():
@@ -272,6 +289,88 @@ class TestAssignStories:
 
         assert await assign_stories([lone], pg) == 0
         assert await _story_of(pg, lone) is None
+
+
+class TestMembershipMean:
+    """The second membership test: how much the article resembles the whole group.
+
+    Every case here is a group the share test on its own would have accepted or
+    refused wrongly, so each one fails if either half of the rule is removed.
+    """
+
+    async def test_a_stock_phrase_bridge_does_not_join(self, pg, nonce):
+        """The production bug, with the group already in the database.
+
+        The root is real coverage of the Kennedy Center that happens to be headlined
+        "...what you need to know about...". The newcomer is about a Walmart sale and
+        matches it at 0.37 on that phrase alone, which satisfies the share test (one
+        match, two members). Against the other member it scores 0.13, so the group as a
+        whole is a 0.25 and it stays out.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {BRIDGE}", hours_ago=3)
+        member = await _article(pg, await _feed(pg), f"{nonce} {KENNEDY}", hours_ago=2)
+        root.story_id = member.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {WALMART}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) is None
+
+    async def test_real_coverage_of_the_same_story_still_joins(self, pg, nonce):
+        """The other direction, on the same group: a third outlet on the same news.
+
+        Without this the test above passes just as well with the threshold set to 1.0.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {BRIDGE}", hours_ago=3)
+        member = await _article(pg, await _feed(pg), f"{nonce} {KENNEDY}", hours_ago=2)
+        root.story_id = member.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {KENNEDY_THIRD}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) == root.id
+
+    async def test_members_that_joined_in_this_batch_count_toward_the_mean(self, pg, nonce):
+        """The whole group, including the part of it that has no story_id yet.
+
+        The three articles arrive together, so when the third one is decided the second
+        has joined the group in memory and nothing about it is written to the database
+        yet. Counting only what a query returns would leave the group at one member,
+        the mean at 0.37, and the Walmart article inside — which is the production bug
+        again, reachable through a single fetch round rather than two.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {BRIDGE}", hours_ago=3)
+        second = await _article(pg, await _feed(pg), f"{nonce} {KENNEDY}", hours_ago=2)
+        third = await _article(pg, await _feed(pg), f"{nonce} {WALMART}", hours_ago=1)
+
+        await assign_stories([root, second, third], pg)
+
+        assert await _story_of(pg, second) == root.id
+        assert await _story_of(pg, third) is None
+
+    async def test_the_share_test_still_holds_a_family_the_mean_would_admit(self, pg, nonce):
+        """Do not delete the share test because the mean looks like it covers it.
+
+        Four headlines about trams: the newcomer is the same story as the root and
+        scores 0.24 to 0.28 against the other three, which is enough to pull its mean
+        over the group to 0.40. Only the share test refuses it, and on the production
+        corpus that refusal is what keeps template families from snowballing — dropping
+        it turned one group of 35 university event announcements into 35 members, and
+        built eleven groups of magazine issues held together by the date in the title.
+        """
+        root = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=3)
+        root.story_id = root.id
+        for title in TRAM_FAMILY:
+            member = await _article(pg, await _feed(pg), f"{nonce} {title}", hours_ago=2)
+            member.story_id = root.id
+        await pg.flush()
+
+        newcomer = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}")
+        await assign_stories([newcomer], pg)
+
+        assert await _story_of(pg, newcomer) is None
 
 
 class TestAssignStoriesGlobal:
