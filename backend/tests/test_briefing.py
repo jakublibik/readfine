@@ -732,3 +732,76 @@ class TestBriefingEndpointValidation:
             user=make_user(), db=db,
         )
         assert response.status_code == 404
+
+
+class TestBriefingFoldsStories:
+    """The folding path of a scheduled send, which the tests above never enter.
+
+    Everything else in this file runs with story_dedup off, so the branch that folds
+    coverage and counts sources went out untested once and took a NameError with it
+    (briefing_service had no logger). These run the real fold_stories against a real
+    CatchupArticle, which is the only way the wiring gets exercised at all.
+    """
+
+    def _article(self, id, story_id=None, score=None, title="A"):
+        from app.services.catchup_service import CatchupArticle
+        return CatchupArticle(
+            id=id, title=title, feed_title="F", published_at=None,
+            fetched_at=datetime.now(timezone.utc), folder_id=None, ai_score=score,
+            ai_summary=None, readable_content=None, content="text",
+            story_id=story_id,
+        )
+
+    async def _send(self, mock_db, articles, story_dedup, capture):
+        from app.services.briefing_service import send_briefing
+        config = make_config()
+        user = make_user()
+        user.settings.story_dedup = story_dedup
+        app_settings = make_app_settings()
+
+        with patch("app.services.briefing_service.fetch_catchup_articles",
+                   new_callable=AsyncMock, return_value=articles) as fetch:
+            with patch("app.services.ai_service.get_ai_client",
+                       new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")):
+                with patch("app.services.briefing_service.annotate_sources",
+                           new_callable=AsyncMock) as annotate:
+                    with patch("app.services.briefing_service.build_articles_meta",
+                               side_effect=lambda sampled, include_snippet: capture.append(sampled) or []):
+                        with patch("app.services.ai_service.catch_me_up",
+                                   new_callable=AsyncMock, return_value=("digest", 10, 5)):
+                            with patch("app.services.briefing_service.send_html_email"):
+                                with patch("app.services.briefing_service._build_email_html",
+                                           return_value="<html></html>"):
+                                    await send_briefing(config, user, mock_db, app_settings)
+        return fetch, annotate
+
+    @pytest.mark.asyncio
+    async def test_coverage_is_folded_and_counted(self, mock_db):
+        arts = [
+            self._article(1, story_id=7, score=0.9, title="Outlet one"),
+            self._article(2, story_id=7, score=0.2, title="Outlet two"),
+            self._article(3, title="Unrelated"),
+        ]
+        sampled: list = []
+        fetch, annotate = await self._send(mock_db, arts, "collapse", sampled)
+
+        assert [a.id for a in sampled[0]] == [1, 3]
+        assert sampled[0][0].folded_count == 1
+        annotate.assert_awaited_once()
+        # collapse folds, but leaves hidden articles where they are
+        assert fetch.await_args.kwargs["exclude_hidden"] is False
+
+    @pytest.mark.asyncio
+    async def test_suppression_also_drops_what_was_kept_out(self, mock_db):
+        fetch, _ = await self._send(mock_db, [self._article(1)], "collapse_suppress", [])
+        assert fetch.await_args.kwargs["exclude_hidden"] is True
+
+    @pytest.mark.asyncio
+    async def test_off_folds_nothing_and_asks_for_nothing(self, mock_db):
+        arts = [self._article(1, story_id=7, score=0.9), self._article(2, story_id=7, score=0.2)]
+        sampled: list = []
+        fetch, annotate = await self._send(mock_db, arts, "off", sampled)
+
+        assert [a.id for a in sampled[0]] == [1, 2]
+        annotate.assert_not_awaited()
+        assert fetch.await_args.kwargs["exclude_hidden"] is False

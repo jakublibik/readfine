@@ -1151,9 +1151,7 @@ _DEFAULT_CATCHUP_PROMPT = (
     "number of topics and sentences to what the content genuinely warrants.\n\n"
     "Avoid filler, repetition, and invented information. Do not speculate beyond what the "
     "articles suggest. Respond in the same language as the majority of the article titles. "
-    "You may use markdown (bold, lists) where it genuinely aids clarity.\n\n"
-    "A line marked [⧉ +N] was covered by N further sources the reader subscribes to. "
-    "Treat that as a reason to give the story more attention, not more sentences."
+    "You may use markdown (bold, lists) where it genuinely aids clarity."
 )
 
 
@@ -1192,6 +1190,15 @@ async def catch_me_up(
 
     article_list = "\n".join(lines)
     user_prompt = f"Articles from the past {period}:\n\n{article_list}"
+    # What the marker means goes with the data, not into the instructions: most runs
+    # carry a custom prompt, which replaces the default one entirely, and a symbol the
+    # model was never introduced to is one it may well copy into the digest.
+    if any(a.get("sources") for a in articles_meta):
+        user_prompt += (
+            "\n\n[⧉ +N] after a headline means N further sources the reader follows "
+            "covered the same story. It says how widely the story was picked up; it is "
+            "not part of the headline and should not appear in your answer."
+        )
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
     answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)

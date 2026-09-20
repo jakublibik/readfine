@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -23,6 +24,8 @@ from app.services.catchup_service import (
 from app.templating import templates
 from app.utils.datetime_format import format_local
 from app.utils.markdown import md_render
+
+logger = logging.getLogger(__name__)
 from app.utils.smtp import send_html_email
 from app.utils.url_validator import find_blocked_address
 

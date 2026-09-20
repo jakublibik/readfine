@@ -531,3 +531,64 @@ class TestSourcesInMeta:
     def test_no_coverage_says_nothing(self):
         meta = build_articles_meta([make_article(source_count=0)], include_snippet=False)
         assert "sources" not in meta[0]
+
+
+# ── the prompt catch_me_up actually sends ─────────────────────────────────────
+
+class TestCatchupPromptLines:
+    """The one part of the digest nothing else covers: every other test patches
+    catch_me_up, so the line it builds, marker included, was never looked at."""
+
+    async def _prompt(self, articles_meta, custom_prompt=None):
+        from unittest.mock import AsyncMock, patch
+
+        from app.services import ai_service
+
+        answer = SimpleNamespace(text="digest", input_tokens=1, output_tokens=1)
+        with patch.object(ai_service, "_complete", new_callable=AsyncMock,
+                          return_value=answer) as complete:
+            await ai_service.catch_me_up(
+                articles_meta=articles_meta, period="7days", client=object(),
+                provider="anthropic", model="claude-3", custom_prompt=custom_prompt,
+            )
+        return complete.await_args.args[0]
+
+    @pytest.mark.asyncio
+    async def test_marker_carries_the_count(self):
+        prompt = await self._prompt([
+            {"feed": "Verge", "title": "Thing happened", "date": "2026-09-20", "sources": 4},
+        ])
+        assert "[⧉ +4]" in prompt
+
+    @pytest.mark.asyncio
+    async def test_no_marker_without_coverage(self):
+        prompt = await self._prompt([
+            {"feed": "Verge", "title": "Thing happened", "date": "2026-09-20"},
+        ])
+        assert "⧉" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_the_marker_is_explained_even_under_a_custom_prompt(self):
+        # The explanation lives with the articles rather than in the default system
+        # prompt, which a custom one replaces outright.
+        prompt = await self._prompt(
+            [{"feed": "Verge", "title": "Thing happened", "date": "2026-09-20", "sources": 2}],
+            custom_prompt="Write me a haiku about the news.",
+        )
+        assert "Write me a haiku" in prompt
+        assert "[⧉ +N]" in prompt
+
+    @pytest.mark.asyncio
+    async def test_nothing_is_explained_when_nothing_is_marked(self):
+        prompt = await self._prompt([
+            {"feed": "Verge", "title": "Thing happened", "date": "2026-09-20"},
+        ])
+        assert "+N" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_snippet_still_follows_the_marker(self):
+        prompt = await self._prompt([
+            {"feed": "Verge", "title": "Thing", "date": "2026-09-20",
+             "sources": 3, "snippet": "the body"},
+        ])
+        assert "[⧉ +3] — the body" in prompt
