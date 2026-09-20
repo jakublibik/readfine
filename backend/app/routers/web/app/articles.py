@@ -565,7 +565,7 @@ async def render_list(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
-            label_id=label_id, labeled_only=labeled_only, q=q,
+            label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
         ),
     )
 
@@ -667,7 +667,7 @@ async def render_list(
         story_unfoldable=collapses,
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
-            label_id=label_id, labeled_only=labeled_only, q=q,
+            label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
         )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -753,7 +753,7 @@ async def htmx_article_list_more(
         shown_stories=parse_shown_stories(shown_stories),
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
-            label_id=label_id, labeled_only=labeled_only, q=q,
+            label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
         ),
     )
     filter_params = _build_filter_params(
@@ -780,7 +780,7 @@ async def htmx_article_list_more(
         "story_unfoldable": collapses,
         "story_scope_qs": urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
-            label_id=label_id, labeled_only=labeled_only, q=q,
+            label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
         )),
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -934,6 +934,7 @@ async def htmx_article_story_rows(
     scope_include: str | None = Query(None),
     label_id: int | None = Query(None),
     labeled_only: bool = Query(False),
+    label_filter: str | None = Query(None),
     q: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -974,7 +975,7 @@ async def htmx_article_story_rows(
         limit=MEMBER_LIMIT + 1,
         **story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
-            label_id=label_id, labeled_only=labeled_only, q=q,
+            label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
         ),
     )
     rows = [m for m in members if m.id != article_id]

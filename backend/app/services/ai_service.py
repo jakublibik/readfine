@@ -1166,13 +1166,23 @@ async def catch_me_up(
     """Generate a catch-up digest grouped by topic.
 
     Returns (text, input_tokens, output_tokens).
-    articles_meta items: {"feed": str, "title": str, "date": str, "snippet": str (optional)}
+    articles_meta items: {"feed": str, "title": str, "date": str,
+                          "sources": int (optional), "snippet": str (optional)}
+
+    The coverage marker carries no English word in it. The prompt above asks for the
+    language of the titles, the marker sits on many lines, and a custom prompt (which
+    most of these runs have) knows nothing about the field, so it has to read as a
+    symbol rather than as a sentence in the wrong language. ⧉ is what the reader's own
+    list marks a story with.
     """
     system_prompt = custom_prompt or _DEFAULT_CATCHUP_PROMPT
 
     lines = []
     for a in articles_meta:
         line = f"- [{a['feed']}] {a['title']} ({a['date']})"
+        sources = a.get("sources", 0)
+        if sources:
+            line += f" [⧉ +{sources}]"
         snippet = a.get("snippet", "")
         if snippet:
             line += f" — {snippet}"
@@ -1180,6 +1190,15 @@ async def catch_me_up(
 
     article_list = "\n".join(lines)
     user_prompt = f"Articles from the past {period}:\n\n{article_list}"
+    # What the marker means goes with the data, not into the instructions: most runs
+    # carry a custom prompt, which replaces the default one entirely, and a symbol the
+    # model was never introduced to is one it may well copy into the digest.
+    if any(a.get("sources") for a in articles_meta):
+        user_prompt += (
+            "\n\n[⧉ +N] after a headline means N further sources the reader follows "
+            "covered the same story. It says how widely the story was picked up; it is "
+            "not part of the headline and should not appear in your answer."
+        )
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
     answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)

@@ -16,7 +16,13 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
-from app.services.catchup_service import count_catchup_articles, fetch_catchup_articles
+from app.services.catchup_service import (
+    annotate_sources,
+    build_articles_meta,
+    count_catchup_articles,
+    fetch_catchup_articles,
+    fold_stories,
+)
 
 NOW = datetime.now(timezone.utc)
 
@@ -196,3 +202,130 @@ async def test_count_matches_fetch_for_every_filter(pg):
             # on the wall clock, so only the equality is checked there.
             if period == "7days":
                 assert counted == expected, case
+
+
+# ── story grouping in a digest ────────────────────────────────────────────────
+
+async def _second_feed(session, user):
+    """A second subscribed feed: grouping only ever pairs articles across feeds."""
+    u = uuid.uuid4().hex[:12]
+    feed = Feed(feed_url=f"https://ex2.invalid/{u}.xml", title="Feed 2", subscriber_count=1)
+    session.add(feed)
+    await session.flush()
+    session.add(UserFeed(user_id=user.id, feed_id=feed.id))
+    await session.flush()
+    return feed
+
+
+async def test_collapsed_count_matches_what_folding_leaves(pg):
+    """The estimate above the form and the prompt have to be the same number.
+
+    One is COUNT(DISTINCT coalesce(story_id, -id)) in SQL, the other is fold_stories in
+    Python, and nothing but this test stops them drifting apart.
+    """
+    user, feed = await _setup(pg)
+    other = await _second_feed(pg, user)
+
+    anchor = await _article(pg, feed, title="Outlet one on the story")
+    second = await _article(pg, other, title="Outlet two on the story")
+    third = await _article(pg, other, title="Outlet three on the story")
+    for a in (second, third):
+        a.story_id = anchor.id
+    anchor.story_id = anchor.id
+    await _article(pg, feed, title="Unrelated")
+    await pg.flush()
+
+    common = dict(
+        user_id=user.id, tz_str="UTC", db=pg, period="7days", scope_include=None,
+        filter_status="all", label_filter=None, filter_score_min=None,
+    )
+    fetched = await fetch_catchup_articles(**common)
+    folded = fold_stories(fetched)
+    counted = await count_catchup_articles(**common, collapsing=True)
+
+    assert len(fetched) == 4
+    assert counted == len(folded) == 2
+    assert sum(a.folded_count for a in folded) == 2
+
+
+async def test_uncollapsed_count_still_counts_articles(pg):
+    """With the feature off the number has to keep meaning what it did."""
+    user, feed = await _setup(pg)
+    other = await _second_feed(pg, user)
+    anchor = await _article(pg, feed, title="Outlet one")
+    second = await _article(pg, other, title="Outlet two")
+    anchor.story_id = second.story_id = anchor.id
+    await pg.flush()
+
+    counted = await count_catchup_articles(
+        user_id=user.id, tz_str="UTC", db=pg, period="7days", scope_include=None,
+        filter_status="all", label_filter=None, filter_score_min=None,
+        collapsing=False,
+    )
+    assert counted == 2
+
+
+async def test_kept_out_articles_leave_and_come_back_with_the_setting(pg):
+    """Suppression hides an article from the list; a digest must not hand it back.
+
+    It is read with no time spent on it, so every other filter here lets it through,
+    including "not opened". Switching the setting back brings it in again, because
+    hidden_at is never cleared and the current setting is what decides.
+    """
+    user, feed = await _setup(pg)
+    hidden = await _article(pg, feed, title="Kept out")
+    await _article(pg, feed, title="Ordinary")
+    pg.add(UserArticleState(
+        user_id=user.id, article_id=hidden.id, is_read=True,
+        read_at=NOW, suppressed_at=NOW, suppressed_by="similar", hidden_at=NOW,
+    ))
+    await pg.flush()
+
+    common = dict(
+        user_id=user.id, tz_str="UTC", db=pg, period="7days", scope_include=None,
+        filter_status="all", label_filter=None, filter_score_min=None,
+    )
+    with_hidden = await fetch_catchup_articles(**common)
+    without = await fetch_catchup_articles(**common, exclude_hidden=True)
+
+    assert {a.title for a in with_hidden} == {"Kept out", "Ordinary"}
+    assert {a.title for a in without} == {"Ordinary"}
+    assert await count_catchup_articles(**common, exclude_hidden=True) == 1
+
+
+async def test_source_count_spans_the_whole_group_but_stops_at_the_access_gate(pg):
+    """The marker counts coverage the reader could open, not the digest's own scope.
+
+    A briefing narrowed to one feed folds nothing, and the number is the whole point
+    there. What it must never count is a member from a feed this reader does not take:
+    the grouping is global and routinely reaches into other people's subscriptions.
+    """
+    user, feed = await _setup(pg)
+    other = await _second_feed(pg, user)
+
+    mine = await _article(pg, feed, title="In my scope")
+    theirs = await _article(pg, other, title="Other feed I take")
+
+    stranger_feed = Feed(feed_url=f"https://ex3.invalid/{uuid.uuid4().hex[:8]}.xml",
+                         title="Not subscribed", subscriber_count=1)
+    pg.add(stranger_feed)
+    await pg.flush()
+    stranger = await _article(pg, stranger_feed, title="Someone else's feed")
+
+    mine.story_id = theirs.story_id = stranger.story_id = mine.id
+    await pg.flush()
+
+    scope = json.dumps([f"feed:{feed.id}"])
+    fetched = await fetch_catchup_articles(
+        user_id=user.id, tz_str="UTC", db=pg, period="7days", scope_include=scope,
+        filter_status="all", label_filter=None, filter_score_min=None,
+    )
+    assert [a.title for a in fetched] == ["In my scope"]
+
+    await annotate_sources(fetched, user.id, pg)
+    # The one other member behind the access gate, not the stranger's.
+    assert fetched[0].source_count == 1
+    assert fetched[0].folded_count == 0
+
+    meta = build_articles_meta(fetched, include_snippet=False)
+    assert meta[0]["sources"] == 1

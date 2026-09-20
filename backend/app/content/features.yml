@@ -163,8 +163,9 @@ categories:
           Headlines are matched across your feeds, so an event several newsrooms cover
           under as many addresses is one row saying how many sources filed it.
           Open the rest in place or from the foot of the article; reading the row
-          finishes the story. Optionally, an article that repeats one you have already
-          read is kept out of the list altogether.
+          finishes the story. Catch me up and briefings fold the same stories and note
+          how many sources filed each one. Optionally, an article that repeats one you
+          have already read is kept out of the list altogether.
       - title: Duplicates across feeds
         desc: >-
           A story that two of your feeds both carry is not put in front of you twice.

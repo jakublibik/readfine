@@ -20,6 +20,9 @@ def make_settings(**kwargs):
         "ai_fast_provider": "anthropic",
         "ai_fast_model": "claude-haiku-4-5",
         "ai_scoring_enabled_default": False,
+        # Which slot a digest runs on is what these tests are about, so story folding
+        # stays out of the way; it is covered in test_catchup_service.
+        "story_dedup": "off",
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

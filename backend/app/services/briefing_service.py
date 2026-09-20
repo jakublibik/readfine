@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -12,14 +13,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.settings import AppSettings
 from app.models.user import CatchupLog, UserCatchupConfig, User
 from app.services.catchup_service import (
+    annotate_sources,
     apply_catchup_limit,
     build_articles_meta,
     fetch_catchup_articles,
+    fold_stories,
     populate_snippet_sources,
+    resolve_story_mode,
 )
 from app.templating import templates
 from app.utils.datetime_format import format_local
 from app.utils.markdown import md_render
+
+logger = logging.getLogger(__name__)
 from app.utils.smtp import send_html_email
 from app.utils.url_validator import find_blocked_address
 
@@ -166,6 +172,7 @@ async def send_briefing(
 
     tz_str = (user.settings.timezone if user.settings else None) or "UTC"
     profile = (user.settings.format_profile if user.settings else None) or "iso"
+    collapsing, exclude_hidden = resolve_story_mode(user.settings)
 
     try:
         articles = await fetch_catchup_articles(
@@ -177,6 +184,7 @@ async def send_briefing(
             label_filter=config.label_filter,
             filter_score_min=config.filter_score_min,
             tz_str=tz_str,
+            exclude_hidden=exclude_hidden,
         )
     except ValueError as exc:
         # Permanent error: scope items no longer exist
@@ -222,7 +230,23 @@ async def send_briefing(
             user.settings and user.settings.ai_scoring_enabled_default
         ) if user.settings else False
 
+        # Same two steps as the on-demand digest, in the same order and off the same
+        # setting: fold before sampling so the freed places go to other news, count the
+        # coverage after it so the query asks about the rows that survived.
+        if collapsing:
+            articles = fold_stories(articles)
         sampled = apply_catchup_limit(articles, config.article_limit, scoring_available)
+        if collapsing:
+            await annotate_sources(sampled, user.id, db)
+            # The only record that folding did anything: nothing is stored per run, and
+            # without this there is no way to tell months later whether the feature
+            # earns its place on real data.
+            logger.info(
+                "briefing: config=%d rows=%d folded=%d with_sources=%d",
+                config.id, len(sampled),
+                sum(a.folded_count for a in sampled),
+                sum(1 for a in sampled if a.source_count),
+            )
         if config.include_snippet:
             await populate_snippet_sources(sampled, user.id, db)
         articles_meta = build_articles_meta(sampled, include_snippet=config.include_snippet)
