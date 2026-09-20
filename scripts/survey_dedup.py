@@ -556,9 +556,9 @@ def groups_from(
         best, best_score = None, 0.0
         for group_id, hits in matches.items():
             member_ids = members.get(group_id) or [group_id]
-            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
-                continue
             if len(member_ids) >= MAX_GROUP_SIZE:
+                continue
+            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
                 continue
             if abs(art.ts - by_id[group_id].ts) > window:
                 continue

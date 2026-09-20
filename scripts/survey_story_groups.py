@@ -80,17 +80,30 @@ def replay(arts, pairs, order: str, mean: float | None, share: bool):
     order inside a fetch round (``_link``), while a corpus replayed by timestamp puts
     articles in publication order, and the two differ whenever a feed backfills. Both
     are here because the answer should not depend on which one is picked.
+
+    Each edge is filed under whichever of its two articles the walk reaches second, so
+    the article making the decision always sees the other one as something already
+    placed. ``find_pairs`` orients its pairs by timestamp, and 11 % of them have the
+    earlier article with the larger id, so reusing that orientation for an id-order walk
+    would let an article be decided before its counterpart and then decided again when
+    its own turn came, leaving it in two groups at once. That is a defect of the replay,
+    not something production can do: ``_link`` never re-decides an article that already
+    has a story_id, which the skip below mirrors.
     """
     by_id = {a.id: a for a in arts}
+    rank = (lambda a: a.id) if order == "id" else (lambda a: a.ts)
     edges: defaultdict[int, list[tuple[int, float]]] = defaultdict(list)
-    for a, b, score in pairs:  # a is the earlier article, b the later one
-        edges[b.id].append((a.id, score))
+    for a, b, score in pairs:
+        first, second = (a, b) if rank(a) <= rank(b) else (b, a)
+        edges[second.id].append((first.id, score))
 
-    walk = sorted(arts, key=(lambda a: a.id) if order == "id" else (lambda a: a.ts))
+    walk = sorted(arts, key=rank)
     story_of: dict[int, int] = {}
     members: dict[int, list[int]] = {}
 
     for art in walk:
+        if art.id in story_of:
+            continue  # named a group before its own turn came; it is already placed
         candidates = edges.get(art.id)
         if not candidates:
             continue
@@ -196,6 +209,10 @@ def dump_diff(path: Path, shipped, candidate, by_id) -> None:
     so it cannot say on its own whether a lost article was lost rightly. This is what
     that question gets answered with: the article, the group it was in, and what else
     was in that group.
+
+    The file is production article titles, so it belongs wherever the export it came
+    from belongs: not in the repository and not in a synced folder, and deleted when the
+    labelling is done. ``*.tsv`` is gitignored, which is a net rather than permission.
     """
     ship_of = {a: g for g, m in shipped.items() for a in m}
     cand_of = {a: g for g, m in candidate.items() for a in m}

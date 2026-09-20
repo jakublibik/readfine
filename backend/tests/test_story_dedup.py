@@ -290,6 +290,30 @@ class TestAssignStories:
         assert await assign_stories([lone], pg) == 0
         assert await _story_of(pg, lone) is None
 
+    async def test_an_article_that_already_has_a_story_is_not_moved(self, pg, nonce):
+        """Grouping happens once. A second pass over the same article decides nothing.
+
+        Reachable in production: a manual refresh groups an article, and the scheduler
+        round it landed inside then sweeps the same article up in its post-gather pass.
+        The article here would rather be in the tram group, and the point is that it
+        does not go: re-deciding it would also measure it against its own group, where
+        it scores 1.0 against itself, and would put it in the membership twice.
+        """
+        tram_root = await _article(pg, await _feed(pg), f"{nonce} {TRAM}", hours_ago=3)
+        tram_member = await _article(pg, await _feed(pg), f"{nonce} {TRAM_THIRD}",
+                                     hours_ago=2)
+        tram_root.story_id = tram_member.story_id = tram_root.id
+
+        elsewhere = await _article(pg, await _feed(pg), f"{nonce} {RATES}", hours_ago=3)
+        settled = await _article(pg, await _feed(pg), f"{nonce} {TRAM_REWORDED}",
+                                 hours_ago=1)
+        elsewhere.story_id = settled.story_id = elsewhere.id
+        await pg.flush()
+
+        await assign_stories([settled], pg)
+
+        assert await _story_of(pg, settled) == elsewhere.id
+
 
 class TestMembershipMean:
     """The second membership test: how much the article resembles the whole group.

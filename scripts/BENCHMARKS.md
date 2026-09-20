@@ -411,23 +411,33 @@ the same Samsung update). The floor is held by the Kennedy case itself, where th
 headline comes out at 0.263.
 
 **Order does not change the answer.** The replay above walks by timestamp; production
-walks new ids in id order inside a fetch round. Re-run with `--order id`: 36 incoherent
-groups (159 articles) become **1** (6 articles), for 118 lost and 49 gained. Different
+walks new ids in id order inside a fetch round. Re-run with `--order id`: 34 incoherent
+groups (164 articles) become **3** (17 articles), for 141 lost and 60 gained. Different
 absolute numbers, same conclusion, which is the point of checking.
+
+> The first version of these id-order figures (36 → 1, 118 lost, 49 gained) was wrong
+> and is corrected above. `find_pairs` orients each pair by timestamp, and 11 % of the
+> pairs have the earlier article with the larger id, so an id-order walk over
+> ts-oriented edges could decide an article before its counterpart and then decide it
+> again on its own turn: 398 articles came out in two groups at once. The replay now
+> files each edge under whichever article the walk reaches second and skips an article
+> that is already placed, which is what `_link` does. The timestamp figures were never
+> affected (there the two orders agree), so the sweep table above stands as published.
 
 **Read by hand, because the metric is partly circular.** The incoherence metric
 thresholds the same similarity the rule thresholds, so "42 down to 3" cannot stand on
-its own. All 118 lost and all 49 gained decisions (`--dump-diff`) were read:
+its own. All 141 lost and all 60 gained decisions (`--dump-diff`, id order) were read:
 
-- of the 118 lost, about **56 were right to lose** (date bridges, `X рассказала` and
-  other template pairs, deal listings, the Kennedy case itself) and about **62 were
-  genuine coverage** that no longer folds, e.g. `Emmy 2026, tutti i vincitori` next to
-  `„Widow's Bay" und „The Pitt" räumen bei Emmys ab`
-- of the 49 gained, about **30 are right**, and most of the rest are new two-member
-  template pairs (`The Economist UK - September 12, 2026` with `The Week UK - 12
+- of the 141 lost, about **70 were right to lose** (date bridges, `X рассказала` and
+  other template pairs, deal listings, "now available" and "what you need to know"
+  phrases, the Kennedy case itself) and about **71 were genuine coverage** that no
+  longer folds, e.g. `Emmy 2026, tutti i vincitori` next to `„Widow's Bay" und „The
+  Pitt" räumen bei Emmys ab`
+- of the 60 gained, about **34 are right**, and most of the rest are new two-member
+  template pairs (`The Economist UK - September 12, 2026` with `The Week Junior UK - 12
   September 2026`), which are harmless in the sense that they do not grow
 
-So the honest trade is roughly **62 correct folds given up to break 35 incoherent
+So the honest trade is roughly **71 correct folds given up to break 31 incoherent
 groups**, about one a day against half a group a day. It is worth taking because the two
 costs are not symmetric: a fold that does not happen shows the reader two rows instead of
 one, while a wrong group shows them a story that is not a story, and can pull an unread

@@ -180,6 +180,17 @@ async def _link(new_ids: list[int], db: AsyncSession) -> int:
     joined: dict[int, int] = {}
     for new_id in sorted(by_new):
         pending.discard(new_id)
+        if articles[new_id].story_id is not None:
+            # Already in a group, so there is nothing to decide: grouping happens once,
+            # and the article is a candidate for the others from here on rather than a
+            # decision of its own. Reachable when a manual refresh lands inside a
+            # scheduler round, whose post-gather pass then sweeps up articles the
+            # refresh has already grouped. Without this the article would be measured
+            # against its own group, where it scores 1.0 against itself and lifts its
+            # own mean, and would be appended to the membership a second time, making
+            # the group look bigger to everything after it in the batch.
+            # app.scripts.backfill_stories._assign skips the same case the same way.
+            continue
         matches: dict[int, list[float]] = {}
         for pair in by_new[new_id]:
             if pair.cand_id in pending:
@@ -305,15 +316,19 @@ async def _pick_group(
             # Root purged from under the group. Its members are older than the root, so
             # the group is outside the window anyway.
             continue
-        if len(hits) < group.size * MEMBERSHIP_SHARE:
-            continue
         if group.size >= MAX_GROUP_SIZE:
             # Documented as something that should never happen, so say when it does
-            # rather than let the article quietly stay on its own.
+            # rather than let the article quietly stay on its own. Checked before the
+            # share test, which changes nothing about the outcome (both refuse the
+            # group) and everything about the log: at 40 members the share test asks
+            # for 20 matches, so behind it the warning would only ever fire for an
+            # article that had already cleared a bar no runaway group would clear.
             logger.warning(
                 "story %s is at the %s-member cap; article %s left ungrouped",
                 group_id, MAX_GROUP_SIZE, article.id,
             )
+            continue
+        if len(hits) < group.size * MEMBERSHIP_SHARE:
             continue
         if abs((article.ts - group.root_ts).total_seconds()) > WINDOW_HOURS * 3600:
             continue
@@ -442,16 +457,18 @@ async def suppress_seen(rows: list[Pair], db: AsyncSession) -> int:
 
 
 class NewArticle(NamedTuple):
-    """The two things about a new article that the grouping decision reads.
+    """What the grouping decision reads about a new article.
 
-    Both are already loaded by ``_find_pairs`` on its way to the candidate search, so
-    they travel with it rather than being fetched again: the timestamp places the
-    article against a group's root, the normalised title scores it against the members.
+    All of it is already loaded by ``_find_pairs`` on its way to the candidate search,
+    so it travels with it rather than being fetched again: the timestamp places the
+    article against a group's root, the normalised title scores it against the members,
+    and the story_id says whether the article is new to the grouping at all.
     """
 
     id: int
     ts: datetime
     title_norm: str
+    story_id: int | None
 
 
 async def _find_pairs(
@@ -477,7 +494,8 @@ async def _find_pairs(
 
     article_ts = func.coalesce(Article.published_at, Article.fetched_at)
     new_rows = (await db.execute(
-        select(Article.id, Article.feed_id, Article.title_norm, article_ts)
+        select(Article.id, Article.feed_id, Article.title_norm, article_ts,
+               Article.story_id)
         .where(
             Article.id.in_(new_ids),
             func.length(Article.title_norm) >= MIN_TITLE_CHARS,
@@ -486,8 +504,8 @@ async def _find_pairs(
 
     pairs: list[Pair] = []
     articles: dict[int, NewArticle] = {}
-    for article_id, feed_id, title_norm, ts in new_rows:
-        articles[article_id] = NewArticle(article_id, ts, title_norm)
+    for article_id, feed_id, title_norm, ts, story_id in new_rows:
+        articles[article_id] = NewArticle(article_id, ts, title_norm, story_id)
         candidates = await db.execute(_candidate_stmt(article_id, feed_id, title_norm, ts))
         pairs.extend(
             Pair(article_id, cand_id, story, similarity,

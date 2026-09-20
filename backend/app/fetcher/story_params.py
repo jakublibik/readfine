@@ -59,6 +59,12 @@ MEMBERSHIP_SHARE = 0.5
 # issues held together by the date in the title. The two conditions fail in opposite
 # directions, so both run.
 #
+# Note what this does not touch. For a group of one, which is what a pair is being made
+# out of, the mean is the pair's own score and that score already cleared
+# COLLAPSE_THRESHOLD, so the test is arithmetically a no-op and pairs group exactly as
+# they did. That is the intent, not an oversight: pairs are most of the corpus, and the
+# chain that this rule exists to break needs a third article to form.
+#
 # 0.30 is the knee of the sweep on a 62k-article production export, not a round number:
 # it drops 121 articles out of 16 536 grouped and cuts groups holding a member pair
 # under 0.15 from 42 to 3. At 0.32 the same trade costs 839 articles and saves one more

@@ -243,9 +243,9 @@ async def _assign(conn) -> tuple[int, int]:
         wanted: set[int] = set()
         for group_id, hits in matches.items():
             member_ids = members.get(group_id) or [group_id]
-            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
-                continue
             if len(member_ids) >= MAX_GROUP_SIZE:
+                continue
+            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
                 continue
             root_ts = meta.get(group_id, (None, None))[0]
             if root_ts is None:
