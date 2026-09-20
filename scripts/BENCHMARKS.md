@@ -448,10 +448,50 @@ pairwise at 0.40 against something the reader read themselves.
 the first 1 500 articles: the token prefilter finds 260 pairs against 262 by brute
 force, 0.8 % lost. (The CJK caveat from 2026-09-19 still stands separately.)
 
-**Still unverified.** The 42-groups baseline is a replay, not a reading of production's
-own `articles.story_id`. Run the metric as SQL over the live column before and after the
-regroup; if the before matches 42, these numbers are absolute, and if it does not, only
-the comparison between rules holds.
+**Measured on production, 2026-09-20.** Everything above is a replay. Run as SQL over
+the live `articles.story_id` on the 10 days the regroup covered, before and after
+`backfill_stories --days 10 --reset`: **21 incoherent groups become 2**, and the
+articles in them go from roughly 80 to 100 down to exactly 11.
+
+Three things that reading gives which the replay could not:
+
+- **The replay understated the damage.** 42 groups over the export's 69 days is 0.6 a
+  day; production had 21 over 10 days, which is 2.1. The replay builds every group in
+  one ordered pass, while production's were built by the live fetcher batch by batch,
+  and until this change it could also re-decide an article it had already grouped. So
+  the survey models the rule, not the path that runs it, and the absolute counts in the
+  tables above are the rule's numbers rather than production's.
+- **The survivors are the same two groups.** Production came out holding stories
+  224443 and 231728, which are two of the three the replay predicted. Agreeing on
+  *which* groups survive is better evidence for the method than agreeing on how many.
+- **Both survivors are correct groups**, so the real count after the change is zero. One
+  is coverage of the iOS 27 release, the other the One UI 9 rollout; the metric flags
+  them because one headline says "One UI 9" where another says "Android 17", which is
+  one story written two ways rather than a chain. 0.15 is a floor for finding chains,
+  and near it a legitimate group can trip it.
+
+The query, which counts members rather than pairs (the obvious form of it groups the
+self-join and so counts the pairs, which is what the 193 in the first reading was):
+
+```sql
+SELECT count(*) AS incoherent_groups, sum(n) AS articles FROM (
+  SELECT story_id, count(*) AS n FROM articles
+  WHERE story_id IN (
+    SELECT a.story_id FROM articles a
+    JOIN articles b ON b.story_id = a.story_id AND b.id > a.id
+    WHERE a.story_id IS NOT NULL
+      AND COALESCE(a.published_at, a.fetched_at) >= now() - interval '10 days'
+      AND COALESCE(b.published_at, b.fetched_at) >= now() - interval '10 days'
+    GROUP BY a.story_id
+    HAVING min(similarity(a.title_norm, b.title_norm)) < 0.15
+  )
+  GROUP BY story_id
+) g;
+```
+
+The window in it has to match `--days`, because `--reset` clears every group in the
+database while the regroup only rebuilds the window. Compared over the whole table, part
+of the drop would just be the old groups outside the window never coming back.
 
 Shipped as `MEMBERSHIP_MEAN` in `app/fetcher/story_params.py`, alongside
 `MEMBERSHIP_SHARE` and not instead of it. The earlier finding "do not add IDF cosine as a
