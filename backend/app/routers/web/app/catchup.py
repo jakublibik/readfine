@@ -135,16 +135,18 @@ async def htmx_catchup_estimate(
     form is one request rather than two.
     """
     article_limit = max(1, min(article_limit, 500))
-    from app.services.catchup_service import count_catchup_articles
+    from app.services.catchup_service import count_catchup_articles, resolve_story_mode
 
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
     tz_str = settings.timezone if settings else "UTC"
+    collapsing, exclude_hidden = resolve_story_mode(settings)
 
     count = await count_catchup_articles(
         user_id=user.id, tz_str=tz_str, db=db,
         period=period, scope_include=scope_include,
         filter_status=filter_status, label_filter=label_filter,
         filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
+        collapsing=collapsing, exclude_hidden=exclude_hidden,
     )
     if count > article_limit:
         count_html = f'<span>{count} articles <span class="text-gray-400">({article_limit} will be used)</span></span>'
@@ -211,8 +213,9 @@ async def htmx_catchup_generate(
     from app.models.user import CatchupLog
     from app.services.ai_service import ai_client, catch_me_up
     from app.services.catchup_service import (
-        apply_catchup_limit, build_articles_meta, fetch_catchup_articles,
-        populate_snippet_sources, validate_scope,
+        annotate_sources, apply_catchup_limit, build_articles_meta,
+        fetch_catchup_articles, fold_stories, populate_snippet_sources,
+        resolve_story_mode, validate_scope,
     )
 
     ai_on = bool(await ai_enabled_globally(db))
@@ -229,6 +232,7 @@ async def htmx_catchup_generate(
 
     tz_str = settings.timezone if settings else "UTC"
     scoring_available = _scoring_available(ai_on, settings)
+    collapsing, exclude_hidden = resolve_story_mode(settings)
 
     try:
         articles = await fetch_catchup_articles(
@@ -236,6 +240,7 @@ async def htmx_catchup_generate(
             period=period, scope_include=scope_include,
             filter_status=filter_status, label_filter=label_filter,
             filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
+            exclude_hidden=exclude_hidden,
         )
     except Exception as exc:
         logger.exception("catchup: fetch failed for user %d", user.id)
@@ -253,7 +258,19 @@ async def htmx_catchup_generate(
                 'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
             )
 
+        # Both halves hang off the one setting: "off" in the list means the reader does
+        # not trust the pairing, and a digest is the last place to overrule that.
+        if collapsing:
+            articles = fold_stories(articles)
         sampled = apply_catchup_limit(articles, article_limit, scoring_available)
+        if collapsing:
+            await annotate_sources(sampled, user.id, db)
+            logger.info(
+                "catchup: user=%d rows=%d folded=%d with_sources=%d",
+                user.id, len(sampled),
+                sum(a.folded_count for a in sampled),
+                sum(1 for a in sampled if a.source_count),
+            )
         if include_snippet_bool:
             await populate_snippet_sources(sampled, user.id, db)
         articles_meta = build_articles_meta(sampled, include_snippet_bool)

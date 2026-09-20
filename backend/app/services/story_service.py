@@ -293,6 +293,9 @@ def row_count(collapsing: bool = True):
 
     Measured at 33 ms against 30 ms for the plain count over 15k unread articles, so the
     distinct is not what makes a badge expensive.
+
+    Also counts a digest, where it is the SQL twin of ``catchup_service.fold_stories``:
+    the estimate above the form is this, the prompt is that, and they have to agree.
     """
     if not collapsing:
         return func.count()
@@ -307,6 +310,10 @@ def collapse_page(
     First in the list's current ordering, so the representative is the newest member
     in a newest-first view and the oldest in an oldest-first one. Either way it is the
     row the reader would have looked at anyway.
+
+    A digest folds the same groups by a different rule (``catchup_service.fold_stories``,
+    highest score first), because it has no reader ordering to defer to and samples by
+    score. Two rules on purpose; change one and look at the other.
 
     ``already_shown`` carries the stories the pages before this one have a row for, so
     a group split by a page boundary is still one group: its remaining members are

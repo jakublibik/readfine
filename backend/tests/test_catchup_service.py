@@ -13,6 +13,8 @@ from app.services.catchup_service import (
     apply_catchup_limit,
     build_articles_meta,
     estimate_catchup_tokens,
+    fold_stories,
+    resolve_story_mode,
 )
 from app.services.scope_tokens import parse_scope_tokens as _parse_scope
 
@@ -30,6 +32,10 @@ def make_article(
     readable_content: str | None = None,
     content: str | None = None,
     folder_id: int | None = None,
+    story_id: int | None = None,
+    has_readable: bool = False,
+    folded_count: int = 0,
+    source_count: int = 0,
 ):
     from app.services.catchup_service import CatchupArticle
     return CatchupArticle(
@@ -43,6 +49,10 @@ def make_article(
         ai_summary=ai_summary,
         readable_content=readable_content,
         content=content,
+        story_id=story_id,
+        has_readable=has_readable,
+        folded_count=folded_count,
+        source_count=source_count,
     )
 
 
@@ -378,3 +388,146 @@ class TestEstimateCatchupTokens:
         inp_no, _ = estimate_catchup_tokens(50, include_snippet=False)
         inp_yes, _ = estimate_catchup_tokens(50, include_snippet=True)
         assert inp_yes > inp_no
+
+
+# ── resolve_story_mode ────────────────────────────────────────────────────────
+
+class TestResolveStoryMode:
+    """One setting decides both halves, for all three callers of the digest query."""
+
+    def test_no_settings_behaves_as_before(self):
+        # An account without a settings row, which is also what the briefing tests
+        # hand in. Nothing folds and nothing is left out.
+        assert resolve_story_mode(None) == (False, False)
+
+    def test_off_means_off(self):
+        assert resolve_story_mode(SimpleNamespace(story_dedup="off")) == (False, False)
+
+    def test_collapse_folds_but_keeps_everything(self):
+        assert resolve_story_mode(SimpleNamespace(story_dedup="collapse")) == (True, False)
+
+    def test_suppress_also_drops_what_was_kept_out(self):
+        assert resolve_story_mode(
+            SimpleNamespace(story_dedup="collapse_suppress")
+        ) == (True, True)
+
+    def test_empty_value_is_off(self):
+        # Older rows can carry NULL; the column has a default, but nothing enforces it.
+        assert resolve_story_mode(SimpleNamespace(story_dedup=None)) == (False, False)
+
+
+# ── fold_stories ──────────────────────────────────────────────────────────────
+
+class TestFoldStories:
+    def test_keeps_one_per_story_and_counts_the_rest(self):
+        arts = [
+            make_article(id=1, story_id=7, ai_score=0.9),
+            make_article(id=2, story_id=7, ai_score=0.5),
+            make_article(id=3, story_id=7, ai_score=0.4),
+        ]
+        kept = fold_stories(arts)
+        assert [a.id for a in kept] == [1]
+        assert kept[0].folded_count == 2
+
+    def test_highest_score_represents_the_story(self):
+        arts = [
+            make_article(id=1, story_id=7, ai_score=0.2),
+            make_article(id=2, story_id=7, ai_score=0.8),
+        ]
+        assert [a.id for a in fold_stories(arts)] == [2]
+
+    def test_readable_body_breaks_a_score_tie(self):
+        # The snippet is most of what the model sees, and the first report of an event
+        # is often the wire piece extraction failed on.
+        arts = [
+            make_article(id=1, story_id=7, ai_score=0.5, has_readable=False),
+            make_article(id=2, story_id=7, ai_score=0.5, has_readable=True),
+        ]
+        assert [a.id for a in fold_stories(arts)] == [2]
+
+    def test_oldest_breaks_the_remaining_tie(self):
+        base = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        arts = [
+            make_article(id=1, story_id=7, published_at=base + timedelta(hours=5)),
+            make_article(id=2, story_id=7, published_at=base),
+        ]
+        assert [a.id for a in fold_stories(arts)] == [2]
+
+    def test_representative_does_not_move_when_coverage_arrives(self):
+        base = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        first = make_article(id=1, story_id=7, published_at=base)
+        second = make_article(id=2, story_id=7, published_at=base + timedelta(hours=2))
+        third = make_article(id=3, story_id=7, published_at=base + timedelta(hours=4))
+
+        assert [a.id for a in fold_stories([first, second])] == [1]
+        assert [a.id for a in fold_stories([first, second, third])] == [1]
+
+    def test_articles_without_a_story_are_untouched(self):
+        arts = [make_article(id=1), make_article(id=2), make_article(id=3)]
+        kept = fold_stories(arts)
+        assert [a.id for a in kept] == [1, 2, 3]
+        assert all(a.folded_count == 0 for a in kept)
+
+    def test_lone_member_carries_no_count(self):
+        # Its group reaches past this digest, so there is nothing to say about rows
+        # that were folded away: none were.
+        arts = [make_article(id=1, story_id=7)]
+        kept = fold_stories(arts)
+        assert kept[0].folded_count == 0
+
+    def test_order_is_preserved(self):
+        arts = [
+            make_article(id=1, story_id=7, ai_score=0.1),
+            make_article(id=2),
+            make_article(id=3, story_id=7, ai_score=0.9),
+            make_article(id=4),
+        ]
+        assert [a.id for a in fold_stories(arts)] == [2, 3, 4]
+
+    def test_two_stories_stay_apart(self):
+        arts = [
+            make_article(id=1, story_id=7, ai_score=0.9),
+            make_article(id=2, story_id=8, ai_score=0.8),
+            make_article(id=3, story_id=7, ai_score=0.1),
+            make_article(id=4, story_id=8, ai_score=0.2),
+        ]
+        kept = fold_stories(arts)
+        assert [a.id for a in kept] == [1, 2]
+        assert all(a.folded_count == 1 for a in kept)
+
+
+# ── folding and the sampler ───────────────────────────────────────────────────
+
+class TestFoldedCountInSampling:
+    """Folding hands a group's lost weight back to its representative."""
+
+    def test_coverage_breaks_a_score_tie(self):
+        # Same score, same day: the one that stands for four other articles goes in.
+        base = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        plain = make_article(id=1, ai_score=0.5, published_at=base)
+        covered = make_article(id=2, ai_score=0.5, published_at=base,
+                               story_id=7, folded_count=4)
+
+        picked = apply_catchup_limit([plain, covered], limit=1, scoring_available=True)
+        assert [a.id for a in picked] == [2]
+
+    def test_it_never_beats_a_better_score(self):
+        base = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        better = make_article(id=1, ai_score=0.9, published_at=base)
+        covered = make_article(id=2, ai_score=0.5, published_at=base,
+                               story_id=7, folded_count=9)
+
+        picked = apply_catchup_limit([better, covered], limit=1, scoring_available=True)
+        assert [a.id for a in picked] == [1]
+
+
+# ── the coverage marker in the prompt ─────────────────────────────────────────
+
+class TestSourcesInMeta:
+    def test_source_count_travels_to_the_prompt(self):
+        meta = build_articles_meta([make_article(source_count=4)], include_snippet=False)
+        assert meta[0]["sources"] == 4
+
+    def test_no_coverage_says_nothing(self):
+        meta = build_articles_meta([make_article(source_count=0)], include_snippet=False)
+        assert "sources" not in meta[0]

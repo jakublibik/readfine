@@ -52,6 +52,11 @@ def make_user(**kwargs):
             timezone="UTC",
             format_profile="eu",
             ai_scoring_enabled_default=False,
+            # Stands in for a UserSettings row, so it carries what send_briefing reads
+            # off one. Story folding is off here on purpose: these tests are about the
+            # send, and folding has its own, in test_catchup_service and the
+            # integration file, where it can be checked against a real database.
+            story_dedup="off",
         ),
     )
     defaults.update(kwargs)

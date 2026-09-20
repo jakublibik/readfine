@@ -1151,7 +1151,9 @@ _DEFAULT_CATCHUP_PROMPT = (
     "number of topics and sentences to what the content genuinely warrants.\n\n"
     "Avoid filler, repetition, and invented information. Do not speculate beyond what the "
     "articles suggest. Respond in the same language as the majority of the article titles. "
-    "You may use markdown (bold, lists) where it genuinely aids clarity."
+    "You may use markdown (bold, lists) where it genuinely aids clarity.\n\n"
+    "A line marked [⧉ +N] was covered by N further sources the reader subscribes to. "
+    "Treat that as a reason to give the story more attention, not more sentences."
 )
 
 
@@ -1166,13 +1168,23 @@ async def catch_me_up(
     """Generate a catch-up digest grouped by topic.
 
     Returns (text, input_tokens, output_tokens).
-    articles_meta items: {"feed": str, "title": str, "date": str, "snippet": str (optional)}
+    articles_meta items: {"feed": str, "title": str, "date": str,
+                          "sources": int (optional), "snippet": str (optional)}
+
+    The coverage marker carries no English word in it. The prompt above asks for the
+    language of the titles, the marker sits on many lines, and a custom prompt (which
+    most of these runs have) knows nothing about the field, so it has to read as a
+    symbol rather than as a sentence in the wrong language. ⧉ is what the reader's own
+    list marks a story with.
     """
     system_prompt = custom_prompt or _DEFAULT_CATCHUP_PROMPT
 
     lines = []
     for a in articles_meta:
         line = f"- [{a['feed']}] {a['title']} ({a['date']})"
+        sources = a.get("sources", 0)
+        if sources:
+            line += f" [⧉ +{sources}]"
         snippet = a.get("snippet", "")
         if snippet:
             line += f" — {snippet}"
