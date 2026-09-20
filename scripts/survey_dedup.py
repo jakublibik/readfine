@@ -94,15 +94,16 @@ THRESHOLDS = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65,
 COLLAPSE_T = 0.30
 SUPPRESS_T = 0.45
 
-# Mirrors app.fetcher.stories, like the thresholds above: how much of a group an article
-# has to match to join it, and the runaway guard on group size. Copied rather than
-# imported so this stays runnable against a CSV without the application on the path.
-MEMBERSHIP_SHARE = 0.5
-MAX_GROUP_SIZE = 40
-
-# Pairs are only considered inside this window, matching the design: a story is a
-# burst, and coverage three weeks apart is a different story about the same subject.
-WINDOW_HOURS = 72
+# The membership rule itself, imported rather than copied. story_params imports nothing,
+# so this still runs against a CSV on a machine with no database; what it buys is that
+# the three implementations of the rule (fetcher, backfill script, groups_from below)
+# cannot drift apart without somebody noticing, which until now took a code review.
+from app.fetcher.story_params import (  # noqa: E402
+    MAX_GROUP_SIZE,
+    MEMBERSHIP_MEAN,
+    MEMBERSHIP_SHARE,
+    WINDOW_HOURS,
+)
 
 # Dropped from the title_key token set. Short, deliberately: an aggressive stopword list
 # starts merging unrelated headlines, and the trigram score is what does the real work.
@@ -525,9 +526,15 @@ def groups_from(
     was 1 %, and no threshold anywhere in this file would have shown that, because
     every individual pair in the chain was a decent match.
 
-    Mirrors ``app.fetcher.stories._pick_group``: an article joins the group it matches
-    best, has to match at least MEMBERSHIP_SHARE of that group's members, cannot join a
-    group whose root is more than the window away, and two groups never merge.
+    Mirrors ``app.fetcher.stories._pick_group``, which is the third place this rule is
+    written down (the other two being the fetcher and
+    ``app.scripts.backfill_stories._assign``). An article joins the group it matches
+    best, has to match at least MEMBERSHIP_SHARE of that group's members *and* average
+    at least MEMBERSHIP_MEAN against all of them, cannot join a group whose root is more
+    than the window away, and two groups never merge.
+
+    ``scripts/survey_story_groups.py`` is where the two membership conditions get swept
+    against each other; this one only ever runs the rule as it ships.
     """
     edges: dict[int, list[tuple[int, float]]] = defaultdict(list)
     for a, b, score in pairs:
@@ -538,7 +545,7 @@ def groups_from(
 
     by_id = {a.id: a for a in arts}
     story_of: dict[int, int] = {}
-    sizes: dict[int, int] = {}
+    members: dict[int, list[int]] = {}
     window = timedelta(hours=WINDOW_HOURS)
 
     for art in arts:
@@ -548,10 +555,15 @@ def groups_from(
 
         best, best_score = None, 0.0
         for group_id, hits in matches.items():
-            size = sizes.get(group_id, 1)
-            if len(hits) < size * MEMBERSHIP_SHARE or size >= MAX_GROUP_SIZE:
+            member_ids = members.get(group_id) or [group_id]
+            if len(member_ids) >= MAX_GROUP_SIZE:
+                continue
+            if len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
                 continue
             if abs(art.ts - by_id[group_id].ts) > window:
+                continue
+            sims = [similarity(art.tri, by_id[m].tri) for m in member_ids]
+            if sum(sims) / len(sims) < MEMBERSHIP_MEAN:
                 continue
             score = sum(hits) / len(hits)
             if score > best_score:
@@ -560,7 +572,7 @@ def groups_from(
             continue
         story_of.setdefault(best, best)
         story_of[art.id] = best
-        sizes[best] = sizes.get(best, 1) + 1
+        members.setdefault(best, [best]).append(art.id)
 
     out: dict[int, list[int]] = defaultdict(list)
     for article_id, group_id in story_of.items():

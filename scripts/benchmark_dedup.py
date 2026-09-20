@@ -76,13 +76,16 @@ from survey_dedup import (  # noqa: E402
     trigrams,
 )
 
-# What the app ships today (app/fetcher/stories.py). Printed as a marked row in every
-# table so the sweep is read against the real operating point rather than in the
-# abstract.
-COLLAPSE_THRESHOLD = 0.30
-SUPPRESS_THRESHOLD = 0.40
-WINDOW_HOURS = 72
-MIN_TITLE_CHARS = 12
+# What the app ships today. Printed as a marked row in every table so the sweep is read
+# against the real operating point rather than in the abstract, which only works if it
+# really is the operating point, so it is imported rather than copied. story_params
+# imports nothing, and survey_dedup has already put backend/ on the path above.
+from app.fetcher.story_params import (  # noqa: E402
+    COLLAPSE_THRESHOLD,
+    MIN_TITLE_CHARS,
+    SUPPRESS_THRESHOLD,
+    WINDOW_HOURS,
+)
 
 SWEEP = [round(0.05 * i, 2) for i in range(1, 19)]
 

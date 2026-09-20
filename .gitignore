@@ -72,3 +72,9 @@ CLAUDE.local.md
 
 # Downloaded extraction benchmark corpus (scripts/benchmark_extraction.py)
 .benchmark/
+
+# Corpora and diffs the dedup surveys read and write (scripts/survey_dedup.py,
+# scripts/survey_story_groups.py). These hold real article titles, and the account
+# export also holds one person's read state, so none of it belongs in the repository.
+*.csv
+*.tsv
