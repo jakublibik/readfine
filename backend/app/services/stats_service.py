@@ -647,23 +647,55 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
         min_score_starred=round(float(cal.min_starred) * 100) if cal.min_starred is not None else None,
     )
 
-    # Overlooked gems — high score, never opened (dwell=0, link_opened=false)
+    # Overlooked gems — high score, never opened (dwell=0, link_opened=false).
+    #
+    # Scoring runs per article, but a story group is one piece of news covered by
+    # several sources, so the group has to be taken into account twice here. Read any
+    # member of it and the news is not missed, whichever row carried it; and a group
+    # whose members all scored high would otherwise fill the ten rows with one event
+    # told five times. Hence the NOT EXISTS (engagement anywhere in the group) and one
+    # row per group, the highest-scoring one.
+    #
+    # The sibling check looks only at this reader's own engagement, so it needs no
+    # access join: a state row with time on it is a read they made, whether or not they
+    # still subscribe to the feed it came from. Articles outside any group key on their
+    # own negated id, which no story_id can collide with.
     gems_result = await db.execute(
         text("""
-            SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score, uas.is_starred
-            FROM user_article_states uas
-            JOIN articles a ON a.id = uas.article_id
-            JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
-            JOIN feeds f ON f.id = uf.feed_id
-            WHERE uas.user_id = :uid
-              AND uas.ai_score >= 0.7
-              AND uas.dwell_seconds = 0
-              AND uas.link_opened = false
-              AND a.fetched_at >= :cutoff
-            ORDER BY uas.ai_score DESC
+            WITH candidates AS (
+                SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title,
+                       uas.ai_score, uas.is_starred,
+                       COALESCE(a.story_id, -a.id) AS story_key
+                FROM user_article_states uas
+                JOIN articles a ON a.id = uas.article_id
+                JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
+                JOIN feeds f ON f.id = uf.feed_id
+                WHERE uas.user_id = :uid
+                  AND uas.ai_score >= 0.7
+                  AND uas.dwell_seconds = 0
+                  AND uas.link_opened = false
+                  AND a.fetched_at >= :cutoff
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM articles sib
+                      JOIN user_article_states sib_uas
+                        ON sib_uas.article_id = sib.id AND sib_uas.user_id = :uid
+                      WHERE a.story_id IS NOT NULL
+                        AND sib.story_id = a.story_id
+                        AND (sib_uas.dwell_seconds >= :dwell OR sib_uas.link_opened)
+                  )
+            )
+            SELECT id, title, feed_title, ai_score, is_starred
+            FROM (
+                SELECT DISTINCT ON (story_key)
+                       id, title, feed_title, ai_score, is_starred
+                FROM candidates
+                ORDER BY story_key, ai_score DESC, id
+            ) one_per_story
+            ORDER BY ai_score DESC
             LIMIT 10
         """),
-        {"uid": user_id, "cutoff": cutoff},
+        {"uid": user_id, "cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS},
     )
     gems = [
         GemArticle(article_id=r.id, title=r.title, feed_title=r.feed_title, ai_score=round(float(r.ai_score), 2), is_starred=bool(r.is_starred))

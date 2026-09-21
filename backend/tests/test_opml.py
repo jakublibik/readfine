@@ -10,6 +10,7 @@ from xml.etree.ElementTree import Element
 import defusedxml.ElementTree as ET
 import pytest
 
+from app.services.feed import FeedLimitReached
 from app.services.opml import (
     ImportResult,
     _collect_feed_outlines,
@@ -541,3 +542,93 @@ class TestScrapeFeedRoundTrip:
 
         assert feed_id == 7
         assert result.feeds_added == 1
+
+
+# ── Feed cap during import ────────────────────────────────────────────────────
+
+class _StubResult:
+    """Empty result for every query import_opml runs outside the feed loop."""
+
+    def all(self):
+        return []
+
+    def scalars(self):
+        return []
+
+    def scalar_one_or_none(self):
+        return None
+
+    def scalar(self):
+        return 0
+
+
+class _StubDB:
+    async def execute(self, *args, **kwargs):
+        return _StubResult()
+
+    async def scalar(self, *args, **kwargs):
+        return None
+
+    async def commit(self):
+        pass
+
+    async def flush(self):
+        pass
+
+    def add(self, obj):
+        pass
+
+
+def _flat_opml(count: int) -> bytes:
+    outlines = "".join(
+        f'<outline type="rss" text="Feed {i}" xmlUrl="https://example.com/{i}/rss"/>'
+        for i in range(count)
+    )
+    return f'<opml version="2.0"><body>{outlines}</body></opml>'.encode()
+
+
+async def _import_feeds_only(xml: bytes) -> ImportResult:
+    return await import_opml(
+        user=SimpleNamespace(id=1, role="user"), xml_bytes=xml,
+        import_feeds=True, import_labels=False, import_prefs=False,
+        import_filters=False, db=_StubDB(),
+    )
+
+
+class TestImportFeedLimit:
+    async def test_cap_records_how_many_feeds_were_left_out(self, monkeypatch):
+        """The cap stops the import part way; the result has to say by how much.
+
+        A migration silently cut from 180 feeds to 50 is the failure this reports,
+        so the count matters more than the fact.
+        """
+        calls = {"n": 0}
+
+        async def fake_subscribe(**kwargs):
+            calls["n"] += 1
+            if calls["n"] > 2:
+                raise FeedLimitReached(50)
+            return SimpleNamespace(feed_id=calls["n"])
+
+        monkeypatch.setattr("app.services.opml.subscribe", fake_subscribe)
+
+        result = await _import_feeds_only(_flat_opml(5))
+
+        assert result.feeds_added == 2
+        # The third raised and was not imported either, so three of five were left out.
+        assert result.feeds_over_limit == 3
+        assert result.feed_limit == 50
+        # The cap is reported as a number, not buried in the warning list.
+        assert not any("limit" in w.lower() for w in result.warnings)
+
+    async def test_import_that_fits_reports_no_cap(self, monkeypatch):
+        async def fake_subscribe(**kwargs):
+            return SimpleNamespace(feed_id=1)
+
+        monkeypatch.setattr("app.services.opml.subscribe", fake_subscribe)
+
+        result = await _import_feeds_only(_flat_opml(3))
+
+        assert result.feeds_added == 3
+        assert result.feeds_over_limit == 0
+        assert result.feed_limit is None
