@@ -18,7 +18,9 @@ the worst single query, the per-folder unread count, from 51 ms to 17 ms. The in
 costs 1.2 MB there. The per-feed counters ride along on the same leading column.
 
 Built with the app down, like every migration here (docker-compose runs alembic before
-uvicorn), so a plain build is fine and CONCURRENTLY would buy nothing.
+uvicorn), so a plain build is fine and CONCURRENTLY would buy nothing. It adds nothing
+worth mentioning to the upgrade: 50 ms for 31k articles, so a fraction of a second at
+production size, against the forty seconds 0098's table rewrite already costs there.
 
 Kept out of the model for the same reason as ix_articles_sort_ts: partial indexes live
 in the migrations in this project.
