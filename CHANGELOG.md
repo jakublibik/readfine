@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-21
+
 ### Upgrade notes
 
 - Story grouping needs the PostgreSQL **`pg_trgm`** extension. The upgrade installs it, which works out of the box in the Docker setup; on a managed PostgreSQL where the application's role is not allowed to create extensions, run `CREATE EXTENSION pg_trgm;` as a superuser first, or the upgrade stops there.
