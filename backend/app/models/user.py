@@ -114,6 +114,9 @@ class UserSettings(Base):
     ai_preference_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_preference_fail_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Lexical scoring. On by default, and harmless when it is: without an interest
+    # profile there is nothing to match against, so it produces no score at all.
+    basic_scoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_prompt: Mapped[str | None] = mapped_column(Text)
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)

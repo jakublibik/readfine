@@ -666,6 +666,20 @@ async def _purge_traffic_stats() -> None:
         await traffic_service.purge_old(session)
 
 
+async def _rebuild_lexical_corpus() -> None:
+    """Job: recount the term statistics the lexical relevance scorer reads.
+
+    Nightly and whole. Nothing scores until it has run once, so a fresh install
+    gets no relevance scores on its first day, which is also the day it has no
+    corpus to compute them from.
+    """
+    if db.async_session_factory is None:
+        return
+    from app.services import relevance_corpus_service
+    async with db.async_session_factory() as session:
+        await relevance_corpus_service.rebuild(session)
+
+
 async def _sweep_thumb_cache() -> None:
     """Job: drop video thumbnails nobody has requested within the idle window."""
     from app.services.video_thumb_service import sweep_idle_thumbnails
@@ -912,6 +926,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=0,
         id="cleanup_unverified_users",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _rebuild_lexical_corpus,
+        trigger="cron",
+        hour=3,
+        minute=40,
+        id="rebuild_lexical_corpus",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

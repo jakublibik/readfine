@@ -123,6 +123,12 @@ class UserArticleState(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
+    # BM25 of the article against the reader's interest profile, written at fetch
+    # time for every article rather than only the labeled ones. Its own column, not
+    # a fallback written into ai_score: the two scorers have to stay comparable over
+    # the same reader and the same profile, and every consumer picks which one it
+    # means. See app.services.relevance_service for what the number is worth.
+    lexical_score: Mapped[float | None] = mapped_column(Float)
     ai_summary: Mapped[str | None] = mapped_column(Text)
     # The model stopped on its output-token cap, so ai_summary ends mid-thought.
     # Kept beside the text rather than marked inside it: the summary is also served

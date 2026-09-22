@@ -25,11 +25,14 @@ Three things here are decisions, not detail:
 """
 from __future__ import annotations
 
+import html as _html
 import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
+
+import nh3
 
 # Standard BM25 constants. Shared with the eval baseline so the shipped scorer
 # and the measured one differ in nothing but the corpus the IDF comes from.
@@ -81,10 +84,31 @@ def terms(text: str, ngram_max: int = NGRAM_MAX) -> list[str]:
     return out
 
 
-def article_text(title: str | None, summary: str | None) -> str:
-    """The input the scorer reads: title plus the head of the summary."""
-    head = (summary or "")[:SUMMARY_MAX_CHARS]
-    return f"{title or ''}\n\n{head}".strip()
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def plain_text(content: str | None) -> str:
+    """Strip HTML, unescape entities, collapse whitespace.
+
+    Deliberately not `ai_jobs.normalize_text`, which does the same three steps:
+    importing it would pull the app config in, and this module has to stay
+    importable by the offline scripts, which run without one. The steps are kept
+    identical because the offline sample was exported through that path, and the
+    measured numbers only carry over while the text does.
+    """
+    plain = nh3.clean(content or "", tags=set())
+    return _WHITESPACE_RE.sub(" ", _html.unescape(plain)).strip()
+
+
+def article_text(title: str | None, content: str | None) -> str:
+    """The input the scorer reads: title plus the head of the body, HTML stripped.
+
+    At fetch time `content` is the feed's own description, which is HTML. Scoring
+    it raw would tokenize tag and attribute names, and `href` would end up one of
+    the commonest terms in the corpus.
+    """
+    head = plain_text(content)[:SUMMARY_MAX_CHARS]
+    return f"{title or ''}\n\n{head}".strip() if head else (title or "").strip()
 
 
 @dataclass(frozen=True)
@@ -117,29 +141,63 @@ class CorpusStats:
         return math.log(1.0 + (self.n_docs - df + 0.5) / (df + 0.5))
 
 
-def build_corpus_stats(texts: Iterable[str], min_df: int = 3,
-                       ngram_max: int = NGRAM_MAX) -> CorpusStats:
-    """Count document frequencies over a corpus.
+def unique_terms(text: str, ngram_max: int = NGRAM_MAX) -> set[str]:
+    """The distinct terms of one document, i.e. its contribution to any count."""
+    return set(terms(text, ngram_max))
 
-    In the app this is a scheduled job over a recent window writing a table; the
-    offline scripts call it directly. `min_df` keeps the table to the terms that
-    recur — the long tail of typos and one-off proper nouns is most of the term
-    count and none of the signal.
+
+def known_term_count(text: str, doc_freq: Mapping[str, int],
+                     ngram_max: int = NGRAM_MAX) -> int:
+    """Length of one document measured the way BM25 will measure it."""
+    return sum(1 for t in terms(text, ngram_max) if t in doc_freq)
+
+
+def count_doc_freq(texts: Iterable[str],
+                   ngram_max: int = NGRAM_MAX) -> tuple[dict[str, int], int]:
+    """First pass: how many documents each term appears in, and how many there are.
+
+    Streams, and keeps only the counter. The app builds this over every article of
+    the last month, so holding the tokenized documents would mean millions of
+    strings in memory on a VPS that has none to spare.
     """
     doc_freq: dict[str, int] = {}
     n_docs = 0
-    lengths: list[list[str]] = []
     for text in texts:
         n_docs += 1
-        doc_terms = terms(text, ngram_max)
-        lengths.append(doc_terms)
-        for term in set(doc_terms):
+        for term in unique_terms(text, ngram_max):
             doc_freq[term] = doc_freq.get(term, 0) + 1
+    return doc_freq, n_docs
 
+
+def mean_doc_len(texts: Iterable[str], doc_freq: Mapping[str, int],
+                 ngram_max: int = NGRAM_MAX) -> float:
+    """Second pass: average length counted over the terms that survived the cutoff.
+
+    It takes a second pass because the cutoff is not known until the first one has
+    finished, and a length measured over terms the scorer will ignore would make
+    the length normalization answer a different question than the score does.
+    """
+    total = 0
+    n_docs = 0
+    for text in texts:
+        n_docs += 1
+        total += known_term_count(text, doc_freq, ngram_max)
+    return (total / n_docs) if n_docs else 0.0
+
+
+def build_corpus_stats(texts: Sequence[str], min_df: int = 3,
+                       ngram_max: int = NGRAM_MAX) -> CorpusStats:
+    """Count document frequencies over a corpus held in memory.
+
+    For the offline scripts and the tests. The app streams the same two passes
+    straight out of the database, see `relevance_corpus_service`. `min_df` keeps
+    the table to terms that recur: the long tail of typos and one-off proper nouns
+    is most of the term count and none of the signal.
+    """
+    doc_freq, n_docs = count_doc_freq(texts, ngram_max)
     kept = {t: df for t, df in doc_freq.items() if df >= min_df}
-    total = sum(sum(1 for t in doc_terms if t in kept) for doc_terms in lengths)
     return CorpusStats(n_docs=n_docs,
-                       avg_doc_len=(total / n_docs) if n_docs else 0.0,
+                       avg_doc_len=mean_doc_len(texts, kept, ngram_max),
                        doc_freq=kept, ngram_max=ngram_max)
 
 
