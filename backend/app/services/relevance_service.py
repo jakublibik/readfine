@@ -3,10 +3,10 @@
 The weaker of the two scorers. It runs on every article at fetch time, from the
 title and the start of the summary, and needs no API key — unlike AI scoring,
 which stays on labeled articles only. Measured offline (see
-`scripts/embedding_eval/`): AUC against engagement is around 0.56 for a fresh
-three-topic profile and 0.62 for a generated one, against 0.73 for the LLM on
-the same sample and 0.50 for no score at all. It is a real signal and a thin
-one, and the UI says so.
+`scripts/embedding_eval/`): on the clean September window this scorer gets AUC
+0.563 against engagement with a fresh three-topic profile and 0.616 with a
+generated one, where the LLM gets 0.729 and no score at all gets 0.50. It is a
+real signal and a thin one, and the UI says so.
 
 Three things here are decisions, not detail:
 
@@ -21,8 +21,7 @@ Three things here are decisions, not detail:
 - **The tokenizer is the eval's tokenizer** (lowercase, accents stripped,
   `\\w\\w+` tokens). Every number quoted above was measured through it, so changing
   it invalidates them rather than merely tuning them. The one deviation is
-  bigrams, which the eval had and this does not: measured on the same sample they
-  moved AUC by +0.000 [-0.002, +0.002] and cost 2.5x the term table.
+  bigrams, which the eval had and this does not: see `NGRAM_MAX`.
 """
 from __future__ import annotations
 
@@ -63,10 +62,13 @@ def tokenize(text: str) -> list[str]:
 
 
 # Bigrams are what would let "AI safety" match as a phrase rather than as two of
-# the commonest words in the corpus, and on the eval sample they were worth
-# nothing at all: +0.000 AUC [-0.002, +0.002] for 2.5x the term table (21320
-# terms against 8409 on 6062 articles). The offline scripts still build them, so
-# the ablation can be rerun rather than taken on faith.
+# the commonest words in the corpus. Measured, they are worth +0.004 AUC
+# [+0.001, +0.008] with a generated profile and +0.000 [-0.000, +0.001] on a
+# cold start, for twice the term table (11144 terms against 5404 on 3106
+# articles). Left off: a gain that small sits well inside the gap this scorer is
+# trying to close, and the table is the one part of this that grows with the
+# install. The offline script still builds them, so flipping this back is a
+# constant and a table rebuild, not a rewrite.
 NGRAM_MAX = 1
 
 
@@ -179,11 +181,12 @@ def bm25_raw(text: str, units: Iterable[str], stats: CorpusStats) -> float:
 # Fitted offline against the decile-by-decile LLM score distribution of the same
 # articles (`scripts/embedding_eval/run_lexical_fidelity.py --calibrate`).
 # Matching the whole distribution is not possible and was not attempted: the LLM
-# has a fat top tail and BM25 a thin one, so on that sample 19.6% of articles
-# clear an LLM 0.7 and 1.4% clear a lexical one. Thin is the safe direction for a
-# filter that sweeps, but the same threshold does read differently depending on
-# which scorer produced the number, and the UI has to say so.
-SQUASH_K = 4.7
+# has a fat top tail and BM25 a thin one, so on the clean window 28.2% of
+# articles clear an LLM 0.7 and 1.1% clear a lexical one. Thin is the safe
+# direction for a filter that sweeps, but the same threshold does read
+# differently depending on which scorer produced the number, and the UI has to
+# say so.
+SQUASH_K = 4.6
 
 
 def squash(raw: float, k: float = SQUASH_K) -> float:
