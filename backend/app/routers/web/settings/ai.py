@@ -37,7 +37,6 @@ from app.services.ai_service import (
     scoring_model_rejection,
     verify_ai_slot,
 )
-from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
 from app.services.stats_service import get_ai_cost_stats
 from app.utils.formats import format_thousands
 from app.templating import templates
@@ -58,10 +57,6 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     s = await _get_or_create_settings(user, db)
     keys = await list_api_keys(user.id, db)
     cost_stats = await get_ai_cost_stats(user.id, db, days=30)
-    strong_count = await get_preference_strong_count(user.id, db)
-    # Same call the scheduler job makes, so the status line cannot promise a
-    # run the job would skip.
-    auto_status, auto_detail = await preference_auto_status(s, db)
     # Title for the error panel's article link. Stays None once retention purge
     # clears the FK, which is why the panel treats the link as optional.
     error_article_title = None
@@ -78,10 +73,6 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "provider_labels": PROVIDER_LABELS,
-        "pref_strong_count": strong_count,
-        "pref_auto_status": auto_status,
-        "pref_auto_detail": auto_detail,
-        "pref_auto_intervals": AUTO_INTERVALS,
         "default_summary_prompt": _DEFAULT_SUMMARY_PROMPT,
         "default_context_prompt": _DEFAULT_CONTEXT_PROMPT,
         # So the field descriptions quote the same defaults the form validates
@@ -263,46 +254,6 @@ async def settings_ai_preferences_save(
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"
 
-    # Everything below belongs to scoring and is disabled in the form while
-    # scoring is off. A disabled control submits nothing, so applying these
-    # unconditionally would wipe the profile (and the schedule, and the score
-    # toggle) the moment someone saves with scoring turned off.
-    if "ai_preference_text" in form:
-        pref_text = (form.get("ai_preference_text") or "").strip() or None
-        if pref_text and len(pref_text) > 5000:
-            ctx = await _ai_page_context(user, db)
-            ctx["prefs_error"] = f"Interest profile is too long ({len(pref_text)} characters). Maximum is 5 000 characters."
-            ctx["pref_text_submitted"] = pref_text
-            return templates.TemplateResponse(request, "settings/ai.html", ctx)
-        # Order matters: the schedule and the text arrive in the same submit. A
-        # real text change stamps the timestamp (and resets the auto clock with
-        # it); switching the schedule on only stamps it when the text did not.
-        if pref_text != s.ai_preference_text:
-            s.ai_preference_text = pref_text
-            s.ai_preference_updated_at = datetime.now(timezone.utc)
-            s.ai_preference_source = "manual"
-
-    if "ai_preference_auto_days" in form:
-        try:
-            auto_days = int(form.get("ai_preference_auto_days") or 0)
-        except (TypeError, ValueError):
-            auto_days = 0
-        if auto_days not in AUTO_INTERVALS:
-            auto_days = 0
-        if auto_days and not s.ai_preference_auto_days:
-            s.ai_preference_fail_count = 0
-            s.ai_preference_last_error = None
-            s.ai_preference_last_error_at = None
-            # Turning the schedule on must not rewrite an existing profile the
-            # next morning: start the clock now and let the first run come one
-            # full interval later. An empty profile keeps NULL and generates
-            # right away.
-            if s.ai_preference_text and s.ai_preference_updated_at is None:
-                s.ai_preference_updated_at = datetime.now(timezone.utc)
-        s.ai_preference_auto_days = auto_days
-
-    if s.ai_scoring_enabled_default:
-        s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     # Numeric limits. A rejected value falls back to its default and says so;
     # the notes are collected rather than flagged one by one, so submitting two
     # bad numbers reports both instead of hiding one behind the other.
@@ -442,10 +393,11 @@ async def settings_ai_generate_preference(
     ) if strong_count < 20 else ""
     return HTMLResponse(
         f'<span class="text-green-600 text-sm">Generated — review and save below.</span>'
-        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="4"'
+        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="7"'
         f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
         f' hx-swap-oob="true">{escaped}</textarea>'
         f'<div id="pref-cold-start-warning" hx-swap-oob="true">{warning_inner}</div>'
+        f'<span id="pref-char-count" hx-swap-oob="true">{len(text_result)}</span>'
     )
 
 

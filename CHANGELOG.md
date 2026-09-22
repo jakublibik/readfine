@@ -9,6 +9,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- Articles are scored for relevance without an API key. **Basic relevance** matches the words of every article that arrives, its title and the opening of its text, against your interest profile. Until now only an article that a filter had labelled was scored, and only with AI, so an account without filters or without a key never saw a score at all. It is the weaker of the two scorers and the page says so: it matches words rather than meaning, so it cannot tell that an article about "LLM jailbreaks" is about AI safety unless your profile names one of those words. Measured against what people actually read, it ranks clearly better than nothing and clearly worse than the AI score, which keeps working as before on labelled articles. Both read the same interest profile, which now has its own page, **Settings → Relevance**, along with the switch for basic relevance and the option to show scores in the list. Saving a profile there scores the last week of unread articles against it.
+
+### Changed
+
+- Automatic regeneration of the interest profile no longer needs AI scoring switched on. The profile now feeds basic relevance as well, which runs without a model, so keeping it current and rating articles with a model became two different questions. It still needs a main model, its key, and the interval you pick.
+
 ## [0.18.0] - 2026-09-21
 
 ### Upgrade notes

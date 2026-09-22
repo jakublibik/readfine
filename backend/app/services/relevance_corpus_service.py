@@ -46,6 +46,13 @@ TERM_MAX_CHARS = 64
 BODY_FETCH_CHARS = 4000
 _INSERT_CHUNK = 5000
 
+# Below this, the instance is still filling up and the statistics are worth
+# recounting as often as anyone asks: a corpus of a few dozen articles at
+# min_df=3 has almost no terms in it, so the scores it produces are close to
+# useless and the rebuild that fixes them costs milliseconds. Above it, the
+# nightly job is enough.
+BOOTSTRAP_MAX_DOCS = 500
+
 _cached: CorpusStats | None = None
 _cached_built_at: datetime | None = None
 
@@ -127,6 +134,31 @@ async def _mean_len(db: AsyncSession, cutoff: datetime, doc_freq: dict[str, int]
         n_docs += 1
         total += known_term_count(text, doc_freq, ngram_max)
     return (total / n_docs) if n_docs else 0.0
+
+
+async def ensure_built(db: AsyncSession, **rebuild_kwargs) -> bool:
+    """Build the statistics if there are none worth using yet. Returns whether it did.
+
+    Without this, a fresh install would score nothing until the first nightly
+    run, which is up to a day of a new account seeing exactly what the feature
+    exists to prevent: an unsorted list. It is also why the check is not simply
+    "has it ever been built" — the first build on a new instance may count a
+    handful of articles, and a corpus that small is worth redoing as the feeds
+    fill in.
+
+    Costs one small query on an instance that is past that stage. The job passes
+    no `rebuild_kwargs`; they exist so a test can narrow the window.
+    """
+    row = (await db.execute(
+        select(LexicalCorpus.built_at, LexicalCorpus.n_docs)
+        .where(LexicalCorpus.id == 1)
+    )).first()
+    if row is not None and row.built_at is not None and row.n_docs >= BOOTSTRAP_MAX_DOCS:
+        return False
+    if not await db.scalar(select(Article.id).limit(1)):
+        return False  # nothing to count yet; a brand new instance with no fetch
+    await rebuild(db, **rebuild_kwargs)
+    return True
 
 
 async def get_stats(db: AsyncSession) -> CorpusStats | None:

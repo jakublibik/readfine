@@ -5,16 +5,16 @@ back. The corpus tables are instance-wide, so there is nothing to scope the way
 the purge tests scope a throwaway feed; the rollback is what protects the dev
 data. Skips automatically if the database is unreachable.
 
-Every test builds with ``window_days=1`` and stamps its articles ``now``, so the
-window holds the test's own rows and the counts are exact rather than relative to
-whatever the dev database fetched this month.
+Every test builds with ``window_days=1`` and stamps its articles ``now``. That
+window also holds whatever the dev database fetched today, so the assertions are
+about invented tokens that nothing else can contain, never about the total.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -83,7 +83,7 @@ class TestRebuild:
         await _seed(pg)
         result = await rcs.rebuild(pg, window_days=1, min_df=3)
 
-        assert result["n_docs"] == 4
+        assert result["n_docs"] >= 4
         assert await pg.scalar(
             select(LexicalTerm.doc_freq).where(LexicalTerm.term == COMMON)) == 3
         assert await pg.scalar(
@@ -94,7 +94,7 @@ class TestRebuild:
         await rcs.rebuild(pg, window_days=1, min_df=3)
 
         corpus = await pg.get(LexicalCorpus, 1)
-        assert corpus.n_docs == 4
+        assert corpus.n_docs >= 4
         assert corpus.avg_doc_len > 0
         assert (corpus.min_df, corpus.window_days) == (3, 1)
         assert corpus.ngram_max == rs.NGRAM_MAX
@@ -123,7 +123,13 @@ class TestRebuild:
                 select(LexicalTerm.doc_freq).where(LexicalTerm.term == markup)) is None
 
     async def test_empty_window_writes_an_empty_table(self, pg):
-        result = await rcs.rebuild(pg, window_days=1, min_df=3)
+        """A window nothing falls into: the table is emptied, not left stale."""
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        assert await pg.scalar(
+            select(LexicalTerm.doc_freq).where(LexicalTerm.term == COMMON)) == 3
+
+        result = await rcs.rebuild(pg, window_days=0, min_df=3)
         assert result["terms"] == 0
         assert await rcs.get_stats(pg) is None
 
@@ -131,6 +137,8 @@ class TestRebuild:
 @pytest.mark.asyncio
 class TestGetStats:
     async def test_none_before_the_first_build(self, pg):
+        """A fresh install: no build, so no score, which is not a score of zero."""
+        await pg.execute(delete(LexicalCorpus))
         assert await rcs.get_stats(pg) is None
 
     async def test_returns_the_built_table(self, pg):
@@ -138,7 +146,7 @@ class TestGetStats:
         await rcs.rebuild(pg, window_days=1, min_df=3)
 
         stats = await rcs.get_stats(pg)
-        assert stats.n_docs == 4
+        assert stats.n_docs >= 4
         assert stats.doc_freq[COMMON] == 3
         assert stats.avg_doc_len > 0
 
@@ -165,3 +173,78 @@ class TestGetStats:
         text = rs.article_text(f"{COMMON} alpha", "<p>body one</p>")
         assert rs.lexical_score(text, profile, stats) > 0.0
         assert rs.lexical_score("nothing in common here", profile, stats) == 0.0
+
+
+@pytest.mark.asyncio
+class TestEnsureBuilt:
+    """The bootstrap path: a young instance must not wait for the nightly job."""
+
+    async def test_builds_when_there_is_nothing_yet(self, pg):
+        await pg.execute(delete(LexicalCorpus))
+        await _seed(pg)
+
+        assert await rcs.ensure_built(pg, window_days=1) is True
+        assert await rcs.get_stats(pg) is not None
+
+    async def test_keeps_rebuilding_while_the_corpus_is_tiny(self, pg):
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        corpus = await pg.get(LexicalCorpus, 1)
+        corpus.n_docs = rcs.BOOTSTRAP_MAX_DOCS - 1
+        first = corpus.built_at
+        await pg.flush()
+
+        assert await rcs.ensure_built(pg, window_days=1) is True
+        assert (await pg.get(LexicalCorpus, 1)).built_at > first
+
+    async def test_leaves_a_grown_corpus_to_the_nightly_job(self, pg):
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        corpus = await pg.get(LexicalCorpus, 1)
+        corpus.n_docs = rcs.BOOTSTRAP_MAX_DOCS
+        await pg.flush()
+
+        assert await rcs.ensure_built(pg) is False
+
+
+@pytest.mark.asyncio
+class TestAutoGenerationCandidates:
+    """Who the nightly profile regeneration considers.
+
+    Lives with the relevance tests because the reason the rule changed is here:
+    the interest profile now also feeds a scorer that runs without a model, so
+    scheduling its regeneration stopped being a question about AI scoring.
+    """
+
+    async def _user(self, session, *, interval: int, ai_scoring: bool,
+                    active_days: int = 0):
+        from app.models.user import User, UserSettings
+        u = uuid.uuid4().hex[:12]
+        user = User(email=f"gen_{u}@test.invalid", password_hash="x",
+                    display_name="t", is_active=True,
+                    last_active_at=NOW - timedelta(days=active_days))
+        session.add(user)
+        await session.flush()
+        session.add(UserSettings(user_id=user.id, ai_preference_auto_days=interval,
+                                 ai_scoring_enabled_default=ai_scoring))
+        await session.flush()
+        return user
+
+    async def test_ai_scoring_off_is_still_a_candidate(self, pg):
+        from app.services.ai_profile_service import due_auto_generation_user_ids
+        user = await self._user(pg, interval=14, ai_scoring=False)
+        assert user.id in await due_auto_generation_user_ids(pg)
+
+    async def test_no_interval_is_not_a_candidate(self, pg):
+        from app.services.ai_profile_service import due_auto_generation_user_ids
+        user = await self._user(pg, interval=0, ai_scoring=True)
+        assert user.id not in await due_auto_generation_user_ids(pg)
+
+    async def test_a_long_absence_drops_out(self, pg):
+        from app.services.ai_profile_service import (
+            AUTO_GENERATION_IDLE_DAYS,
+            due_auto_generation_user_ids,
+        )
+        user = await self._user(pg, interval=14, ai_scoring=True,
+                                active_days=AUTO_GENERATION_IDLE_DAYS + 1)
+        assert user.id not in await due_auto_generation_user_ids(pg)

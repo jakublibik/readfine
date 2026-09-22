@@ -132,30 +132,19 @@ def _as_utc(value: datetime | None) -> datetime | None:
     return value
 
 
-async def preference_auto_status(
-    settings: UserSettings, db: AsyncSession, now: datetime | None = None
-) -> tuple[str, dict]:
-    """Single source of truth for "should the profile be regenerated, and if not, why".
+async def quality_slot_blocker(
+    settings: UserSettings, db: AsyncSession
+) -> tuple[str, dict] | None:
+    """Why a model call on the main slot cannot be made, or None when it can.
 
-    Used by both the scheduler job and the settings page, so the status line can
-    never claim something other than what the job actually does. Returns one of
-    ``off`` / ``up_to_date`` / ``cooldown`` / ``no_quality_model`` / ``no_api_key`` /
-    ``cold_start`` / ``not_enough_new`` / ``due`` plus details for the UI.
+    One answer for the scheduler, for the status line and for whether the
+    Relevance page offers the generate button at all: "some key exists" is not
+    the question, the question is whether *this* slot resolves to a model that
+    can be called.
+
+    Returns the same ``(status, detail)`` shape `preference_auto_status` returns,
+    so a caller can render either one the same way.
     """
-    now = now or datetime.now(timezone.utc)
-    interval = settings.ai_preference_auto_days or 0
-    if interval <= 0:
-        return "off", {}
-
-    delta = timedelta(days=interval)
-    updated_at = _as_utc(settings.ai_preference_updated_at)
-    if updated_at is not None and now - updated_at < delta:
-        return "up_to_date", {"next_at": updated_at + delta}
-
-    last_attempt = _as_utc(settings.ai_preference_last_attempt_at)
-    if last_attempt is not None and now - last_attempt < delta:
-        return "cooldown", {"next_at": last_attempt + delta}
-
     if not settings.ai_quality_provider or not settings.ai_quality_model:
         return "no_quality_model", {}
 
@@ -183,6 +172,36 @@ async def preference_auto_status(
         # one instruction that will not help here — the whole point of this
         # provider is that a local model does not have one.
         return "no_endpoint", {}
+    return None
+
+
+async def preference_auto_status(
+    settings: UserSettings, db: AsyncSession, now: datetime | None = None
+) -> tuple[str, dict]:
+    """Single source of truth for "should the profile be regenerated, and if not, why".
+
+    Used by both the scheduler job and the settings page, so the status line can
+    never claim something other than what the job actually does. Returns one of
+    ``off`` / ``up_to_date`` / ``cooldown`` / ``no_quality_model`` / ``no_api_key`` /
+    ``cold_start`` / ``not_enough_new`` / ``due`` plus details for the UI.
+    """
+    now = now or datetime.now(timezone.utc)
+    interval = settings.ai_preference_auto_days or 0
+    if interval <= 0:
+        return "off", {}
+
+    delta = timedelta(days=interval)
+    updated_at = _as_utc(settings.ai_preference_updated_at)
+    if updated_at is not None and now - updated_at < delta:
+        return "up_to_date", {"next_at": updated_at + delta}
+
+    last_attempt = _as_utc(settings.ai_preference_last_attempt_at)
+    if last_attempt is not None and now - last_attempt < delta:
+        return "cooldown", {"next_at": last_attempt + delta}
+
+    blocked = await quality_slot_blocker(settings, db)
+    if blocked is not None:
+        return blocked
 
     strong, fresh = await signal_counts(settings.user_id, updated_at, db)
     if strong < MIN_STRONG_SIGNALS:
@@ -210,6 +229,37 @@ def _apply_failure(settings: UserSettings, message: str, now: datetime) -> None:
     # No single article behind a profile failure, so drop any link left by an
     # earlier per-article error so the panel cannot point at an unrelated one.
     settings.last_ai_error_article_id = None
+
+
+# Someone who has not opened Readfine for a month stops having a profile
+# regenerated for them; they re-enter on their next visit, since last_active_at is
+# bumped hourly while browsing.
+AUTO_GENERATION_IDLE_DAYS = 30
+
+
+async def due_auto_generation_user_ids(db: AsyncSession) -> list[int]:
+    """Candidates for the nightly profile regeneration, oldest profile first.
+
+    Deliberately not gated on ``ai_scoring_enabled_default``. The interest profile
+    feeds the lexical scorer as well, which runs without a model at all, so
+    "keep my profile up to date" and "rate articles with a model" are two
+    different questions. What a candidate still needs is their own interval and a
+    usable model, and the second one is `preference_auto_status`'s call, so this
+    query and the line the settings page shows cannot disagree about who is due.
+    """
+    from app.models.user import User
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=AUTO_GENERATION_IDLE_DAYS)
+    return list((await db.execute(
+        select(UserSettings.user_id)
+        .join(User, User.id == UserSettings.user_id)
+        .where(
+            UserSettings.ai_preference_auto_days > 0,
+            User.is_active.is_(True),
+            User.last_active_at >= cutoff,
+        )
+        .order_by(UserSettings.ai_preference_updated_at.asc().nulls_first())
+    )).scalars().all())
 
 
 async def run_auto_generation(user_id: int, db: AsyncSession) -> str:

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
@@ -181,6 +181,9 @@ class TestGates:
         assert await _state(pg, user, article) is None
 
     async def test_does_nothing_before_the_corpus_is_built(self, pg):
+        """A fresh install scores nothing until the statistics exist."""
+        from app.models.relevance import LexicalCorpus
+        await pg.execute(delete(LexicalCorpus))
         user, feed = await _setup(pg)
         article = await _article(pg, feed, f"{TOPIC} findings published")
 
