@@ -52,6 +52,8 @@ def make_user(**kwargs):
             timezone="UTC",
             format_profile="eu",
             ai_scoring_enabled_default=False,
+            basic_scoring_enabled=False,
+            ai_preference_text=None,
             # Stands in for a UserSettings row, so it carries what send_briefing reads
             # off one. Story folding is off here on purpose: these tests are about the
             # send, and folding has its own, in test_catchup_service and the
@@ -291,7 +293,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -316,7 +318,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -343,7 +345,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -379,7 +381,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -409,7 +411,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         with patch("app.services.briefing_service.fetch_catchup_articles",
@@ -442,7 +444,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
@@ -476,7 +478,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         async def _subject_for(profile):
@@ -524,7 +526,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
@@ -564,7 +566,7 @@ class TestSendBriefing:
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
                                        published_at=None, fetched_at=datetime.now(timezone.utc),
-                                       folder_id=None, ai_score=None, ai_summary=None,
+                                       folder_id=None, score=None, ai_summary=None,
                                        readable_content=None, content="text")
 
         def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
@@ -747,7 +749,7 @@ class TestBriefingFoldsStories:
         from app.services.catchup_service import CatchupArticle
         return CatchupArticle(
             id=id, title=title, feed_title="F", published_at=None,
-            fetched_at=datetime.now(timezone.utc), folder_id=None, ai_score=score,
+            fetched_at=datetime.now(timezone.utc), folder_id=None, score=score,
             ai_summary=None, readable_content=None, content="text",
             story_id=story_id,
         )

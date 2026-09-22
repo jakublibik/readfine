@@ -69,7 +69,11 @@ class ArticleListItem(BaseModel):
     is_starred: bool
     is_archived: bool
     is_saved: bool = False
+    # Both scorers, kept apart. What the row shows is `score`, the better of the
+    # two, and `score_is_ai` says which one that was: a template deciding it for
+    # itself is how two views end up disagreeing about the same article.
     ai_score: float | None = None
+    lexical_score: float | None = None
     labels: list[dict] = []  # [{"id": int, "name": str, "color": str}]
     # Story group this article belongs to, or None when nothing else covered it.
     story_id: int | None = None
@@ -95,6 +99,17 @@ class ArticleListItem(BaseModel):
 
     model_config = {"from_attributes": False}
 
+    @property
+    def score(self) -> float | None:
+        """The best score this article has, from either scorer."""
+        from app.services.relevance_service import effective_score
+        return effective_score(self.ai_score, self.lexical_score)[0]
+
+    @property
+    def score_is_ai(self) -> bool:
+        """Whether `score` came from the model rather than from word matching."""
+        from app.services.relevance_service import effective_score
+        return effective_score(self.ai_score, self.lexical_score)[1]
 
 class ArticleResponse(BaseModel):
     id: int

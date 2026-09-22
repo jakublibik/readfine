@@ -15,6 +15,7 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.services.article import add_article_access_joins, article_access_predicate
+from app.services.relevance_service import effective_score_sql
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.story_service import DEDUP_OFF, DEDUP_SUPPRESS, row_count
 from app.utils.text import strip_html
@@ -32,7 +33,10 @@ class CatchupArticle:
     published_at: datetime | None
     fetched_at: datetime
     folder_id: int | None
-    ai_score: float | None
+    # The better of the two scorers (relevance_service.effective_score), not the
+    # AI one: a digest that sampled only by ai_score would behave, for a reader on
+    # basic relevance, exactly as if they had no score at all.
+    score: float | None
     ai_summary: str | None
     readable_content: str | None
     content: str | None
@@ -213,7 +217,7 @@ def _catchup_stmt(
 
     # Score filter
     if filter_score_min is not None:
-        stmt = stmt.where(UserArticleState.ai_score >= filter_score_min)
+        stmt = stmt.where(effective_score_sql(UserArticleState) >= filter_score_min)
 
     # Kept out of the unread list as a repeat of something already read. The join is an
     # outer one, so an article with no state row at all has a NULL here and stays.
@@ -248,7 +252,7 @@ async def fetch_catchup_articles(
             Article.published_at,
             Article.fetched_at,
             UserFeed.folder_id,
-            UserArticleState.ai_score,
+            effective_score_sql(UserArticleState).label("score"),
             Article.story_id,
             # Whether there is an extracted body, not how long it is: length() would
             # detoast every body in the window, which is the cost this projection is
@@ -271,7 +275,7 @@ async def fetch_catchup_articles(
             published_at=r.published_at,
             fetched_at=r.fetched_at,
             folder_id=r.folder_id,
-            ai_score=r.ai_score,
+            score=r.score,
             ai_summary=None,
             readable_content=None,
             content=None,
@@ -385,7 +389,7 @@ def fold_stories(articles: list[CatchupArticle]) -> list[CatchupArticle]:
         if len(members) == 1:
             continue
         best = min(members, key=lambda a: (
-            -(a.ai_score if a.ai_score is not None else -1),
+            -(a.score if a.score is not None else -1),
             0 if a.has_readable else 1,
             _ts(a),
         ))
@@ -459,6 +463,22 @@ def _date_key(article: CatchupArticle) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
+def scoring_available(ai_on: bool, settings) -> bool:
+    """Does this reader have any relevance score to sample by?
+
+    It used to be one line in the catch-me-up router and another, subtly
+    different, in the briefing service, and both read ai_scoring_enabled_default
+    alone. Lexical scoring made that answer wrong rather than duplicated: a reader
+    with basic relevance has scores on every article, and would have been sampled
+    as if they had none. One function, two callers, one answer.
+    """
+    if settings is None:
+        return False
+    if settings.basic_scoring_enabled and settings.ai_preference_text:
+        return True
+    return bool(ai_on and settings.ai_scoring_enabled_default)
+
+
 def apply_catchup_limit(
     articles: list[CatchupArticle],
     limit: int,
@@ -488,7 +508,7 @@ def apply_catchup_limit(
         # breaker, so it never moves a row past a better scoring one: how much coverage
         # a story got says something about it, but not more than the score does.
         return (
-            -(a.ai_score if a.ai_score is not None else -1),
+            -(a.score if a.score is not None else -1),
             -a.folded_count,
             -_ts(a),
         )

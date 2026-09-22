@@ -206,3 +206,20 @@ class TestCorpusStats:
         # matched here and ignored against a unigram table.
         assert rs.bm25_raw("football results today", ["football results"],
                            bigrams) > 0.0
+
+
+class TestEffectiveScore:
+    """Which number a reader is shown when both scorers have an opinion."""
+
+    def test_the_model_wins_where_it_has_spoken(self):
+        assert rs.effective_score(0.8, 0.2) == (0.8, True)
+
+    def test_falls_back_to_the_lexical_one(self):
+        assert rs.effective_score(None, 0.2) == (0.2, False)
+
+    def test_a_lexical_zero_is_still_a_score(self):
+        """0.0 is "read it, found nothing"; None is "nobody looked"."""
+        assert rs.effective_score(None, 0.0) == (0.0, False)
+
+    def test_neither_is_not_a_zero(self):
+        assert rs.effective_score(None, None) == (None, False)

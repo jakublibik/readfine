@@ -15,6 +15,7 @@ from app.models.user import CatchupLog, UserCatchupConfig, User
 from app.services.catchup_service import (
     annotate_sources,
     apply_catchup_limit,
+    scoring_available,
     build_articles_meta,
     fetch_catchup_articles,
     fold_stories,
@@ -226,16 +227,16 @@ async def send_briefing(
         if client is None:
             raise RuntimeError("No main model configured — set one up in Settings → AI")
 
-        scoring_available = bool(
-            user.settings and user.settings.ai_scoring_enabled_default
-        ) if user.settings else False
+        # AI is on for the instance or this code would not be running: the
+        # briefing itself is a model call.
+        has_score = scoring_available(True, user.settings)
 
         # Same two steps as the on-demand digest, in the same order and off the same
         # setting: fold before sampling so the freed places go to other news, count the
         # coverage after it so the query asks about the rows that survived.
         if collapsing:
             articles = fold_stories(articles)
-        sampled = apply_catchup_limit(articles, config.article_limit, scoring_available)
+        sampled = apply_catchup_limit(articles, config.article_limit, has_score)
         if collapsing:
             await annotate_sources(sampled, user.id, db)
             # The only record that folding did anything: nothing is stored per run, and

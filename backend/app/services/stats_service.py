@@ -102,9 +102,14 @@ class IntakeStats:
     """
     all: IntakeColumn
     labeled: IntakeColumn | None
+    # One set of bands per scorer, never merged. The AI score exists only on
+    # labelled articles and the lexical one on everything, so a single spread over
+    # whichever number happened to be there would describe neither scorer.
     bands: list[ScoreBand]
     scored: int
     unscored: int
+    lexical_bands: list[ScoreBand]
+    lexical_scored: int
 
 
 @dataclass
@@ -306,6 +311,7 @@ async def get_intake_stats(
             WITH classed AS (
                 SELECT a.id, a.story_id, a.published_at, a.fetched_at,
                        ROUND(uas.ai_score * 100)::int AS pct,
+                       ROUND(uas.lexical_score * 100)::int AS lex_pct,
                        {_INTAKE_BUCKETS} AS bucket,
                        (COALESCE(uas.dwell_seconds, 0) >= :dwell
                         OR COALESCE(uas.link_opened, false))                AS engaged,
@@ -367,7 +373,11 @@ async def get_intake_stats(
                 (SELECT COUNT(*) FROM classed WHERE pct >= 50 AND pct < 75)        AS b_mid,
                 (SELECT COUNT(*) FROM classed WHERE pct > 25 AND pct < 50)         AS b_low,
                 (SELECT COUNT(*) FROM classed WHERE pct <= 25)                     AS b_bottom,
-                (SELECT COUNT(*) FROM classed WHERE pct IS NULL)                   AS b_unscored
+                (SELECT COUNT(*) FROM classed WHERE pct IS NULL)                   AS b_unscored,
+                (SELECT COUNT(*) FROM classed WHERE lex_pct >= 75)                  AS lb_top,
+                (SELECT COUNT(*) FROM classed WHERE lex_pct >= 50 AND lex_pct < 75) AS lb_mid,
+                (SELECT COUNT(*) FROM classed WHERE lex_pct > 25 AND lex_pct < 50)  AS lb_low,
+                (SELECT COUNT(*) FROM classed WHERE lex_pct <= 25)                  AS lb_bottom
         """),
         {
             "uid": user_id, "cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS,
@@ -375,15 +385,19 @@ async def get_intake_stats(
         },
     )).one()
 
-    counts = [row.b_top, row.b_mid, row.b_low, row.b_bottom]
-    bands: list[ScoreBand] = []
-    running = 0
-    for (floor, ceiling), count in zip(SCORE_BANDS, counts):
-        running += int(count or 0)
-        bands.append(ScoreBand(
-            floor=floor, ceiling=ceiling,
-            articles=int(count or 0), at_floor_or_better=running,
-        ))
+    def _bands(counts) -> list[ScoreBand]:
+        out: list[ScoreBand] = []
+        running = 0
+        for (floor, ceiling), count in zip(SCORE_BANDS, counts):
+            running += int(count or 0)
+            out.append(ScoreBand(
+                floor=floor, ceiling=ceiling,
+                articles=int(count or 0), at_floor_or_better=running,
+            ))
+        return out
+
+    bands = _bands([row.b_top, row.b_mid, row.b_low, row.b_bottom])
+    lexical_bands = _bands([row.lb_top, row.lb_mid, row.lb_low, row.lb_bottom])
 
     fetched = int(row.fetched or 0)
     unscored = int(row.b_unscored or 0)
@@ -412,6 +426,8 @@ async def get_intake_stats(
         bands=bands,
         scored=fetched - unscored,
         unscored=unscored,
+        lexical_bands=lexical_bands,
+        lexical_scored=sum(b.articles for b in lexical_bands),
     )
 
 

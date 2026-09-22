@@ -1,4 +1,4 @@
-"""Offline evaluation of AI scoring: does `ai_score` predict real engagement?
+"""Offline evaluation of scoring: does a relevance score predict real engagement?
 
 Reads only existing columns on `user_article_states` (`ai_score` + engagement) —
 no new logging or tables. `ai_score` is written once at scoring time; engagement
@@ -34,6 +34,15 @@ Caveats, in descending order of how much they move the number:
 4. With `user_id=None` the aggregate pools users with different base rates, and
    any single window pools profile regimes the same way.
 5. It is observational, not randomized, and un-engaged may just mean unseen.
+6. **The two scorers are measured on different populations.** `ai_score` exists
+   only where a filter labeled the article, `lexical_score` on everything that
+   arrived, so their headline AUCs answer different questions and must not be
+   read as a ranking. `head_to_head` is the comparable one: the same articles,
+   the same reader, scored by both.
+7. Caveat 1 will apply to the lexical score as well once a score filter is
+   allowed to act on it. That is opt-in and off by default precisely because 71%
+   of never-labeled articles score under 0.3, so a sweeping rule would suddenly
+   cover two thirds of the intake.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -186,6 +195,20 @@ def score_histogram(scores: list[float], n_bins: int = 20) -> list[dict]:
 
 # ── DB-backed report ──────────────────────────────────────────────────────────
 
+def _series(pairs: list[tuple[float, bool]]) -> dict:
+    """The same summary for either scorer, so the page can print them side by side."""
+    n = len(pairs)
+    engaged = sum(1 for _, e in pairs if e)
+    return {
+        "n": n,
+        "engaged_total": engaged,
+        "engaged_rate": (engaged / n) if n else None,
+        "auc": compute_auc(pairs),
+        "calibration": calibration_buckets(pairs),
+        "histogram": score_histogram([s for s, _ in pairs]),
+    }
+
+
 async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None = None) -> dict:
     """Scoring-quality metrics for the last `days`, all users or a single one.
 
@@ -208,16 +231,29 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
     if user_id is not None:
         user_clause = " AND user_id = :uid"
         params["uid"] = user_id
-    rows = await db.execute(text(f"""
-        SELECT ai_score,
+    rows = (await db.execute(text(f"""
+        SELECT ai_score, lexical_score,
                (user_starred OR dwell_seconds >= 60 OR link_opened) AS engaged
         FROM user_article_states
-        WHERE ai_score IS NOT NULL
+        WHERE (ai_score IS NOT NULL OR lexical_score IS NOT NULL)
           AND created_at >= :cutoff{user_clause}
-    """), params)
-    pairs = [(float(s), bool(e)) for s, e in rows]
+    """), params)).all()
+    pairs = [(float(ai), bool(e)) for ai, _lex, e in rows if ai is not None]
     n = len(pairs)
     engaged_total = sum(1 for _, e in pairs if e)
+
+    lexical = _series([(float(lex), bool(e)) for _ai, lex, e in rows if lex is not None])
+    # The only fair comparison there is: one set of articles, scored by both.
+    both = [(float(ai), float(lex), bool(e))
+            for ai, lex, e in rows if ai is not None and lex is not None]
+    head_to_head = None
+    if both:
+        head_to_head = {
+            "n": len(both),
+            "engaged_total": sum(1 for _, _, e in both if e),
+            "auc_ai": compute_auc([(ai, e) for ai, _, e in both]),
+            "auc_lexical": compute_auc([(lex, e) for _, lex, e in both]),
+        }
 
     # Second reading for a user whose own filter hides the bottom of the range.
     # Deliberately not called a correction: dropping the band cuts the LLM's
@@ -249,6 +285,8 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
             exposure = {"aggregate_only": True, "users_affected": affected}
 
     return {
+        "lexical": lexical,
+        "head_to_head": head_to_head,
         "days": days,
         "retention": retention,
         "presets": window_presets(purge_after_days),
