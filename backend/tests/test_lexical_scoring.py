@@ -110,15 +110,21 @@ class TestScoreNewArticles:
         assert 0.0 < state.lexical_score < 1.0
         assert state.ai_score is None
 
-    async def test_no_row_for_an_article_with_no_overlap(self, pg):
+    async def test_no_overlap_is_stored_as_a_zero_not_as_nothing(self, pg):
+        """0.0 and "never scored" have to stay distinguishable.
+
+        A filter reading `score < 0.3` treats a missing row as NULL, so leaving
+        these out would let the least relevant articles of all escape the very
+        rule meant to sweep them.
+        """
         user, feed = await _setup(pg)
         await _corpus(pg)
         article = await _article(pg, feed, "weather forecast for the weekend")
 
-        assert await lss.score_new_articles(pg, feed.id, [article]) == 0
-        assert await _state(pg, user, article) is None
+        assert await lss.score_new_articles(pg, feed.id, [article]) == 1
+        assert (await _state(pg, user, article)).lexical_score == 0.0
 
-    async def test_clears_a_score_the_previous_profile_left_behind(self, pg):
+    async def test_rewrites_a_score_the_previous_profile_left_behind(self, pg):
         user, feed = await _setup(pg)
         await _corpus(pg)
         article = await _article(pg, feed, f"{TOPIC} findings published")
@@ -130,7 +136,7 @@ class TestScoreNewArticles:
         await pg.flush()
 
         await lss.score_new_articles(pg, feed.id, [article])
-        assert (await _state(pg, user, article)).lexical_score is None
+        assert (await _state(pg, user, article)).lexical_score == 0.0
 
     async def test_reuses_an_existing_state_row(self, pg):
         user, feed = await _setup(pg)
@@ -166,6 +172,7 @@ class TestGates:
         assert await _state(pg, user, article) is None
 
     async def test_skips_a_user_without_a_profile(self, pg):
+        """No profile means no row at all, which is the one meaning "no row" keeps."""
         user, feed = await _setup(pg, profile=None)
         await _corpus(pg)
         article = await _article(pg, feed, f"{TOPIC} findings published")

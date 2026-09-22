@@ -8,13 +8,17 @@ It is its own pass over the feed's subscribers rather than a step inside
 `filter_service.apply_filters_to_new_articles`, which skips any subscriber with
 no filters — exactly the readers this exists for.
 
-**Only a score above zero is stored.** Better than half of the articles nobody
-labeled have no term in common with the profile at all (measured: 56%), and a
-row per reader per article for each of them is a lot of table for a number that
-means the same as no number. Nothing distinguishes the two anywhere: both sort
-last, neither is displayed, and a threshold above zero excludes both. A score
-that falls back to zero after a profile change does clear the stored one, so a
-stale high score cannot survive the profile that produced it.
+**A zero is stored like any other score**, although 56% of the articles nobody
+labeled score exactly that. Leaving them out would halve the rows, and it was
+how this first shipped, but it makes 0.0 indistinguishable from "never scored"
+and those two have to behave differently in one place that matters: a filter
+saying `score < 0.3 -> mark read` reads a missing row as NULL, so the articles
+with no overlap at all, the least relevant there are, would be the ones that
+escape it while a 0.25 got swept. Measured cost of storing them: around 340
+bytes a row including indexes, so tens of megabytes at production size.
+
+A row still only appears once the reader has a profile, so "no row" keeps one
+honest meaning: this article was never scored for them.
 """
 from __future__ import annotations
 
@@ -112,20 +116,16 @@ async def score_articles_for_users(db: AsyncSession, articles: Sequence[Scorable
         text = article_text(article.title, article.body)
         for user_id, profile in profiles.items():
             score = lexical_score(text, profile, stats)
+            if score is None:
+                continue  # the scorer had nothing to say; not the same as 0.0
             state = existing.get((user_id, article.id))
-            if not score:
-                # Clears a score the previous profile left behind; writes nothing
-                # when there was none, which is the common case at fetch time.
-                if state is not None and state.lexical_score is not None:
-                    state.lexical_score = None
-                    written += 1
-                continue
             if state is None:
                 state = UserArticleState(user_id=user_id, article_id=article.id)
                 db.add(state)
                 existing[(user_id, article.id)] = state
-            state.lexical_score = score
-            written += 1
+            if state.lexical_score != score:
+                state.lexical_score = score
+                written += 1
     return written
 
 
