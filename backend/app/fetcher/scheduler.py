@@ -680,6 +680,15 @@ async def _rebuild_lexical_corpus() -> None:
         await relevance_corpus_service.rebuild(session)
 
 
+async def _backfill_lexical_scores() -> None:
+    """Job: catch up accounts whose interest profile is newer than their scores."""
+    if db.async_session_factory is None:
+        return
+    from app.services.lexical_score_service import process_due_backfills
+    async with db.async_session_factory() as session:
+        await process_due_backfills(session)
+
+
 async def _sweep_thumb_cache() -> None:
     """Job: drop video thumbnails nobody has requested within the idle window."""
     from app.services.video_thumb_service import sweep_idle_thumbnails
@@ -939,6 +948,15 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _backfill_lexical_scores,
+        trigger="interval",
+        minutes=5,
+        id="backfill_lexical_scores",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
     scheduler.add_job(
         _sweep_thumb_cache,

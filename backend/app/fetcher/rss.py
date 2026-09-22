@@ -418,6 +418,13 @@ async def _save_articles(
         # this benign race as "0 new articles" rather than a fetch failure.
         await db.flush()
 
+        # Before the filters, so an article carries its relevance score from the
+        # moment it exists. Its own pass: apply_filters_to_new_articles walks the
+        # subscribers that have filters, and lexical scoring is mostly for the ones
+        # that do not.
+        from app.services.lexical_score_service import score_new_articles
+        await score_new_articles(db, feed.id, new_articles)
+
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
 

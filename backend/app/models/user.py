@@ -117,6 +117,12 @@ class UserSettings(Base):
     # Lexical scoring. On by default, and harmless when it is: without an interest
     # profile there is nothing to match against, so it produces no score at all.
     basic_scoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # When the lexical backfill last caught this account up with its profile. The
+    # work is due whenever ai_preference_updated_at is newer, which makes "saving a
+    # profile starts a backfill" a fact about two timestamps instead of a task
+    # somebody has to remember to enqueue, and lets a run that died halfway be
+    # picked up again on the next pass.
+    lexical_backfill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_prompt: Mapped[str | None] = mapped_column(Text)
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)
