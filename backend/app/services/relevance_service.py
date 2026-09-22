@@ -4,7 +4,7 @@ The weaker of the two scorers. It runs on every article at fetch time, from the
 title and the start of the summary, and needs no API key — unlike AI scoring,
 which stays on labeled articles only. Measured offline (see
 `scripts/embedding_eval/`): on the clean September window this scorer gets AUC
-0.563 against engagement with a fresh three-topic profile and 0.616 with a
+0.566 against engagement with a fresh three-topic profile and 0.628 with a
 generated one, where the LLM gets 0.729 and no score at all gets 0.50. It is a
 real signal and a thin one, and the UI says so.
 
@@ -34,10 +34,14 @@ from typing import Iterable, Mapping, Sequence
 
 import nh3
 
-# Standard BM25 constants. Shared with the eval baseline so the shipped scorer
-# and the measured one differ in nothing but the corpus the IDF comes from.
 BM25_K1 = 1.5
-BM25_B = 0.75
+# Length normalization, off. Standard BM25 uses 0.75, and the eval baseline did
+# too, but the input here is already capped at a title plus 300 characters, so
+# what the normalization mostly does is penalize an article for having a summary
+# next to one that arrived with none (14.6% of the sample). Measured on the clean
+# window it costs AUC 0.013 [0.006, 0.019], above zero in every one of 2000
+# resamples, and one in five of the top twenty articles.
+BM25_B = 0.0
 
 # Matches scikit-learn's default `(?u)\b\w\w+\b`: two or more word characters,
 # so single letters and punctuation drop out.
@@ -240,11 +244,11 @@ def bm25_raw(text: str, units: Iterable[str], stats: CorpusStats) -> float:
 # articles (`scripts/embedding_eval/run_lexical_fidelity.py --calibrate`).
 # Matching the whole distribution is not possible and was not attempted: the LLM
 # has a fat top tail and BM25 a thin one, so on the clean window 28.2% of
-# articles clear an LLM 0.7 and 1.1% clear a lexical one. Thin is the safe
+# articles clear an LLM 0.7 and 3.3% clear a lexical one. Thin is the safe
 # direction for a filter that sweeps, but the same threshold does read
 # differently depending on which scorer produced the number, and the UI has to
 # say so.
-SQUASH_K = 4.6
+SQUASH_K = 3.7
 
 
 def squash(raw: float, k: float = SQUASH_K) -> float:

@@ -3,6 +3,7 @@
 # dependencies = [
 #   "scikit-learn>=1.5",
 #   "numpy>=1.26",
+#   "nh3>=0.2",
 #   "sqlalchemy>=2.0",
 # ]
 # ///
@@ -54,6 +55,22 @@ def reference_scores(texts: list[str], positive: list[str]) -> list[float]:
 def shipped_scores(texts: list[str], positive: list[str],
                    stats: rs.CorpusStats) -> list[float]:
     return [rs.bm25_raw(t, positive, stats) for t in texts]
+
+
+def with_reference_params(fn):
+    """Run `fn` with the constants the scikit-learn baseline was measured with.
+
+    The shipped scorer turns length normalization off; the reference does not.
+    The exactness check has to compare like with like, so it borrows the
+    reference's b, and the cost of the deviation is then measured separately as
+    its own variant.
+    """
+    original = rs.BM25_B
+    rs.BM25_B = run_eval.BM25_B
+    try:
+        return fn()
+    finally:
+        rs.BM25_B = original
 
 
 def auc(scores: list[float], engaged: list[bool]) -> float | None:
@@ -192,7 +209,8 @@ def main() -> None:
             pos = profile.positive[:topics] if topics else profile.positive
 
             reference = reference_scores(seg_texts, ref_pos)
-            ours_same_corpus = shipped_scores(seg_texts, pos, seg_stats)
+            ours_same_corpus = with_reference_params(
+                lambda: shipped_scores(seg_texts, pos, seg_stats))
             ours_production = shipped_scores(seg_texts, pos, global_stats)
             ours_bigram = shipped_scores(seg_texts, pos, global_bigram)
 
@@ -207,6 +225,8 @@ def main() -> None:
                     "shipped_same_corpus": auc(ours_same_corpus, engaged),
                     "shipped_production_table": auc(ours_production, engaged),
                     "shipped_with_bigrams": auc(ours_bigram, engaged),
+                    "shipped_with_length_norm": auc(with_reference_params(
+                        lambda: shipped_scores(seg_texts, pos, global_stats)), engaged),
                 },
                 "port_check": {
                     "max_abs_diff_rel": float(np.abs(ref_arr - ours_arr).max() / scale),
@@ -260,6 +280,7 @@ def main() -> None:
                   f"rank moves {v['port_check']['spearman_like_rank_diff']}")
             print(f"    shipped (table)  {fmt(a['shipped_production_table'])}")
             print(f"    shipped (+bigram){fmt(a['shipped_with_bigrams'])}")
+            print(f"    shipped (+len norm) {fmt(a['shipped_with_length_norm'])}")
             if "calibration" in v:
                 c = v["calibration"]
                 print(f"    squash k={c['k']} (mean decile error "
