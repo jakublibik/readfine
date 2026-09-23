@@ -102,6 +102,25 @@ docker exec readfine-app-1 python /tmp/export_sample.py --corpus \
 gzip ~/corpus.jsonl
 ```
 
+## 5. The shipped basic scorer
+
+`run_terms_fidelity.py` runs the scorer as it ships
+(`relevance_service.bm25_raw` over a term list) next to the prototype that step
+2b of the plan measured, on both windows, and fails unless every score matches
+and the AUCs are the recorded ones. Rerun it after any change to tokenization or
+scoring. `load_sample` reads plain JSONL, so decompress the samples first (into
+a temp directory, not a synced one).
+
+```bash
+uv run --script run_terms_fidelity.py --sample sample_clean.jsonl \
+    --august-sample sample.jsonl --corpus corpus.jsonl.gz --terms-dir terms_v1
+```
+
+`run_lexical_fidelity.py`, and the fidelity block at the top of
+`run_terms_eval.py`, check the scorer as it was before the term list (AI profile
+as topics, bigram option, length normalization). That API is gone; to rerun
+them, check out `6a62e7a`.
+
 ## Notes
 
 Notes on what the runs do, because they are decisions and not details:

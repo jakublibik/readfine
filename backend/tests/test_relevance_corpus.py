@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
 from app.models.article import Article
-from app.models.relevance import LexicalCorpus, LexicalTerm
+from app.models.relevance import LexicalCorpus, LexicalPrefix, LexicalTerm
 from app.services import relevance_corpus_service as rcs
 from app.services import relevance_service as rs
 
@@ -95,18 +95,27 @@ class TestRebuild:
 
         corpus = await pg.get(LexicalCorpus, 1)
         assert corpus.n_docs >= 4
-        assert corpus.avg_doc_len > 0
         assert (corpus.min_df, corpus.window_days) == (3, 1)
-        assert corpus.ngram_max == rs.NGRAM_MAX
+        assert corpus.tokenizer == rs.TOKENIZER
         assert corpus.built_at is not None
+
+    async def test_counts_prefixes_of_every_length_from_four(self, pg):
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+
+        for prefix in ("qzlo", "qzlor", COMMON):
+            assert await pg.scalar(select(LexicalPrefix.doc_freq)
+                                   .where(LexicalPrefix.prefix == prefix)) == 3
+        assert await pg.scalar(select(LexicalPrefix.doc_freq)
+                               .where(LexicalPrefix.prefix == RARE[:4])) is None
 
     async def test_is_idempotent(self, pg):
         await _seed(pg)
         first = await rcs.rebuild(pg, window_days=1, min_df=3)
         second = await rcs.rebuild(pg, window_days=1, min_df=3)
 
-        assert (first["terms"], first["n_docs"]) == (second["terms"], second["n_docs"])
-        assert first["avg_doc_len"] == second["avg_doc_len"]
+        assert ((first["terms"], first["prefixes"], first["n_docs"])
+                == (second["terms"], second["prefixes"], second["n_docs"]))
         assert await pg.scalar(
             select(LexicalTerm.doc_freq).where(LexicalTerm.term == COMMON)) == 3
 
@@ -148,7 +157,24 @@ class TestGetStats:
         stats = await rcs.get_stats(pg)
         assert stats.n_docs >= 4
         assert stats.doc_freq[COMMON] == 3
-        assert stats.avg_doc_len > 0
+
+    async def test_a_table_from_another_tokenizer_is_no_table(self, pg):
+        """Its vocabulary is one the scorer can no longer produce."""
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        corpus = await pg.get(LexicalCorpus, 1)
+        corpus.tokenizer = rs.TOKENIZER - 1
+        await pg.flush()
+        rcs.reset_cache()
+
+        assert await rcs.get_stats(pg) is None
+
+    async def test_loads_only_the_prefixes_asked_for(self, pg):
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        stats = await rcs.with_prefixes(pg, await rcs.get_stats(pg),
+                                        {"qzlor", "nopefix"})
+        assert stats.prefix_freq == {"qzlor": 3}
 
     async def test_reuses_the_cache_until_a_new_build(self, pg):
         await _seed(pg)
@@ -169,10 +195,10 @@ class TestGetStats:
         await rcs.rebuild(pg, window_days=1, min_df=3)
         stats = await rcs.get_stats(pg)
 
-        profile = rs.parse_profile(f"High relevance: {COMMON} topics")
+        terms = rs.parse_terms(f"{COMMON} topics")
         text = rs.article_text(f"{COMMON} alpha", "<p>body one</p>")
-        assert rs.lexical_score(text, profile, stats) > 0.0
-        assert rs.lexical_score("nothing in common here", profile, stats) == 0.0
+        assert rs.lexical_score(text, terms, stats) > 0.0
+        assert rs.lexical_score("nothing in common here", terms, stats) == 0.0
 
 
 @pytest.mark.asyncio
@@ -196,6 +222,18 @@ class TestEnsureBuilt:
 
         assert await rcs.ensure_built(pg, window_days=1) is True
         assert (await pg.get(LexicalCorpus, 1)).built_at > first
+
+    async def test_rebuilds_a_table_from_another_tokenizer_at_once(self, pg):
+        """An upgrade that changes tokenization must not wait for the night."""
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        corpus = await pg.get(LexicalCorpus, 1)
+        corpus.n_docs = rcs.BOOTSTRAP_MAX_DOCS
+        corpus.tokenizer = rs.TOKENIZER - 1
+        await pg.flush()
+
+        assert await rcs.ensure_built(pg, window_days=1) is True
+        assert (await pg.get(LexicalCorpus, 1)).tokenizer == rs.TOKENIZER
 
     async def test_leaves_a_grown_corpus_to_the_nightly_job(self, pg):
         await _seed(pg)

@@ -17,7 +17,7 @@ with no overlap at all, the least relevant there are, would be the ones that
 escape it while a 0.25 got swept. Measured cost of storing them: around 340
 bytes a row including indexes, so tens of megabytes at production size.
 
-A row still only appears once the reader has a profile, so "no row" keeps one
+A row still only appears once the reader has terms, so "no row" keeps one
 honest meaning: this article was never scored for them.
 """
 from __future__ import annotations
@@ -35,10 +35,10 @@ from app.models.user import UserSettings
 from app.services import relevance_corpus_service
 from app.services.relevance_service import (
     CorpusStats,
-    Profile,
     article_text,
     lexical_score,
-    parse_profile,
+    parse_terms,
+    terms_needed,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,46 +66,59 @@ class Scorable(NamedTuple):
                    article.readable_content or article.content)
 
 
-async def load_profiles(db: AsyncSession,
-                        user_ids: list[int]) -> dict[int, Profile]:
-    """Parsed interest profiles of the users who have lexical scoring to do.
+Terms = tuple[str, ...]
 
-    A user with the feature off, or with an empty profile, is left out entirely
-    rather than mapped to an empty profile: the caller's `if not profiles` is
-    then the whole gate, and no article gets tokenized for nothing.
+
+async def load_terms(db: AsyncSession, user_ids: list[int]) -> dict[int, Terms]:
+    """Parsed term lists of the users who have lexical scoring to do.
+
+    A user with the feature off, or with no terms, is left out entirely rather
+    than mapped to an empty list: the caller's `if not terms` is then the whole
+    gate, and no article gets tokenized for nothing.
     """
     if not user_ids:
         return {}
     rows = (await db.execute(
-        select(UserSettings.user_id, UserSettings.ai_preference_text)
+        select(UserSettings.user_id, UserSettings.relevance_terms)
         .where(UserSettings.user_id.in_(user_ids),
                UserSettings.basic_scoring_enabled == True)  # noqa: E712
     )).all()
-    profiles = {}
+    out = {}
     for user_id, text in rows:
-        profile = parse_profile(text)
-        if profile:
-            profiles[user_id] = profile
-    return profiles
+        terms = parse_terms(text)
+        if terms:
+            out[user_id] = tuple(terms)
+    return out
+
+
+async def stats_for(db: AsyncSession,
+                    terms_by_user: dict[int, Terms]) -> CorpusStats | None:
+    """The corpus statistics, with the prefix counts these term lists need."""
+    stats = await relevance_corpus_service.get_stats(db)
+    if stats is None:
+        return None
+    prefixes: set[str] = set()
+    for terms in terms_by_user.values():
+        prefixes |= terms_needed(terms)[1]
+    return await relevance_corpus_service.with_prefixes(db, stats, prefixes)
 
 
 async def score_articles_for_users(db: AsyncSession, articles: Sequence[Scorable],
-                                   profiles: dict[int, Profile],
+                                   terms_by_user: dict[int, Terms],
                                    stats: CorpusStats) -> int:
-    """Score each article for each user and write the scores that are non-zero.
+    """Score each article for each user and write the scores that changed.
 
-    The article text is tokenized once per article, not once per article and
-    user: the corpus statistics are instance-wide, so only the profile differs
-    between readers.
+    `stats` has to carry the prefix counts of every term list here, see
+    `stats_for`.
     """
-    if not articles or not profiles:
+    if not articles or not terms_by_user:
         return 0
 
     existing = {
         (s.user_id, s.article_id): s
         for s in (await db.scalars(
             select(UserArticleState).where(
-                UserArticleState.user_id.in_(profiles),
+                UserArticleState.user_id.in_(terms_by_user),
                 UserArticleState.article_id.in_([a.id for a in articles]),
             )
         )).all()
@@ -114,8 +127,8 @@ async def score_articles_for_users(db: AsyncSession, articles: Sequence[Scorable
     written = 0
     for article in articles:
         text = article_text(article.title, article.body)
-        for user_id, profile in profiles.items():
-            score = lexical_score(text, profile, stats)
+        for user_id, terms in terms_by_user.items():
+            score = lexical_score(text, terms, stats)
             if score is None:
                 continue  # the scorer had nothing to say; not the same as 0.0
             state = existing.get((user_id, article.id))
@@ -134,42 +147,42 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
     """Fetch-time entry point: score a feed's new articles for its subscribers.
 
     Silent no-op before the corpus statistics exist (a fresh install, up to the
-    first nightly build) and for a feed whose subscribers have no profile.
+    first build) and for a feed whose subscribers have no terms.
     """
     if not articles:
         return 0
     user_ids = list(await db.scalars(
         select(UserFeed.user_id).where(UserFeed.feed_id == feed_id)))
-    profiles = await load_profiles(db, user_ids)
-    if not profiles:
+    terms_by_user = await load_terms(db, user_ids)
+    if not terms_by_user:
         return 0
-    stats = await relevance_corpus_service.get_stats(db)
+    stats = await stats_for(db, terms_by_user)
     if stats is None:
         return 0
     return await score_articles_for_users(
-        db, [Scorable.of(a) for a in articles], profiles, stats)
+        db, [Scorable.of(a) for a in articles], terms_by_user, stats)
 
 
-# ── backfill after a profile change ───────────────────────────────────────────
+# ── backfill after a change to the terms ──────────────────────────────────────
 
-# Unread and published within the last week. One rule for both cases the plan
-# names (a profile typed by hand and one generated automatically), because two
-# windows would mean two answers to "why does this article have no score".
+# Unread and published within the last week, whichever way the terms were saved
+# (by hand, at onboarding, from the seed), because two windows would mean two
+# answers to "why does this article have no score".
 BACKFILL_DAYS = 7
 _BACKFILL_CHUNK = 500
 # Accounts caught up per pass. A backfill is seconds of work, but the first pass
-# after the release has every account with a profile due at once, and the point
+# after the release has every account with terms due at once, and the point
 # of a cap is that this does not become one long transaction.
 _BACKFILL_USERS_PER_RUN = 5
 
 
-async def backfill_user(db: AsyncSession, user_id: int, profile: Profile,
+async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
                         stats: CorpusStats, *, days: int = BACKFILL_DAYS) -> int:
-    """Score the reader's recent unread articles against the current profile.
+    """Score the reader's recent unread articles against their current terms.
 
     Deliberately not everything unread: on an account with twelve thousand unread
-    articles the first profile save would otherwise write twelve thousand rows,
-    and again after every automatic regeneration. Older articles stay unscored,
+    articles every save of the terms would otherwise write twelve thousand rows.
+    Older articles stay unscored,
     and Stats and missed gems are what lead back to them, not the ordering.
 
     Chunked and committed as it goes, so an interrupted run leaves the work it
@@ -200,39 +213,43 @@ async def backfill_user(db: AsyncSession, user_id: int, profile: Profile,
             break
         last_id = rows[-1][0]
         written += await score_articles_for_users(
-            db, [Scorable(*r) for r in rows], {user_id: profile}, stats)
+            db, [Scorable(*r) for r in rows], {user_id: terms}, stats)
         await db.commit()
     return written
 
 
 async def process_due_backfills(db: AsyncSession) -> int:
-    """Catch up the accounts whose profile is newer than their last backfill."""
+    """Catch up the accounts whose terms are newer than their last backfill.
+
+    Only the basic terms make an account due. Regenerating the AI profile does
+    not touch the lexical score, so it has nothing to catch up.
+    """
     due = (await db.execute(
         select(UserSettings.user_id)
         .where(UserSettings.basic_scoring_enabled == True,  # noqa: E712
-               UserSettings.ai_preference_text.isnot(None),
-               UserSettings.ai_preference_updated_at.isnot(None),
+               UserSettings.relevance_terms.isnot(None),
+               UserSettings.relevance_terms_updated_at.isnot(None),
                or_(UserSettings.lexical_backfill_at.is_(None),
                    UserSettings.lexical_backfill_at
-                   < UserSettings.ai_preference_updated_at))
+                   < UserSettings.relevance_terms_updated_at))
         .order_by(UserSettings.lexical_backfill_at.asc().nulls_first())
         .limit(_BACKFILL_USERS_PER_RUN)
     )).scalars().all()
     if not due:
         return 0
 
-    stats = await relevance_corpus_service.get_stats(db)
+    terms_by_user = await load_terms(db, list(due))
+    stats = await stats_for(db, terms_by_user)
     if stats is None:
         return 0
-    profiles = await load_profiles(db, list(due))
 
     done = 0
     for user_id in due:
-        profile = profiles.get(user_id)
-        # Stamped even when there is nothing to score (an unparseable profile, or
-        # one that lost its topics), or the account would come up due forever.
-        if profile is not None:
-            written = await backfill_user(db, user_id, profile, stats)
+        terms = terms_by_user.get(user_id)
+        # Stamped even when there is nothing to score (a list with no usable
+        # term left in it), or the account would come up due forever.
+        if terms is not None:
+            written = await backfill_user(db, user_id, terms, stats)
             logger.info("lexical backfill: user=%s wrote %d scores", user_id, written)
         settings = await db.get(UserSettings, user_id)
         settings.lexical_backfill_at = datetime.now(timezone.utc)

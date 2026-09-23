@@ -114,11 +114,20 @@ class UserSettings(Base):
     ai_preference_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_preference_fail_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Lexical scoring. On by default, and harmless when it is: without an interest
-    # profile there is nothing to match against, so it produces no score at all.
+    # Lexical scoring. On by default, and harmless when it is: without terms there
+    # is nothing to match against, so it produces no score at all.
     basic_scoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # When the lexical backfill last caught this account up with its profile. The
-    # work is due whenever ai_preference_updated_at is newer, which makes "saving a
+    # The basic profile: what the lexical scorer matches, one term per line
+    # (`relevance_service.parse_terms`). Separate from ai_preference_text on
+    # purpose: that one is a description written for a model, this is a list of
+    # words to look up, and each is kept up differently (regenerated vs edited by
+    # hand), so the two are never synchronised.
+    relevance_terms: Mapped[str | None] = mapped_column(Text)
+    relevance_terms_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # manual / onboarding / seed_ai: how many accounts still run on a seed.
+    relevance_terms_source: Mapped[str | None] = mapped_column(String(12))
+    # When the lexical backfill last caught this account up with its terms. The
+    # work is due whenever relevance_terms_updated_at is newer, which makes "saving a
     # profile starts a backfill" a fact about two timestamps instead of a task
     # somebody has to remember to enqueue, and lets a run that died halfway be
     # picked up again on the next pass.

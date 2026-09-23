@@ -23,7 +23,7 @@ from app.services import relevance_corpus_service as rcs
 NOW = datetime.now(timezone.utc)
 
 TOPIC = "qzlorp"
-PROFILE = f"High relevance: {TOPIC} research\nAvoid: vexmuq gossip"
+TERMS = f"{TOPIC} research\nsomething else entirely"
 
 
 @pytest_asyncio.fixture
@@ -53,13 +53,13 @@ def clear_cache():
     rcs.reset_cache()
 
 
-async def _setup(session, *, profile: str | None = PROFILE,
+async def _setup(session, *, terms: str | None = TERMS,
                  enabled: bool = True) -> tuple[User, Feed]:
     u = uuid.uuid4().hex[:12]
     user = User(email=f"lex_{u}@test.invalid", password_hash="x", display_name="t")
     session.add(user)
     await session.flush()
-    session.add(UserSettings(user_id=user.id, ai_preference_text=profile,
+    session.add(UserSettings(user_id=user.id, relevance_terms=terms,
                              basic_scoring_enabled=enabled))
     feed = Feed(feed_url=f"https://ex.invalid/{u}.xml", title="t", subscriber_count=1)
     session.add(feed)
@@ -124,7 +124,7 @@ class TestScoreNewArticles:
         assert await lss.score_new_articles(pg, feed.id, [article]) == 1
         assert (await _state(pg, user, article)).lexical_score == 0.0
 
-    async def test_rewrites_a_score_the_previous_profile_left_behind(self, pg):
+    async def test_rewrites_a_score_the_previous_terms_left_behind(self, pg):
         user, feed = await _setup(pg)
         await _corpus(pg)
         article = await _article(pg, feed, f"{TOPIC} findings published")
@@ -132,7 +132,7 @@ class TestScoreNewArticles:
         assert (await _state(pg, user, article)).lexical_score > 0
 
         settings = await pg.get(UserSettings, user.id)
-        settings.ai_preference_text = "High relevance: entirely different subjects"
+        settings.relevance_terms = "entirely different subjects"
         await pg.flush()
 
         await lss.score_new_articles(pg, feed.id, [article])
@@ -150,15 +150,26 @@ class TestScoreNewArticles:
         assert state.lexical_score > 0
         assert state.is_starred is True
 
-    async def test_the_avoid_list_cannot_lower_a_score(self, pg):
-        """The plan's most expensive mistake, pinned end to end."""
-        user, feed = await _setup(pg)
+    async def test_an_inflected_form_scores_through_its_prefix(self, pg):
+        """The prefix counts come out of the database, not out of memory."""
+        user, feed = await _setup(pg, terms=f"{TOPIC}em")
         await _corpus(pg)
-        wanted = await _article(pg, feed, f"{TOPIC} findings published")
-        both = await _article(pg, feed, f"{TOPIC} findings published vexmuq gossip")
-        await lss.score_new_articles(pg, feed.id, [wanted, both])
+        article = await _article(pg, feed, f"{TOPIC}ovi findings published")
 
-        assert (await _state(pg, user, both)).lexical_score > 0
+        await lss.score_new_articles(pg, feed.id, [article])
+        assert (await _state(pg, user, article)).lexical_score > 0
+
+    async def test_reads_the_terms_not_the_ai_profile(self, pg):
+        """Two profiles, never synchronised: the AI one is for the model only."""
+        user, feed = await _setup(pg, terms="entirely different subjects")
+        settings = await pg.get(UserSettings, user.id)
+        settings.ai_preference_text = f"High relevance: {TOPIC} research"
+        await pg.flush()
+        await _corpus(pg)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+
+        await lss.score_new_articles(pg, feed.id, [article])
+        assert (await _state(pg, user, article)).lexical_score == 0.0
 
 
 @pytest.mark.asyncio
@@ -171,9 +182,9 @@ class TestGates:
         assert await lss.score_new_articles(pg, feed.id, [article]) == 0
         assert await _state(pg, user, article) is None
 
-    async def test_skips_a_user_without_a_profile(self, pg):
-        """No profile means no row at all, which is the one meaning "no row" keeps."""
-        user, feed = await _setup(pg, profile=None)
+    async def test_skips_a_user_without_terms(self, pg):
+        """No terms means no row at all, which is the one meaning "no row" keeps."""
+        user, feed = await _setup(pg, terms=None)
         await _corpus(pg)
         article = await _article(pg, feed, f"{TOPIC} findings published")
 
@@ -210,7 +221,7 @@ class TestBackfill:
     async def _due_setup(self, pg):
         user, feed = await _setup(pg)
         settings = await pg.get(UserSettings, user.id)
-        settings.ai_preference_updated_at = NOW
+        settings.relevance_terms_updated_at = NOW
         await pg.flush()
         await _only_due_account(pg, user.id)
         await _corpus(pg)
@@ -261,12 +272,12 @@ class TestBackfill:
         await lss.process_due_backfills(pg)
         assert (await _state(pg, user, article)).lexical_score == scored
 
-    async def test_a_new_profile_makes_it_due_again(self, pg):
+    async def test_new_terms_make_it_due_again(self, pg):
         user, feed = await self._due_setup(pg)
         await lss.process_due_backfills(pg)
 
         settings = await pg.get(UserSettings, user.id)
-        settings.ai_preference_updated_at = NOW + timedelta(minutes=1)
+        settings.relevance_terms_updated_at = NOW + timedelta(minutes=1)
         await pg.flush()
 
         article = await _article(pg, feed, f"{TOPIC} findings published")
@@ -276,8 +287,18 @@ class TestBackfill:
         assert await lss.process_due_backfills(pg) == 1
         assert (await _state(pg, user, article)).lexical_score > 0
 
-    async def test_an_account_that_never_saved_a_profile_is_not_due(self, pg):
-        user, _feed = await _setup(pg, profile=None)
+    async def test_a_new_ai_profile_does_not_make_it_due(self, pg):
+        """Regenerating the AI profile leaves the lexical score as it was."""
+        user, _feed = await self._due_setup(pg)
+        await lss.process_due_backfills(pg)
+
+        settings = await pg.get(UserSettings, user.id)
+        settings.ai_preference_updated_at = NOW + timedelta(minutes=1)
+        await pg.flush()
+        assert await lss.process_due_backfills(pg) == 0
+
+    async def test_an_account_that_never_saved_terms_is_not_due(self, pg):
+        user, _feed = await _setup(pg, terms=None)
         await _only_due_account(pg, user.id)
         await _corpus(pg)
         assert await lss.process_due_backfills(pg) == 0
