@@ -87,6 +87,21 @@ A blank verdict is an error rather than a "no": a half-finished review would
 otherwise read as "the scorers found nothing", which is the one wrong answer this
 test could produce unnoticed.
 
+## 4. The whole corpus, across users
+
+For the multilingual questions (Cyrillic, CJK, document frequencies over a mixed
+corpus), one user's sample is not enough. `--corpus` exports every article
+fetched in the window from all feeds: title, the head of the feed description
+(what the lexical scorer reads at fetch time) and of the readable text. No user
+id, no reading state, no profile.
+
+```bash
+# on the server, after copying the script in as in section 1
+docker exec readfine-app-1 python /tmp/export_sample.py --corpus \
+    --since 2026-09-01 > ~/corpus.jsonl
+gzip ~/corpus.jsonl
+```
+
 ## Notes
 
 Notes on what the runs do, because they are decisions and not details:
