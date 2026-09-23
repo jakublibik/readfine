@@ -53,6 +53,22 @@ from app.services import relevance_service as rs  # noqa: E402
 
 K, W = 2, 0.5
 
+# Function words for the languages this reader reads, accents stripped the way
+# the tokenizer strips them. English is scikit-learn's list (loaded in main, the
+# eval has it); Czech is written out here. A product version needs one per
+# language the instance carries.
+CS_STOP = set("""
+a aby ac ale ani ano asi az bez bude budou budu by byl byla byli bylo byly byt
+ci co coz do ho i jak jake jaky jako je jeho jej jeji jejich jen jeste ji jiz
+jsem jsi jsme jsou jste k kam kde kdo kdy kdyz ke ktera ktere kteri kterou
+ktery kterym kterych ma maji mame mate me mezi mi mit mne mnou muj muze my na
+nad nam nami nas nase nasi ne nebo neni nez nic nich nim o od ode on ona oni
+ono pak po pod podle pokud pouze prave pred pres pri pro proc proto protoze
+prvni s se si sve svych svym svou ta tak take takze tam te tedy ten tento teto
+tim timto to tohle toho tohoto tom tomto tomu tu tuto ty tyto u uz v ve vice
+vsak vse vsechny vsech z za zde ze rok roku let dnes jiz cela cely celou
+""".split())
+
 
 def unit_scores(doc, units, weights, tables, pdf) -> float:
     best = 0.0
@@ -118,7 +134,8 @@ def rocchio(train_docs, train_lab, tables):
 
 
 def pick_add(ranked: dict, profile_tokens, inflow_df: dict, n_inflow: int, m: int,
-             min_support: int = 3, max_df_share: float = 0.01) -> list[str]:
+             min_support: int = 3, max_df_share: float = 0.01,
+             stop: set | None = None) -> list[str]:
     """Top candidates that are specific enough to be a topic.
 
     Commonness is measured over the reader's own inflow, not the instance: half
@@ -128,6 +145,8 @@ def pick_add(ranked: dict, profile_tokens, inflow_df: dict, n_inflow: int, m: in
     out = []
     for t, (score, sup) in sorted(ranked.items(), key=lambda x: -x[1][0]):
         if sup < min_support or len(t) < 4 or t.isdigit():
+            continue
+        if stop and t in stop:
             continue
         df = inflow_df.get(t, 0)
         if not df or df / n_inflow > max_df_share:
@@ -161,7 +180,14 @@ def main() -> None:
     ap.add_argument("--terms-dir", required=True, type=Path)
     ap.add_argument("--bootstrap", type=int, default=1000)
     ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--filters", default="0.01:0",
+                    help="comma list of max_df_share:stoplist(0/1) settings")
+    ap.add_argument("--skip-calibration", action="store_true")
     args = ap.parse_args()
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+    stop_all = set(ENGLISH_STOP_WORDS) | CS_STOP
+    filters = [(float(a), b == "1") for a, b in
+               (f.split(":") for f in args.filters.split(","))]
 
     meta, rows = run_eval.load_sample(args.sample)
     with gzip.open(args.august_sample, "rt", encoding="utf-8") as f:
@@ -205,13 +231,19 @@ def main() -> None:
     plans = {}
     for pname, terms in base_profiles.items():
         ptoks = {t for u in terms for t in rs.tokenize(u)}
-        adds = {"logodds": pick_add(lo, ptoks, inflow_df, n_inflow, 20),
-                "rocchio": pick_add(ro, ptoks, inflow_df, n_inflow, 20)}
+        adds = {}
+        for share, use_stop in filters:
+            tag = f"df{share:g}{'+stop' if use_stop else ''}"
+            st = stop_all if use_stop else None
+            adds[f"logodds {tag}"] = pick_add(lo, ptoks, inflow_df, n_inflow, 20,
+                                              max_df_share=share, stop=st)
+            adds[f"rocchio {tag}"] = pick_add(ro, ptoks, inflow_df, n_inflow, 20,
+                                              max_df_share=share, stop=st)
         plans[pname] = {"terms": terms, "adds": adds}
 
     needed = set()
     for p in plans.values():
-        for u in p["terms"] + p["adds"]["logodds"] + p["adds"]["rocchio"]:
+        for u in p["terms"] + [t for a in p["adds"].values() for t in a]:
             for q in rs.tokenize(u):
                 needed.add(tt.prefix_of(q, K, None))
     needed.discard(None)
@@ -240,13 +272,11 @@ def main() -> None:
         for meth, add in p["adds"].items():
             for m in (5, 10, 20):
                 a = add[:m]
-                evaluate(f"{pname} +{meth} {m}", terms + a, [1.0] * (len(terms) + m))
-                evaluate(f"{pname} silent {meth} {m}", terms + a,
-                         [1.0] * len(terms) + [0.5] * m)
+                evaluate(f"{pname} +{meth} {m}", terms + a, [1.0] * (len(terms) + len(a)))
             if rm:
                 a = add[:10]
                 evaluate(f"{pname} +{meth} 10 & remove", kept + a,
-                         [1.0] * (len(kept) + 10))
+                         [1.0] * (len(kept) + len(a)))
 
     print(f"\n{'variant':34s} {'AUC':>6s} {'top50':>6s} {'zero':>5s}")
     for n, r in results.items():
@@ -266,6 +296,13 @@ def main() -> None:
         for meth, add in p["adds"].items():
             print(f"  add {meth}: {', '.join(add)}")
         print(f"  remove: {p['removes']}")
+
+    if args.skip_calibration:
+        if args.out:
+            args.out.write_text(json.dumps({"results": results, "deltas": deltas,
+                                            "plans": plans}, indent=2,
+                                           ensure_ascii=False))
+        return
 
     # ── E8: calibration on the whole P2 window, chosen scorer, en_cs ────────
     units = [rs.tokenize(u) for u in en + cs]
