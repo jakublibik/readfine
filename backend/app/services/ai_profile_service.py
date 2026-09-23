@@ -240,12 +240,12 @@ AUTO_GENERATION_IDLE_DAYS = 30
 async def due_auto_generation_user_ids(db: AsyncSession) -> list[int]:
     """Candidates for the nightly profile regeneration, oldest profile first.
 
-    Deliberately not gated on ``ai_scoring_enabled_default``. The interest profile
-    feeds the lexical scorer as well, which runs without a model at all, so
-    "keep my profile up to date" and "rate articles with a model" are two
-    different questions. What a candidate still needs is their own interval and a
-    usable model, and the second one is `preference_auto_status`'s call, so this
-    query and the line the settings page shows cannot disagree about who is due.
+    Only readers with AI scoring on. The profile is read by the scoring model and
+    by nothing else (basic relevance has its own term list), so regenerating it
+    while scoring is off would spend tokens on a text nobody reads. Beyond that a
+    candidate needs their own interval and a usable model, and the second one is
+    `preference_auto_status`'s call, so this query and the line the settings
+    page shows cannot disagree about who is due.
     """
     from app.models.user import User
 
@@ -255,6 +255,7 @@ async def due_auto_generation_user_ids(db: AsyncSession) -> list[int]:
         .join(User, User.id == UserSettings.user_id)
         .where(
             UserSettings.ai_preference_auto_days > 0,
+            UserSettings.ai_scoring_enabled_default.is_(True),
             User.is_active.is_(True),
             User.last_active_at >= cutoff,
         )

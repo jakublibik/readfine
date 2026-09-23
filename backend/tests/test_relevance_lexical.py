@@ -83,12 +83,16 @@ class TestTokenize:
 
 
 class TestParseTerms:
-    def test_one_term_per_line(self):
+    def test_new_lines_separate_terms(self):
         assert rs.parse_terms("AI safety\nUkraine\n\n  brain health  ") == [
             "AI safety", "Ukraine", "brain health"]
 
     def test_duplicates_are_judged_after_normalization(self):
         assert rs.parse_terms("AI Safety\nai safety\nAI-safety") == ["AI Safety"]
+
+    def test_skipped_pieces_are_reported_as_written(self):
+        assert rs.skipped_terms("AI Safety, x, ai safety, !!, cycling") == [
+            "x", "ai safety", "!!"]
 
     def test_lines_with_no_token_are_dropped(self):
         assert rs.parse_terms("-\nx\nAI") == ["AI"]
@@ -97,8 +101,17 @@ class TestParseTerms:
         assert rs.parse_terms("- AI safety\n• Ukraine\n* crypto") == [
             "AI safety", "Ukraine", "crypto"]
 
-    def test_no_syntax_a_comma_is_just_part_of_the_line(self):
-        assert rs.parse_terms("AI, crypto") == ["AI, crypto"]
+    def test_commas_and_semicolons_separate_like_new_lines(self):
+        assert rs.parse_terms("AI safety, crypto; kryptoměny\nUkraine") == [
+            "AI safety", "crypto", "kryptoměny", "Ukraine"]
+
+    def test_cjk_list_separators_count_too(self):
+        assert rs.parse_terms("人工智能，比特币、乌克兰；睡眠") == [
+            "人工智能", "比特币", "乌克兰", "睡眠"]
+
+    def test_words_of_a_term_stay_together(self):
+        """A space is not a separator: the words of a term add up as one topic."""
+        assert rs.parse_terms("multiple sclerosis") == ["multiple sclerosis"]
 
     def test_empty(self):
         assert rs.parse_terms(None) == []
@@ -158,6 +171,13 @@ class TestScorer:
         """Strict phrases cost 0.035 AUC: "AI" alone still carries signal."""
         assert rs.bm25_raw("safety first for AI", ["AI safety"], stats).score > 0.0
         assert rs.bm25_raw("AI chips", ["AI safety"], stats).score > 0.0
+
+    def test_words_of_one_term_add_up_separate_terms_do_not(self, stats):
+        """Why the grouping matters: one topic of two words, or two topics."""
+        text = "AI safety benchmark"
+        together = rs.bm25_raw(text, rs.parse_terms("AI safety"), stats).score
+        apart = rs.bm25_raw(text, rs.parse_terms("AI, safety"), stats).score
+        assert together > apart > 0.0
 
     def test_a_cjk_term_must_match_in_a_row(self, stats):
         """One word cut into bigrams, not a list of words."""

@@ -609,18 +609,24 @@ class TestScoringAvailable:
         return SimpleNamespace(**{
             "ai_scoring_enabled_default": False,
             "basic_scoring_enabled": False,
-            "ai_preference_text": None,
+            "relevance_terms": None,
             **kwargs,
         })
 
     def test_basic_relevance_counts_even_with_ai_off_for_the_instance(self):
         from app.services.catchup_service import scoring_available
-        s = self._settings(basic_scoring_enabled=True, ai_preference_text="topics")
+        s = self._settings(basic_scoring_enabled=True, relevance_terms="topics")
         assert scoring_available(False, s) is True
 
-    def test_basic_relevance_without_a_profile_does_not_count(self):
+    def test_basic_relevance_without_terms_does_not_count(self):
         from app.services.catchup_service import scoring_available
         s = self._settings(basic_scoring_enabled=True)
+        assert scoring_available(True, s) is False
+
+    def test_an_ai_profile_alone_does_not_make_basic_count(self):
+        """The AI profile is the model's; basic relevance reads the terms."""
+        from app.services.catchup_service import scoring_available
+        s = self._settings(basic_scoring_enabled=True, ai_preference_text="topics")
         assert scoring_available(True, s) is False
 
     def test_ai_scoring_counts_while_the_instance_allows_it(self):

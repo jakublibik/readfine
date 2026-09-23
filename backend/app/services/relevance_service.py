@@ -3,7 +3,7 @@
 The weaker of the two scorers. It runs on every article at fetch time, from the
 title and the start of the feed's description, and needs no API key, unlike AI
 scoring, which stays on labeled articles only. It reads its own profile, a list
-of terms one per line (`relevance_terms`), not the AI profile: a model reads a
+of terms (`relevance_terms`, see `parse_terms`), not the AI profile: a model reads a
 description it understands, BM25 only looks words up, and the brackets and
 generic words of a profile written for a model were what made it misfire.
 
@@ -14,10 +14,10 @@ list this scorer gets AUC 0.659 against engagement on the September window and
 
 What is a decision here and not detail:
 
-- **A line is loose words, not a phrase.** Requiring the words to stand next to
-  each other cost 0.035 AUC: "AI" from "AI safety" carries signal a phrase cuts
-  off. The score is the max over lines, so a translation or a synonym is simply
-  another line and nothing is counted twice.
+- **A term is loose words, not a phrase.** Requiring the words to stand next
+  to each other cost 0.035 AUC: "AI" from "AI safety" carries signal a phrase
+  cuts off. The score is the max over terms, so a translation or a synonym is
+  simply another term and nothing is counted twice.
 - **Inflection by graded truncation, no stemmer and no language detection.** A
   query word that does not match exactly may match on its prefix (the word minus
   its last two characters, never shorter than four) at half the weight, with the
@@ -239,29 +239,55 @@ def build_corpus_stats(texts: Iterable[str], min_df: int = 3) -> CorpusStats:
 # ── the term list ─────────────────────────────────────────────────────────────
 
 _BULLET_CHARS = " -•*\t"
+# What separates one term from the next: a new line, a comma or a semicolon,
+# including the full-width forms and the ideographic enumeration comma a
+# Chinese or Japanese list is written with. All of them mean the same thing; the
+# semicolon is there because people reach for it to set a translation apart.
+_TERM_SEPARATOR_RE = re.compile(r"[\n\r,;\uff0c\uff1b\u3001]")
+
+
+def split_terms(text: str | None) -> list[str]:
+    """The pieces of a term list as written, trimmed, empty ones out."""
+    if not text:
+        return []
+    pieces = (p.strip(_BULLET_CHARS) for p in _TERM_SEPARATOR_RE.split(text))
+    return [p for p in pieces if p]
 
 
 def parse_terms(text: str | None) -> list[str]:
-    """The basic profile: one term per line, trimmed, empty and duplicate lines out.
+    """The basic profile as the scorer reads it: its terms, duplicates out.
 
-    No syntax on purpose (no quotes, wildcards, weights or groups): a line is
-    just words. Duplicates are judged after tokenization, so "AI Safety" and
-    "ai safety" are one term, and a line that yields no token at all (a stray
-    "-" or a single letter) is dropped, since it could never match anything.
-    Pasted bullets are forgiven.
+    Terms are separated by new lines, commas or semicolons, all alike, and the
+    stored text stays the way the reader wrote it; this is the only place that
+    reads it apart. The words within a term are the one grouping there is: they
+    add up, and the best-matching term is the score (see `bm25_raw`).
+
+    No other syntax on purpose (no quotes, wildcards, weights or groups).
+    Duplicates are judged after tokenization, so "AI Safety" and "ai safety" are
+    one term, and a piece that yields no token at all (a stray "-" or a single
+    letter) is dropped, since it could never match anything. Pasted bullets are
+    forgiven.
     """
-    if not text:
-        return []
-    out: list[str] = []
+    return _read_terms(text)[0]
+
+
+def skipped_terms(text: str | None) -> list[str]:
+    """The pieces `parse_terms` leaves out, as written, to show the reader which."""
+    return _read_terms(text)[1]
+
+
+def _read_terms(text: str | None) -> tuple[list[str], list[str]]:
+    kept: list[str] = []
+    skipped: list[str] = []
     seen: set[tuple[str, ...]] = set()
-    for raw in text.splitlines():
-        line = raw.strip(_BULLET_CHARS)
-        key = tuple(tokenize(line))
+    for term in split_terms(text):
+        key = tuple(tokenize(term))
         if not key or key in seen:
+            skipped.append(term)
             continue
         seen.add(key)
-        out.append(line)
-    return out
+        kept.append(term)
+    return kept, skipped
 
 
 def terms_needed(terms: Iterable[str]) -> tuple[set[str], set[str]]:

@@ -6,7 +6,16 @@
 <h1 class="text-xl font-semibold text-gray-900 mb-6">Relevance</h1>
 
 {% if saved %}
-<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">Relevance settings saved.</div>
+<div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
+  Relevance settings saved.
+  {% if skipped %}
+  <span class="block mt-1 text-gray-700">
+    Skipped {{ skipped | length }} term{{ 's' if skipped | length != 1 else '' }}, as a repeat of another term or with no word of two letters or more:
+    {% for t in skipped %}<code class="text-gray-800">{{ t }}</code>{{ ", " if not loop.last }}{% endfor %}.
+    They stay in your list; remove them there if you like.
+  </span>
+  {% endif %}
+</div>
 {% elif error %}
 <div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
 {% endif %}
@@ -15,14 +24,14 @@
    these answers: a setting that changes place according to another setting is
    worse than one that is always visible. #}
 <p class="text-sm text-gray-600 mb-6">
-  Readfine scores how well an article matches your interest profile, and can sort and filter by it.
+  Readfine scores how well an article matches what you follow, and can sort and filter by it.
   {% if s.basic_scoring_enabled %}
-    <span class="font-medium">Basic relevance</span> reads the title and the opening of every article that arrives and matches its words against your profile. It needs no API key.
+    <span class="font-medium">Basic relevance</span> reads the title and the opening of every article that arrives and looks for your terms in it. It needs no API key.
   {% else %}
     <span class="font-medium">Basic relevance</span> is off, so articles are scored only where AI scoring applies.
   {% endif %}
   {% if app_ai_enabled() and s.ai_scoring_enabled_default %}
-    <span class="font-medium">AI scoring</span> is on as well and rates labeled articles with a model, which is noticeably more accurate. Where both have a score, the AI one is shown.
+    <span class="font-medium">AI scoring</span> is on as well and rates labeled articles against your <a href="/settings/ai" class="text-blue-600 hover:underline">interest profile</a>, which is noticeably more accurate. Where both have a score, the AI one is shown.
   {% elif app_ai_enabled() %}
     <a href="/settings/ai" class="text-blue-600 hover:underline">AI scoring</a> rates labeled articles with a model and is noticeably more accurate, but it needs an API key.
   {% endif %}
@@ -30,132 +39,28 @@
 
 <form method="POST" action="/settings/relevance" hx-boost="true" class="space-y-8">
 
-{# ── Interest profile ──────────────────────────────────────────────────────── #}
+{# ── Terms ─────────────────────────────────────────────────────────────────── #}
 <section>
-  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Interest profile</h2>
-  <p class="text-xs text-gray-500 mb-2">
-    What every article is rated against. A plain list of topics is enough, and the more specific, the better.
-    You can label the lines as well &mdash; <code class="text-gray-600">High relevance:</code>,
-    <code class="text-gray-600">Moderate relevance:</code>, <code class="text-gray-600">Avoid:</code> &mdash; which is
-    what a generated profile looks like, but only AI scoring reads the difference between them.
-  </p>
-
-  <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
-            placeholder="software engineering, open-source tooling, AI research, European politics&#10;&#10;or, with levels:&#10;High relevance: software engineering, AI research&#10;Moderate relevance: hardware, science reporting&#10;Avoid: celebrity news, sports"
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
-  <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / {{ profile_max_chars | thousands }}</div>
-
-  {% if not s.ai_preference_text %}
-  <p class="text-xs text-amber-600 mt-1">No profile yet, so nothing is being scored. Three topics on one line are enough to start. Leaving it empty keeps scoring off.</p>
-  {% endif %}
-
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Your terms</h2>
+  <textarea name="relevance_terms" id="relevance_terms" rows="8"
+            placeholder="sourdough baking, Formula 1, urban cycling, James Webb telescope"
+            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ terms_submitted if terms_submitted is defined else (s.relevance_terms or '') }}</textarea>
   <p class="text-xs text-gray-500 mt-1">
-    {% if s.ai_preference_updated_at %}
-      Last updated {{ s.ai_preference_updated_at | localtime('numdate') }}{% if s.ai_preference_source %} ({{ s.ai_preference_source }}){% endif %}.
-    {% else %}
-      Never generated.
-    {% endif %}
-    Saving it rescores the last 7 days of unread articles.
+    Separate terms with commas, semicolons or new lines. A term can be several words, such as
+    <code class="text-gray-600">urban cycling</code>: an article with more of them scores higher, and they don't have
+    to stand together. Related forms are found too (<code class="text-gray-600">cycling</code> also finds
+    <code class="text-gray-600">cyclist</code>), and a translation is simply another term. Specific beats general:
+    <code class="text-gray-600">health</code> on its own matches almost everything.
+    <a href="/help#basic-relevance" class="text-blue-600 hover:underline">How matching works</a>
   </p>
-
-  {# The profile is the one thing on this page that needs a model, and it used to
-     live on the AI page where that went without saying. It does not go without
-     saying here, so the block is labelled and priced.
-
-     The whole block is gone when the administrator has AI switched off for the
-     instance: there is nothing there the reader could act on, and a heading
-     offering AI followed by a line taking it back is worse than silence. The AI
-     item disappears from the settings nav in that state for the same reason. #}
-  {% if app_ai_enabled() %}
-  <div class="mt-5 pt-3 border-t border-gray-100">
-    <h3 class="text-sm font-medium text-gray-700">Write it with AI</h3>
-    <p class="text-xs text-gray-500 mt-1">
-      Optional. Your main model reads the articles you recently read and starred and writes the
-      profile from them, which counts toward your AI usage like any other model call. Everything
-      else on this page works without a model.
-    </p>
-
-    {# Whether generation is possible is one question with one answer, asked of the
-       main model slot (see quality_slot_blocker): the same one the nightly job and
-       the status line below use. #}
-    {% if gen_blocked == 'no_quality_model' %}
-    <p class="text-xs text-gray-500 mt-2">This needs a main model, which you pick under <a href="/settings/ai" class="text-blue-600 hover:underline">AI</a>. Until then, write the profile by hand above.</p>
-    {% elif gen_blocked == 'no_api_key' %}
-    <p class="text-xs text-gray-500 mt-2">This needs an API key for {{ provider_labels[gen_blocked_detail.provider] or gen_blocked_detail.provider }}, which you can add under <a href="/settings/ai" class="text-blue-600 hover:underline">AI</a>. Until then, write the profile by hand above.</p>
-    {% elif gen_blocked == 'no_endpoint' %}
-    <p class="text-xs text-gray-500 mt-2">This needs the endpoint URL for your custom provider, which you set under <a href="/settings/ai" class="text-blue-600 hover:underline">AI</a>. Until then, write the profile by hand above.</p>
+  <p class="text-xs text-gray-500 mt-1">
+    {% if term_count %}
+      {{ term_count }} term{{ 's' if term_count != 1 else '' }}{% if s.relevance_terms_updated_at %}, updated {{ s.relevance_terms_updated_at | localtime('numdate') }}{% endif %}.
     {% else %}
-    <p class="text-xs text-gray-500 mt-2">
-      {% if pref_strong_count > 80 %}
-        <span class="font-medium">{{ pref_strong_count }}</span> strong reading signals, the 80 most recent are used.
-      {% else %}
-        <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.
-      {% endif %}
-    </p>
-    <div id="pref-cold-start-warning">
-      {% if pref_strong_count < 20 %}
-      <p class="text-xs text-amber-600 mt-1 mb-1">
-        Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far &mdash; the profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
-      </p>
-      {% endif %}
-    </div>
-    <div class="flex flex-wrap items-center gap-3 mt-2">
-      <button type="button" id="btn-generate-preference"
-              hx-post="/settings/ai/generate-preference"
-              hx-target="#preference-message"
-              hx-swap="innerHTML"
-              data-loading-target="preference-message" data-loading-text="Generating…"
-              class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed">
-        ✨ Generate with AI
-      </button>
-      <label class="text-sm text-gray-600 flex items-center gap-2">
-        Regenerate automatically
-        <select name="ai_preference_auto_days"
-                class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-          <option value="0" {% if not s.ai_preference_auto_days %}selected{% endif %}>Off</option>
-          <option value="14" {% if s.ai_preference_auto_days == 14 %}selected{% endif %}>Every 2 weeks</option>
-          <option value="28" {% if s.ai_preference_auto_days == 28 %}selected{% endif %}>Every 4 weeks</option>
-        </select>
-      </label>
-      {% if s.ai_preference_prev_text %}
-      <button type="button" id="btn-revert-preference"
-              hx-post="/settings/ai/revert-preference"
-              hx-target="#preference-message"
-              hx-swap="innerHTML"
-              data-loading-target="preference-message" data-loading-text="Reverting…"
-              class="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50 text-gray-600">
-        Revert to previous
-      </button>
-      {% endif %}
-      <span id="preference-message" class="text-sm"></span>
-    </div>
-    <p class="text-xs text-gray-500 mt-1">
-      {% if pref_auto_status == 'up_to_date' or pref_auto_status == 'cooldown' %}
-        Next automatic generation {{ pref_auto_detail.next_at | localtime('numdate') }}.
-      {% elif pref_auto_status == 'not_enough_new' %}
-        Next automatic generation after {{ pref_auto_detail.missing }} more article{{ 's' if pref_auto_detail.missing != 1 else '' }} you read or star.
-      {% elif pref_auto_status == 'cold_start' %}
-        Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
-      {% elif pref_auto_status == 'no_quality_model' %}
-        Automatic generation needs a main model configured under <a href="/settings/ai" class="text-blue-600 hover:underline">AI</a>.
-      {% elif pref_auto_status == 'no_api_key' %}
-        Automatic generation needs an API key for {{ provider_labels[pref_auto_detail.provider] or pref_auto_detail.provider }}.
-      {% elif pref_auto_status == 'no_endpoint' %}
-        Automatic generation needs the endpoint URL for your custom provider.
-      {% elif pref_auto_status == 'due' %}
-        The next generation runs tonight.
-      {% endif %}
-      Automatic generation overwrites the profile and keeps the replaced version for one-click revert.
-    </p>
+      <span class="text-amber-600">No terms yet, so nothing is being scored. Three are enough to start.</span>
     {% endif %}
-
-    {% if s.ai_preference_last_error %}
-    <p class="text-xs text-red-600 mt-1">
-      Last automatic generation failed{% if s.ai_preference_last_error_at %} ({{ s.ai_preference_last_error_at | localtime('numdate') }}){% endif %}: {{ s.ai_preference_last_error }}
-    </p>
-    {% endif %}
-  </div>
-  {% endif %}
+    Saving rescores the last 7 days of unread articles.
+  </p>
 </section>
 
 {# ── Basic relevance ───────────────────────────────────────────────────────── #}
@@ -166,17 +71,16 @@
            {% if s.basic_scoring_enabled %}checked{% endif %}
            class="w-4 h-4 text-blue-600 rounded border-gray-300">
     <label for="basic_scoring_enabled" class="text-sm font-medium text-gray-700">
-      Score every article by word match
+      Score every article by your terms
     </label>
   </div>
   <p class="text-xs text-gray-500 mt-1 ml-6">
     Runs on everything that arrives, from the title and the first 300 characters, with no API key and no cost.
-    It is a weaker signal than AI scoring: it matches words, so it cannot tell that an article about
-    &ldquo;LLM jailbreaks&rdquo; is about AI safety unless your profile says one of those words. Measured against
+    It is a weaker signal than AI scoring: it matches words, so it cannot tell that a report
+    from the Tour de France is about cycling unless one of your terms appears in it. Measured against
     what people actually read, it ranks clearly better than nothing and clearly worse than the AI score.
-    Does nothing while the interest profile is empty.
   </p>
-  {% if s.basic_scoring_enabled and s.ai_preference_text and not corpus_ready %}
+  {% if s.basic_scoring_enabled and term_count and not corpus_ready %}
   <p class="text-xs text-amber-600 mt-1 ml-6">
     Word statistics for this instance are still being counted. They are built within a few minutes of the first articles arriving, and refreshed every night, and scoring starts as soon as they exist.
   </p>
@@ -194,7 +98,7 @@
       Show the score in the article list
     </label>
   </div>
-  <p class="text-xs text-gray-500 mt-1 ml-6">Applies to both scorers. The badge says which one produced the number.</p>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Applies to both scorers. A basic score is marked with <code class="text-gray-600">~</code>, since a word-match 70 is rare where an AI 70 is common.</p>
 </section>
 
   <div class="mt-8">
@@ -204,8 +108,4 @@
     </button>
   </div>
 </form>
-{# Shared with the AI page: the character counter and the "Generating…" label on
-   the HTMX buttons. Everything else in that file is guarded by element lookups
-   and no-ops here. #}
-<script src="{{ static_url('js/ai-settings.js') }}"></script>
 {% endblock %}

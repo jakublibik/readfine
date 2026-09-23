@@ -247,11 +247,11 @@ class TestEnsureBuilt:
 
 @pytest.mark.asyncio
 class TestAutoGenerationCandidates:
-    """Who the nightly profile regeneration considers.
+    """Who the nightly AI profile regeneration considers.
 
-    Lives with the relevance tests because the reason the rule changed is here:
-    the interest profile now also feeds a scorer that runs without a model, so
-    scheduling its regeneration stopped being a question about AI scoring.
+    Lives with the relevance tests because the rule turned twice with them: it
+    dropped the AI scoring gate while both scorers read one profile, and got it
+    back when basic relevance got its own term list.
     """
 
     async def _user(self, session, *, interval: int, ai_scoring: bool,
@@ -268,10 +268,16 @@ class TestAutoGenerationCandidates:
         await session.flush()
         return user
 
-    async def test_ai_scoring_off_is_still_a_candidate(self, pg):
+    async def test_ai_scoring_on_is_a_candidate(self, pg):
+        from app.services.ai_profile_service import due_auto_generation_user_ids
+        user = await self._user(pg, interval=14, ai_scoring=True)
+        assert user.id in await due_auto_generation_user_ids(pg)
+
+    async def test_ai_scoring_off_is_not_a_candidate(self, pg):
+        """Nothing but the scoring model reads the profile; no tokens for nothing."""
         from app.services.ai_profile_service import due_auto_generation_user_ids
         user = await self._user(pg, interval=14, ai_scoring=False)
-        assert user.id in await due_auto_generation_user_ids(pg)
+        assert user.id not in await due_auto_generation_user_ids(pg)
 
     async def test_no_interval_is_not_a_candidate(self, pg):
         from app.services.ai_profile_service import due_auto_generation_user_ids

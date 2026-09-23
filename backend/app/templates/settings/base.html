@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 {% from "partials/side_nav.html" import side_nav %}
-{# Relevance sits before the AI item and outside the AI switch on purpose: the
-   interest profile drives the lexical scorer too, which runs with no API key and
-   whatever the admin did with the AI kill switch. #}
+{# Relevance sits before the AI item and outside the AI switch on purpose: basic
+   relevance runs with no API key and whatever the admin did with the AI kill
+   switch. #}
 {% set _nav_before_ai = [
   {"label": "Stats",       "url": "/settings/stats",        "active": active == "stats"},
   {"label": "Relevance",   "url": "/settings/relevance",    "active": active == "relevance"},

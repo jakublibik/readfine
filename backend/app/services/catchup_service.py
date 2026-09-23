@@ -474,7 +474,7 @@ def scoring_available(ai_on: bool, settings) -> bool:
     """
     if settings is None:
         return False
-    if settings.basic_scoring_enabled and settings.ai_preference_text:
+    if settings.basic_scoring_enabled and settings.relevance_terms:
         return True
     return bool(ai_on and settings.ai_scoring_enabled_default)
 
