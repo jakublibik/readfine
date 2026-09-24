@@ -9,8 +9,9 @@ generic words of a profile written for a model were what made it misfire.
 
 Measured offline (`scripts/embedding_eval/`, step 2b of the plan): with a term
 list this scorer gets AUC 0.659 against engagement on the September window and
-0.677 on the independent summer one, where the LLM gets 0.729 and no score at all
-0.50. A real signal and a thin one, and the UI says so.
+0.676 on the independent summer one, where the LLM gets 0.729. The baseline a
+reader actually has is the date order, not a coin toss: newest first gets 0.557
+and 0.549 on the same windows. A real signal and a thin one, and the UI says so.
 
 What is a decision here and not detail:
 
