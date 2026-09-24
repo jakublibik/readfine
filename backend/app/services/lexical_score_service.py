@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -161,31 +161,6 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
         return 0
     return await score_articles_for_users(
         db, [Scorable.of(a) for a in articles], terms_by_user, stats)
-
-
-def scoring_active(settings: UserSettings) -> bool:
-    """Does this reader's basic relevance produce scores: switched on, with terms?"""
-    return bool(settings.basic_scoring_enabled and parse_terms(settings.relevance_terms))
-
-
-async def clear_scores(db: AsyncSession, settings: UserSettings) -> int:
-    """Drop every basic score the reader has, for when their scoring stops.
-
-    Switching basic relevance off or emptying the list stops new scores, but the
-    ones already written would otherwise keep showing in the list and keep
-    feeding Catch me up and score filters, from a list the reader no longer has.
-    Resetting the backfill stamp makes turning it back on catch the last week up
-    again, the same as saving new terms. Does not commit.
-    """
-    settings.lexical_backfill_at = None
-    result = await db.execute(
-        update(UserArticleState)
-        .where(UserArticleState.user_id == settings.user_id,
-               UserArticleState.lexical_score.isnot(None))
-        .values(lexical_score=None)
-        .execution_options(synchronize_session=False)
-    )
-    return result.rowcount or 0
 
 
 # ── backfill after a change to the terms ──────────────────────────────────────

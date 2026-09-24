@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
-from app.services import lexical_score_service
 from app.services.relevance_corpus_service import get_stats
 from app.services import relevance_suggest_service as suggest
 from app.services.relevance_service import parse_terms, skipped_terms
@@ -49,12 +48,6 @@ def _save_terms(s, text: str | None) -> None:
         s.relevance_terms = text
         s.relevance_terms_updated_at = datetime.now(timezone.utc)
         s.relevance_terms_source = "manual"
-
-
-async def _clear_if_stopped(s, was_active: bool, db: AsyncSession) -> None:
-    """Scores from a list the reader switched off or emptied go with it."""
-    if was_active and not lexical_score_service.scoring_active(s):
-        await lexical_score_service.clear_scores(db, s)
 
 
 @router.get("/relevance", response_class=HTMLResponse)
@@ -91,11 +84,9 @@ async def settings_relevance_save(
     # to skip is said instead.
     text = raw.strip() or None
 
-    was_active = lexical_score_service.scoring_active(s)
     s.basic_scoring_enabled = form.get("basic_scoring_enabled") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     _save_terms(s, text)
-    await _clear_if_stopped(s, was_active, db)
     await db.commit()
 
     ctx = await _page_context(user, db)
@@ -163,9 +154,7 @@ async def settings_relevance_suggestion_apply(
             f"maximum is {TERMS_MAX_CHARS:,}.".replace(",", " ")))
         text = (form.get("relevance_terms") or "").replace("\r\n", "\n")
     elif done:
-        was_active = lexical_score_service.scoring_active(s)
         _save_terms(s, text)
-        await _clear_if_stopped(s, was_active, db)
         await db.commit()
         ctx.update(chip=_chip_id(form.get("chip")), terms_status=done)
 
