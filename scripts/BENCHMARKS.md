@@ -498,3 +498,27 @@ Shipped as `MEMBERSHIP_MEAN` in `app/fetcher/story_params.py`, alongside
 second opinion" (2026-09-14) still stands and is about a different class of error: it was
 measured on the hiding branch, where the mistakes are same-topic-different-event rather
 than chains through a stock phrase.
+
+### Same-feed members in the share test, 2026-09-24
+
+Same-feed pairs are never candidates, but the share test divides by every member of
+the group, own feed included. On production an article from an aggregator feed
+(`AI & Trending now`) stayed out of a 5-member group because one member came from its
+own feed: 2 matches out of 5 fails, 2 out of the 4 it could have matched would pass.
+
+The obvious fix, counting the share only over members from other feeds, is
+`survey_story_groups.py --eligible-share`. On the 62k-article whole-instance export of
+2026-09-19, walked in id order:
+
+| | shipped | other feeds only |
+|---|---|---|
+| articles grouped | 16,451 | 16,877 |
+| groups at the 40 cap | 0 | 3 |
+| date-template groups | 0 (0 articles) | 6 (159) |
+| incoherent groups | 3 (17 articles) | 6 (73) |
+| articles in a different group | | 1,026 |
+
+It brings back the template families the share test was written against: a feed that
+publishes one headline template many times stops counting against itself, and its group
+grows the way groups did before. Not shipped. What the gap costs is an article ending up
+in a smaller group of its own instead of the big one, which is minor.

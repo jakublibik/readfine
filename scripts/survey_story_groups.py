@@ -69,7 +69,8 @@ MAX_GROUP_SIZE = sd.MAX_GROUP_SIZE
 MEMBERSHIP_MEAN = sd.MEMBERSHIP_MEAN
 
 
-def replay(arts, pairs, order: str, mean: float | None, share: bool):
+def replay(arts, pairs, order: str, mean: float | None, share: bool,
+           own_feed_counts: bool = True):
     """Walk the corpus one article at a time and join each to at most one group.
 
     The third copy of the membership rule, after ``app.fetcher.stories._pick_group`` and
@@ -89,6 +90,12 @@ def replay(arts, pairs, order: str, mean: float | None, share: bool):
     its own turn came, leaving it in two groups at once. That is a defect of the replay,
     not something production can do: ``_link`` never re-decides an article that already
     has a story_id, which the skip below mirrors.
+
+    ``own_feed_counts=False`` measures the share only against members from other feeds.
+    Same-feed pairs are never candidates (``find_pairs`` drops them, as does
+    ``_candidate_stmt``), so a member from the article's own feed is a match it could
+    not have scored however alike the titles are. With it counted, an aggregator feed
+    that already has one article in a group needs to match more than half of the rest.
     """
     by_id = {a.id: a for a in arts}
     rank = (lambda a: a.id) if order == "id" else (lambda a: a.ts)
@@ -116,7 +123,9 @@ def replay(arts, pairs, order: str, mean: float | None, share: bool):
             member_ids = members.get(group_id) or [group_id]
             if len(member_ids) >= MAX_GROUP_SIZE:
                 continue
-            if share and len(hits) < len(member_ids) * MEMBERSHIP_SHARE:
+            eligible = len(member_ids) if own_feed_counts else sum(
+                1 for m in member_ids if by_id[m].feed_id != art.feed_id)
+            if share and len(hits) < eligible * MEMBERSHIP_SHARE:
                 continue
             root = by_id.get(group_id)
             if root is None:
@@ -223,6 +232,10 @@ def dump_diff(path: Path, shipped, candidate, by_id) -> None:
     for article_id, group_id in cand_of.items():
         if article_id not in ship_of:
             rows.append(("gained", article_id, group_id, candidate[group_id]))
+        elif set(candidate[group_id]) != set(shipped[ship_of[article_id]]):
+            # In a group under both rules, but not the same one: the titles listed are
+            # the candidate's group, which is the one the verdict is about.
+            rows.append(("moved", article_id, group_id, candidate[group_id]))
 
     with path.open("w", encoding="utf-8", newline="") as fh:
         fh.write("verdict\tkind\tarticle_id\tgroup_id\ttitle\tgroup_titles\n")
@@ -248,6 +261,9 @@ def main() -> None:
                     help="also replay with the share test dropped, which is what the "
                          "template-family numbers in BENCHMARKS.md come from")
     ap.add_argument("--dump-diff", help="write the differing decisions to this TSV")
+    ap.add_argument("--eligible-share", action="store_true",
+                    help="also replay the shipped rule with the share counted only over "
+                         "members from other feeds, and compare the two")
     ap.add_argument("--show", type=int, default=0,
                     help="print the N largest groups under the first --mean value")
     args = ap.parse_args()
@@ -281,8 +297,27 @@ def main() -> None:
 
     if first is None:
         return
+    candidate = None
+    if args.eligible_share:
+        candidate, _ = replay(arts, pairs, args.order, mean=args.mean[0], share=True,
+                              own_feed_counts=False)
+        describe(f"share over other feeds AND mean {args.mean[0]:.2f}", candidate,
+                 by_id, shipped)
+        here = {a for m in first.values() for a in m}
+        there = {a for m in candidate.values() for a in m}
+        # Lost/gained alone misses the case this variant is about: an article that sat
+        # in a small group of its own and now sits in the big one is in both sets.
+        mates_now = {a: frozenset(m) for m in first.values() for a in m}
+        mates_new = {a: frozenset(m) for m in candidate.values() for a in m}
+        moved = sum(1 for a in here & there if mates_now[a] != mates_new[a])
+        print(f"  vs shipped (share AND mean): {len(here - there)} articles lost, "
+              f"{len(there - here)} gained, {moved} in a group with different members")
     if args.dump_diff:
-        dump_diff(Path(args.dump_diff), shipped, first, by_id)
+        # With --eligible-share the diff that matters is shipped against the candidate.
+        if candidate is not None:
+            dump_diff(Path(args.dump_diff), first, candidate, by_id)
+        else:
+            dump_diff(Path(args.dump_diff), shipped, first, by_id)
     for group_id, mem in sorted(first.items(), key=lambda kv: -len(kv[1]))[:args.show]:
         print(f"\ngroup {group_id}: {len(mem)} members")
         for a in mem[:16]:
