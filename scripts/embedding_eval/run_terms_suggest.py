@@ -213,7 +213,9 @@ def main() -> None:
     en = te.read_terms(args.terms_dir / "en.txt")
     cs = te.read_terms(args.terms_dir / "cs_translations.txt")
     cold = te.read_terms(args.terms_dir / "cold_start.txt")
-    base_profiles = {"en_cs": en + cs, "cold3": cold}
+    # "empty": a reader who never wrote a term. The base scores nothing (AUC
+    # 0.5 by ties), so the gain is what suggestions alone bring.
+    base_profiles = {"en_cs": en + cs, "cold3": cold, "empty": []}
 
     feeds = {r["feed_id"] for r in rows}
     inflow = [rs.tokenize(rs.article_text(o["title"], o["body"]))
