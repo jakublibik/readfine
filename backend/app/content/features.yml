@@ -150,7 +150,8 @@ categories:
         desc: >-
           Every incoming article is scored against a list of terms you keep, with
           no AI key. Related word forms match, and so do Chinese,
-          Japanese and Korean terms. It matches words rather than meaning, so it is
+          Japanese and Korean terms. Suggestions learned from what you read offer
+          words to add and terms to drop. It matches words rather than meaning, so it is
           the weaker scorer; with an AI key, labeled articles are also rated by a
           model, and a filter can act on that score (for example, mark anything
           below a threshold as read).

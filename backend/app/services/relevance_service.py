@@ -56,7 +56,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Iterable, Mapping, NamedTuple, Sequence
+from typing import Iterable, Iterator, Mapping, NamedTuple, Sequence
 
 import nh3
 
@@ -351,16 +351,29 @@ def bm25_raw(text: str, terms: Sequence[str], stats: CorpusStats) -> Match:
     three just by having more chances to match a little. Within a term the words
     add up, each one exact or, failing that, through its prefix.
     """
+    best = Match(0.0, None)
+    for term, score in term_scores(text, terms, stats):
+        if score > best.score:
+            best = Match(score, term)
+    return best
+
+
+def term_scores(text: str, terms: Sequence[str],
+                stats: CorpusStats) -> Iterator[tuple[str, float]]:
+    """Each term's raw score against one article, the article tokenized once.
+
+    What `bm25_raw` takes the maximum of, and what the suggestions count matches
+    with: a term that scores above zero is one the article matched.
+    """
     if not stats:
-        return Match(0.0, None)
+        return
     doc = tokenize(text)
     if not doc:
-        return Match(0.0, None)
+        return
     counts: dict[str, int] = {}
     for t in doc:
         counts[t] = counts.get(t, 0) + 1
 
-    best = Match(0.0, None)
     for unit in _units(tuple(terms)):
         if unit.contiguous:
             n = _run_count(doc, unit.tokens)
@@ -369,9 +382,7 @@ def bm25_raw(text: str, terms: Sequence[str], stats: CorpusStats) -> Match:
                      if n else 0.0)
         else:
             score = sum(_word_score(q, counts, stats) for q in unit.tokens)
-        if score > best.score:
-            best = Match(score, unit.term)
-    return best
+        yield unit.term, score
 
 
 def _word_score(q: str, counts: Mapping[str, int], stats: CorpusStats) -> float:

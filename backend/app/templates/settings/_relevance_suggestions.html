@@ -1,0 +1,65 @@
+{# Suggested terms, loaded after the page. A click on a suggestion edits the list
+   and saves it. Turning one down ("Hide for 3 months") lives under "Why
+   these?", not on the bubble: next to a red "remove" bubble an ✕ reads as the
+   remove button, and that is what people clicked. `sugg` is None
+   before the instance's word statistics exist, which the page already explains. #}
+<div id="relevance-suggestions" class="mt-4">
+{% if sugg is none %}
+{% elif not sugg.enough %}
+  <p class="text-xs text-gray-500">
+    Suggestions for your list appear once you have read {{ min_engaged }} articles properly
+    (read for half a minute, opened the link or starred) in the last {{ window_days }} days.
+    So far: {{ sugg.engaged }}.
+  </p>
+{% elif not sugg.items %}
+  <p class="text-xs text-gray-500">No suggestions for your list right now.</p>
+{% else %}
+  <h3 class="text-xs font-medium text-gray-600 mb-2">
+    {% if term_count %}Suggestions for your list{% else %}Based on what you read{% endif %}
+  </h3>
+  {# Additions on one row, removals on the next; the ids number them in that
+     order, and "Why these?" lists them in the same order. #}
+  {% set ordered = sugg.adds + sugg.removes %}
+  {% for group in [sugg.adds, sugg.removes] if group %}
+  {% set offset = 0 if loop.first and sugg.adds else sugg.adds | length %}
+  <div class="flex flex-wrap gap-2{{ ' mt-2' if not loop.first }}">
+    {% for x in group %}
+    {% set add = x.kind == "add" %}
+    {% set n = offset + loop.index %}
+    {% set vals = {"term": x.term, "kind": x.kind, "chip": "sugg-" ~ n} %}
+    <button type="button" id="sugg-{{ n }}"
+            class="rounded-full border px-3 py-0.5 text-sm hover:underline {{ 'bg-green-50 border-green-200 text-green-700' if add else 'bg-red-50 border-red-200 text-red-700' }}"
+            hx-post="/settings/relevance/suggestions/apply" hx-vals='{{ vals | tojson }}' hx-swap="none"
+            title="{{ 'Add to' if add else 'Remove from' }} your list and save">
+      <span aria-hidden="true">{{ '+' if add else '−' }}</span>
+      <span class="sr-only">{{ 'Add' if add else 'Remove' }}</span>
+      {{ x.term }}
+    </button>
+    {% endfor %}
+  </div>
+  {% endfor %}
+  <details class="mt-2 text-xs text-gray-500">
+    <summary class="cursor-pointer select-none">Why these?</summary>
+    <ul class="mt-1 space-y-1">
+      {% for x in ordered %}
+      {% set vals = {"term": x.term, "kind": x.kind, "chip": "sugg-" ~ loop.index} %}
+      <li id="sugg-{{ loop.index }}-why">
+        {% if x.kind == "add" %}
+          <span class="text-green-700">+ {{ x.term }}</span>: comes up in articles you read, such as
+          {% for t in x.titles %}“{{ t }}”{{ ", " if not loop.last }}{% endfor %}.
+        {% else %}
+          <span class="text-red-700">− {{ x.term }}</span>: matched {{ x.matched }} articles in the last
+          {{ window_days }} days, and you read {{ x.engaged }} of them.
+        {% endif %}
+        <button type="button" class="ml-1 text-gray-500 underline hover:text-gray-700"
+                hx-post="/settings/relevance/suggestions/dismiss" hx-vals='{{ vals | tojson }}' hx-swap="none">Hide for 3 months</button>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="mt-2">
+      Learned from your last {{ window_days }} days of reading. A click on a suggestion adds or removes the term and
+      saves your list. A hidden one can come back after three months, since interests change.
+    </p>
+  </details>
+{% endif %}
+</div>

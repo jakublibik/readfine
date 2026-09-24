@@ -42,9 +42,9 @@
 {# ── Terms ─────────────────────────────────────────────────────────────────── #}
 <section>
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Your terms</h2>
-  <textarea name="relevance_terms" id="relevance_terms" rows="8"
-            placeholder="sourdough baking, Formula 1, urban cycling, James Webb telescope"
-            class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ terms_submitted if terms_submitted is defined else (s.relevance_terms or '') }}</textarea>
+  {% set terms_text = terms_submitted if terms_submitted is defined else (s.relevance_terms or '') %}
+  {% set saved_text = s.relevance_terms or '' %}
+  {% include "settings/_relevance_terms_textarea.html" %}
   <p class="text-xs text-gray-500 mt-1">
     Separate terms with commas, semicolons or new lines. A term can be several words, such as
     <code class="text-gray-600">urban cycling</code>: an article with more of them scores higher, and they don't have
@@ -61,6 +61,7 @@
     {% endif %}
     Saving rescores the last 7 days of unread articles.
   </p>
+  <div hx-get="/settings/relevance/suggestions" hx-trigger="load" hx-swap="outerHTML"></div>
 </section>
 
 {# ── Basic relevance ───────────────────────────────────────────────────────── #}
@@ -108,4 +109,8 @@
     </button>
   </div>
 </form>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ static_url('js/relevance-settings.js') }}"></script>
 {% endblock %}

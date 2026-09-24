@@ -69,7 +69,12 @@ class LexicalCorpus(Base):
 
 
 class RelevanceSuggestionDismissal(Base):
-    """A suggested term the reader said no to, so it is never suggested again.
+    """A suggested term the reader said no to, kept away for a while.
+
+    For `relevance_suggest_service.DISMISS_DAYS` from ``dismissed_at``, not for
+    good: interests change, and a suggestion that returns after that has been
+    learned from different reading. ``term`` is the normalized key
+    (`relevance_suggest_service.term_key`).
 
     ``kind`` is which suggestion it was (``add`` or ``remove``): turning down
     "remove crypto" says nothing about whether "crypto" would be welcome as an

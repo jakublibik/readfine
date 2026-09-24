@@ -50,6 +50,7 @@ import run_lexical_fidelity as fid  # noqa: E402
 import run_terms_eval as te  # noqa: E402
 import run_terms_trunc as tt  # noqa: E402
 from app.services import relevance_service as rs  # noqa: E402
+from app.services import relevance_suggest_service as ss  # noqa: E402
 
 K, W = 2, 0.5
 
@@ -227,6 +228,26 @@ def main() -> None:
     n_inflow = len(inflow)
     print(f"reader inflow: {n_inflow} articles from {len(feeds)} feeds",
           file=sys.stderr)
+    # The shipped suggestions (`relevance_suggest_service.compute`) as the app
+    # would have computed them at the end of the train half: every article of the
+    # reader's feeds fetched before the cutoff (the corpus starts on 24 August,
+    # so two weeks rather than the app's 30 days), engaged if the train half says
+    # so. The export has no story groups, so every article is its own story.
+    # The prototype above counts the inflow share over the whole corpus of
+    # the reader's feeds, the test half included, so the words can differ.
+    cutoff = rows[half]["fetched_at"]
+    engaged_ids = {r["article_id"] for r in rows[:half] if r["engaged"]}
+    shipped_rows = sorted(
+        ((o["fetched_at"], o["title"], o["body"], o["article_id"] in engaged_ids,
+          o["article_id"], run_eval.parse_dt(o["fetched_at"]).date())
+         for o in corpus.values() if o["feed_id"] in feeds and o["fetched_at"] < cutoff),
+        reverse=True)
+    shipped_rows = [r[1:] for r in shipped_rows]
+    print(f"shipped inflow: {len(shipped_rows)} articles before {cutoff[:10]}",
+          file=sys.stderr)
+    shipped_stats = rs.build_corpus_stats(
+        rs.article_text(o["title"], o["body"]) for o in corpus.values())
+
     lo = log_odds(tr_d, tr_l, tables.df, n_corpus)
     ro = rocchio(tr_d, tr_l, tables)
 
@@ -241,6 +262,8 @@ def main() -> None:
                                               max_df_share=share, stop=st)
             adds[f"rocchio {tag}"] = pick_add(ro, ptoks, inflow_df, n_inflow, 20,
                                               max_df_share=share, stop=st)
+        adds["shipped"] = [s.term for s in
+                           ss.compute(shipped_rows, terms, shipped_stats, set()).adds]
         plans[pname] = {"terms": terms, "adds": adds}
 
     needed = set()

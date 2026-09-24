@@ -16,6 +16,7 @@ from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.user import User
 from app.services.relevance_corpus_service import get_stats
+from app.services import relevance_suggest_service as suggest
 from app.services.relevance_service import parse_terms, skipped_terms
 from app.templating import templates
 
@@ -38,6 +39,15 @@ async def _page_context(user: User, db: AsyncSession) -> dict:
         "corpus_ready": await get_stats(db) is not None,
         "terms_max_chars": TERMS_MAX_CHARS,
     }
+
+
+def _save_terms(s, text: str | None) -> None:
+    """Store the list as written; a change also makes the 7-day backfill due."""
+    text = (text or "").strip() or None
+    if text != s.relevance_terms:
+        s.relevance_terms = text
+        s.relevance_terms_updated_at = datetime.now(timezone.utc)
+        s.relevance_terms_source = "manual"
 
 
 @router.get("/relevance", response_class=HTMLResponse)
@@ -76,14 +86,91 @@ async def settings_relevance_save(
 
     s.basic_scoring_enabled = form.get("basic_scoring_enabled") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
-    if text != s.relevance_terms:
-        s.relevance_terms = text
-        # Also what makes the 7-day backfill due.
-        s.relevance_terms_updated_at = datetime.now(timezone.utc)
-        s.relevance_terms_source = "manual"
+    _save_terms(s, text)
     await db.commit()
 
     ctx = await _page_context(user, db)
     ctx["saved"] = True
     ctx["skipped"] = skipped_terms(raw)
     return templates.TemplateResponse(request, "settings/relevance.html", ctx)
+
+
+# ── suggestions ───────────────────────────────────────────────────────────────
+# Loaded after the page (hx-trigger="load"): a month of headlines is tokenized
+# for them, and the rest of the page should not wait for that. Clicking one edits
+# the list and saves it, the way hiding one saves the dismissal.
+
+@router.get("/relevance/suggestions", response_class=HTMLResponse)
+async def settings_relevance_suggestions(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    s = await _get_or_create_settings(user, db)
+    return templates.TemplateResponse(request, "settings/_relevance_suggestions.html", {
+        "sugg": await suggest.suggestions(user.id, s.relevance_terms, db),
+        "term_count": len(parse_terms(s.relevance_terms)),
+        "window_days": suggest.WINDOW_DAYS,
+        "min_engaged": suggest.MIN_ENGAGED,
+    })
+
+
+def _chip_id(value) -> str | None:
+    """The suggestion's element id, echoed back so the response can remove it."""
+    value = str(value or "")
+    return value if value.startswith("sugg-") and value[5:].isdigit() else None
+
+
+@router.post("/relevance/suggestions/apply", response_class=HTMLResponse)
+async def settings_relevance_suggestion_apply(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add or remove the term and save the list, like hiding one saves the dismissal.
+
+    The list saved is the text area as it is now, edits typed into it included:
+    a click that changed the list without saving it left the reader with a
+    suggestion gone from the page and nothing kept.
+    """
+    form = await request.form()
+    s = await _get_or_create_settings(user, db)
+    text = (form.get("relevance_terms") or "").replace("\r\n", "\n")
+    term = (form.get("term") or "").strip()
+    kind = form.get("kind")
+    ctx = {"chip": None, "terms_error": False}
+    if term and kind == suggest.ADD:
+        text = suggest.add_term(text, term)
+        done = f"Added {term} and saved your list."
+    elif term and kind == suggest.REMOVE:
+        text = suggest.remove_term(text, term)
+        done = f"Removed {term} and saved your list."
+    else:
+        done = None
+
+    if done and len(text) > TERMS_MAX_CHARS:
+        ctx.update(terms_error=True, terms_status=(
+            f"Not saved: the list would be {len(text)} characters, and the "
+            f"maximum is {TERMS_MAX_CHARS:,}.".replace(",", " ")))
+        text = (form.get("relevance_terms") or "").replace("\r\n", "\n")
+    elif done:
+        _save_terms(s, text)
+        await db.commit()
+        ctx.update(chip=_chip_id(form.get("chip")), terms_status=done)
+
+    ctx.update(terms_text=text, saved_text=s.relevance_terms or "")
+    return templates.TemplateResponse(
+        request, "settings/_relevance_suggestion_applied.html", ctx)
+
+
+@router.post("/relevance/suggestions/dismiss", response_class=HTMLResponse)
+async def settings_relevance_suggestion_dismiss(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    form = await request.form()
+    await suggest.dismiss(user.id, (form.get("term") or "").strip(), form.get("kind"), db)
+    return templates.TemplateResponse(request, "settings/_relevance_suggestion_applied.html", {
+        "chip": _chip_id(form.get("chip")),
+    })

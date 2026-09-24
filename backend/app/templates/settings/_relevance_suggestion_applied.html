@@ -1,0 +1,7 @@
+{# Answer to a click on a suggestion: the text area with the lines under it, and
+   the suggestion gone, all out of band; the button itself swaps nothing. #}
+{% if terms_text is defined %}{% set oob = true %}{% include "settings/_relevance_terms_textarea.html" %}{% endif %}
+{% if chip %}
+<button id="{{ chip }}" hx-swap-oob="delete"></button>
+<li id="{{ chip }}-why" hx-swap-oob="delete"></li>
+{% endif %}
