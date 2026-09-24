@@ -5,7 +5,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,6 +42,8 @@ async def main_app(
         await db.commit()
     settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
     settings = settings_result.scalar_one_or_none()
+    if settings and settings.onboarded_at is None:
+        return RedirectResponse("/welcome", status_code=303)
     bucket_small_max = settings.bucket_small_max if settings else 640
     bucket_medium_max = settings.bucket_medium_max if settings else 1100
     reading_font_size = settings.reading_font_size if settings else "md"

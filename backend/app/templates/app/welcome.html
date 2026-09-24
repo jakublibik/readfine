@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Welcome – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-start sm:items-center justify-center px-4 pt-12 pb-8 sm:py-8">
+  <div class="w-full max-w-lg">
+    <h1 class="text-2xl font-semibold text-center mb-6">Welcome to Readfine</h1>
+
+    <form hx-post="/welcome" hx-target="#welcome-error" hx-swap="innerHTML"
+          class="bg-white shadow rounded-lg p-6 space-y-4">
+      <div>
+        <label for="relevance_terms" class="block text-base font-medium text-gray-900 mb-1">What do you like to read about?</label>
+        <p class="text-sm text-gray-600 mb-3">
+          List a few topics and Readfine will score every article by how well it matches them,
+          so the ones you care about stand out. No API key needed.
+        </p>
+        <textarea name="relevance_terms" id="relevance_terms" rows="4" maxlength="{{ terms_max_chars }}"
+                  placeholder="sourdough baking, Formula 1, urban cycling"
+                  class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></textarea>
+        <p class="text-xs text-gray-500 mt-1">
+          Separate topics with commas. Three are enough to start, and you can change them any time in Settings → Relevance.
+        </p>
+        <p id="welcome-error" class="text-sm text-red-700 mt-1"></p>
+      </div>
+      <div class="flex items-center justify-between gap-3">
+        <button type="submit" name="skip" value="1"
+                class="text-sm text-gray-500 hover:text-gray-700 bg-transparent border-0 cursor-pointer p-0">Skip for now</button>
+        <button type="submit"
+                class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 border-0 cursor-pointer">Continue</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

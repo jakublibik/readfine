@@ -28,6 +28,7 @@ from app.services.article import (
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
+from app.services.relevance_terms_service import show_relevance_intro
 from app.services.story_service import (
     DEDUP_COLLAPSE,
     DEDUP_OFF,
@@ -633,6 +634,13 @@ async def render_list(
         extra_ctx["chat_article_ids"] = await _get_chat_article_ids(
             user.id, [a.id for a in articles], db
         )
+
+    # The bar that points at Settings → Relevance, on the first page of a plain
+    # list only: search results and Saved have headers of their own.
+    extra_ctx["relevance_intro"] = bool(
+        articles and offset == 0 and not is_search and not saved_only
+        and show_relevance_intro(settings)
+    )
 
     if not articles and offset == 0:
         feed_count = await db.scalar(

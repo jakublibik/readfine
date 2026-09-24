@@ -6,8 +6,6 @@ term list the lexical scorer matches, its switch, and the score-in-list option,
 which applies to both scorers. The AI interest profile is a different text for a
 different reader (the model) and lives with AI scoring on the AI page.
 """
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,13 +16,12 @@ from app.models.user import User
 from app.services.relevance_corpus_service import get_stats
 from app.services import relevance_suggest_service as suggest
 from app.services.relevance_service import parse_terms, skipped_terms
+from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
 from app.templating import templates
 
 from .common import _get_or_create_settings
 
 router = APIRouter(prefix="/settings", tags=["settings"])
-
-TERMS_MAX_CHARS = 5000
 
 
 async def _page_context(user: User, db: AsyncSession) -> dict:
@@ -39,20 +36,6 @@ async def _page_context(user: User, db: AsyncSession) -> dict:
         "corpus_ready": await get_stats(db) is not None,
         "terms_max_chars": TERMS_MAX_CHARS,
     }
-
-
-def _save_terms(s, text: str | None) -> None:
-    """Store the list as written; a change also makes the 7-day backfill due."""
-    text = (text or "").strip() or None
-    if text != s.relevance_terms:
-        s.relevance_terms = text
-        s.relevance_terms_updated_at = datetime.now(timezone.utc)
-        s.relevance_terms_source = "manual"
-    # Switched off or emptied: the scores already written stay, but the account
-    # counts as never caught up, so switching back on with the same list rescores
-    # the last 7 days (the articles that arrived meanwhile have no score).
-    if not (s.basic_scoring_enabled and parse_terms(s.relevance_terms)):
-        s.lexical_backfill_at = None
 
 
 @router.get("/relevance", response_class=HTMLResponse)
@@ -91,7 +74,7 @@ async def settings_relevance_save(
 
     s.basic_scoring_enabled = form.get("basic_scoring_enabled") == "on"
     s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
-    _save_terms(s, text)
+    save_terms(s, text)
     await db.commit()
 
     ctx = await _page_context(user, db)
@@ -159,7 +142,7 @@ async def settings_relevance_suggestion_apply(
             f"maximum is {TERMS_MAX_CHARS:,}.".replace(",", " ")))
         text = (form.get("relevance_terms") or "").replace("\r\n", "\n")
     elif done:
-        _save_terms(s, text)
+        save_terms(s, text)
         await db.commit()
         ctx.update(chip=_chip_id(form.get("chip")), terms_status=done)
 
