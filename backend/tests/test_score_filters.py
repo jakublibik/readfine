@@ -200,6 +200,38 @@ class TestAtFetch:
 
         assert (await _state(pg, user, article)).is_starred is True
 
+    async def test_a_label_from_a_relevance_filter_goes_to_ai_scoring(self, pg):
+        """Same rule as a label from any fetch filter: labeled means AI-scored.
+
+        The filter itself is done, so the AI score arriving later must not run it
+        again: nothing is parked.
+        """
+        user, feed, _ = await _setup(pg)
+        label = Label(user_id=user.id, name="top")
+        pg.add(label)
+        await pg.flush()
+        await _filter(pg, user, "relevance_score", "gt", "50", "label",
+                      action_value=str(label.id))
+        article = await _article(pg, feed, user, basic=0.8)
+
+        with _ai_scoring(enqueued=True) as enqueue:
+            await fs.apply_filters_to_new_articles(feed.id, [article], pg)
+
+        enqueue.assert_awaited_once()
+        assert (await _state(pg, user, article)).relevance_filters_pending is False
+
+    async def test_a_star_from_a_relevance_filter_queues_the_extraction(self, pg):
+        user, feed, uf = await _setup(pg)
+        uf.extract_readable = True
+        await _filter(pg, user, "relevance_score", "gt", "50")
+        article = await _article(pg, feed, user, basic=0.8)
+
+        with _ai_scoring(enqueued=False) as enqueue:
+            await fs.apply_filters_to_new_articles(feed.id, [article], pg)
+
+        assert article.readable_status == "pending"
+        enqueue.assert_not_awaited()
+
     async def test_parking_creates_the_state_row_it_needs(self, pg):
         user, feed, _ = await _setup(pg)
         await _label_everything(pg, user)

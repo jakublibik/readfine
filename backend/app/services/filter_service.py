@@ -640,32 +640,16 @@ async def _apply_user_filters_to_article(
     filters, run now over the basic score, or parked for the AI score when the
     first pass sent the article to AI scoring (see ``filter_phase``).
     """
-    got_star_or_label = False
-    got_label = False
+    fired: set[str] = set()
     for f in filters:
         if filter_phase(f) != "fetch":
             continue
         if evaluate_filter(f, article, uf, state):
-            action_types = {a.action_type for a in f.actions}
-            if action_types & {"star", "label"}:
-                got_star_or_label = True
-            if "label" in action_types:
-                got_label = True
+            fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, uf.user_id, uf, db)
             if f.stop_on_match:
                 break
-
-    if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
-        article.readable_status = "pending"
-
-    # Enqueue scoring for labeled articles on non-readable feeds (or feeds with readable already done)
-    ai_expected = False
-    if got_label and (not uf.extract_readable or article.readable_status == "success"):
-        from app.services.ai_scoring_service import enqueue_scoring_job
-        ai_expected = await enqueue_scoring_job(article, uf.user_id, db)
-    elif got_label and article.readable_status == "pending":
-        # Scored once the extraction finishes (run_pipeline_for_article_all_users).
-        ai_expected = await _scoring_would_run(article, uf, db)
+    ai_expected = await _follow_up_star_or_label(article, uf, fired, db)
 
     relevance = [f for f in filters if filter_phase(f) == "relevance"]
     if not relevance:
@@ -675,7 +659,34 @@ async def _apply_user_filters_to_article(
             state = await _get_or_create_state(article.id, uf.user_id, db)
         state.relevance_filters_pending = True
         return
-    await _run_filters_once(relevance, article, uf.user_id, uf, state, db)
+    # Ran over the basic score, so a label from here goes to AI scoring like one
+    # from the first pass. These filters are done: the AI score arriving later
+    # runs only the AI filters (relevance_filters_pending stays False).
+    fired = await _run_filters_once(relevance, article, uf.user_id, uf, state, db)
+    await _follow_up_star_or_label(article, uf, fired, db)
+
+
+async def _follow_up_star_or_label(article: Article, uf: UserFeed, fired: set[str],
+                                   db: AsyncSession) -> bool:
+    """What a star or a label from a fetch-time filter sets off. Returns whether an
+    AI score is now on its way.
+
+    Either one queues the readable extraction on a feed that uses it. A label also
+    sends the article to AI scoring: straight away on a feed without extraction (or
+    with it already done), after the extraction otherwise.
+    """
+    got_label = "label" in fired
+    if fired & {"star", "label"} and uf.extract_readable and article.readable_status == "skipped":
+        article.readable_status = "pending"
+    if not got_label:
+        return False
+    if not uf.extract_readable or article.readable_status == "success":
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        return await enqueue_scoring_job(article, uf.user_id, db)
+    if article.readable_status == "pending":
+        # Scored once the extraction finishes (run_pipeline_for_article_all_users).
+        return await _scoring_would_run(article, uf, db)
+    return False
 
 
 async def _scoring_would_run(article: Article, uf: UserFeed, db: AsyncSession) -> bool:
@@ -712,13 +723,19 @@ async def _get_or_create_state(article_id: int, user_id: int, db: AsyncSession) 
 async def _run_filters_once(
     filters: "list[Filter]", article: Article, user_id: int, uf: "UserFeed | None",
     state: "UserArticleState | None", db: AsyncSession,
-) -> None:
-    """Evaluate filters in order and execute actions, honouring stop-on-match."""
+) -> set[str]:
+    """Evaluate filters in order and execute actions, honouring stop-on-match.
+
+    Returns the action types of the filters that fired.
+    """
+    fired: set[str] = set()
     for f in filters:
         if evaluate_filter(f, article, uf, state):
+            fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, user_id, uf, db)
             if f.stop_on_match:
                 break
+    return fired
 
 
 async def apply_filters_to_saved_article(
