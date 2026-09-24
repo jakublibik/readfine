@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -163,6 +163,31 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
         db, [Scorable.of(a) for a in articles], terms_by_user, stats)
 
 
+def scoring_active(settings: UserSettings) -> bool:
+    """Does this reader's basic relevance produce scores: switched on, with terms?"""
+    return bool(settings.basic_scoring_enabled and parse_terms(settings.relevance_terms))
+
+
+async def clear_scores(db: AsyncSession, settings: UserSettings) -> int:
+    """Drop every basic score the reader has, for when their scoring stops.
+
+    Switching basic relevance off or emptying the list stops new scores, but the
+    ones already written would otherwise keep showing in the list and keep
+    feeding Catch me up and score filters, from a list the reader no longer has.
+    Resetting the backfill stamp makes turning it back on catch the last week up
+    again, the same as saving new terms. Does not commit.
+    """
+    settings.lexical_backfill_at = None
+    result = await db.execute(
+        update(UserArticleState)
+        .where(UserArticleState.user_id == settings.user_id,
+               UserArticleState.lexical_score.isnot(None))
+        .values(lexical_score=None)
+        .execution_options(synchronize_session=False)
+    )
+    return result.rowcount or 0
+
+
 # ── backfill after a change to the terms ──────────────────────────────────────
 
 # Unread and published within the last week, whichever way the terms were saved
@@ -224,8 +249,8 @@ async def process_due_backfills(db: AsyncSession) -> int:
     Only the basic terms make an account due. Regenerating the AI profile does
     not touch the lexical score, so it has nothing to catch up.
     """
-    due = (await db.execute(
-        select(UserSettings.user_id)
+    due = dict((await db.execute(
+        select(UserSettings.user_id, UserSettings.relevance_terms_updated_at)
         .where(UserSettings.basic_scoring_enabled == True,  # noqa: E712
                UserSettings.relevance_terms.isnot(None),
                UserSettings.relevance_terms_updated_at.isnot(None),
@@ -234,7 +259,7 @@ async def process_due_backfills(db: AsyncSession) -> int:
                    < UserSettings.relevance_terms_updated_at))
         .order_by(UserSettings.lexical_backfill_at.asc().nulls_first())
         .limit(_BACKFILL_USERS_PER_RUN)
-    )).scalars().all()
+    )).all())
     if not due:
         return 0
 
@@ -244,15 +269,19 @@ async def process_due_backfills(db: AsyncSession) -> int:
         return 0
 
     done = 0
-    for user_id in due:
+    for user_id, terms_updated_at in due.items():
         terms = terms_by_user.get(user_id)
         # Stamped even when there is nothing to score (a list with no usable
         # term left in it), or the account would come up due forever.
         if terms is not None:
             written = await backfill_user(db, user_id, terms, stats)
             logger.info("lexical backfill: user=%s wrote %d scores", user_id, written)
+        # Stamped with the save it caught up with, not with the time it finished.
+        # Terms saved while this ran (a few suggestion clicks in a row) are newer
+        # than that, so the account stays due and the next pass scores them. A
+        # save between the query above and `load_terms` only costs a repeat run.
         settings = await db.get(UserSettings, user_id)
-        settings.lexical_backfill_at = datetime.now(timezone.utc)
+        settings.lexical_backfill_at = terms_updated_at
         await db.commit()
         done += 1
     return done

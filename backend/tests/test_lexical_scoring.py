@@ -287,6 +287,31 @@ class TestBackfill:
         assert await lss.process_due_backfills(pg) == 1
         assert (await _state(pg, user, article)).lexical_score > 0
 
+    async def test_terms_saved_during_a_run_keep_it_due(self, pg, monkeypatch):
+        """A save landing while the backfill runs is not marked as caught up.
+
+        Clicking a few suggestions in a row saves the list each time; stamping the
+        finish time would have swallowed every save after the first.
+        """
+        user, feed = await self._due_setup(pg)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+        article.published_at = NOW - timedelta(days=1)
+        await pg.flush()
+
+        real_backfill = lss.backfill_user
+
+        async def save_meanwhile(db, user_id, terms, stats, **kw):
+            written = await real_backfill(db, user_id, terms, stats, **kw)
+            settings = await db.get(UserSettings, user_id)
+            settings.relevance_terms = f"{TERMS}\nanother topic"
+            settings.relevance_terms_updated_at = datetime.now(timezone.utc)
+            return written
+
+        monkeypatch.setattr(lss, "backfill_user", save_meanwhile)
+        assert await lss.process_due_backfills(pg) == 1
+        monkeypatch.setattr(lss, "backfill_user", real_backfill)
+        assert await lss.process_due_backfills(pg) == 1
+
     async def test_a_new_ai_profile_does_not_make_it_due(self, pg):
         """Regenerating the AI profile leaves the lexical score as it was."""
         user, _feed = await self._due_setup(pg)
@@ -302,3 +327,57 @@ class TestBackfill:
         await _only_due_account(pg, user.id)
         await _corpus(pg)
         assert await lss.process_due_backfills(pg) == 0
+
+
+@pytest.mark.asyncio
+class TestClearScores:
+    async def test_drops_the_scores_and_makes_it_due_again(self, pg):
+        user, feed = await _setup(pg)
+        await _corpus(pg)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+        await lss.score_new_articles(pg, feed.id, [article])
+        settings = await pg.get(UserSettings, user.id)
+        settings.relevance_terms_updated_at = NOW
+        settings.lexical_backfill_at = NOW
+
+        assert await lss.clear_scores(pg, settings) == 1
+        await pg.flush()
+        state = await _state(pg, user, article)
+        await pg.refresh(state)
+        assert state.lexical_score is None
+
+        # Switched back on with the same list: the last week is caught up again.
+        await _only_due_account(pg, user.id)
+        article.published_at = NOW - timedelta(days=1)
+        await pg.flush()
+        assert await lss.process_due_backfills(pg) == 1
+        await pg.refresh(state)
+        assert state.lexical_score > 0
+
+    async def test_leaves_other_readers_alone(self, pg):
+        user, feed = await _setup(pg)
+        other = User(email=f"lex_{uuid.uuid4().hex[:12]}@test.invalid",
+                     password_hash="x", display_name="t")
+        pg.add(other)
+        await pg.flush()
+        pg.add(UserSettings(user_id=other.id, relevance_terms=TERMS))
+        pg.add(UserFeed(user_id=other.id, feed_id=feed.id))
+        await pg.flush()
+        await _corpus(pg)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+        await lss.score_new_articles(pg, feed.id, [article])
+
+        await lss.clear_scores(pg, await pg.get(UserSettings, user.id))
+        await pg.flush()
+        kept = await _state(pg, other, article)
+        await pg.refresh(kept)
+        assert kept.lexical_score > 0
+
+
+def test_scoring_active_needs_the_switch_and_a_usable_term():
+    assert lss.scoring_active(UserSettings(basic_scoring_enabled=True,
+                                           relevance_terms="cycling"))
+    assert not lss.scoring_active(UserSettings(basic_scoring_enabled=False,
+                                               relevance_terms="cycling"))
+    assert not lss.scoring_active(UserSettings(basic_scoring_enabled=True,
+                                               relevance_terms=" - "))
