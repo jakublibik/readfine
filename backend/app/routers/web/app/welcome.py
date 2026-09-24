@@ -55,10 +55,15 @@ async def welcome_save(
             return HTMLResponse(
                 f"That list is too long. Maximum is {TERMS_MAX_CHARS:,} characters.".replace(",", " ")
             )
-        if parse_terms(raw):
-            save_terms(s, raw, source="onboarding")
-            # A score nobody can see does not show that the answer did anything.
-            s.ai_score_show_in_list = True
+        # Continue with nothing usable in the box would do what Skip does, and
+        # quietly: say so instead, and leave the choice to skip to the reader.
+        if not raw.strip():
+            return HTMLResponse("Type a few topics, or choose Skip for now.")
+        if not parse_terms(raw):
+            return HTMLResponse("None of these can be matched. Use words of two letters or more.")
+        save_terms(s, raw, source="onboarding")
+        # A score nobody can see does not show that the answer did anything.
+        s.ai_score_show_in_list = True
     if not s.onboarded_at:
         s.onboarded_at = datetime.now(timezone.utc)
     await db.commit()

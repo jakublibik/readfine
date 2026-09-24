@@ -647,6 +647,9 @@ async def render_list(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         extra_ctx["has_feeds"] = bool(feed_count)
+        # The welcome box stands in for the relevance bar while there are no
+        # articles to put the bar above.
+        extra_ctx["relevance_setup_hint"] = show_relevance_intro(settings)
     else:
         extra_ctx["has_feeds"] = True
 

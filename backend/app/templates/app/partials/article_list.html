@@ -97,6 +97,11 @@
       <p class="text-xs text-green-700 dark:text-green-300">
         Coming from another reader? <a href="/settings/opml" class="underline hover:text-green-900 dark:hover:text-green-100">Import OPML</a>.
       </p>
+      {% if relevance_setup_hint %}
+      <p class="text-xs text-green-700 dark:text-green-300">
+        Then tell Readfine <a href="/settings/relevance" class="underline hover:text-green-900 dark:hover:text-green-100">what you like to read about</a>, and it will score new articles by it.
+      </p>
+      {% endif %}
       <p class="text-xs text-green-700 dark:text-green-300">
         New here? <a href="/help" class="underline hover:text-green-900 dark:hover:text-green-100">See the guide</a>.
       </p>
