@@ -48,6 +48,11 @@ def _save_terms(s, text: str | None) -> None:
         s.relevance_terms = text
         s.relevance_terms_updated_at = datetime.now(timezone.utc)
         s.relevance_terms_source = "manual"
+    # Switched off or emptied: the scores already written stay, but the account
+    # counts as never caught up, so switching back on with the same list rescores
+    # the last 7 days (the articles that arrived meanwhile have no score).
+    if not (s.basic_scoring_enabled and parse_terms(s.relevance_terms)):
+        s.lexical_backfill_at = None
 
 
 @router.get("/relevance", response_class=HTMLResponse)
