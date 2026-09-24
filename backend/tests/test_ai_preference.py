@@ -1,6 +1,8 @@
 """Unit tests for interest-profile prompt assembly (pure functions)."""
 from app.services.ai_service import (
+    COLD_START_STRONG_SIGNALS,
     _PREF_SECTIONS,
+    _cold_start_context,
     _build_preference_prompt,
     _pref_snippet,
 )
@@ -83,3 +85,33 @@ class TestBuildPreferencePrompt:
         prompt = _build_preference_prompt({"g1": [("Title only", "")]}, "")
         assert "- Title only" in prompt
         assert "Title only — " not in prompt
+
+
+class TestColdStartContext:
+    def test_terms_included_below_threshold(self):
+        ctx = _cold_start_context(COLD_START_STRONG_SIGNALS - 1, [], ["cycling", "sourdough"])
+        assert "- cycling" in ctx
+        assert "- sourdough" in ctx
+        assert "the behaviour wins" in ctx
+
+    def test_nothing_at_or_above_threshold(self):
+        assert _cold_start_context(COLD_START_STRONG_SIGNALS, ["Feed A"], ["cycling"]) == ""
+
+    def test_empty_terms_no_block(self):
+        ctx = _cold_start_context(0, ["Feed A"], [])
+        assert "Feed A" in ctx
+        assert "listed themselves" not in ctx
+
+    def test_nothing_at_all(self):
+        assert _cold_start_context(0, [], []) == ""
+
+    def test_terms_capped(self):
+        terms = [f"term{i}" for i in range(80)]
+        ctx = _cold_start_context(0, [], terms)
+        assert "- term49" in ctx
+        assert "- term50" not in ctx
+
+    def test_reaches_prompt_before_reading_data(self):
+        ctx = _cold_start_context(0, [], ["cycling"])
+        prompt = _build_preference_prompt({"g1": [("Tour de France recap", "")]}, ctx)
+        assert prompt.index("- cycling") < prompt.index("Tour de France recap")

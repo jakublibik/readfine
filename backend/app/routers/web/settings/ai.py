@@ -462,11 +462,14 @@ async def settings_ai_generate_preference(
     await db.commit()
 
     strong_count = await get_preference_strong_count(user.id, db)
+    has_terms = bool((await db.scalar(
+        select(UserSettings.relevance_terms).where(UserSettings.user_id == user.id)
+    ) or "").strip())
     escaped = text_result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     warning_inner = (
         f'<p class="text-xs text-amber-600 mt-1 mb-1">'
         f'Only {strong_count} article{"s" if strong_count != 1 else ""} with strong reading signals so far — '
-        f'profile was supplemented with feed names. Keep reading and starring to improve accuracy.'
+        f'profile was supplemented with feed names{" and your relevance terms" if has_terms else ""}. Keep reading and starring to improve accuracy.'
         f'</p>'
     ) if strong_count < 20 else ""
     return HTMLResponse(

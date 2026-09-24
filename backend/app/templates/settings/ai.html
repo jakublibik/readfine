@@ -276,7 +276,7 @@
       <div id="pref-cold-start-warning">
         {% if pref_strong_count < 20 %}
         <p class="text-xs text-amber-600 mt-1 mb-1">
-          Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far, so the profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
+          Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far, so the profile will be supplemented with feed names{{ ' and your relevance terms' if s.relevance_terms and s.relevance_terms.strip() }} until you reach 20. Keep reading and starring to improve accuracy.
         </p>
         {% endif %}
       </div>
