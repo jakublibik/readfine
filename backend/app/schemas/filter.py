@@ -3,7 +3,10 @@ from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel, field_validator
 
-FieldType = Literal["title_or_content", "title", "content", "author", "url", "published_at", "ai_score"]
+FieldType = Literal[
+    "title_or_content", "title", "content", "author", "url", "published_at",
+    "ai_score", "basic_score", "relevance_score",
+]
 OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "lt"]
 ActionType = Literal["label", "mark_read", "star", "archive"]
 MatchOperator = Literal["AND", "OR"]

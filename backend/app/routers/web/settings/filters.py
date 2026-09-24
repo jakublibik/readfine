@@ -40,6 +40,7 @@ async def settings_filters(
     return templates.TemplateResponse(request, "settings/filters.html", {
         "filters": filters,
         "labels": labels,
+        "score_sources": await _user_score_sources(user, db),
     })
 
 
@@ -69,6 +70,12 @@ async def settings_filter_edit(
     return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
 
 
+async def _user_score_sources(user, db) -> list[str]:
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    return score_sources(app_s, user_s)
+
+
 async def _filter_form_context(user, db):
     labels = await list_labels(user, db)
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
@@ -78,15 +85,34 @@ async def _filter_form_context(user, db):
     folders_result = await db.execute(
         select(Folder).where(Folder.user_id == user.id).order_by(*folder_order_clause(folder_order))
     )
-    ai_score_available = bool(
-        app_s and app_s.ai_enabled and user_s and user_s.ai_scoring_enabled_default
-    )
     return {
         "labels": labels,
         "user_feeds": user_feeds,
         "folders": folders_result.scalars().all(),
-        "ai_score_available": ai_score_available,
+        "score_sources": score_sources(app_s, user_s),
     }
+
+
+# The editor's "Score" field and its source, against the stored condition field.
+SCORE_SOURCE_FIELDS = {"ai": "ai_score", "basic": "basic_score", "relevance": "relevance_score"}
+
+
+def score_sources(app_s, user_s) -> list[str]:
+    """Score sources a new condition may pick: the scorers this reader has running.
+
+    A saved condition keeps its source even when that scorer is off (the editor
+    shows it marked as off), so turning AI scoring off never rewrites a filter.
+    """
+    ai = bool(app_s and app_s.ai_enabled and user_s and user_s.ai_scoring_enabled_default)
+    basic = bool(user_s and user_s.basic_scoring_enabled and (user_s.relevance_terms or "").strip())
+    sources = []
+    if ai:
+        sources.append("ai")
+    if basic:
+        sources.append("basic")
+    if ai or basic:
+        sources.append("relevance")
+    return sources
 
 
 @router.post("/filters", response_class=HTMLResponse)
@@ -151,6 +177,7 @@ async def settings_filter_delete(
     return templates.TemplateResponse(request, "settings/partials/filters_list.html", {
         "filters": filters,
         "labels": labels,
+        "score_sources": await _user_score_sources(user, db),
     })
 
 
@@ -212,8 +239,12 @@ def _parse_filter_form(form) -> FilterCreate:
     operators = form.getlist("cond_operator")
     values = form.getlist("cond_value")
     positions = form.getlist("cond_position")
+    sources = form.getlist("cond_source")
     for i, (field, op, val) in enumerate(zip(fields, operators, values)):
         val = val.strip()
+        if field == "score":
+            source = sources[i] if i < len(sources) else ""
+            field = SCORE_SOURCE_FIELDS.get(source, "")
         if field and op and val:
             conditions.append(FilterConditionCreate(
                 field=field, operator=op, value=val,

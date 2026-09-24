@@ -530,12 +530,14 @@ async def _process_ai_summaries() -> None:
 
 
 async def _process_ai_filters() -> None:
-    """Job: apply AI filters to articles that received a fresh ai_score."""
+    """Job: apply AI filters to articles that received a fresh ai_score, and run
+    parked relevance filters over the basic score where no AI score is coming."""
     if db.async_session_factory is None:
         return
-    from app.services.filter_service import process_ai_filters_batch
+    from app.services.filter_service import process_ai_filters_batch, process_relevance_fallback
     async with db.async_session_factory() as session:
         await process_ai_filters_batch(session)
+        await process_relevance_fallback(session)
 
 
 async def recompute_derived_intervals(session) -> int:

@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     BigInteger, Boolean, Computed, DateTime, Float, Integer, SmallInteger,
-    String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint,
+    String, Text, ForeignKey, func, false, CheckConstraint, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -136,6 +136,11 @@ class UserArticleState(Base):
     ai_summary_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_context: Mapped[str | None] = mapped_column(Text)
     ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Relevance-score filters are waiting for this article's AI score (a label filter
+    # sent it to scoring at fetch). Cleared by the AI pass, or by the fallback over the
+    # basic score when the scoring never lands. See filter_service.
+    relevance_filters_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

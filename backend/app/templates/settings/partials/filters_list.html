@@ -1,34 +1,58 @@
 <div id="filters-list">
   {% if filters %}
-    {%- set ai_fields = ['ai_score'] -%}
+    {#- Listed in the order they run: filters that need nothing but the fetch (basic
+        score included) first, then the ones that read the relevance or AI score.
+        Mirrors filter_service.filter_phase. -#}
+    {%- set score_source_fields = {'ai_score': 'ai', 'basic_score': 'basic', 'relevance_score': 'relevance'} -%}
+    {%- set score_names = {'ai_score': 'Score · AI', 'basic_score': 'Score · Basic', 'relevance_score': 'Score · AI, else basic'} -%}
+    {%- set op_symbols = {'gt': '>', 'lt': '<', 'equals': '='} -%}
+    {%- set late_fields = ['ai_score', 'relevance_score'] -%}
+    {%- set sources_on = score_sources if score_sources is defined else [] -%}
     {%- set regular_filters = [] -%}
-    {%- set ai_filters = [] -%}
+    {%- set late_filters = [] -%}
     {%- for f in filters -%}
-      {%- if f.conditions | selectattr('field', 'in', ai_fields) | list -%}
-        {%- set _ = ai_filters.append(f) -%}
+      {%- if f.conditions | selectattr('field', 'in', late_fields) | list -%}
+        {%- set _ = late_filters.append(f) -%}
       {%- else -%}
         {%- set _ = regular_filters.append(f) -%}
       {%- endif -%}
     {%- endfor -%}
     <ul class="space-y-3">
-      {% for f in regular_filters + ai_filters %}
-      {%- set is_ai = f.conditions | selectattr('field', 'in', ai_fields) | list | length > 0 -%}
-      {% if is_ai and loop.index0 == regular_filters | length and regular_filters %}
+      {% for f in regular_filters + late_filters %}
+      {%- set fields = f.conditions | map(attribute='field') | list -%}
+      {%- set is_late = fields | select('in', late_fields) | list | length > 0 -%}
+      {%- set f_sources = [] -%}
+      {%- for fld in fields if fld in score_source_fields -%}
+        {%- set _ = f_sources.append(score_source_fields[fld]) -%}
+      {%- endfor -%}
+      {%- set f_off = f_sources | reject('in', sources_on) | list -%}
+      {% if is_late and loop.index0 == regular_filters | length and regular_filters %}
         <li class="flex items-center gap-2 py-1">
           <div class="flex-1 border-t border-dashed border-gray-200"></div>
-          <span class="text-xs text-gray-400 shrink-0">↓ Score filters - run after scoring</span>
+          <span class="text-xs text-gray-400 shrink-0">↓ Run after regular filters, and after AI scoring when the article gets it</span>
           <div class="flex-1 border-t border-dashed border-gray-200"></div>
         </li>
       {% endif %}
       <li class="p-4 bg-white border border-gray-200 rounded">
         <div class="flex items-start justify-between gap-3">
-          <div class="flex items-center gap-2 flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
             <span class="font-medium text-sm text-gray-900">{{ f.name }}</span>
-            {% if is_ai %}
-              <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score</span>
+            {% if 'ai_score' in fields %}
+              <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score · AI</span>
+            {% elif 'relevance_score' in fields %}
+              <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score · AI, else basic</span>
+            {% elif 'basic_score' in fields %}
+              <span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Score · Basic</span>
+            {% endif %}
+            {% if 'ai' in f_off %}
+              <span class="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded" title="Its AI score condition never matches while AI scoring is off">AI scoring off</span>
+            {% elif 'basic' in f_off %}
+              <span class="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded" title="Its basic score condition never matches without basic relevance terms">Basic relevance off</span>
+            {% elif 'relevance' in f_off %}
+              <span class="text-xs text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded" title="Its score condition never matches while neither scorer is on">Scoring off</span>
             {% endif %}
             {% if f.position %}
-              <span class="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">priority {{ f.position }}</span>
+              <span class="text-xs text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">order {{ f.position }}</span>
             {% endif %}
             {% if not f.is_active %}
               <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
@@ -64,7 +88,11 @@
         </div>
         <div class="text-xs text-gray-500 space-y-0.5 mt-1">
           {% for c in f.conditions %}
+            {% if c.field in score_names %}
+            <div>{{ score_names[c.field] }} {{ op_symbols.get(c.operator, c.operator) }} <em>{{ c.value }}</em></div>
+            {% else %}
             <div>{{ c.field }} {{ c.operator }} <em>{{ c.value }}</em></div>
+            {% endif %}
           {% endfor %}
         </div>
         {% if f.actions %}

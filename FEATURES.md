@@ -44,8 +44,8 @@ _A clean reader that adapts to your screen._
 
 _Trim the stream down to what matters._
 
-- **Relevance scoring:** Every incoming article is scored against a list of terms you keep, with no AI key. Related word forms match, and so do Chinese, Japanese and Korean terms. Suggestions learned from what you read offer words to add and terms to drop. It matches words rather than meaning, so it is the weaker scorer; with an AI key, labeled articles are also rated by a model, and a filter can act on that score (for example, mark anything below a threshold as read).
-- **Filters:** Match on title, content, author, URL, or AI score, then automatically add a label, mark read, star, or archive.
+- **Relevance scoring:** Every incoming article is scored against a list of terms you keep, with no AI key. Related word forms match, and so do Chinese, Japanese and Korean terms. Suggestions learned from what you read offer words to add and terms to drop. It matches words rather than meaning, so it is the weaker scorer; with an AI key, labeled articles are also rated by a model. A filter can act on either score, or on the AI one where it exists (for example, mark anything below a threshold as read).
+- **Filters:** Match on title, content, author, URL, or relevance score, then automatically add a label, mark read, star, or archive.
 - **Regex and AND/OR:** Combine conditions with AND/OR and match with regular expressions (Python syntax) when plain "contains" is not enough.
 - **Feed & folder scoping:** Restrict any filter to specific feeds or folders.
 - **Retroactive apply:** Run a filter over existing articles, not just new ones.

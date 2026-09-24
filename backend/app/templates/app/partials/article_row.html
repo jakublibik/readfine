@@ -163,7 +163,7 @@
   {% if article.score >= 0.75 %}{% set score_class = "ai-score-high" %}
   {% elif article.score >= 0.4 %}{% set score_class = "ai-score-mid" %}
   {% else %}{% set score_class = "ai-score-low" %}{% endif %}
-  {% set score_title = "AI relevance score" if article.score_is_ai else "Basic relevance score (word match, weaker than the AI score)" %}
+  {% set score_title = "Relevance: AI score" if article.score_is_ai else "Relevance: basic score (word match, weaker than the AI score)" %}
   {% set score_text = score_int if article.score_is_ai else "~" ~ score_int %}
 {% endif %}
 

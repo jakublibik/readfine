@@ -52,8 +52,10 @@
         </select>
       </div>
       <div class="flex items-center gap-2">
-        <label class="text-sm text-gray-700">Priority</label>
-        <input type="number" name="position" min="0"
+        <label for="filter-position" class="text-sm text-gray-700"
+               title="Filters run from the lowest number up; equal numbers run in name order.">Run order</label>
+        <input type="number" name="position" id="filter-position" min="0"
+               title="Filters run from the lowest number up; equal numbers run in name order."
                value="{{ fv.position if fv else 0 }}"
                class="w-16 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
@@ -143,22 +145,30 @@
   <!-- Conditions -->
   <div>
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Conditions</h2>
-    <div id="ai-filter-notice" class="hidden mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
-      Score filters run after regular filters and scoring - they only apply to articles that have received an AI score.<br>Pipeline: regular filters → scoring (labeled articles) → score filters.
+    <div id="score-filter-notice" class="hidden mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
+      <p data-phase="ai" class="hidden">This filter reads the AI score, so it runs after regular filters and AI scoring, and only reaches articles that have an AI score.<br>Pipeline: regular filters → AI scoring (labeled articles) → this filter.</p>
+      <p data-phase="relevance" class="hidden">This filter reads AI, else basic, so it runs right after the regular filters. When one of them sends the article to AI scoring, it waits for the AI score, and uses the basic score if scoring fails.</p>
+      <p data-phase="fetch" class="hidden">The basic score is there as soon as an article arrives, so this filter runs with the regular filters, in run order.</p>
     </div>
+    {% set score_source_fields = {'ai_score': 'ai', 'basic_score': 'basic', 'relevance_score': 'relevance'} %}
     <div id="conditions" class="space-y-2">
       {% set existing_conditions = fv.conditions if fv else [] %}
       {% for c in existing_conditions %}
+      {% set c_source = score_source_fields.get(c.field, '') %}
       <div class="flex flex-wrap items-center gap-2 condition-row">
         <div class="flex items-center gap-2 shrink-0">
           <select name="cond_field" class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-field-select">
             {% for f in ['title_or_content','title','content','author','url','published_at'] %}
               <option value="{{ f }}" {% if c.field == f %}selected{% endif %}>{{ f | replace('_', ' ') }}</option>
             {% endfor %}
-            {% if ai_score_available %}
-              <option value="ai_score" {% if c.field == 'ai_score' %}selected{% endif %}>ai score</option>
+            {% if score_sources or c_source %}
+              <option value="score" {% if c_source %}selected{% endif %}>score</option>
             {% endif %}
           </select>
+          {# The source select is filled by filter-edit.js; the hidden input is what posts,
+             so every row sends one cond_source and the lists stay aligned. #}
+          <select class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-source-select hidden" aria-label="Score source"></select>
+          <input type="hidden" name="cond_source" value="{{ c_source }}" data-saved="{{ c_source }}">
           <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
             {% for op in ['contains','not_contains','equals','regex','gt','lt'] %}
               <option value="{{ op }}" {% if c.operator == op %}selected{% endif %}>{{ op }}</option>
@@ -169,6 +179,7 @@
         <input type="text" name="cond_value" value="{{ c.value }}" required
                class="flex-1 min-w-32 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
         <button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row shrink-0">✕</button>
+        <p class="cond-hint hidden basis-full text-xs text-gray-500"></p>
       </div>
       {% endfor %}
     </div>
@@ -240,6 +251,6 @@
   {% endif %}
 </form>
 
-<script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if ai_score_available %},"ai_score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"aiScoreOperators":["equals","gt","lt"],"aiScoreAvailable":{{ 'true' if ai_score_available else 'false' }},"actionTypes":["label","mark_read","star","archive"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
+<script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if score_sources %},"score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"scoreOperators":["equals","gt","lt"],"scoreSources":{{ score_sources|tojson }},"actionTypes":["label","mark_read","star","archive"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
 {% endblock %}
 {% block scripts %}<script src="{{ static_url('js/filter-edit.js') }}"></script>{% endblock %}
