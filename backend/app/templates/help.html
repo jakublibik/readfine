@@ -289,8 +289,9 @@
               <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a>.</p>
             <p class="mt-2">Filters run by their <strong>run order</strong>, from the lowest number up, and filters with the
               same number run in name order. It matters with <strong>Stop on match</strong>: a matching filter with it
-              ticked keeps the filters after it in the same group from running on that article. Score filters that wait for
-              the AI score form their own group, listed below the others.</p>
+              ticked keeps the filters after it in the same group from running on that article. Filters on the <strong>AI</strong>
+              and the <strong>AI, else basic</strong> score form their own group, listed below the others. They run after
+              the rest, so a Stop on match in the first group does not stop them.</p>
             <p class="mt-2">A new filter only sees articles that arrive after you save it. To catch up on what's
               already in your list, use <strong>Apply</strong> next to the filter, which runs it over your existing
               articles once and shows you what it will do before anything is committed. <strong>Test</strong> next to
@@ -305,7 +306,8 @@
                 filter runs once the score is in.</li>
               <li><strong>AI, else basic</strong>: the relevance score, the same number the article list shows. The filter
                 runs right after the others, unless one of them sent the article to AI scoring; then it waits for the AI
-                score, and uses the basic score if scoring fails.</li>
+                score, and uses the basic score if scoring fails. A label it adds sends the article to AI scoring like
+                a label from any other filter.</li>
             </ul>
             <p class="mt-2">Each filter runs once per article. A condition whose scorer is off never matches; the filter
               stays as it is and is marked in the list.</p>
