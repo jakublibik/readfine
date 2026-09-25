@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
+from app.fetcher.story_params import SUPPRESS_THRESHOLD
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
@@ -920,20 +921,29 @@ async def htmx_article_related(
     member, inside the service. The group is global, so the second check is the one that
     keeps a feed the reader never subscribed to out of the footer.
     """
-    story_id = (await db.execute(
-        add_article_access_joins(select(Article.story_id), user.id)
+    row = (await db.execute(
+        add_article_access_joins(select(Article.story_id, Article.title_norm), user.id)
         .where(Article.id == article_id, article_access_predicate())
-    )).scalar_one_or_none()
+    )).one_or_none()
+    story_id = row.story_id if row else None
     if story_id is None or await _story_dedup_off(user.id, db):
         return HTMLResponse("")
 
-    members = await list_members(user.id, story_id, article_id, db)
+    # Admins get each member's similarity to this article, to check why something that
+    # repeats a read story was not kept out of unread. Empty title_norm is never matched.
+    is_admin = user.role == "admin"
+    members = await list_members(
+        user.id, story_id, article_id, db,
+        title_norm=(row.title_norm or "") if is_admin else None,
+    )
     show_score = await db.scalar(
         select(UserSettings.ai_score_show_in_list).where(UserSettings.user_id == user.id))
     return templates.TemplateResponse(request, "app/partials/story_members.html", {
         "article_id": article_id,
         "members": members,
         "show_ai_score": bool(show_score),
+        "show_similarity": is_admin,
+        "suppress_threshold": SUPPRESS_THRESHOLD,
     })
 
 

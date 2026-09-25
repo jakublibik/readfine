@@ -186,6 +186,10 @@ class StoryMember(_EffectiveScore, BaseModel):
     is_starred: bool = False
     ai_score: float | None = None
     lexical_score: float | None = None
+    # Admin diagnostic only (list_members with title_norm): trigram similarity to the
+    # open article and whether one headline reads as a follow-up of the other.
+    similarity: float | None = None
+    follow_up: bool = False
 
     model_config = {"from_attributes": False}
 

@@ -83,6 +83,17 @@
          class="flex-shrink-0 hover:text-gray-600 dark:hover:text-gray-300" title="Open at the source">↗</a>
       {% endif %}
     </div>
+    {#- Admin diagnostic: what suppress_seen decided on for this pair. Hiding also
+        needs the reader to have read one side before the other arrived, which this
+        line cannot tell. -#}
+    {% if show_similarity and member.similarity is not none %}
+    <div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5 pl-[18px] tabular-nums">
+      similarity {{ "%.2f" | format(member.similarity) }}
+      · {% if member.similarity >= suppress_threshold %}clears{% else %}below{% endif %}
+      hide {{ "%.2f" | format(suppress_threshold) }}
+      {%- if member.follow_up %} · follow-up word{% endif %}
+    </div>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>
