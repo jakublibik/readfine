@@ -166,7 +166,7 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
 # ── backfill after a change to the terms ──────────────────────────────────────
 
 # Unread and published within the last week, whichever way the terms were saved
-# (by hand, at onboarding, from the seed), because two windows would mean two
+# (by hand, at onboarding, from a suggestion), because two windows would mean two
 # answers to "why does this article have no score".
 BACKFILL_DAYS = 7
 _BACKFILL_CHUNK = 500

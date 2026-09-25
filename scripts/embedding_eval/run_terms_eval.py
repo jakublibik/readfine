@@ -47,6 +47,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 import run_eval  # noqa: E402
 from app.services import relevance_service as rs  # noqa: E402
+import ai_profile_topics  # noqa: E402
 from app.services.ai_eval_service import compute_auc  # noqa: E402
 
 K1 = rs.BM25_K1
@@ -311,7 +312,7 @@ def main() -> None:
     en = read_terms(args.terms_dir / "en.txt")
     cs = read_terms(args.terms_dir / "cs_translations.txt")
     cold = read_terms(args.terms_dir / "cold_start.txt")
-    ai_profile = rs.parse_profile(seg["profile"])
+    ai_profile = ai_profile_topics.parse_profile(seg["profile"])
     profiles = {
         "ai_profile": ai_profile.positive,
         "ai_profile_cold3": ai_profile.positive[:3],

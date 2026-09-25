@@ -34,14 +34,6 @@ CORPUS = [
 ]
 
 
-# The AI profile, which only the seed reads now.
-PROFILE = (
-    "High relevance: AI safety and alignment, Ukraine war updates\n"
-    "Moderate relevance: RSS readers and feed curation\n"
-    "Avoid: celebrity gossip, football results"
-)
-
-
 @pytest.fixture
 def stats() -> rs.CorpusStats:
     return rs.build_corpus_stats(CORPUS, min_df=3)
@@ -247,55 +239,6 @@ class TestCorpusStats:
     def test_prefix_counts_documents_not_occurrences(self, stats):
         # válka, války, válku: three articles, one prefix class.
         assert stats.prefix_freq["valk"] == 3
-
-
-class TestParseProfile:
-    """The AI profile read as topics, for the one-off seed of a term list."""
-
-    def test_splits_positive_units_and_keeps_negatives_apart(self):
-        """"X and Y" is two directions, not one, exactly as the eval parsed it."""
-        profile = rs.parse_profile(PROFILE)
-        assert profile.positive == [
-            "AI safety",
-            "alignment",
-            "Ukraine war updates",
-            "RSS readers",
-            "feed curation",
-        ]
-        assert profile.negative == ["celebrity gossip", "football results"]
-
-    def test_moderate_line_counts_as_positive(self):
-        profile = rs.parse_profile("Moderate relevance: space exploration")
-        assert profile.positive == ["space exploration"]
-        assert profile.negative == []
-
-    def test_unlabelled_line_counts_as_positive(self):
-        """A hand-written profile has no labels; it still has to produce units."""
-        profile = rs.parse_profile("I read about climate policy, and about trains")
-        assert profile.positive == ["I read about climate policy", "about trains"]
-        assert profile.negative == []
-
-    def test_separator_inside_brackets_does_not_split_the_topic(self):
-        profile = rs.parse_profile(
-            "High relevance: health science (nutrition, exercise), trains")
-        assert profile.positive == [
-            "health science (nutrition, exercise)", "trains"]
-
-    def test_avoid_label_in_czech_is_recognised(self):
-        profile = rs.parse_profile("Nezajímá mě: fotbalové výsledky, celebrity")
-        assert profile.positive == []
-        assert profile.negative == ["fotbalové výsledky", "celebrity"]
-
-    def test_empty_profile_is_falsy(self):
-        assert not rs.parse_profile(None)
-        assert not rs.parse_profile("   \n  ")
-
-    def test_avoid_only_profile_has_nothing_to_rank_by(self):
-        # It must not fall back to scoring the avoid list as if it were positive:
-        # that is the below-chance scorer the module is written to avoid.
-        profile = rs.parse_profile("Avoid: sports, celebrity news")
-        assert profile.positive == []
-        assert not profile
 
 
 class TestSquash:

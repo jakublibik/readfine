@@ -40,9 +40,7 @@ What is a decision here and not detail:
   title and 300 characters, so normalizing mostly penalized an article for
   having a summary at all; it cost 0.013 AUC.
 - **No negative side.** Subtracting an avoid list scored AUC 0.486 in the eval,
-  below chance. The basic profile has no avoid list, and `parse_profile` below,
-  which reads the AI profile for the one-off seed, returns its negatives only so
-  that nothing mistakes them for positives.
+  below chance, so the basic profile has no avoid list.
 
 Every number above was measured through exactly this tokenizer and this scorer,
 so changing either one invalidates them rather than tuning them. `TOKENIZER`
@@ -441,99 +439,6 @@ def lexical_score(text: str, terms: Sequence[str], stats: CorpusStats,
     if not terms or not stats:
         return None
     return squash(bm25_raw(text, terms, stats).score, k)
-
-
-# ── the AI profile, read as topics ────────────────────────────────────────────
-
-# Not what the basic scorer reads any more: that is `parse_terms`. This splits the
-# AI profile into topics for the one-off seed that offers them as a starting term
-# list, and the offline scripts measure the old baseline through it.
-
-# The generator writes `label: topics` lines and asks for "High relevance /
-# Moderate relevance / Avoid", but the model may translate or reword the labels,
-# so both are matched loosely and anything unrecognised counts as positive.
-_NEGATIVE_LABEL_RE = re.compile(
-    r"avoid|exclude|not interested|no interest|dislike|skip|irrelevant|"
-    r"nezajím|vyhýb|vynech|nechci", re.IGNORECASE)
-# Splitting on the Czech conjunction "a" is deliberately left out: it collides
-# with the English article, and the profile is written in English by default.
-_TOPIC_SEPARATOR_RE = re.compile(r"[,;]|\band\b|\bnebo\b")
-_MIN_TOPIC_CHARS = 4
-
-
-def split_topics(line: str) -> list[str]:
-    """Split a topic list on separators that sit outside brackets.
-
-    The generator writes topics like "health science with mechanistic findings
-    (nutrition, exercise, longevity)". Splitting on every comma turns that into
-    bare "exercise" and "longevity)" — fragments that have lost the context that
-    made them a topic, and that then match unrelated articles.
-    """
-    parts: list[str] = []
-    depth = 0
-    current: list[str] = []
-    tokens = _TOPIC_SEPARATOR_RE.split(line)
-    separators = _TOPIC_SEPARATOR_RE.findall(line)
-    for i, token in enumerate(tokens):
-        current.append(token)
-        depth += token.count("(") - token.count(")")
-        if i < len(separators):
-            if depth > 0:  # separator inside brackets: keep the topic together
-                current.append(separators[i])
-            else:
-                parts.append("".join(current))
-                current = []
-    parts.append("".join(current))
-    return [p.strip() for p in parts if p.strip()]
-
-
-@dataclass(frozen=True)
-class Profile:
-    """The interest profile split into the units a lexical score is built from."""
-
-    positive: list[str]
-    negative: list[str]
-
-    def __bool__(self) -> bool:
-        return bool(self.positive)
-
-
-def parse_profile(text: str | None) -> Profile:
-    """Split `ai_preference_text` into positive and negative topic units.
-
-    High and Moderate land in the same positive list. The negatives are returned
-    so that nothing mistakes them for positives, and are never offered as terms.
-    """
-    if not text or not text.strip():
-        return Profile([], [])
-
-    positive_lines: list[str] = []
-    negative_lines: list[str] = []
-    for raw_line in text.strip().splitlines():
-        line = raw_line.strip(" -•\t")
-        if not line:
-            continue
-        label, _, topics = line.partition(":")
-        if not topics.strip():
-            # A line without a label is a plain sentence: keep it whole and positive.
-            positive_lines.append(line)
-        elif _NEGATIVE_LABEL_RE.search(label):
-            negative_lines.append(topics.strip())
-        else:
-            positive_lines.append(topics.strip())
-
-    def units(lines: list[str]) -> list[str]:
-        out = [t for line in lines
-               for t in split_topics(line) if len(t) >= _MIN_TOPIC_CHARS]
-        return out or ([" ".join(lines)] if lines else [])
-
-    positive = units(positive_lines)
-    if not positive and negative_lines:
-        # Nothing but an avoid list: there is nothing to rank by, and scoring the
-        # avoid list as if it were positive is the failure mode this whole module
-        # is written around.
-        return Profile([], units(negative_lines))
-    return Profile(positive, units(negative_lines))
 
 
 # ── the effective score ───────────────────────────────────────────────────────

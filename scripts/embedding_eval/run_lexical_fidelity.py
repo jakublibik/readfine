@@ -43,6 +43,7 @@ sys.path.insert(0, str(REPO_ROOT / "backend"))
 
 import run_eval  # noqa: E402  (the reference implementation, imported not copied)
 from app.services import relevance_service as rs  # noqa: E402
+import ai_profile_topics  # noqa: E402
 from app.services.ai_eval_service import compute_auc  # noqa: E402
 
 
@@ -205,7 +206,7 @@ def main() -> None:
         for variant, topics in (("generated", None), ("cold_start_3", 3)):
             ref_pos, mask, _neg = run_eval.parse_profile(
                 seg["profile"], "b", None, topics)
-            profile = rs.parse_profile(seg["profile"])
+            profile = ai_profile_topics.parse_profile(seg["profile"])
             pos = profile.positive[:topics] if topics else profile.positive
 
             reference = reference_scores(seg_texts, ref_pos)

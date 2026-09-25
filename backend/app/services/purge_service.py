@@ -9,6 +9,11 @@ Lifecycle of an article older than T1 (= default_purge_after_days):
 
 T1 measures article age (fetched_at); T2 measures uas.created_at (mirrors the profile
 lookback window). Invariant: admin T1 max (120) < T2 (180).
+
+uas.created_at is not "first engaged": basic relevance writes a state for every
+article at fetch, so for most rows it is the fetch time. An article read long after
+it arrived leaves the profile window, and T2, that much sooner. Both read the same
+column, so a stub is still only deleted once the profile no longer looks at it.
 """
 import logging
 from datetime import datetime, timedelta, timezone
