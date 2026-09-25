@@ -1506,6 +1506,8 @@ function openSearchModal(prefill) {
     if (window._lastSearchScoreSource) qs.push('score_source=' + encodeURIComponent(window._lastSearchScoreSource));
     if (window._lastSearchScoreOp) qs.push('score_op=' + encodeURIComponent(window._lastSearchScoreOp));
     if (window._lastSearchScoreVal) qs.push('score_val=' + encodeURIComponent(window._lastSearchScoreVal));
+    if (window._lastSearchSince) qs.push('since_days=' + encodeURIComponent(window._lastSearchSince));
+    if (window._lastSearchState) qs.push('state=' + encodeURIComponent(window._lastSearchState));
     if (qs.length) url += '?' + qs.join('&');
   }
   htmx.ajax('GET', url, { target: '#search-modal-content', swap: 'innerHTML' });
@@ -1557,13 +1559,22 @@ function submitSearch() {
   }
   var scoreActive = scoreOp !== 'any';
   if (!scoreActive) scoreVal = '';
+  // Published: days back from now, empty = any time.
+  var sinceEl = document.getElementById('search-since');
+  var sinceVal = sinceEl ? sinceEl.value : '';
+  // List: starred | saved | archived, empty = any article.
+  var stateEl = document.getElementById('search-state');
+  var stateVal = stateEl ? stateEl.value : '';
 
   // Empty text is allowed as a pure filter view, but only when at least one
   // filter is set (sorting by score counts, that is the "best first" list);
   // otherwise it's just "all articles", so nudge for input.
   var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all')
-    || scoreActive || sortVal === 'score';
+    || scoreActive || sortVal === 'score' || !!sinceVal || !!stateVal;
   if (!q && !hasFilter) { input.focus(); return; }
+  // With no words there is nothing to rank by relevance, and the list comes back
+  // newest first. Say so, so reopening the modal shows the order actually used.
+  if (!q && sortVal === 'relevance') sortVal = 'newest';
 
   window._lastSearchQuery = q;
   window._lastSearchScope = scopeVal;
@@ -1573,6 +1584,8 @@ function submitSearch() {
   window._lastSearchScoreSource = scoreSrc;
   window._lastSearchScoreOp = scoreActive ? scoreOp : '';
   window._lastSearchScoreVal = scoreVal;
+  window._lastSearchSince = sinceVal;
+  window._lastSearchState = stateVal;
 
   var params = new URLSearchParams();
   if (q) params.set('q', q);
@@ -1585,6 +1598,8 @@ function submitSearch() {
     params.set('score_op', scoreOp);
     params.set('score_val', scoreVal);
   }
+  if (sinceVal) params.set('since_days', sinceVal);
+  if (stateVal) params.set('state', stateVal);
   htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
   closeSearchModal();
   // On mobile the search modal is opened from inside the sidebar overlay; close
@@ -1605,6 +1620,80 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }
 });
+
+// ── Search hits ────────────────────────────────────────────────────────────
+// Marks the searched words in the result rows' titles and snippets. Done here, not
+// on the server: it only has to catch the common case (the word in the title or at
+// the start of the text), and the server's matching (stems, the index) can't be
+// mirrored exactly anyway. Accents are ignored and a word matches by its beginning,
+// with a common English ending dropped first, so "vote" also marks "voting".
+function _foldForSearch(s) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+function _searchHitTerms(query) {
+  var terms = [];
+  // A quoted phrase counts as its words; "-word" is excluded, so it's no hit; "or"
+  // is an operator.
+  query.replace(/"/g, ' ').split(/\s+/).forEach(function (w) {
+    if (!w || w.charAt(0) === '-' || w.toLowerCase() === 'or') return;
+    w = _foldForSearch(w.replace(/\*+$/, '')).replace(/[^\p{L}\p{N}]+/gu, '');
+    var stem = w.replace(/(ing|ed|es|s|e)$/, '');
+    if (stem.length >= 3) w = stem;
+    if (w.length >= 2) terms.push(w);
+  });
+  return terms;
+}
+
+function _highlightIn(el, terms) {
+  var text = el.textContent;
+  // Fold one character at a time, keeping where each folded one came from, so a
+  // match in the folded text maps back onto the original.
+  var folded = '', origin = [];
+  for (var i = 0; i < text.length; i++) {
+    var f = _foldForSearch(text.charAt(i));
+    for (var k = 0; k < f.length; k++) { folded += f.charAt(k); origin.push(i); }
+  }
+  var hits = [];
+  terms.forEach(function (t) {
+    var re = new RegExp('(^|[^\\p{L}\\p{N}])(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gu');
+    var m;
+    while ((m = re.exec(folded))) {
+      var start = m.index + m[1].length;
+      hits.push([origin[start], origin[start + m[2].length - 1] + 1]);
+    }
+  });
+  if (!hits.length) return;
+  hits.sort(function (a, b) { return a[0] - b[0]; });
+  var frag = document.createDocumentFragment(), pos = 0;
+  hits.forEach(function (h) {
+    if (h[0] < pos) return;  // overlaps a hit already marked
+    if (h[0] > pos) frag.appendChild(document.createTextNode(text.slice(pos, h[0])));
+    var mark = document.createElement('mark');
+    mark.className = 'search-hit';
+    mark.textContent = text.slice(h[0], h[1]);
+    frag.appendChild(mark);
+    pos = h[1];
+  });
+  if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+  el.textContent = '';
+  el.appendChild(frag);
+}
+
+function highlightSearchHits() {
+  var list = document.getElementById('article-list');
+  var header = list && list.querySelector('[data-search-query]');
+  if (!header) return;
+  var terms = _searchHitTerms(header.getAttribute('data-search-query') || '');
+  if (!terms.length) return;
+  // Rows arrive in pages, unfolded stories and polled replacements: mark each once.
+  list.querySelectorAll('[data-article-title]:not([data-hl]), [data-article-snippet]:not([data-hl])')
+    .forEach(function (el) {
+      el.setAttribute('data-hl', '');
+      _highlightIn(el, terms);
+    });
+}
+document.body.addEventListener('htmx:afterSettle', highlightSearchHits);
 
 // ── Feedback modal ─────────────────────────────────────────────────────────
 function openFeedbackModal() {

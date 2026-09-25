@@ -130,8 +130,10 @@ categories:
         desc: Optionally mark articles read as they scroll past. Search results are left alone.
       - title: Search
         desc: >-
-          Full-text search across your articles, scoped by feed, folder, status,
-          or label. Open it from anywhere with the `/` shortcut.
+          Full-text search across your articles that ignores accents and matches English
+          word forms, with `word*` for word beginnings. Filter by feed, folder, status,
+          label, score, publish date, or your starred, saved and archived articles.
+          Open it from anywhere with the `/` shortcut.
       - title: Save by URL
         desc: >-
           Paste a link to keep an article that is not in any of your feeds. It goes

@@ -1,10 +1,11 @@
 """Article service: listing, detail, state toggles, unread count management."""
 import logging
 import math
-from datetime import date, datetime, timezone
+import re
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, literal, literal_column, null, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import Text, cast, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -128,6 +129,12 @@ def body_permanently_empty(article: Article, extract_readable: bool | None) -> b
 # The scorers a search can filter and sort by, as the filter editor names them.
 SCORE_SOURCES = ("ai", "basic", "relevance")
 
+# The time windows the search offers, in days back from now. A request takes any
+# number of days, so a view kept for later isn't bound to this menu.
+SINCE_DAYS_OPTIONS = {
+    1: "Last 24 hours", 3: "Last 3 days", 7: "Last 7 days", 30: "Last 30 days", 365: "Last 12 months",
+}
+
 
 def score_expr(source: str | None):
     """The score column a search reads: AI, basic, or AI else basic (the default,
@@ -144,13 +151,80 @@ def _format_date(dt: datetime | None) -> str:
     return format_local(dt, current_viewer_tz.get(), "short")
 
 
-_FTS_VECTOR = (
-    "to_tsvector('simple',"
-    " coalesce(articles.title,'') || ' ' ||"
-    " coalesce(articles.summary,'') || ' ' ||"
-    " coalesce(articles.content,'') || ' ' ||"
-    " coalesce(articles.readable_content,''))"
+# Accent-folded and weighted: title A, summary B, body D. Each part goes in twice, as
+# written ('simple') and stemmed ('english'), so "votes" finds "voting" while a query
+# the English parser drops as stop words ("The Who") still finds its exact words.
+# Must match the expression of idx_articles_search_fts (migration 0109) exactly, or
+# searches stop using the index.
+_FTS_TITLE = "immutable_unaccent(coalesce(articles.title, ''))"
+_FTS_SUMMARY = "immutable_unaccent(coalesce(articles.summary, ''))"
+_FTS_BODY = (
+    "immutable_unaccent(coalesce(articles.content, '') || ' ' || "
+    "coalesce(articles.readable_content, ''))"
 )
+_FTS_CONFIGS = ("simple", "english")
+_FTS_VECTOR = "(" + " || ".join(
+    f"setweight(to_tsvector('{config}', {part}), '{weight}')"
+    for part, weight in ((_FTS_TITLE, "A"), (_FTS_SUMMARY, "B"), (_FTS_BODY, "D"))
+    for config in _FTS_CONFIGS
+) + ")"
+
+# A word ending in "*" matches every word it begins ("zpráv*" finds "zprávami"). Two
+# letters at least: a one-letter prefix matches nearly everything and is slow.
+_PREFIX_WORD = re.compile(r"(\w{2,})\*")
+_SINGLE_LEXEME = re.compile(r"^'([^']+)'$")
+
+
+async def _search_tsquery(db: AsyncSession, q: str):
+    """The tsquery for a search box input: websearch syntax, accent-folded, each word
+    matching as written or stemmed, and ``word*`` a prefix match.
+
+    The query is parsed as written ('simple'), then every lexeme in it becomes
+    ``('as written' | 'stemmed')``. Doing it per word keeps the query's own logic
+    (every word, phrases, ``-word``): a stop word has no stemmed form and stays
+    required as written, where ORing a whole stemmed query would have dropped it and
+    turned "the who tour" into "tour".
+
+    websearch_to_tsquery has no prefix syntax, so the stars are taken out before it
+    parses the input, and the lexemes of the starred words are marked ``:*``, on both
+    forms ("running*" is 'running':* | 'run':*). Lexemes and stems come from Postgres
+    (lowered and unaccented as the vector is), so the rewrite finds them as the
+    parser wrote them.
+    """
+    prefixes = _PREFIX_WORD.findall(q)
+    folded = func.immutable_unaccent(re.sub(r"(\w)\*", r"\1", q))
+    written = func.websearch_to_tsquery("simple", folded)
+    try:
+        # Round-trip to PostgreSQL to catch malformed inputs before the full query
+        row = (await db.execute(select(
+            written.cast(Text),
+            *(
+                func.websearch_to_tsquery("simple", func.immutable_unaccent(word)).cast(Text)
+                for word in prefixes
+            ),
+        ))).one()
+    except Exception:
+        logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
+        return func.plainto_tsquery("simple", folded)
+
+    text_form = row[0]
+    lexemes = list(dict.fromkeys(re.findall(r"'([^']+)'", text_form)))
+    if not lexemes:
+        return written
+    starred = {m.group(1) for m in map(_SINGLE_LEXEME.match, row[1:]) if m}
+    stems = (await db.execute(select(
+        *(func.websearch_to_tsquery("english", lexeme).cast(Text) for lexeme in lexemes),
+    ))).one()
+
+    def expand(match: re.Match) -> str:
+        lexeme = match.group(1)
+        star = ":*" if lexeme in starred else ""
+        stem = _SINGLE_LEXEME.match(stems[lexemes.index(lexeme)] or "")
+        if stem is None or stem.group(1) == lexeme:
+            return f"'{lexeme}'{star}"
+        return f"( '{lexeme}'{star} | '{stem.group(1)}'{star} )"
+
+    return cast(re.sub(r"'([^']+)'", expand, text_form), TSQUERY)
 
 
 async def list_articles(
@@ -174,6 +248,8 @@ async def list_articles(
     score_source: str | None = None,
     score_op: str | None = None,
     score_val: float | None = None,
+    since_days: int | None = None,
+    search: bool = False,
     limit: int = 50,
     offset: int = 0,
     cursor_ts: datetime | None = None,
@@ -181,6 +257,10 @@ async def list_articles(
     _count=None,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state.
+
+    ``search`` marks a search view, with or without a query term. It searches what
+    a text search does (subscriptions plus what the reader keeps for good), so
+    adding a word to a pure filter view never widens what it can find.
 
     ``_count`` is for ``count_articles`` only: a count expression to take over the
     same filters instead of the rows, so the two can't disagree on what matches.
@@ -206,7 +286,7 @@ async def list_articles(
     # of its own — a story is global, built across every feed in the instance — so it
     # carries ``article_access_predicate`` below and must keep the optional joins, or
     # a member the reader keeps only through a star would drop out of its own group.
-    searching = bool(q and q.strip())
+    searching = bool(q and q.strip()) or search
     feed_optional = (
         starred_only or archived_only or saved_only
         or label_id is not None or labeled_only or searching
@@ -265,13 +345,18 @@ async def list_articles(
 
     if folder_id is not None:
         if folder_id == 0:
-            stmt = stmt.where(UserFeed.folder_id == None)
+            # "No folder" means a subscription without one. Under the outer joins an
+            # article with no subscription at all has a NULL folder too, and must
+            # not pass for uncategorized.
+            stmt = stmt.where(UserFeed.id.is_not(None), UserFeed.folder_id == None)
         else:
             stmt = stmt.where(UserFeed.folder_id == folder_id)
 
     # Multi-select scope (same JSON format as filters/catchup: ["feed:1","folder:2"]).
-    # Empty lists mean "all feeds" — no restriction. Feed ownership is already
-    # enforced by the UserFeed join above, so unknown ids simply match nothing.
+    # Empty lists mean "all feeds" — no restriction. A scope names subscriptions, so
+    # it requires one: under the outer joins that is what keeps a kept article from
+    # a feed the reader left, or one saved by URL, out of it (and "folder:0" from
+    # matching it on its NULL folder). Unknown ids simply match nothing.
     if scope_include:
         scope_feed_ids, scope_folder_ids = parse_scope_tokens(scope_include)
         if scope_feed_ids or scope_folder_ids:
@@ -283,7 +368,7 @@ async def list_articles(
                     clauses.append(UserFeed.folder_id.is_(None))
                 else:
                     clauses.append(UserFeed.folder_id == fid)
-            stmt = stmt.where(or_(*clauses))
+            stmt = stmt.where(UserFeed.id.is_not(None), or_(*clauses))
 
     if label_id is not None:
         stmt = stmt.join(
@@ -348,15 +433,16 @@ async def list_articles(
         cut = (math.ceil(score_val) - 0.5) / 100
         stmt = stmt.where(score >= cut if score_op == "gte" else score < cut)
 
+    # Search time window: the last N days, counted back from now, so a window kept
+    # for later keeps moving with the calendar. On the date the list sorts by.
+    if since_days:
+        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        stmt = stmt.where(func.coalesce(Article.published_at, Article.fetched_at) >= since)
+
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
-        tsquery = func.websearch_to_tsquery('simple', q)
-        try:
-            # Round-trip to PostgreSQL to catch malformed inputs before the full query
-            await db.execute(select(tsquery))
-        except Exception:
-            logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
-            tsquery = func.plainto_tsquery('simple', q)
+        # The query is accent-folded like the vector, so "zpravy" finds "zprávy".
+        tsquery = await _search_tsquery(db, q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
 
     if _count is not None:
@@ -372,8 +458,10 @@ async def list_articles(
         elif sort_order == "oldest":
             stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
         else:
+            # Normalization 1 divides by 1 + log(length), so a long body doesn't
+            # outrank a title match on the number of mentions alone.
             stmt = stmt.order_by(
-                func.ts_rank(fts_vec, tsquery).desc(),
+                func.ts_rank(fts_vec, tsquery, 1).desc(),
                 coalesced.desc(),
                 Article.id.desc(),
             )

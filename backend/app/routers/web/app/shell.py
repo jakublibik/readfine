@@ -17,7 +17,7 @@ from app.models.label import ArticleLabel
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.routers.web.settings.filters import score_sources
-from app.services.article import mark_scope_read
+from app.services.article import SINCE_DAYS_OPTIONS, mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
@@ -500,6 +500,8 @@ async def htmx_search_modal(
     score_source: str | None = Query(None),
     score_op: str | None = Query(None),
     score_val: str | None = Query(None),
+    since_days: str | None = Query(None),
+    state: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -521,4 +523,7 @@ async def htmx_search_modal(
         "score_source_value": score_source if score_source in sources else "relevance",
         "score_op_value": score_op if score_op in ("gte", "lt") else None,
         "score_val_value": score_val or "",
+        "since_options": SINCE_DAYS_OPTIONS,
+        "since_value": int(since_days) if since_days and since_days.isdigit() else None,
+        "state_value": state or None,
     })

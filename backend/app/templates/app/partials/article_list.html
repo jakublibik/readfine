@@ -29,23 +29,29 @@
 {% endif %}
 
 {% if search_query or filter_active %}
-<div data-list-header
+<div data-list-header{% if search_query %} data-search-query="{{ search_query }}"{% endif %}
      class="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
   <button data-action="open-search-again"
           class="text-blue-400 hover:text-blue-600 flex-shrink-0 bg-transparent border-0 cursor-pointer p-0.5"
           title="New search">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
   </button>
+  {# One line: the count never wraps, only the query gives way when space runs out.
+     Which filters are on is left to the modal; the header only says how many. #}
   {% set results_word = "result" if result_count == 1 else "results" %}
   {% if search_query %}
-  <span class="text-gray-500">{% if result_count is not none %}{{ "{:,}".format(result_count) }} {{ results_word }} for{% else %}Results for:{% endif %} <strong class="text-gray-800">{{ search_query }}</strong></span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{% if result_count is not none %}{{ "{:,}".format(result_count) }} {{ results_word }} for{% else %}Results for:{% endif %}</span>
+  <strong class="text-gray-800 truncate min-w-0" title="{{ search_query }}">{{ search_query }}</strong>
   {% elif result_count is not none %}
-  <span class="text-gray-500">{{ "{:,}".format(result_count) }} filtered {{ results_word }}</span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{{ "{:,}".format(result_count) }} filtered {{ results_word }}</span>
   {% else %}
-  <span class="text-gray-500">Filtered results</span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">Filtered results</span>
   {% endif %}
-  {% if score_label %}
-  <span class="text-gray-500 truncate min-w-0">· Score {{ score_label }}</span>
+  {% if filter_count %}
+  <span class="text-gray-400 flex-shrink-0" aria-hidden="true">·</span>
+  <button data-action="open-search-again"
+          class="text-blue-600 hover:underline whitespace-nowrap flex-shrink-0 bg-transparent border-0 cursor-pointer p-0 text-sm"
+          title="Edit filters">{{ filter_count }} filter{{ "" if filter_count == 1 else "s" }}</button>
   {% endif %}
   <button data-action="refresh-articles"
           class="ml-auto text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0.5"

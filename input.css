@@ -364,3 +364,8 @@ html.dark[data-layout="3"] .article-row.article-active {
    thing you just acted on ended up. */
 .folder-just-moved { animation: row-just-saved 2s ease-out; }
 .dark .folder-just-moved { animation-name: row-just-saved-dark; }
+
+/* Search hits in the result list's titles and snippets (static/js/app.js,
+   highlightSearchHits). Tinted, not bold, so an unread title keeps its weight. */
+mark.search-hit { background: #fef08a; color: inherit; border-radius: 2px; padding: 0 1px; }
+.dark mark.search-hit { background: #713f12; color: inherit; }

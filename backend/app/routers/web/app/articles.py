@@ -30,6 +30,7 @@ from app.services.article import (
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.relevance_terms_service import show_relevance_intro
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.story_service import (
     DEDUP_COLLAPSE,
     DEDUP_OFF,
@@ -226,9 +227,6 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
-_SCORE_SOURCE_LABELS = {"ai": "AI", "basic": "Basic", "relevance": "AI, else basic"}
-
-
 def search_score(
     score_source: str | None, score_op: str | None, score_val: float | None,
     sort: str | None = None,
@@ -248,12 +246,34 @@ def search_score(
     return {}
 
 
-def _score_label(score: dict) -> str | None:
-    """The condition as the results header shows it, e.g. "AI, else basic ≥ 70"."""
-    if "score_op" not in score:
-        return None
-    op = "≥" if score["score_op"] == "gte" else "<"
-    return f"{_SCORE_SOURCE_LABELS[score['score_source']]} {op} {score['score_val']:g}"
+# The search's List filter: one of the reader's own lists, as the sidebar names them.
+SEARCH_STATES = ("starred", "saved", "archived")
+
+
+def search_state(state: str | None) -> str | None:
+    """The List filter, or None for any article."""
+    return state if state in SEARCH_STATES else None
+
+
+def search_filter_count(
+    *, read_status: str | None, scope_include: str | None, label_filter: str | None,
+    score: dict, since_days: int | None, state: str | None = None,
+) -> int:
+    """How many of the search modal's filters are on, for the results header.
+
+    The header says only how many, not which: listing them overflowed it, and the
+    modal is one click away. The sort is not a filter and does not count.
+    """
+    feed_ids, folder_ids = parse_scope_tokens(scope_include)
+    any_label, label_ids = parse_label_tokens(label_filter)
+    return sum((
+        read_status in ("unread", "read"),
+        bool(feed_ids or folder_ids),
+        bool(any_label or label_ids),
+        "score_op" in score,
+        bool(since_days),
+        bool(search_state(state)),
+    ))
 
 
 def _build_filter_params(
@@ -273,6 +293,8 @@ def _build_filter_params(
     read_status: str | None,
     label_filter: str | None,
     score: dict,
+    since_days: int | None,
+    state: str | None = None,
 ) -> dict:
     """Active-filter dict carried into infinite-scroll pagination. Shared by the
     first-page and load-more endpoints; the caller passes the unread flag it uses
@@ -306,6 +328,10 @@ def _build_filter_params(
         if label_filter:
             params["label_filter"] = label_filter
         params.update(score)
+        if since_days:
+            params["since_days"] = since_days
+        if state:
+            params["state"] = state
     return params
 
 
@@ -371,7 +397,7 @@ def _collapses_stories(
 
 def story_scope(
     *, feed_id=None, folder_id=None, scope_include=None, label_id=None,
-    labeled_only=False, label_filter=None, q=None, score=None,
+    labeled_only=False, label_filter=None, q=None, score=None, since_days=None,
 ) -> dict:
     """The filters that decide which members of a story belong in this view.
 
@@ -406,6 +432,9 @@ def story_scope(
     # on the row. The sort alone is not.
     if score and "score_op" in score:
         scope.update(score)
+    # So is a time window: "the last 24 hours" unfolds the members from that day.
+    if since_days:
+        scope["since_days"] = since_days
     return scope
 
 
@@ -485,6 +514,8 @@ async def htmx_article_list(
     score_source: str | None = Query(None),
     score_op: str | None = Query(None),
     score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
+    state: str | None = Query(None),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -497,6 +528,7 @@ async def htmx_article_list(
         archived_only=archived_only, saved_only=saved_only, labeled_only=labeled_only,
         q=q, sort=sort, read_status=read_status, label_filter=label_filter,
         score=search_score(score_source, score_op, score_val, sort),
+        since_days=since_days, state=state,
         offset=offset,
     )
 
@@ -520,6 +552,8 @@ async def render_list(
     read_status: str | None = None,
     label_filter: str | None = None,
     score: dict | None = None,
+    since_days: int | None = None,
+    state: str | None = None,
     offset: int = 0,
 ) -> HTMLResponse:
     """Render the article list for one set of filters.
@@ -538,10 +572,17 @@ async def render_list(
     settings = settings_result.scalar_one_or_none()
 
     # The search modal can submit with an empty query term as a pure filter view
-    # (scope / labels / status / score), so "search mode" is any of those, not just q.
+    # (scope / labels / status / score / time / list), so "search mode" is any of
+    # those, not just q.
     score = score or {}
+    state = search_state(state)
     is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
-                 or bool(read_status) or bool(score))
+                 or bool(read_status) or bool(score) or bool(since_days) or bool(state))
+    # The search's List filter asks what the sidebar's lists ask. Kept apart from the
+    # view flags, which also pick the header and the empty state (Saved has its own).
+    in_starred = starred_only or state == "starred"
+    in_archived = archived_only or state == "archived"
+    in_saved = saved_only or state == "saved"
 
     sort_order = settings.default_sort_order if settings else "newest"
     # Search has its own sort selector (relevance default); other views use the
@@ -590,13 +631,15 @@ async def render_list(
         label_filter=label_filter,
         unread_only=effective_unread_only,
         read_status=read_status,
-        starred_only=starred_only,
-        archived_only=archived_only,
-        saved_only=saved_only,
+        starred_only=in_starred,
+        archived_only=in_archived,
+        saved_only=in_saved,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
         **score,
+        since_days=since_days,
+        search=is_search,
         limit=articles_per_page,
         offset=offset,
     )
@@ -605,15 +648,15 @@ async def render_list(
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
     collapses = _collapses_stories(
-        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-        archived_only=archived_only, saved_only=saved_only,
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
+        archived_only=in_archived, saved_only=in_saved,
     )
     articles, shown_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
-            score=score,
+            score=score, since_days=since_days,
         ),
     )
 
@@ -625,8 +668,9 @@ async def render_list(
             user, db, collapsing=collapses,
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, label_filter=label_filter, read_status=read_status,
-            starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
-            labeled_only=labeled_only, q=q or None, **score,
+            starred_only=in_starred, archived_only=in_archived, saved_only=in_saved,
+            labeled_only=labeled_only, q=q or None, **score, since_days=since_days,
+            search=True,
         )
 
     # Title bar count for mobile hideable mode
@@ -678,6 +722,7 @@ async def render_list(
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
         read_status=read_status, label_filter=label_filter, score=score,
+        since_days=since_days, state=state,
     )
 
     extra_headers: dict[str, str] = {}
@@ -723,7 +768,10 @@ async def render_list(
         saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
-        score_label=_score_label(score),
+        filter_count=search_filter_count(
+            read_status=read_status, scope_include=scope_include,
+            label_filter=label_filter, score=score, since_days=since_days, state=state,
+        ),
         result_count=result_count,
         # Search never marks rows read on scroll. Looking something up is not
         # reading it: the reader scans the results for the one they want, and the
@@ -740,7 +788,7 @@ async def render_list(
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
-            score=score,
+            score=score, since_days=since_days,
         )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -772,6 +820,8 @@ async def htmx_article_list_more(
     score_source: str | None = Query(None),
     score_op: str | None = Query(None),
     score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
+    state: str | None = Query(None),
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
@@ -788,8 +838,13 @@ async def htmx_article_list_more(
     settings = settings_result.scalar_one_or_none()
 
     score = search_score(score_source, score_op, score_val, sort)
+    state = search_state(state)
     is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
-                 or bool(read_status) or bool(score))
+                 or bool(read_status) or bool(score) or bool(since_days) or bool(state))
+    # Same split as render_list: the List filter asks what the sidebar's lists ask.
+    in_starred = starred_only or state == "starred"
+    in_archived = archived_only or state == "archived"
+    in_saved = saved_only or state == "saved"
     sort_order = settings.default_sort_order if settings else "newest"
     if is_search:
         sort_order = sort or "relevance"
@@ -809,13 +864,15 @@ async def htmx_article_list_more(
         label_filter=label_filter,
         unread_only=unread_only,
         read_status=read_status,
-        starred_only=starred_only,
-        archived_only=archived_only,
-        saved_only=saved_only,
+        starred_only=in_starred,
+        archived_only=in_archived,
+        saved_only=in_saved,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
         **score,
+        since_days=since_days,
+        search=is_search,
         limit=articles_per_page,
         offset=offset,
         cursor_ts=cursor_ts,
@@ -824,8 +881,8 @@ async def htmx_article_list_more(
 
     has_more = len(rows) >= articles_per_page
     collapses = _collapses_stories(
-        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-        archived_only=archived_only, saved_only=saved_only,
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
+        archived_only=in_archived, saved_only=in_saved,
     )
     articles, next_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
@@ -833,7 +890,7 @@ async def htmx_article_list_more(
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
-            score=score,
+            score=score, since_days=since_days,
         ),
     )
     filter_params = _build_filter_params(
@@ -843,6 +900,7 @@ async def htmx_article_list_more(
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
         read_status=read_status, label_filter=label_filter, score=score,
+        since_days=since_days, state=state,
     )
 
     extra_ctx = {}
@@ -861,7 +919,7 @@ async def htmx_article_list_more(
         "story_scope_qs": urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
-            score=score,
+            score=score, since_days=since_days,
         )),
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -1032,6 +1090,7 @@ async def htmx_article_story_rows(
     score_source: str | None = Query(None),
     score_op: str | None = Query(None),
     score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1073,7 +1132,7 @@ async def htmx_article_story_rows(
         **story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
-            score=score,
+            score=score, since_days=since_days,
         ),
     )
     rows = [m for m in members if m.id != article_id]

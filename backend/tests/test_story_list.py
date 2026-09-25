@@ -450,7 +450,7 @@ class TestUnfoldRespectsLabelFilter:
             head.id, self._request(), density=None, label_display=None,
             feed_id=None, folder_id=None, scope_include=None,
             label_id=None, labeled_only=False,
-            label_filter=json.dumps([f"label:{label.id}"]), q=None,
+            label_filter=json.dumps([f"label:{label.id}"]), q=None, since_days=None,
             user=user, db=pg,
         )
 
@@ -471,7 +471,7 @@ class TestUnfoldRespectsLabelFilter:
         response = await htmx_article_story_rows(
             head.id, self._request(), density=None, label_display=None,
             feed_id=None, folder_id=None, scope_include=None,
-            label_id=None, labeled_only=False, label_filter=None, q=None,
+            label_id=None, labeled_only=False, label_filter=None, q=None, since_days=None,
             user=user, db=pg,
         )
 

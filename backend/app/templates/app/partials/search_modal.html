@@ -14,14 +14,15 @@
            placeholder="Search articles…"
            class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
            autofocus>
+    <p class="mt-1 text-xs text-gray-500">End a word with * to find every word it begins: cycl* finds cycling and cyclist.</p>
   </div>
 
-  <!-- Sort + status -->
+  {% set select_cls = "w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500" %}
+  <!-- Sort + time window (counted back from now) -->
   <div class="mb-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
     <div class="flex-1">
       <label for="search-sort" class="block text-xs font-medium text-gray-600 mb-1">Sort by</label>
-      <select id="search-sort"
-              class="w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <select id="search-sort" class="{{ select_cls }}">
         <option value="relevance"{% if not sort_value or sort_value == 'relevance' %} selected{% endif %}>Search relevance</option>
         <option value="newest"{% if sort_value == 'newest' %} selected{% endif %}>Newest first</option>
         <option value="oldest"{% if sort_value == 'oldest' %} selected{% endif %}>Oldest first</option>
@@ -31,12 +32,33 @@
       </select>
     </div>
     <div class="flex-1">
+      <label for="search-since" class="block text-xs font-medium text-gray-600 mb-1">Published</label>
+      <select id="search-since" class="{{ select_cls }}">
+        <option value=""{% if not since_value %} selected{% endif %}>Any time</option>
+        {% for days, label in since_options.items() %}
+        <option value="{{ days }}"{% if since_value == days %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <!-- Status + list: what the reader has done with an article -->
+  <div class="mb-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
+    <div class="flex-1">
       <label for="search-status" class="block text-xs font-medium text-gray-600 mb-1">Status</label>
-      <select id="search-status"
-              class="w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+      <select id="search-status" class="{{ select_cls }}">
         <option value="all"{% if not status_value or status_value == 'all' %} selected{% endif %}>All</option>
         <option value="unread"{% if status_value == 'unread' %} selected{% endif %}>Unread</option>
         <option value="read"{% if status_value == 'read' %} selected{% endif %}>Read</option>
+      </select>
+    </div>
+    <div class="flex-1">
+      <label for="search-state" class="block text-xs font-medium text-gray-600 mb-1">List</label>
+      <select id="search-state" class="{{ select_cls }}">
+        <option value=""{% if not state_value %} selected{% endif %}>Any</option>
+        <option value="starred"{% if state_value == 'starred' %} selected{% endif %}>Starred</option>
+        <option value="saved"{% if state_value == 'saved' %} selected{% endif %}>Saved</option>
+        <option value="archived"{% if state_value == 'archived' %} selected{% endif %}>Archive</option>
       </select>
     </div>
   </div>
