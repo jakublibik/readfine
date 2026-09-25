@@ -33,7 +33,29 @@ class ArticleStateResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ArticleListItem(BaseModel):
+class _EffectiveScore:
+    """`score` and `score_is_ai` for anything that carries both scorers' numbers.
+
+    One definition for the list row and the story footer, so the two cannot show
+    different numbers for the same article.
+    """
+    ai_score: float | None
+    lexical_score: float | None
+
+    @property
+    def score(self) -> float | None:
+        """The best score this article has, from either scorer."""
+        from app.services.relevance_service import effective_score
+        return effective_score(self.ai_score, self.lexical_score)[0]
+
+    @property
+    def score_is_ai(self) -> bool:
+        """Whether `score` came from the model rather than from word matching."""
+        from app.services.relevance_service import effective_score
+        return effective_score(self.ai_score, self.lexical_score)[1]
+
+
+class ArticleListItem(_EffectiveScore, BaseModel):
     id: int
     feed_id: int | None
     feed_title: str | None  # resolved from Feed or UserFeed.custom_title
@@ -99,18 +121,6 @@ class ArticleListItem(BaseModel):
 
     model_config = {"from_attributes": False}
 
-    @property
-    def score(self) -> float | None:
-        """The best score this article has, from either scorer."""
-        from app.services.relevance_service import effective_score
-        return effective_score(self.ai_score, self.lexical_score)[0]
-
-    @property
-    def score_is_ai(self) -> bool:
-        """Whether `score` came from the model rather than from word matching."""
-        from app.services.relevance_service import effective_score
-        return effective_score(self.ai_score, self.lexical_score)[1]
-
 class ArticleResponse(BaseModel):
     id: int
     feed_id: int | None
@@ -154,7 +164,7 @@ class ArticleResponse(BaseModel):
     model_config = {"from_attributes": False}
 
 
-class StoryMember(BaseModel):
+class StoryMember(_EffectiveScore, BaseModel):
     """One other article covering the same story, as the reader footer shows it.
 
     Deliberately narrow: the footer lists coverage, it does not re-render article rows,
@@ -174,6 +184,8 @@ class StoryMember(BaseModel):
     # says "read" for, so the word answers "did I actually meet this one".
     read_by_reader: bool = False
     is_starred: bool = False
+    ai_score: float | None = None
+    lexical_score: float | None = None
 
     model_config = {"from_attributes": False}
 

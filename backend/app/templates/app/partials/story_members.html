@@ -17,6 +17,7 @@
     full width or start at the text column, and there is no gutter here to start from.
     The colours are halfway between the two greys either side of them: gray-200 drew a
     table, gray-100 was not there at all against the panel. -#}
+{% from "app/partials/score_badge.html" import score_badge %}
 <ul class="mt-3 divide-y divide-[#ecedf1] dark:divide-[#353535]">
   {% for member in members %}
   {#- data-story-member is what the star below is found by when the article is starred
@@ -45,6 +46,13 @@
         on a narrow panel. -#}
     <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5 pl-[18px]">
       <span class="truncate min-w-0">{{ member.feed_title or (member.url | hostname) }}</span>
+      {#- The score helps pick which of several sources to open, the same choice the
+          list asks it for, so it follows the list's
+          setting, and stands before the date as it does in the list. -#}
+      {% if show_ai_score and member.score is not none %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <span class="flex-shrink-0">{{ score_badge(member) }}</span>
+      {% endif %}
       {% if member.published_at %}
       <span class="flex-shrink-0" aria-hidden="true">·</span>
       <time class="flex-shrink-0 whitespace-nowrap"

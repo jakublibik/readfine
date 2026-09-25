@@ -110,6 +110,8 @@ async def list_members(
                 UserArticleState.is_read,
                 UserArticleState.suppressed_at,
                 UserArticleState.is_starred,
+                UserArticleState.ai_score,
+                UserArticleState.lexical_score,
             ],
             user_id, story_id, article_id,
         )
@@ -131,6 +133,8 @@ async def list_members(
             is_read=bool(r.is_read),
             read_by_reader=bool(r.is_read) and r.suppressed_at is None,
             is_starred=bool(r.is_starred),
+            ai_score=r.ai_score,
+            lexical_score=r.lexical_score,
         )
         for r in rows
     ]

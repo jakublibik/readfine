@@ -928,9 +928,12 @@ async def htmx_article_related(
         return HTMLResponse("")
 
     members = await list_members(user.id, story_id, article_id, db)
+    show_score = await db.scalar(
+        select(UserSettings.ai_score_show_in_list).where(UserSettings.user_id == user.id))
     return templates.TemplateResponse(request, "app/partials/story_members.html", {
         "article_id": article_id,
         "members": members,
+        "show_ai_score": bool(show_score),
     })
 
 

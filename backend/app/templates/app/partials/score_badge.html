@@ -1,0 +1,15 @@
+{#- One number, the better of the two scorers (`score` on ArticleListItem and
+    StoryMember), with the weaker one marked. A basic-relevance score is prefixed
+    with ~ and says so on hover: the two are not on the same scale, a lexical 70 is
+    rare where an AI 70 is common, so showing them as the same number without a
+    mark would invite comparing them. Shared by the list row and the story footer
+    so the two never draw the same article differently. -#}
+{% macro score_badge(article) -%}
+{%- if article.score is not none -%}
+  {%- set score_int = (article.score * 100) | round | int -%}
+  {%- if article.score >= 0.75 %}{% set score_class = "ai-score-high" -%}
+  {%- elif article.score >= 0.4 %}{% set score_class = "ai-score-mid" -%}
+  {%- else %}{% set score_class = "ai-score-low" %}{% endif -%}
+  <span class="text-xs {{ score_class }}" title="{{ 'Relevance: AI score' if article.score_is_ai else 'Relevance: basic score (word match, weaker than the AI score)' }}">{{ score_int if article.score_is_ai else '~' ~ score_int }}</span>
+{%- endif -%}
+{%- endmacro %}
