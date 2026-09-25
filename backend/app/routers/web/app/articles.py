@@ -267,7 +267,7 @@ def search_filter_count(
     feed_ids, folder_ids = parse_scope_tokens(scope_include)
     any_label, label_ids = parse_label_tokens(label_filter)
     return sum((
-        read_status in ("unread", "read"),
+        read_status in ("unread", "read", "engaged", "not_engaged"),
         bool(feed_ids or folder_ids),
         bool(any_label or label_ids),
         "score_op" in score,

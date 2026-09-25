@@ -137,3 +137,28 @@ def test_list_filter_is_normalized_and_counted():
     none = dict(read_status=None, scope_include=None, label_filter=None, score={}, since_days=None)
     assert search_filter_count(**none, state="saved") == 1
     assert search_filter_count(**none, state="bogus") == 0
+
+
+async def test_actually_read_goes_by_dwell_or_opened_link(pg):
+    """Stats' definition of read: 30 s in front of it, or the original opened. The
+    read flag (set by scrolling past) doesn't count, and no state row means unread."""
+    user, feed, token, arts = await _setup(pg)
+    for name, kw in {
+        "a": dict(dwell_seconds=45),
+        "b": dict(link_opened=True),
+        "c": dict(dwell_seconds=10, is_read=True),
+    }.items():
+        state = await pg.get(UserArticleState, (user.id, arts[name].id))
+        for k, v in kw.items():
+            setattr(state, k, v)
+    await pg.delete(await pg.get(UserArticleState, (user.id, arts["d"].id)))
+    await pg.flush()
+
+    async def names(status):
+        items = await list_articles(user=user, db=pg, q=token, read_status=status)
+        return _names(items, arts)
+
+    assert await names("engaged") == ["a", "b"]
+    assert await names("not_engaged") == ["c", "d", "e"]
+    assert await count_articles(user, pg, collapsing=False, q=token,
+                                read_status="not_engaged") == 3

@@ -406,13 +406,25 @@ async def list_articles(
             (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
 
-    # Search status filter (tri-state): "unread" / "read" / anything else = all.
+    # Search status filter: "unread" / "read" go by the read flag, which scrolling
+    # past and mark-all-read set too. "engaged" / "not_engaged" go by what the reader
+    # actually did, the Stats definition of read: long enough in front of it, or the
+    # original opened. Anything else = all.
     if read_status == "unread":
         stmt = stmt.where(
             (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
     elif read_status == "read":
         stmt = stmt.where(UserArticleState.is_read == True)
+    elif read_status in ("engaged", "not_engaged"):
+        from app.services.story_service import ENGAGED_DWELL_SECONDS
+        engaged = (
+            (UserArticleState.dwell_seconds >= ENGAGED_DWELL_SECONDS)
+            | UserArticleState.link_opened.is_(True)
+        )
+        # No state row (outer join) means never opened: NULL counts as not engaged.
+        engaged = func.coalesce(engaged, False)
+        stmt = stmt.where(engaged if read_status == "engaged" else ~engaged)
 
     if starred_only:
         stmt = stmt.where(UserArticleState.is_starred == True)

@@ -50,6 +50,10 @@
         <option value="all"{% if not status_value or status_value == 'all' %} selected{% endif %}>All</option>
         <option value="unread"{% if status_value == 'unread' %} selected{% endif %}>Unread</option>
         <option value="read"{% if status_value == 'read' %} selected{% endif %}>Read</option>
+        <optgroup label="By time spent">
+          <option value="engaged"{% if status_value == 'engaged' %} selected{% endif %}>Actually read</option>
+          <option value="not_engaged"{% if status_value == 'not_engaged' %} selected{% endif %}>Not actually read</option>
+        </optgroup>
       </select>
     </div>
     <div class="flex-1">
