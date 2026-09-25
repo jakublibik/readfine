@@ -18,6 +18,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 ### Fixed
 
 - Editing a filter with an AI score condition while AI scoring was off showed the condition as "title or content", and saving turned it into one. The condition now keeps its source, marked as off, and the filter list flags it.
+- In dark mode, the regex tips in the filter editor and the "try web scraping" link after a feed test were dark blue on a dark background and hard to read.
 
 ## [0.18.0] - 2026-09-21
 
