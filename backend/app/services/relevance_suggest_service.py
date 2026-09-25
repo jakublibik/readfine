@@ -24,6 +24,11 @@ click is not interest.
 - **Remove**: a term that matched at least `MIN_MATCHES` articles in the window
   and led to engagement at under `REMOVE_RATIO` of the reader's base rate.
 
+The same counts, for every term, are shown as a table under the suggestions
+("How your terms did"), so the numbers there and in "Why these?" always agree.
+A term counts every article it matched, not only those it decided the score of:
+the question is what happens when this term matches.
+
 Measured offline (step 2b, E7, and 2026-09-24 for an empty list; see
 `scripts/embedding_eval/run_terms_suggest.py`): five Rocchio suggestions lift a
 three-term list from AUC 0.545 to 0.678 and an empty one from 0.500 to 0.628,
@@ -66,8 +71,15 @@ from app.services.relevance_stopwords import STOPWORDS
 
 WINDOW_DAYS = 30
 # The newest articles of the window, at most. Enough for a base rate and for
-# the inflow share, and it keeps the page from tokenizing a heavy reader's month.
+# the inflow share, and it keeps the page from tokenizing a heavy reader's month
+# (about 0.13 s per thousand articles, measured 2026-09-25).
 MAX_INFLOW = 5000
+# ...but never fewer days than this: on production (2026-09-25) the heaviest
+# reader's 5,000 articles were three days, too short for MIN_DAYS and for a base
+# rate that one news event cannot swing. Only two readers needed it then.
+MIN_WINDOW_DAYS = 7
+# The floor's own ceiling, for a reader with thousands of articles a day.
+HARD_MAX_INFLOW = 15000
 # Below this many engaged articles there is nothing to learn from, and a single
 # article would make a suggestion.
 MIN_ENGAGED = 10
@@ -80,6 +92,9 @@ MIN_TOKEN_CHARS = 4
 
 MIN_MATCHES = 15
 REMOVE_RATIO = 0.5
+# Below this many matches a term's rate against the base is noise: two matches,
+# both read, would come out as "30x".
+MIN_LIFT_MATCHES = 5
 
 # A turned-down suggestion stays away this long, then may come back: interests
 # change, and after three windows it would be learned from different reading.
@@ -102,10 +117,26 @@ class Suggestion:
 
 
 @dataclass(frozen=True)
+class TermStat:
+    term: str
+    matched: int                # articles in the window the term matched
+    engaged: int                # how many of those were engaged with
+    lift: float | None          # their engagement rate over the base rate; None
+                                # below MIN_ENGAGED overall or MIN_LIFT_MATCHES here
+
+
+@dataclass(frozen=True)
 class Suggestions:
     items: tuple[Suggestion, ...]
     engaged: int                # engaged articles in the window
     enough: bool                # engaged >= MIN_ENGAGED
+    terms: tuple[TermStat, ...] = ()  # every term, most matches first
+    inflow: int = 0             # articles in the window
+    span_days: int | None = None  # days they cover, when MAX_INFLOW cut the window short
+
+    @property
+    def base(self) -> float:
+        return self.engaged / self.inflow if self.inflow else 0.0
 
     @property
     def adds(self) -> tuple[Suggestion, ...]:
@@ -183,20 +214,31 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
     """
     texts = [article_text(title, body) for title, body, *_ in rows]
     labels = [bool(r[2]) for r in rows]
-    docs = [tokenize(t) for t in texts]
     n_engaged = sum(labels)
-    if n_engaged < MIN_ENGAGED or not stats:
-        return Suggestions((), n_engaged, n_engaged >= MIN_ENGAGED)
+    enough = n_engaged >= MIN_ENGAGED
+    if not stats:
+        return Suggestions((), n_engaged, enough)
 
-    items: list[Suggestion] = []
-
-    base = n_engaged / len(rows)
+    # Counted even below MIN_ENGAGED: a term that matches nothing is worth
+    # knowing about from the first day.
+    base = n_engaged / len(rows) if rows else 0.0
     matched = {t: [0, 0] for t in terms}
     for text, label in zip(texts, labels):
         for term, score in term_scores(text, terms, stats):
             if score > 0:
                 matched[term][0] += 1
                 matched[term][1] += label
+    term_stats = tuple(sorted(
+        (TermStat(t, n, e, (e / n) / base if enough and base and n >= MIN_LIFT_MATCHES
+                  else None)
+         for t, (n, e) in matched.items()),
+        key=lambda st: -st.matched))
+    span = (rows[0][4] - rows[-1][4]).days + 1 if len(rows) >= MAX_INFLOW else None
+    if not enough:
+        return Suggestions((), n_engaged, False, term_stats, len(rows), span)
+
+    docs = [tokenize(t) for t in texts]
+    items: list[Suggestion] = []
     for term in terms:
         n, e = matched[term]
         key = term_key(term)
@@ -225,7 +267,7 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
                        if tok in doc)[:EXAMPLE_TITLES]
         items.append(Suggestion(ADD, tok, tok, titles, 0, 0))
 
-    return Suggestions(tuple(items), n_engaged, True)
+    return Suggestions(tuple(items), n_engaged, True, term_stats, len(rows), span)
 
 
 # ── editing the list as written ───────────────────────────────────────────────
@@ -325,17 +367,36 @@ def _engaged():
 
 async def _rows(user_id: int, db: AsyncSession,
                 now: datetime) -> list[tuple[str | None, str | None, bool, int, date]]:
+    """The reader's inflow, newest first: the newest `MAX_INFLOW` articles of the
+    window, or every article of the last `MIN_WINDOW_DAYS` if that is more.
+
+    The cutoff is found first from `fetched_at` alone, so the article text is only
+    read for the rows that are used.
+    """
     s = UserArticleState
+    mine = and_(UserFeed.feed_id == Article.feed_id, UserFeed.user_id == user_id)
+    window_start = now - timedelta(days=WINDOW_DAYS)
+    nth_newest = (
+        select(Article.fetched_at).join(UserFeed, mine)
+        .where(Article.fetched_at >= window_start)
+        .order_by(Article.fetched_at.desc())
+        .offset(MAX_INFLOW - 1).limit(1)
+        .scalar_subquery()
+    )
+    # No MAX_INFLOW-th article means the whole window fits. COALESCE, because
+    # LEAST skips a NULL and would cut that reader down to the floor.
+    cutoff = func.least(now - timedelta(days=MIN_WINDOW_DAYS),
+                        func.coalesce(nth_newest, window_start))
     stmt = (
         select(Article.title, func.left(Article.content, BODY_FETCH_CHARS),
                func.coalesce(_engaged(), false()),
                func.coalesce(Article.story_id, Article.id),
                func.date(Article.fetched_at))
-        .join(UserFeed, and_(UserFeed.feed_id == Article.feed_id, UserFeed.user_id == user_id))
+        .join(UserFeed, mine)
         .outerjoin(s, and_(s.article_id == Article.id, s.user_id == user_id))
-        .where(Article.fetched_at >= now - timedelta(days=WINDOW_DAYS))
+        .where(Article.fetched_at >= window_start, Article.fetched_at >= cutoff)
         .order_by(Article.fetched_at.desc(), Article.id.desc())
-        .limit(MAX_INFLOW)
+        .limit(HARD_MAX_INFLOW)
     )
     return [tuple(r) for r in (await db.execute(stmt)).all()]
 

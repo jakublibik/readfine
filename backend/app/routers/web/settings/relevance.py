@@ -91,15 +91,25 @@ async def settings_relevance_save(
 @router.get("/relevance/suggestions", response_class=HTMLResponse)
 async def settings_relevance_suggestions(
     request: Request,
+    part: str | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The suggestions with the term table, or with `part=terms` the table alone.
+
+    The table alone is what a click on a suggestion reloads: the list changed, so
+    its numbers did, but re-rendering the suggestions would close "Why these?"
+    under the reader's hands.
+    """
     s = await _get_or_create_settings(user, db)
-    return templates.TemplateResponse(request, "settings/_relevance_suggestions.html", {
+    template = ("settings/_relevance_term_stats.html" if part == "terms"
+                else "settings/_relevance_suggestions.html")
+    return templates.TemplateResponse(request, template, {
         "sugg": await suggest.suggestions(user.id, s.relevance_terms, db),
         "term_count": len(parse_terms(s.relevance_terms)),
         "window_days": suggest.WINDOW_DAYS,
         "min_engaged": suggest.MIN_ENGAGED,
+        "min_lift_matches": suggest.MIN_LIFT_MATCHES,
     })
 
 
@@ -147,8 +157,11 @@ async def settings_relevance_suggestion_apply(
         ctx.update(chip=_chip_id(form.get("chip")), terms_status=done)
 
     ctx.update(terms_text=text, saved_text=s.relevance_terms or "")
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request, "settings/_relevance_suggestion_applied.html", ctx)
+    if done and not ctx["terms_error"]:
+        response.headers["HX-Trigger"] = "relevance-terms-saved"
+    return response
 
 
 @router.post("/relevance/suggestions/dismiss", response_class=HTMLResponse)

@@ -181,6 +181,56 @@ class TestCompute:
         assert ss.compute(rows, ["crypto"], _stats(rows), set()).removes == ()
 
 
+class TestTermStats:
+    def _rows(self):
+        # 12 engaged of 424: 4 of them about sourdough, 20 unread about crypto.
+        engaged = ([f"sourdough starter tips {i}" for i in range(4)]
+                   + [f"misc story{i}" for i in range(8)])
+        other = [f"crypto news {i}" for i in range(20)] + FILLER
+        return _rows(engaged, other)
+
+    def test_same_counts_as_the_removal_suggestion(self):
+        rows = self._rows()
+        out = ss.compute(rows, ["crypto"], _stats(rows), set())
+        [remove] = out.removes
+        [st] = out.terms
+        assert (st.term, st.matched, st.engaged) == (remove.term, remove.matched, remove.engaged)
+
+    def test_lift_is_the_terms_read_rate_over_the_base(self):
+        rows = self._rows()
+        out = ss.compute(rows, ["sourdough", "crypto"], _stats(rows), set())
+        by_term = {st.term: st for st in out.terms}
+        assert out.base == pytest.approx(12 / len(rows))
+        assert by_term["sourdough"].lift is None  # 4 matches, under MIN_LIFT_MATCHES
+        assert by_term["crypto"].lift == 0.0
+        rows += [(f"sourdough bread {i}", None, True, 1000 + i, DAY0) for i in range(4)]
+        out = ss.compute(rows, ["sourdough"], _stats(rows), set())
+        [st] = out.terms
+        assert (st.matched, st.engaged) == (8, 8)
+        assert st.lift == pytest.approx(1 / out.base)
+
+    def test_most_matches_first_and_a_term_with_none_listed(self):
+        rows = self._rows()
+        out = ss.compute(rows, ["bike commuting", "sourdough", "crypto"], _stats(rows), set())
+        assert [(st.term, st.matched) for st in out.terms] == [
+            ("crypto", 20), ("sourdough", 4), ("bike commuting", 0)]
+
+    def test_counted_below_min_engaged_but_without_lift(self):
+        engaged = [f"sourdough loaf {i}" for i in range(ss.MIN_ENGAGED - 1)]
+        rows = _rows(engaged, FILLER)
+        out = ss.compute(rows, ["sourdough"], _stats(rows), set())
+        assert not out.enough and out.items == ()
+        [st] = out.terms
+        assert (st.matched, st.engaged, st.lift) == (ss.MIN_ENGAGED - 1, ss.MIN_ENGAGED - 1, None)
+
+    def test_span_only_when_the_inflow_cap_cut_the_window(self, monkeypatch):
+        rows = self._rows()
+        assert ss.compute(rows, ["crypto"], _stats(rows), set()).span_days is None
+        monkeypatch.setattr(ss, "MAX_INFLOW", len(rows))
+        rows.sort(key=lambda r: r[4], reverse=True)  # newest first, as the query returns them
+        assert ss.compute(rows, ["crypto"], _stats(rows), set()).span_days == 7
+
+
 # ── the database ──────────────────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
@@ -252,6 +302,33 @@ class TestRows:
         await pg.flush()
         rows = await ss._rows(user.id, pg, NOW + timedelta(seconds=1))
         assert [t for t, *_ in rows] == ["mine"]
+
+    async def _ages(self, pg, ages: list[float]) -> list[float]:
+        """Articles fetched that many days ago; the ages `_rows` returns."""
+        user, feed = await _user_with_feed(pg)
+        for age in ages:
+            u = uuid.uuid4().hex
+            pg.add(Article(feed_id=feed.id, guid=u, guid_hash=u, title=str(age),
+                           fetched_at=NOW - timedelta(days=age)))
+        await pg.flush()
+        return [float(t) for t, *_ in await ss._rows(user.id, pg, NOW + timedelta(seconds=1))]
+
+    async def test_the_newest_max_inflow_when_they_span_the_floor(self, pg, monkeypatch):
+        monkeypatch.setattr(ss, "MAX_INFLOW", 3)
+        assert await self._ages(pg, [1, 10, 12, 14, 20]) == [1, 10, 12]
+
+    async def test_never_fewer_days_than_the_floor(self, pg, monkeypatch):
+        monkeypatch.setattr(ss, "MAX_INFLOW", 3)
+        assert await self._ages(pg, [1, 2, 3, 4, 6, 10]) == [1, 2, 3, 4, 6]
+
+    async def test_the_whole_window_when_under_max_inflow(self, pg, monkeypatch):
+        monkeypatch.setattr(ss, "MAX_INFLOW", 3)
+        assert await self._ages(pg, [1, 20, ss.WINDOW_DAYS + 1]) == [1, 20]
+
+    async def test_the_floor_has_a_ceiling(self, pg, monkeypatch):
+        monkeypatch.setattr(ss, "MAX_INFLOW", 3)
+        monkeypatch.setattr(ss, "HARD_MAX_INFLOW", 4)
+        assert await self._ages(pg, [1, 2, 3, 4, 6, 10]) == [1, 2, 3, 4]
 
 
 @pytest.mark.asyncio

@@ -4,11 +4,18 @@
    remove button, and that is what people clicked. `sugg` is None
    before the instance's word statistics exist, which the page already explains. #}
 <div id="relevance-suggestions" class="mt-4">
+{% set days = (sugg.span_days if sugg else none) or window_days %}
+{% if sugg and sugg.terms %}
+<details class="mb-4 text-xs text-gray-500">
+  <summary class="cursor-pointer select-none">How your terms did</summary>
+  {% include "settings/_relevance_term_stats.html" %}
+</details>
+{% endif %}
 {% if sugg is none %}
 {% elif not sugg.enough %}
   <p class="text-xs text-gray-500">
     Suggestions for your list appear once you have read {{ min_engaged }} articles properly
-    (read for half a minute, opened the link or starred) in the last {{ window_days }} days.
+    (read for half a minute, opened the link or starred) in the last {{ days }} days.
     So far: {{ sugg.engaged }}.
   </p>
 {% elif not sugg.items %}
@@ -49,7 +56,7 @@
           {% for t in x.titles %}“{{ t }}”{{ ", " if not loop.last }}{% endfor %}.
         {% else %}
           <span class="text-red-700">− {{ x.term }}</span>: matched {{ x.matched }} articles in the last
-          {{ window_days }} days, and you read {{ x.engaged }} of them.
+          {{ days }} days, and you read {{ x.engaged }} of them.
         {% endif %}
         <button type="button" class="ml-1 text-gray-500 underline hover:text-gray-700"
                 hx-post="/settings/relevance/suggestions/dismiss" hx-vals='{{ vals | tojson }}' hx-swap="none">Hide for 3 months</button>
@@ -57,7 +64,7 @@
       {% endfor %}
     </ul>
     <p class="mt-2">
-      Learned from your last {{ window_days }} days of reading. A click on a suggestion adds or removes the term and
+      Learned from your last {{ days }} days of reading. A click on a suggestion adds or removes the term and
       saves your list. A hidden one can come back after three months, since interests change.
     </p>
   </details>
