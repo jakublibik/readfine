@@ -1,5 +1,6 @@
 """Article service: listing, detail, state toggles, unread count management."""
 import logging
+import math
 from datetime import date, datetime, timezone
 
 from sqlalchemy import func, literal, literal_column, null, or_, select, tuple_, update
@@ -11,6 +12,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.services.relevance_service import effective_score_sql
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
 from app.utils.text import strip_html
@@ -123,6 +125,20 @@ def body_permanently_empty(article: Article, extract_readable: bool | None) -> b
     return True
 
 
+# The scorers a search can filter and sort by, as the filter editor names them.
+SCORE_SOURCES = ("ai", "basic", "relevance")
+
+
+def score_expr(source: str | None):
+    """The score column a search reads: AI, basic, or AI else basic (the default,
+    the same number the article list shows)."""
+    if source == "ai":
+        return UserArticleState.ai_score
+    if source == "basic":
+        return UserArticleState.lexical_score
+    return effective_score_sql(UserArticleState)
+
+
 def _format_date(dt: datetime | None) -> str:
     # Uses the per-request viewer timezone (set in the auth dependency).
     return format_local(dt, current_viewer_tz.get(), "short")
@@ -155,12 +171,20 @@ async def list_articles(
     story_ids: list[int] | None = None,
     q: str | None = None,
     sort_order: str = "newest",
+    score_source: str | None = None,
+    score_op: str | None = None,
+    score_val: float | None = None,
     limit: int = 50,
     offset: int = 0,
     cursor_ts: datetime | None = None,
     cursor_id: int | None = None,
+    _count=None,
 ) -> list[ArticleListItem]:
-    """Return articles visible to the user with their read/star state."""
+    """Return articles visible to the user with their read/star state.
+
+    ``_count`` is for ``count_articles`` only: a count expression to take over the
+    same filters instead of the rows, so the two can't disagree on what matches.
+    """
     # State/label views are anchored on user-owned state (star, archive, save, label)
     # that outlives the feed subscription: the feed may be unsubscribed or deleted
     # (Article.feed_id NULL), and a saved-by-URL article never had one, so the
@@ -314,6 +338,16 @@ async def list_articles(
     if saved_only:
         stmt = stmt.where(UserArticleState.saved_at.is_not(None))
 
+    # Search score condition and the "score" sort, over the scorer the reader picked.
+    # An article with no score from it (NULL) fails either comparison, so it never
+    # matches a condition and sorts last. score_val is on the 0–100 scale the list
+    # shows, and is held against the number shown there, which is rounded: a row
+    # reading 70 (stored 0.696) is "at least 70", not "below 70".
+    score = score_expr(score_source)
+    if score_op in ("gte", "lt") and score_val is not None:
+        cut = (math.ceil(score_val) - 0.5) / 100
+        stmt = stmt.where(score >= cut if score_op == "gte" else score < cut)
+
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
         tsquery = func.websearch_to_tsquery('simple', q)
@@ -324,9 +358,16 @@ async def list_articles(
             logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
             tsquery = func.plainto_tsquery('simple', q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
+
+    if _count is not None:
+        return (await db.execute(stmt.with_only_columns(_count))).scalar() or 0
+
+    if q:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
         # Search honours its own sort selector; default is relevance (ts_rank).
-        if sort_order == "newest":
+        if sort_order == "score":
+            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
+        elif sort_order == "newest":
             stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
         elif sort_order == "oldest":
             stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
@@ -338,7 +379,11 @@ async def list_articles(
             )
     else:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
-        if sort_order == "oldest":
+        if sort_order == "score":
+            # Offset-paged like text search: a score can't serve as a keyset cursor
+            # (it is NULL for half the list and changes when the terms do).
+            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
+        elif sort_order == "oldest":
             # id tiebreaker keeps the total order deterministic (matches
             # ix_articles_sort_ts) and is required for stable keyset pagination
             stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
@@ -380,6 +425,16 @@ async def list_articles(
         )
         for article, state, feed_title, custom_title, extract_readable in rows
     ]
+
+
+async def count_articles(user: User, db: AsyncSession, *, collapsing: bool, **filters) -> int:
+    """How many rows ``list_articles`` would draw for these filters, all pages together.
+
+    One row per story where the list folds them (``collapsing``), one per article
+    otherwise; see ``story_service.row_count``. Takes the list's own filter arguments.
+    """
+    from app.services.story_service import row_count
+    return await list_articles(user, db, _count=row_count(collapsing), **filters)
 
 
 def _to_list_item(

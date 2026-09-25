@@ -22,9 +22,12 @@
       <label for="search-sort" class="block text-xs font-medium text-gray-600 mb-1">Sort by</label>
       <select id="search-sort"
               class="w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <option value="relevance"{% if not sort_value or sort_value == 'relevance' %} selected{% endif %}>Relevance</option>
+        <option value="relevance"{% if not sort_value or sort_value == 'relevance' %} selected{% endif %}>Search relevance</option>
         <option value="newest"{% if sort_value == 'newest' %} selected{% endif %}>Newest first</option>
         <option value="oldest"{% if sort_value == 'oldest' %} selected{% endif %}>Oldest first</option>
+        {% if score_sources %}
+        <option value="score"{% if sort_value == 'score' %} selected{% endif %}>Score, highest first</option>
+        {% endif %}
       </select>
     </div>
     <div class="flex-1">
@@ -37,6 +40,32 @@
       </select>
     </div>
   </div>
+
+  <!-- Score: the same source choice as a filter's score condition -->
+  {% if score_sources %}
+  {% set source_labels = {'ai': 'AI', 'basic': 'Basic', 'relevance': 'AI, else basic'} %}
+  <div class="mb-4">
+    <label for="search-score-source" class="block text-xs font-medium text-gray-600 mb-1">Score</label>
+    <div class="flex gap-2">
+      <select id="search-score-source" aria-label="Score source"
+              class="flex-1 min-w-0 text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+        {% for src in score_sources %}
+        <option value="{{ src }}"{% if src == score_source_value %} selected{% endif %}>{{ source_labels[src] }}</option>
+        {% endfor %}
+      </select>
+      <select id="search-score-op" aria-label="Score condition"
+              class="text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <option value="any"{% if not score_op_value %} selected{% endif %}>any</option>
+        <option value="gte"{% if score_op_value == 'gte' %} selected{% endif %}>at least</option>
+        <option value="lt"{% if score_op_value == 'lt' %} selected{% endif %}>below</option>
+      </select>
+      <input type="number" id="search-score-val" min="0" max="100" step="1" inputmode="numeric"
+             aria-label="Score value" value="{{ score_val_value }}"
+             class="w-20 text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+    </div>
+    <p class="mt-1 text-xs text-gray-500">Scores run from 0 to 100. Articles without a score don't match.</p>
+  </div>
+  {% endif %}
 
   <!-- Scope -->
   <div class="mb-4">

@@ -36,10 +36,16 @@
           title="New search">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
   </button>
+  {% set results_word = "result" if result_count == 1 else "results" %}
   {% if search_query %}
-  <span class="text-gray-500">Results for: <strong class="text-gray-800">{{ search_query }}</strong></span>
+  <span class="text-gray-500">{% if result_count is not none %}{{ "{:,}".format(result_count) }} {{ results_word }} for{% else %}Results for:{% endif %} <strong class="text-gray-800">{{ search_query }}</strong></span>
+  {% elif result_count is not none %}
+  <span class="text-gray-500">{{ "{:,}".format(result_count) }} filtered {{ results_word }}</span>
   {% else %}
   <span class="text-gray-500">Filtered results</span>
+  {% endif %}
+  {% if score_label %}
+  <span class="text-gray-500 truncate min-w-0">· Score {{ score_label }}</span>
   {% endif %}
   <button data-action="refresh-articles"
           class="ml-auto text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0.5"

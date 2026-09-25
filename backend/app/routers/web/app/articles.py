@@ -23,7 +23,7 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
-    add_article_access_joins, article_access_predicate,
+    SCORE_SOURCES, add_article_access_joins, article_access_predicate, count_articles,
     filter_accessible_article_ids, get_article, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
@@ -226,6 +226,36 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
+_SCORE_SOURCE_LABELS = {"ai": "AI", "basic": "Basic", "relevance": "AI, else basic"}
+
+
+def search_score(
+    score_source: str | None, score_op: str | None, score_val: float | None,
+    sort: str | None = None,
+) -> dict:
+    """The search's score knobs, cleaned up, keyed as ``list_articles`` takes them.
+
+    Holds a condition (source, operator, value) when one is set, or only the source
+    when the results are sorted by score without one. Empty means the search does
+    nothing with scores. The source falls back to AI, else basic, the number the
+    list shows.
+    """
+    src = score_source if score_source in SCORE_SOURCES else "relevance"
+    if score_op in ("gte", "lt") and score_val is not None:
+        return {"score_source": src, "score_op": score_op, "score_val": score_val}
+    if sort == "score":
+        return {"score_source": src}
+    return {}
+
+
+def _score_label(score: dict) -> str | None:
+    """The condition as the results header shows it, e.g. "AI, else basic ≥ 70"."""
+    if "score_op" not in score:
+        return None
+    op = "≥" if score["score_op"] == "gte" else "<"
+    return f"{_SCORE_SOURCE_LABELS[score['score_source']]} {op} {score['score_val']:g}"
+
+
 def _build_filter_params(
     *,
     feed_id: int | None,
@@ -242,6 +272,7 @@ def _build_filter_params(
     sort_order: str,
     read_status: str | None,
     label_filter: str | None,
+    score: dict,
 ) -> dict:
     """Active-filter dict carried into infinite-scroll pagination. Shared by the
     first-page and load-more endpoints; the caller passes the unread flag it uses
@@ -274,6 +305,7 @@ def _build_filter_params(
             params["read_status"] = read_status
         if label_filter:
             params["label_filter"] = label_filter
+        params.update(score)
     return params
 
 
@@ -284,7 +316,7 @@ def _build_more_qs(
     """Query string for the infinite-scroll "load more" sentinel.
 
     Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
-    and search isn't unread-filtered). Everything else uses a keyset cursor on
+    and search isn't unread-filtered), and so does the score sort. Everything else uses a keyset cursor on
     (sort_ts, id) so marking articles read mid-scroll can't shift the window and
     skip rows — see ix_articles_sort_ts.
 
@@ -300,7 +332,7 @@ def _build_more_qs(
     one scroll through one list, and a reload starts a fresh one.
     """
     params = dict(filter_params)
-    if q and q.strip():
+    if (q and q.strip()) or params.get("sort") == "score":
         params["offset"] = next_offset
     elif articles:
         params["cursor_ts"] = articles[-1].sort_ts.isoformat()
@@ -339,7 +371,7 @@ def _collapses_stories(
 
 def story_scope(
     *, feed_id=None, folder_id=None, scope_include=None, label_id=None,
-    labeled_only=False, label_filter=None, q=None,
+    labeled_only=False, label_filter=None, q=None, score=None,
 ) -> dict:
     """The filters that decide which members of a story belong in this view.
 
@@ -369,6 +401,11 @@ def story_scope(
         scope["label_filter"] = label_filter
     if q and q.strip():
         scope["q"] = q
+    # A score condition is part of what the list is about too, like the query: a
+    # "70 and up" search unfolds only the members at 70 and up, and counts only those
+    # on the row. The sort alone is not.
+    if score and "score_op" in score:
+        scope.update(score)
     return scope
 
 
@@ -445,6 +482,9 @@ async def htmx_article_list(
     sort: str | None = Query(None),
     read_status: str | None = Query(None),
     label_filter: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -456,6 +496,7 @@ async def htmx_article_list(
         label_id=label_id, unread_only=unread_only, starred_only=starred_only,
         archived_only=archived_only, saved_only=saved_only, labeled_only=labeled_only,
         q=q, sort=sort, read_status=read_status, label_filter=label_filter,
+        score=search_score(score_source, score_op, score_val, sort),
         offset=offset,
     )
 
@@ -478,6 +519,7 @@ async def render_list(
     sort: str | None = None,
     read_status: str | None = None,
     label_filter: str | None = None,
+    score: dict | None = None,
     offset: int = 0,
 ) -> HTMLResponse:
     """Render the article list for one set of filters.
@@ -496,8 +538,10 @@ async def render_list(
     settings = settings_result.scalar_one_or_none()
 
     # The search modal can submit with an empty query term as a pure filter view
-    # (scope / labels / status), so "search mode" is any of those, not just q.
-    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+    # (scope / labels / status / score), so "search mode" is any of those, not just q.
+    score = score or {}
+    is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
+                 or bool(read_status) or bool(score))
 
     sort_order = settings.default_sort_order if settings else "newest"
     # Search has its own sort selector (relevance default); other views use the
@@ -552,6 +596,7 @@ async def render_list(
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
+        **score,
         limit=articles_per_page,
         offset=offset,
     )
@@ -568,8 +613,21 @@ async def render_list(
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score,
         ),
     )
+
+    # How many rows the search found, for its header. First page only: the header
+    # isn't redrawn when more pages load.
+    result_count: int | None = None
+    if is_search and offset == 0:
+        result_count = await count_articles(
+            user, db, collapsing=collapses,
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, label_filter=label_filter, read_status=read_status,
+            starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
+            labeled_only=labeled_only, q=q or None, **score,
+        )
 
     # Title bar count for mobile hideable mode
     rows_drawn = row_count(story_dedup != DEDUP_OFF)
@@ -619,7 +677,7 @@ async def render_list(
         starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
-        read_status=read_status, label_filter=label_filter,
+        read_status=read_status, label_filter=label_filter, score=score,
     )
 
     extra_headers: dict[str, str] = {}
@@ -665,6 +723,8 @@ async def render_list(
         saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
+        score_label=_score_label(score),
+        result_count=result_count,
         # Search never marks rows read on scroll. Looking something up is not
         # reading it: the reader scans the results for the one they want, and the
         # rest should keep the state they had. It also sidesteps a pagination bug,
@@ -680,6 +740,7 @@ async def render_list(
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score,
         )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -708,6 +769,9 @@ async def htmx_article_list_more(
     sort: str | None = Query(None),
     read_status: str | None = Query(None),
     label_filter: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
@@ -723,7 +787,9 @@ async def htmx_article_list_more(
     )
     settings = settings_result.scalar_one_or_none()
 
-    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+    score = search_score(score_source, score_op, score_val, sort)
+    is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
+                 or bool(read_status) or bool(score))
     sort_order = settings.default_sort_order if settings else "newest"
     if is_search:
         sort_order = sort or "relevance"
@@ -749,6 +815,7 @@ async def htmx_article_list_more(
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
+        **score,
         limit=articles_per_page,
         offset=offset,
         cursor_ts=cursor_ts,
@@ -766,6 +833,7 @@ async def htmx_article_list_more(
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score,
         ),
     )
     filter_params = _build_filter_params(
@@ -774,7 +842,7 @@ async def htmx_article_list_more(
         starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
-        read_status=read_status, label_filter=label_filter,
+        read_status=read_status, label_filter=label_filter, score=score,
     )
 
     extra_ctx = {}
@@ -793,6 +861,7 @@ async def htmx_article_list_more(
         "story_scope_qs": urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score,
         )),
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -960,6 +1029,9 @@ async def htmx_article_story_rows(
     labeled_only: bool = Query(False),
     label_filter: str | None = Query(None),
     q: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -993,6 +1065,7 @@ async def htmx_article_story_rows(
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     if settings is not None and settings.story_dedup == DEDUP_OFF:
         return HTMLResponse("")
+    score = search_score(score_source, score_op, score_val)
     members = await list_articles(
         user=user, db=db, story_id=story_id,
         sort_order=settings.default_sort_order if settings else "newest",
@@ -1000,6 +1073,7 @@ async def htmx_article_story_rows(
         **story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score,
         ),
     )
     rows = [m for m in members if m.id != article_id]

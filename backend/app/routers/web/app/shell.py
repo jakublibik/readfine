@@ -14,7 +14,9 @@ from app.database import get_db
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
+from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
+from app.routers.web.settings.filters import score_sources
 from app.services.article import mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
@@ -495,11 +497,18 @@ async def htmx_search_modal(
     sort: str | None = Query(None),
     status: str | None = Query(None),
     labels: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db, folder_order=await get_folder_order(db, user.id))
     user_labels = await list_labels(user, db)
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    # The same sources the filter editor offers: only the scorers this reader runs.
+    sources = score_sources(app_s, user_s)
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {
         "user_feeds": user_feeds,
@@ -508,4 +517,8 @@ async def htmx_search_modal(
         "sort_value": sort or None,
         "status_value": status or None,
         "label_value": labels or None,
+        "score_sources": sources,
+        "score_source_value": score_source if score_source in sources else "relevance",
+        "score_op_value": score_op if score_op in ("gte", "lt") else None,
+        "score_val_value": score_val or "",
     })

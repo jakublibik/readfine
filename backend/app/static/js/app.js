@@ -1503,6 +1503,9 @@ function openSearchModal(prefill) {
     if (window._lastSearchSort) qs.push('sort=' + encodeURIComponent(window._lastSearchSort));
     if (window._lastSearchStatus) qs.push('status=' + encodeURIComponent(window._lastSearchStatus));
     if (window._lastSearchLabels) qs.push('labels=' + encodeURIComponent(window._lastSearchLabels));
+    if (window._lastSearchScoreSource) qs.push('score_source=' + encodeURIComponent(window._lastSearchScoreSource));
+    if (window._lastSearchScoreOp) qs.push('score_op=' + encodeURIComponent(window._lastSearchScoreOp));
+    if (window._lastSearchScoreVal) qs.push('score_val=' + encodeURIComponent(window._lastSearchScoreVal));
     if (qs.length) url += '?' + qs.join('&');
   }
   htmx.ajax('GET', url, { target: '#search-modal-content', swap: 'innerHTML' });
@@ -1530,7 +1533,7 @@ function submitSearch() {
   // Multi-select scope: hidden input holds a JSON array like ["feed:1","folder:2"].
   var scopeEl = document.getElementById('search-scope-value');
   var scopeVal = scopeEl ? scopeEl.value.trim() : '';
-  // Sort: relevance (default) | newest | oldest.
+  // Sort: relevance (default) | newest | oldest | score.
   var sortEl = document.getElementById('search-sort');
   var sortVal = sortEl ? sortEl.value : 'relevance';
   // Status: all (default, no filter) | unread | read.
@@ -1539,10 +1542,27 @@ function submitSearch() {
   // Labels: JSON array like ["any"] or ["label:3"]. Empty = no label filter.
   var labelsEl = document.getElementById('search-labels-value');
   var labelsVal = labelsEl ? labelsEl.value.trim() : '';
+  // Score: source (ai | basic | relevance), condition (any | gte | lt) and value.
+  // The row is only there when the reader has a scorer running.
+  var scoreSrcEl = document.getElementById('search-score-source');
+  var scoreOpEl = document.getElementById('search-score-op');
+  var scoreValEl = document.getElementById('search-score-val');
+  var scoreSrc = scoreSrcEl ? scoreSrcEl.value : '';
+  var scoreOp = scoreOpEl ? scoreOpEl.value : 'any';
+  var scoreVal = scoreValEl ? scoreValEl.value.trim() : '';
+  if (scoreOp !== 'any' && (scoreVal === '' || !scoreValEl.checkValidity())) {
+    scoreValEl.focus();
+    if (scoreValEl.reportValidity) scoreValEl.reportValidity();
+    return;
+  }
+  var scoreActive = scoreOp !== 'any';
+  if (!scoreActive) scoreVal = '';
 
   // Empty text is allowed as a pure filter view, but only when at least one
-  // filter is set — otherwise it's just "all articles", so nudge for input.
-  var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all');
+  // filter is set (sorting by score counts, that is the "best first" list);
+  // otherwise it's just "all articles", so nudge for input.
+  var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all')
+    || scoreActive || sortVal === 'score';
   if (!q && !hasFilter) { input.focus(); return; }
 
   window._lastSearchQuery = q;
@@ -1550,6 +1570,9 @@ function submitSearch() {
   window._lastSearchSort = sortVal;
   window._lastSearchStatus = statusVal;
   window._lastSearchLabels = labelsVal;
+  window._lastSearchScoreSource = scoreSrc;
+  window._lastSearchScoreOp = scoreActive ? scoreOp : '';
+  window._lastSearchScoreVal = scoreVal;
 
   var params = new URLSearchParams();
   if (q) params.set('q', q);
@@ -1557,6 +1580,11 @@ function submitSearch() {
   params.set('sort', sortVal);
   if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
   if (labelsVal) params.set('label_filter', labelsVal);
+  if (scoreSrc && (scoreActive || sortVal === 'score')) params.set('score_source', scoreSrc);
+  if (scoreActive) {
+    params.set('score_op', scoreOp);
+    params.set('score_val', scoreVal);
+  }
   htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
   closeSearchModal();
   // On mobile the search modal is opened from inside the sidebar overlay; close
