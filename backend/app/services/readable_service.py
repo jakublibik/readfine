@@ -806,9 +806,10 @@ def redirected_back_to_us(
       ever judged;
     * a query value holds the whole requested address or its whole path, not merely a
       substring of one, so a stray ``?ref=/`` cannot trip it;
-    * the page does not claim to be the article. A document viewer legitimately built
-      around ``?url=`` says so with rel=canonical or og:url, and is waved through, the
-      same escape hatch cross-host redirects already get.
+    * the page does not claim an address of its own. A document viewer legitimately
+      built around ``?url=`` says so with rel=canonical or og:url, and is waved through,
+      the same escape hatch cross-host redirects already get. A canonical pointing at
+      the carried article is no such claim: the iDNES wall ships exactly that.
     """
     if not fetched_url or not requested_url or fetched_url == requested_url:
         return False
@@ -824,9 +825,13 @@ def redirected_back_to_us(
     )
     if not carried:
         return False
-    # The page naming the requested article as its own address is the article.
+    # A page naming an address of its own is a viewer built around ?url=, not a wall.
+    # Naming the carried article does not count: iDNES's consent page copies the
+    # interrupted article's canonical into its head, so that claim is the wall's too.
     declared = _declared_url(fetched_url, html)
-    return not (declared and declared != fetched_url)
+    if not declared or declared == fetched_url:
+        return True
+    return declared in wanted or urlsplit(declared).path in wanted
 
 
 def _declared_url(fetched_url: str, html: Optional[str]) -> Optional[str]:

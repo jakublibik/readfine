@@ -1003,6 +1003,16 @@ class TestRedirectedBackToUs:
         assert redirected_back_to_us("https://site.invalid/viewer?url=" + self.ARTICLE,
                              self.ARTICLE, page) is False
 
+    def test_wall_naming_the_carried_article_is_still_a_wall(self):
+        """iDNES's consent page copies the interrupted article's canonical into its
+        head, so pointing at the carried address is not a claim of its own. The feed
+        link carries a #utm fragment the wall's ?url= does not."""
+        from app.services.readable_service import redirected_back_to_us
+        page = f'<html><head><link rel="canonical" href="{self.ARTICLE}"></head></html>'
+        wall = ("https://www.idnes.cz/nastaveni-souhlasu?url="
+                "https%3a%2f%2fwww.idnes.cz%2fzpravy%2fzahranicni%2fstory.A260806_154839_x_y")
+        assert redirected_back_to_us(wall, self.ARTICLE + "#utm_source=rss", page) is True
+
 
 class TestInterstitialIsRejectedOnBothPaths:
     WALL = ("https://www.idnes.cz/nastaveni-souhlasu?url="
