@@ -19,6 +19,7 @@ from app.config import settings as app_settings
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
+from app.schemas.article import ArticleListItem
 from app.routers.web.app.articles import _build_more_qs, search_score, story_scope
 from app.services.article import list_articles
 
@@ -116,12 +117,61 @@ async def test_sort_by_score_without_query_puts_unscored_last(pg):
 
 
 async def test_sort_by_score_with_query_and_offset(pg):
+    # Offset still works for the REST API.
     user, feed, token, arts = await _setup(pg)
     first = await list_articles(user=user, db=pg, q=token, sort_order="score",
                                 score_source="basic", limit=2)
     rest = await list_articles(user=user, db=pg, q=token, sort_order="score",
                                score_source="basic", limit=2, offset=2)
     assert _names(first, arts) + _names(rest, arts) == ["d", "b", "a", "c"]
+
+
+def _next(item):
+    return {"cursor_ts": item.sort_ts, "cursor_id": item.id, "cursor_key": item.sort_key}
+
+
+async def _walk(pg, user, **kw):
+    """Page one row at a time by keyset, as the infinite scroll does."""
+    seen, cursor = [], {}
+    for _ in range(10):
+        page = await list_articles(user=user, db=pg, limit=1, **kw, **cursor)
+        if not page:
+            return seen
+        seen += page
+        cursor = _next(page[-1])
+    raise AssertionError("did not end")
+
+
+async def test_score_sort_keyset_walks_through_unscored(pg):
+    # c has no score: the cursor has to cross from scored rows to NULL ones.
+    user, feed, token, arts = await _setup(pg)
+    for kw in ({"q": token}, {"feed_id": feed.id}):
+        seen = await _walk(pg, user, sort_order="score", score_source="relevance", **kw)
+        assert _names(seen, arts) == ["a", "b", "d", "c"]
+
+
+async def test_score_sort_keyset_survives_mark_read(pg):
+    # The bug offset had: rows read on scroll leave an unread list, and the next
+    # page skipped as many rows as left.
+    user, feed, token, arts = await _setup(pg)
+    kw = dict(q=token, sort_order="score", score_source="basic", read_status="unread", limit=2)
+    first = await list_articles(user=user, db=pg, **kw)
+    assert _names(first, arts) == ["d", "b"]
+    for item in first:
+        (await pg.get(UserArticleState, (user.id, item.id))).is_read = True
+    await pg.flush()
+    rest = await list_articles(user=user, db=pg, **kw, **_next(first[-1]))
+    assert _names(rest, arts) == ["a", "c"]
+
+
+async def test_relevance_sort_keyset(pg):
+    # Every row matches the token once, so the rank ties and the date decides; the
+    # cursor must page through the ties without repeating or skipping.
+    user, feed, token, arts = await _setup(pg)
+    seen = await _walk(pg, user, q=token, sort_order="relevance")
+    assert sorted(_names(seen, arts)) == ["a", "b", "c", "d"]
+    assert len(seen) == 4
+    assert all(i.sort_key is not None for i in seen)
 
 
 async def test_threshold_matches_the_rounded_number_shown(pg):
@@ -153,10 +203,34 @@ def test_story_scope_takes_the_condition_not_the_sort():
     assert story_scope(score=search_score("ai", None, None, sort="score")) == {}
 
 
-def test_score_sort_pages_by_offset():
-    qs = parse_qs(_build_more_qs({"sort": "score", "score_source": "ai"}, [], None, 50))
-    assert qs["offset"] == ["50"]
-    assert "cursor_ts" not in qs
+def _item(**kw):
+    return ArticleListItem(
+        id=7, feed_id=1, feed_title="f", url="u", title="t", author=None,
+        summary=None, snippet=None, published_at=NOW, formatted_date="x",
+        estimated_read_min=None, image_url=None, is_read=False, is_starred=False,
+        is_archived=False, sort_ts=NOW, **kw,
+    )
+
+
+def test_score_sort_pages_by_cursor_with_key():
+    qs = parse_qs(_build_more_qs({"sort": "score", "score_source": "ai"}, [_item(sort_key=0.75)]),
+                  keep_blank_values=True)
+    assert qs["cursor_key"] == ["0.75"] and qs["cursor_id"] == ["7"]
+    assert "offset" not in qs
+    # A row without a score: an empty key.
+    qs = parse_qs(_build_more_qs({"sort": "score"}, [_item()]), keep_blank_values=True)
+    assert qs["cursor_key"] == [""]
+    # Rank for a text search sorted by relevance; none for newest.
+    assert "cursor_key" in _build_more_qs({"q": "x", "sort": "relevance"}, [_item(sort_key=0.1)])
+    assert "cursor_key" not in _build_more_qs({"q": "x", "sort": "newest"}, [_item()])
+
+
+def test_parse_cursor_key():
+    from app.routers.web.app.articles import _parse_cursor_key
+    assert _parse_cursor_key("0.5") == 0.5
+    assert _parse_cursor_key("") is None
+    assert _parse_cursor_key("nan") is None
+    assert _parse_cursor_key("junk") is None
 
 
 async def test_count_matches_the_list(pg):

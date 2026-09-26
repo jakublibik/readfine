@@ -28,9 +28,31 @@
 </div>
 {% endif %}
 
-{% if search_query or filter_active %}
-<div data-list-header{% if search_query %} data-search-query="{{ search_query }}"{% endif %}
-     class="flex items-center gap-2 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
+{% if saved_search %}
+{#- A saved search opened from the sidebar reads like a feed, so its header looks
+    like a list's, not like the blue search header: the name, how many, and Edit
+    (its query and filters are one click away there). No close button, as a feed
+    has none. The values let the client remember it as the last search, so Edit
+    reopens the modal filled in with it. -#}
+<div data-list-header data-search-header data-saved-search-id="{{ saved_search.id }}"
+     data-saved-search-values="{{ saved_search_values }}"
+     {% if search_query %} data-search-query="{{ search_query }}"{% endif %}
+     class="flex items-center gap-2 px-4 py-2 bg-white border-b border-gray-200 text-sm sticky top-0 z-10 dark:bg-gray-800 dark:border-gray-700">
+  <svg class="w-3.5 h-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
+  <strong class="text-gray-800 truncate min-w-0 dark:text-gray-100" title="{{ saved_search.name }}">{{ saved_search.name }}</strong>
+  {% if result_count is not none %}
+  <span class="text-gray-400 flex-shrink-0" aria-hidden="true">·</span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{{ result_count | num }} {{ "unread" if view_unread else ("article" if result_count == 1 else "articles") }}</span>
+  {% endif %}
+  <button data-action="open-search-again"
+          class="ml-auto text-blue-600 hover:underline whitespace-nowrap flex-shrink-0 bg-transparent border-0 cursor-pointer p-0 text-sm"
+          title="Change the search, rename or delete it">Edit</button>
+</div>
+{% elif search_query or filter_active %}
+{#- Wraps only to show the name field under the line when saving. -#}
+<div data-list-header data-search-header{% if search_query %} data-search-query="{{ search_query }}"{% endif %}
+     {% if search_ref %} data-saved-ref="{{ search_ref.search.id }}"{% endif %}
+     class="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-2 bg-blue-50 border-b border-blue-100 text-sm sticky top-0 z-10">
   <button data-action="open-search-again"
           class="text-blue-400 hover:text-blue-600 flex-shrink-0 bg-transparent border-0 cursor-pointer p-0.5"
           title="New search">
@@ -53,6 +75,23 @@
           class="text-blue-600 hover:underline whitespace-nowrap flex-shrink-0 bg-transparent border-0 cursor-pointer p-0 text-sm"
           title="Edit filters">{{ filter_count }} filter{{ "" if filter_count == 1 else "s" }}</button>
   {% endif %}
+  {#- Saving keeps you here, in results that behave as search results; the saved
+      search behaves like a feed once opened from the sidebar. The client swaps this
+      span for "Saved" after a save (see saveSearch in app.js). -#}
+  {% set link_cls = "text-blue-600 hover:underline whitespace-nowrap flex-shrink-0 bg-transparent border-0 cursor-pointer p-0 text-sm" %}
+  <span data-save-search-area class="flex items-center gap-2 flex-shrink-0">
+    <span class="text-gray-400" aria-hidden="true">·</span>
+    {% if search_ref and search_ref.matches %}
+    <span class="text-gray-500 whitespace-nowrap" title="Saved as “{{ search_ref.search.name }}”">Saved</span>
+    {% elif search_ref %}
+    <button data-action="update-search-inline" data-saved-id="{{ search_ref.search.id }}"
+            class="{{ link_cls }}" title="Save these changes to “{{ search_ref.search.name }}”">Update</button>
+    <button data-action="open-save-search-inline" class="{{ link_cls }}">Save as new</button>
+    {% else %}
+    <button data-action="open-save-search-inline" class="{{ link_cls }}"
+            title="Keep this search in the sidebar">Save</button>
+    {% endif %}
+  </span>
   <button data-action="refresh-articles"
           class="ml-auto text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-0.5"
           title="Clear search">
@@ -60,6 +99,19 @@
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
     </svg>
   </button>
+  <div data-save-search-form class="hidden basis-full">
+    <div class="flex items-center gap-2">
+      <input type="text" id="header-save-name" maxlength="100" placeholder="Name this search"
+             aria-label="Saved search name"
+             class="flex-1 min-w-0 h-6 text-sm px-2 rounded border border-blue-200 bg-white text-gray-800 placeholder-gray-400 focus:outline-none focus:border-blue-400 dark:bg-gray-800 dark:border-blue-900 dark:text-gray-200">
+      <button data-action="save-search-inline"
+              class="flex-shrink-0 h-6 px-3 text-sm leading-none rounded bg-blue-600 hover:bg-blue-700 text-white border-0 cursor-pointer">Save</button>
+      <button data-action="close-save-search-inline"
+              class="flex-shrink-0 text-gray-500 hover:text-gray-700 bg-transparent border-0 cursor-pointer p-0 text-sm">Cancel</button>
+    </div>
+  </div>
+  {#- Outside the name field's row, so Update (which has no field) can show one too. -#}
+  <p id="header-save-error" class="basis-full text-xs text-red-600 empty:hidden" role="alert"></p>
 </div>
 {% endif %}
 
@@ -98,6 +150,16 @@
   {% if saved_view %}
   <div class="flex items-center justify-center h-48 text-gray-400 text-sm px-8 text-center">
     No saved articles yet. Paste a URL above to save one.
+  </div>
+  {% elif saved_search %}
+  {#- "Show read too" is for this once: the saved search keeps its status. -#}
+  <div class="flex flex-col items-center justify-center gap-2 h-48 text-gray-400 text-sm px-8 text-center">
+    <p>{% if view_filtered %}Nothing {{ "unread" if view_unread else "with this status" }} here.{% else %}Nothing matches this search yet.{% endif %}</p>
+    {% if view_filtered %}
+    <button hx-get="/htmx/articles?saved_search_id={{ saved_search.id }}&show_read=true"
+            hx-target="#article-list" hx-swap="innerHTML"
+            class="text-blue-600 hover:underline bg-transparent border-0 cursor-pointer p-0 text-sm">Show read too</button>
+    {% endif %}
   </div>
   {% elif not search_query and not filter_active and has_feeds == false %}
   <div class="mt-10 mx-8">

@@ -1499,7 +1499,11 @@ document.body.addEventListener('click', function (e) {
 });
 
 // ── Search modal ───────────────────────────────────────────────────────────
-function openSearchModal(prefill) {
+// The saved search the list came from (window._activeSavedSearchId): set when one
+// runs, kept while the reader tries changes to it with Search, so reopening the
+// modal from those results edits it again with Update / Save as new at hand.
+// Cleared by a fresh search and by leaving search for a feed or list.
+function openSearchModal(prefill, savedId) {
   var el = document.getElementById('full-menu-dropdown');
   if (el) el.classList.add('hidden');
   var overlay = document.getElementById('search-modal-overlay');
@@ -1509,9 +1513,17 @@ function openSearchModal(prefill) {
   // Only restore the previous query/scope when reopening from the results header
   // (prefill); a fresh search from the menu or the "/" shortcut starts empty.
   window._searchPrefill = !!prefill;
+  if (!prefill && !savedId) window._activeSavedSearchId = null;
   var url = '/htmx/search-modal';
-  if (prefill) {
+  if (savedId && !prefill) {
+    // The pencil in the saved list: the server fills the form from what is stored.
+    url += '?saved_id=' + encodeURIComponent(savedId);
+  } else if (prefill) {
     var qs = [];
+    if (window._activeSavedSearchId) {
+      qs.push('saved_id=' + encodeURIComponent(window._activeSavedSearchId));
+      qs.push('edited=true');
+    }
     if (window._lastSearchScope) qs.push('scope=' + encodeURIComponent(window._lastSearchScope));
     if (window._lastSearchSort) qs.push('sort=' + encodeURIComponent(window._lastSearchSort));
     if (window._lastSearchStatus) qs.push('status=' + encodeURIComponent(window._lastSearchStatus));
@@ -1588,9 +1600,11 @@ document.addEventListener('change', function (e) {
   if (note) note.classList.toggle('hidden', off);
 });
 
-function submitSearch() {
+// The modal's search as the list endpoint's parameters, remembered as the last
+// search on the way. Null (with focus on the field to fix) when it can't run.
+function collectSearch() {
   var input = document.getElementById('search-input');
-  if (!input) return;
+  if (!input) return null;
   var q = input.value.trim();
   // Multi-select scope: hidden input holds a JSON array like ["feed:1","folder:2"].
   var scopeEl = document.getElementById('search-scope-value');
@@ -1616,7 +1630,7 @@ function submitSearch() {
   if (scoreActive && (scoreVal === '' || !scoreValEl.checkValidity())) {
     scoreValEl.focus();
     if (scoreValEl.reportValidity) scoreValEl.reportValidity();
-    return;
+    return null;
   }
   if (!scoreActive) { scoreSrc = ''; scoreVal = ''; }
   // Published: days back from now, empty = any time.
@@ -1631,7 +1645,7 @@ function submitSearch() {
   // otherwise it's just "all articles", so nudge for input.
   var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all')
     || scoreActive || sortVal === 'score' || !!sinceVal || !!stateVal;
-  if (!q && !hasFilter) { input.focus(); return; }
+  if (!q && !hasFilter) { input.focus(); return null; }
   // With no words there is nothing to rank by relevance, and the list comes back
   // newest first. Say so, so reopening the modal shows the order actually used.
   if (!q && sortVal === 'relevance') sortVal = 'newest';
@@ -1646,28 +1660,204 @@ function submitSearch() {
   window._lastSearchScoreVal = scoreVal;
   window._lastSearchSince = sinceVal;
   window._lastSearchState = stateVal;
+  return lastSearchParams();
+}
 
+// The last search (window._lastSearch*) as the list endpoint's parameters. Also what
+// the results header saves, since that is the search those results came from.
+function lastSearchParams() {
   var params = new URLSearchParams();
-  if (q) params.set('q', q);
-  if (scopeVal) params.set('scope_include', scopeVal);
-  params.set('sort', sortVal);
-  if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
-  if (labelsVal) params.set('label_filter', labelsVal);
+  if (window._lastSearchQuery) params.set('q', window._lastSearchQuery);
+  if (window._lastSearchScope) params.set('scope_include', window._lastSearchScope);
+  params.set('sort', window._lastSearchSort || 'relevance');
+  var status = window._lastSearchStatus;
+  if (status && status !== 'all') params.set('read_status', status);
+  if (window._lastSearchLabels) params.set('label_filter', window._lastSearchLabels);
   // A score sort with Any sends no source, and the router sorts by AI, else basic,
   // the number the list shows.
-  if (scoreActive) {
-    params.set('score_source', scoreSrc);
-    params.set('score_op', scoreOp);
-    params.set('score_val', scoreVal);
+  if (window._lastSearchScoreOp) {
+    params.set('score_source', window._lastSearchScoreSource);
+    params.set('score_op', window._lastSearchScoreOp);
+    params.set('score_val', window._lastSearchScoreVal);
   }
-  if (sinceVal) params.set('since_days', sinceVal);
-  if (stateVal) params.set('state', stateVal);
-  htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
+  if (window._lastSearchSince) params.set('since_days', window._lastSearchSince);
+  if (window._lastSearchState) params.set('state', window._lastSearchState);
+  return params;
+}
+
+function _closeSearchForResults() {
   closeSearchModal();
   // On mobile the search modal is opened from inside the sidebar overlay; close
   // it so the results are immediately visible instead of hidden behind it.
   if (window._closeMobileSidebarOverlay) window._closeMobileSidebarOverlay();
 }
+
+// Run the last search. With a saved search it relates to, the results header says
+// whether it still matches that one (Saved) or offers Update / Save as new.
+function _runLastSearch() {
+  var params = lastSearchParams();
+  if (window._activeSavedSearchId) params.set('saved_ref', window._activeSavedSearchId);
+  htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
+}
+
+function submitSearch() {
+  if (!collectSearch()) return;
+  // Trying changes to a saved search keeps it the one being edited.
+  var savedIdEl = document.getElementById('saved-search-id');
+  window._activeSavedSearchId = savedIdEl ? savedIdEl.value : null;
+  _runLastSearch();
+  _closeSearchForResults();
+}
+
+// ── Saved searches ─────────────────────────────────────────────────────────
+// Saving never swaps the list: the results stay search results, and a saved search
+// behaves like a feed only when opened from the sidebar. The server answers with a
+// savedSearchesChanged event, or puts a mistake on the form's error line.
+var _savingFrom = null;  // 'modal' | 'header', for the event handler below
+
+function runSavedSearch(id) {
+  htmx.ajax('GET', '/htmx/articles?saved_search_id=' + encodeURIComponent(id),
+    { target: '#article-list', swap: 'innerHTML' });
+  _closeSearchForResults();
+}
+
+function _postSavedSearch(url, params, extra, from) {
+  var values = {};
+  params.forEach(function (v, k) { values[k] = v; });
+  Object.keys(extra).forEach(function (k) { values[k] = extra[k]; });
+  _savingFrom = from;
+  htmx.ajax('POST', url, { swap: 'none', values: values });
+}
+
+function _savedSearchUrl(id) {
+  return id ? '/htmx/saved-searches/' + encodeURIComponent(id) : '/htmx/saved-searches';
+}
+
+// The edit form in the search window: Update, or Save as new under the name typed.
+function saveSearchFromModal(asNew) {
+  var params = collectSearch();
+  if (!params) return;
+  var nameEl = document.getElementById('saved-search-name');
+  var errEl = document.getElementById('saved-search-error');
+  if (errEl) errEl.textContent = '';
+  if (!nameEl || !nameEl.value.trim()) {
+    if (nameEl) nameEl.focus();
+    if (errEl) errEl.textContent = 'Give the search a name.';
+    return;
+  }
+  var savedIdEl = document.getElementById('saved-search-id');
+  _postSavedSearch(_savedSearchUrl(asNew ? null : savedIdEl && savedIdEl.value), params,
+    { name: nameEl.value, error_target: 'saved-search-error' }, 'modal');
+}
+
+// The results header: the name field that opens under it, and Update.
+function _headerSaveForm(show) {
+  var header = document.querySelector('[data-search-header]');
+  var form = header && header.querySelector('[data-save-search-form]');
+  if (!form) return;
+  form.classList.toggle('hidden', !show);
+  var err = document.getElementById('header-save-error');
+  if (err) err.textContent = '';
+  if (show) document.getElementById('header-save-name').focus();
+}
+
+function saveSearchFromHeader() {
+  var nameEl = document.getElementById('header-save-name');
+  var errEl = document.getElementById('header-save-error');
+  if (errEl) errEl.textContent = '';
+  if (!nameEl || !nameEl.value.trim()) {
+    if (nameEl) nameEl.focus();
+    if (errEl) errEl.textContent = 'Give the search a name.';
+    return;
+  }
+  _postSavedSearch(_savedSearchUrl(null), lastSearchParams(),
+    { name: nameEl.value, error_target: 'header-save-error' }, 'header');
+}
+
+function updateSearchFromHeader(id) {
+  // No name in the form: the saved search keeps its own.
+  _postSavedSearch(_savedSearchUrl(id), lastSearchParams(),
+    { error_target: 'header-save-error' }, 'header');
+}
+
+function deleteSavedSearch(id, name) {
+  if (!confirm('Delete the saved search “' + name + '”?')) return;
+  htmx.ajax('POST', '/htmx/saved-searches/' + encodeURIComponent(id) + '/delete', { swap: 'none' });
+}
+
+document.body.addEventListener('savedSearchesChanged', function (e) {
+  var from = _savingFrom;
+  _savingFrom = null;
+  window._activeSavedSearchId = String(e.detail.id);
+  // A new or renamed search has to show up in the sidebar.
+  htmx.trigger(document.body, 'sidebarRefresh');
+  if (from === 'modal') {
+    var current = document.querySelector('[data-search-header]');
+    if (current && current.dataset.savedSearchId === String(e.detail.id)) {
+      // Edited from its own view: back to that view, with the new parameters.
+      runSavedSearch(e.detail.id);
+    } else {
+      // Edited from search results: back to them, now of the saved parameters.
+      _runLastSearch();
+      _closeSearchForResults();
+    }
+    return;
+  }
+  // From the header: the results are already these, only the header changes.
+  var header = document.querySelector('[data-search-header]');
+  if (!header) return;
+  header.dataset.savedRef = e.detail.id;
+  _headerSaveForm(false);
+  var area = header.querySelector('[data-save-search-area]');
+  if (area) {
+    area.innerHTML = '<span class="text-gray-400" aria-hidden="true">·</span>' +
+      '<span class="text-gray-500 whitespace-nowrap"></span>';
+    area.lastChild.textContent = 'Saved';
+    area.lastChild.title = 'Saved as “' + e.detail.name + '”';
+  }
+});
+
+document.body.addEventListener('savedSearchDeleted', function (e) {
+  closeSearchModal();
+  htmx.trigger(document.body, 'sidebarRefresh');
+  if (String(window._activeSavedSearchId) !== String(e.detail.id)) return;
+  window._activeSavedSearchId = null;
+  var header = document.querySelector('[data-search-header]');
+  if (header && header.dataset.savedSearchId) {
+    // Viewing the deleted search, which was the active sidebar item: go to All
+    // articles, through its own nav item so the sidebar highlights it.
+    var all = document.querySelector('#sidebar-full .nav-item[hx-get="/htmx/articles"]');
+    if (all) all.click();
+    else htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+  } else if (header) {
+    // Results of a search related to it: the same results, now unsaved.
+    _runLastSearch();
+  }
+});
+
+// A list that arrives with a saved search's header (or a search related to one)
+// makes it the active one; a saved search's also sets the last search to its
+// parameters. A list without any search header ends search.
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (!evt.detail.target || evt.detail.target.id !== 'article-list') return;
+  var header = evt.detail.target.querySelector('[data-search-header]');
+  if (!header) { window._activeSavedSearchId = null; return; }
+  if (header.dataset.savedRef) { window._activeSavedSearchId = header.dataset.savedRef; return; }
+  if (!header.dataset.savedSearchId) return;
+  window._activeSavedSearchId = header.dataset.savedSearchId;
+  var v;
+  try { v = JSON.parse(header.dataset.savedSearchValues || '{}'); } catch (err) { return; }
+  window._lastSearchQuery = v.q || '';
+  window._lastSearchScope = v.scope || '';
+  window._lastSearchSort = v.sort || '';
+  window._lastSearchStatus = v.status || '';
+  window._lastSearchLabels = v.labels || '';
+  window._lastSearchScoreSource = v.score_source || '';
+  window._lastSearchScoreOp = v.score_op || '';
+  window._lastSearchScoreVal = v.score_val || '';
+  window._lastSearchSince = v.since_days || '';
+  window._lastSearchState = v.state || '';
+});
 
 // Focus search input when modal loads
 document.body.addEventListener('htmx:afterSettle', function (evt) {
@@ -1800,6 +1990,10 @@ document.addEventListener('keydown', function (e) {
     closeSearchModal(); closeFeedbackModal(); return;
   }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
+  // Enter in a name field saves: the edited search in the window, a new one under
+  // the results header.
+  if (e.key === 'Enter' && e.target.id === 'saved-search-name') { saveSearchFromModal(false); return; }
+  if (e.key === 'Enter' && e.target.id === 'header-save-name') { saveSearchFromHeader(); return; }
   if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
     e.preventDefault();
     openSearchModal();
@@ -1913,6 +2107,15 @@ document.addEventListener('click', function (e) {
   if (action === 'open-feedback-modal') { openFeedbackModal(); return; }
   if (action === 'close-feedback-modal') { closeFeedbackModal(); return; }
   if (action === 'submit-search') { submitSearch(); return; }
+  if (action === 'run-saved-search') { runSavedSearch(el.dataset.savedId); return; }
+  if (action === 'edit-saved-search') { openSearchModal(false, el.dataset.savedId); return; }
+  if (action === 'save-search-new') { saveSearchFromModal(true); return; }
+  if (action === 'save-search-update') { saveSearchFromModal(false); return; }
+  if (action === 'open-save-search-inline') { _headerSaveForm(true); return; }
+  if (action === 'close-save-search-inline') { _headerSaveForm(false); return; }
+  if (action === 'save-search-inline') { saveSearchFromHeader(); return; }
+  if (action === 'update-search-inline') { updateSearchFromHeader(el.dataset.savedId); return; }
+  if (action === 'delete-saved-search') { deleteSavedSearch(el.dataset.savedId, el.dataset.savedName); return; }
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
     // Clearing search returns to the active nav category (where you were before
@@ -2597,6 +2800,7 @@ function _autoAdvanceParam(hx) {
   if (/[?&]feed_id=/.test(hx)) return 'feed_id';
   if (/[?&]folder_id=/.test(hx)) return 'folder_id';
   if (/[?&]label_id=/.test(hx)) return 'label_id';
+  if (/[?&]saved_search_id=/.test(hx)) return 'saved_search_id';
   return null; // special rows (All / Starred / Archived / Labels header)
 }
 

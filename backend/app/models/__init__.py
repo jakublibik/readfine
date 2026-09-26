@@ -9,6 +9,7 @@ from app.models.label import Label, ArticleLabel
 from app.models.filter import Filter, FilterCondition, FilterAction
 from app.models.ai import UserAiKey
 from app.models.traffic import PageViewHourly, TrafficSourceHourly, VisitorDaily
+from app.models.saved_search import SavedSearch
 from app.models.relevance import (
     LexicalCorpus, LexicalPrefix, LexicalTerm, RelevanceSuggestionDismissal,
 )
@@ -25,4 +26,5 @@ __all__ = [
     "UserAiKey",
     "PageViewHourly", "TrafficSourceHourly", "VisitorDaily",
     "LexicalTerm", "LexicalPrefix", "LexicalCorpus", "RelevanceSuggestionDismissal",
+    "SavedSearch",
 ]

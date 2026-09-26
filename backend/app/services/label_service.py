@@ -8,6 +8,7 @@ from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
 from app.services.article import add_article_access_joins, article_access_predicate
+from app.services.saved_search_service import strip_saved_search_references
 
 
 class LabelAlreadyExistsError(Exception):
@@ -64,6 +65,7 @@ async def delete_label(user: User, label_id: int, db: AsyncSession) -> "Label | 
     label = result.scalar_one_or_none()
     if not label:
         return None
+    await strip_saved_search_references(db, kind="label", ref_id=label.id, user_id=user.id)
     await db.delete(label)
     await db.commit()
     return label

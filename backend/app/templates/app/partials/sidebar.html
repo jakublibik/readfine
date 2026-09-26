@@ -61,6 +61,18 @@
     L{{ rail_count(nav_unread_labeled) }}
   </a>
 
+  {% if saved_searches %}
+  <!-- Saved searches: the first two letters of the name, like folders -->
+  <div class="w-6 border-t border-gray-200 my-1"></div>
+  {% for s in saved_searches %}
+  <a class="nav-item w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:bg-gray-100 cursor-pointer text-xs font-medium relative"
+     hx-get="/htmx/articles?saved_search_id={{ s.id }}" hx-target="#article-list" hx-swap="innerHTML" hx-push-url="false"
+     title="{{ s.name }}">
+    {{ s.name[:2] }}
+  </a>
+  {% endfor %}
+  {% endif %}
+
   {% if user_feeds %}
   <!-- Folder separator -->
   <div class="w-6 border-t border-gray-200 my-1"></div>
@@ -215,6 +227,30 @@
 
   <!-- Labels + Feed list (scroll together) -->
   <div id="sidebar-scroll" class="flex-1 overflow-y-auto">
+
+  {#- Saved searches: first in the scrolling part, alphabetical, with no header of
+      their own (unlike Labels, there is no "all of them" view for one to open) and
+      so nothing to fold. A grey magnifier stands where a label has its colour dot.
+      The counts come with step 4 of the saved-search plan. -#}
+  {% if saved_searches %}
+  <div class="px-2 py-3 border-b border-gray-200">
+    {% for s in saved_searches %}
+      <div class="group relative mark-read-row">
+        <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+           hx-get="/htmx/articles?saved_search_id={{ s.id }}" hx-target="#article-list" hx-swap="innerHTML"
+           hx-push-url="false">
+          <svg class="w-3 h-3 flex-shrink-0 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
+          <span class="flex-1 truncate">{{ s.name }}</span>
+        </a>
+        <button class="{{ mark_read_btn }}"
+                title="Mark all as read"
+                hx-post="/htmx/saved-searches/{{ s.id }}/mark-read"
+                hx-swap="none"
+                data-action="mark-read">✓</button>
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   {% if user_labels %}
   <div class="px-2 py-3 border-b border-gray-200">

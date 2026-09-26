@@ -149,15 +149,16 @@ class TestKeysetPagination:
 
 
 class TestMoreQsBuilder:
-    def test_search_uses_offset(self):
-        qs = _build_more_qs({"q": "foo"}, [ArticleListItem(
+    def test_search_uses_cursor_too(self):
+        # Text search pages by keyset as well, led by the rank (see test_search_score).
+        qs = _build_more_qs({"q": "foo", "sort": "newest"}, [ArticleListItem(
             id=1, feed_id=1, feed_title="f", url="u", title="t", author=None,
             summary=None, snippet=None, published_at=NOW, formatted_date="x",
             estimated_read_min=None, image_url=None, is_read=False, is_starred=False,
             is_archived=False, sort_ts=NOW,
-        )], q="foo", next_offset=50)
-        assert "offset=50" in qs
-        assert "cursor_ts" not in qs
+        )])
+        assert "cursor_ts" in qs
+        assert "offset" not in qs
 
     def test_non_search_uses_cursor(self):
         item = ArticleListItem(
@@ -166,7 +167,7 @@ class TestMoreQsBuilder:
             estimated_read_min=None, image_url=None, is_read=False, is_starred=False,
             is_archived=False, sort_ts=NOW,
         )
-        qs = _build_more_qs({"unread_only": "true"}, [item], q=None, next_offset=50)
+        qs = _build_more_qs({"unread_only": "true"}, [item])
         assert "cursor_id=7" in qs
         assert "cursor_ts" in qs
         assert "offset" not in qs

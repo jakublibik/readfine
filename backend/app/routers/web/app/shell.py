@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +21,10 @@ from app.services.article import SINCE_DAYS_OPTIONS, mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
+from app.services.saved_search_service import (
+    get_saved_search, has_missing_references, list_saved_searches,
+)
+from app.services.search_params import modal_values, normalize_search_params
 from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
 from app.templating import templates
 
@@ -246,6 +250,7 @@ async def htmx_sidebar(
         "user": user,
         "user_feeds": user_feeds,
         "user_labels": user_labels,
+        "saved_searches": await list_saved_searches(db, user.id),
         "feed_total_counts": feed_total_counts,
         "feed_unread_counts": feed_unread_counts,
         "label_counts": label_counts,
@@ -497,6 +502,7 @@ async def htmx_refresh_feed(
 @router.get("/htmx/search-modal", response_class=HTMLResponse)
 async def htmx_search_modal(
     request: Request,
+    q: str | None = Query(None),
     scope: str | None = Query(None),
     sort: str | None = Query(None),
     status: str | None = Query(None),
@@ -506,9 +512,25 @@ async def htmx_search_modal(
     score_val: str | None = Query(None),
     since_days: str | None = Query(None),
     state: str | None = Query(None),
+    saved_id: int | None = Query(None),
+    edited: bool = Query(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """The search form. With ``saved_id`` it edits that saved search: filled in with
+    its stored parameters, or with the ones in the request when ``edited`` (the
+    reader changed the search since opening it and is coming back to save that)."""
+    saved = None
+    if saved_id is not None:
+        saved = await get_saved_search(db, user.id, saved_id)
+        if saved is None:
+            raise HTTPException(status_code=404)
+        if not edited:
+            v = modal_values(saved.params)
+            q, scope, sort, status, labels = v["q"], v["scope"], v["sort"], v["status"], v["labels"]
+            score_source, score_op, score_val = v["score_source"], v["score_op"], v["score_val"]
+            since_days, state = v["since_days"], v["state"]
+
     user_feeds = await list_user_feeds(user, db, folder_order=await get_folder_order(db, user.id))
     user_labels = await list_labels(user, db)
     app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
@@ -534,4 +556,11 @@ async def htmx_search_modal(
         "since_options": SINCE_DAYS_OPTIONS,
         "since_value": int(since_days) if since_days and since_days.isdigit() else None,
         "state_value": state or None,
+        "q_value": q or "",
+        "saved_search": saved,
+        # Checked on the form as shown, which is the stored search or the reader's
+        # changes to it.
+        "missing_references": bool(saved) and await has_missing_references(
+            db, user.id, normalize_search_params({"scope_include": scope, "label_filter": labels}),
+        ),
     })

@@ -4,7 +4,7 @@ import math
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import Text, cast, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy import Text, and_, cast, func, literal, literal_column, null, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -254,7 +254,9 @@ async def list_articles(
     offset: int = 0,
     cursor_ts: datetime | None = None,
     cursor_id: int | None = None,
+    cursor_key: float | None = None,
     _count=None,
+    _ids: bool = False,
 ) -> list[ArticleListItem]:
     """Return articles visible to the user with their read/star state.
 
@@ -264,6 +266,8 @@ async def list_articles(
 
     ``_count`` is for ``count_articles`` only: a count expression to take over the
     same filters instead of the rows, so the two can't disagree on what matches.
+    ``_ids`` likewise returns the unexecuted SELECT of matching article ids, for a
+    bulk write over exactly what the list shows (mark a saved search read).
     """
     # State/label views are anchored on user-owned state (star, archive, save, label)
     # that outlives the feed subscription: the feed may be unsubscribed or deleted
@@ -459,48 +463,56 @@ async def list_articles(
 
     if _count is not None:
         return (await db.execute(stmt.with_only_columns(_count))).scalar() or 0
+    if _ids:
+        return stmt.with_only_columns(Article.id)
 
-    if q:
-        coalesced = func.coalesce(Article.published_at, Article.fetched_at)
-        # Search honours its own sort selector; default is relevance (ts_rank).
-        if sort_order == "score":
-            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
-        elif sort_order == "newest":
-            stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
-        elif sort_order == "oldest":
-            stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
-        else:
-            # Normalization 1 divides by 1 + log(length), so a long body doesn't
-            # outrank a title match on the number of mentions alone.
-            stmt = stmt.order_by(
-                func.ts_rank(fts_vec, tsquery, 1).desc(),
-                coalesced.desc(),
-                Article.id.desc(),
-            )
+    coalesced = func.coalesce(Article.published_at, Article.fetched_at)
+    # Two sorts lead with something other than the date: the score, and for a text
+    # search the rank (search's default; without a query term "relevance" is newest).
+    # Normalization 1 divides the rank by 1 + log(length), so a long body doesn't
+    # outrank a title match on the number of mentions alone.
+    sort_key = None
+    if sort_order == "score":
+        sort_key = score
+    elif q and sort_order not in ("newest", "oldest"):
+        sort_key = func.ts_rank(fts_vec, tsquery, 1)
+
+    # Every sort pages by keyset: the next page starts after the last row's sort
+    # values, not after a number of rows. Rows marked read on scroll drop out of an
+    # unread list between pages, and an offset would then skip as many rows as left.
+    # The id breaks ties, matching ix_articles_sort_ts.
+    has_cursor = cursor_ts is not None and cursor_id is not None
+    if sort_key is not None:
+        # The key goes out with the row, so the next page can start after it. A
+        # score is NULL for articles the scorer hasn't seen; those sort last, and a
+        # NULL cursor_key means the previous page already ended among them. A score
+        # can change between pages when the terms do; the worst that does is show
+        # or skip that one article, where an offset would shift the whole page.
+        stmt = stmt.add_columns(sort_key.label("sort_key")).order_by(
+            sort_key.desc().nulls_last(), coalesced.desc(), Article.id.desc(),
+        )
+        if has_cursor:
+            after = tuple_(coalesced, Article.id) < tuple_(cursor_ts, cursor_id)
+            if cursor_key is None:
+                stmt = stmt.where(sort_key.is_(None), after)
+            else:
+                stmt = stmt.where(or_(
+                    sort_key < cursor_key,
+                    and_(sort_key == cursor_key, after),
+                    sort_key.is_(None),
+                ))
+    elif sort_order == "oldest":
+        stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
+        if has_cursor:
+            stmt = stmt.where(tuple_(coalesced, Article.id) > tuple_(cursor_ts, cursor_id))
     else:
-        coalesced = func.coalesce(Article.published_at, Article.fetched_at)
-        if sort_order == "score":
-            # Offset-paged like text search: a score can't serve as a keyset cursor
-            # (it is NULL for half the list and changes when the terms do).
-            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
-        elif sort_order == "oldest":
-            # id tiebreaker keeps the total order deterministic (matches
-            # ix_articles_sort_ts) and is required for stable keyset pagination
-            stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
-            if cursor_ts is not None and cursor_id is not None:
-                stmt = stmt.where(
-                    tuple_(coalesced, Article.id) > tuple_(cursor_ts, cursor_id)
-                )
-        else:
-            stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
-            if cursor_ts is not None and cursor_id is not None:
-                stmt = stmt.where(
-                    tuple_(coalesced, Article.id) < tuple_(cursor_ts, cursor_id)
-                )
+        stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
+        if has_cursor:
+            stmt = stmt.where(tuple_(coalesced, Article.id) < tuple_(cursor_ts, cursor_id))
     stmt = stmt.limit(limit)
-    # Keyset pagination (cursor) supersedes offset; offset stays for the FTS
-    # branch and the REST API, which keep offset/limit semantics.
-    if cursor_ts is None:
+    # A cursor supersedes offset; offset stays for the REST API, which keeps
+    # offset/limit semantics.
+    if not has_cursor:
         stmt = stmt.offset(offset)
 
     rows = (await db.execute(stmt)).all()
@@ -518,13 +530,17 @@ async def list_articles(
         for aid, lid, lname, lcolor in labels_rows:
             labels_by_article.setdefault(aid, []).append({"id": lid, "name": lname, "color": lcolor})
 
-    return [
-        _to_list_item(
+    items = []
+    for row in rows:
+        article, state, feed_title, custom_title, extract_readable = row[:5]
+        item = _to_list_item(
             article, state, feed_title, custom_title, extract_readable,
             labels_by_article.get(article.id, []),
         )
-        for article, state, feed_title, custom_title, extract_readable in rows
-    ]
+        if sort_key is not None:
+            item.sort_key = row.sort_key
+        items.append(item)
+    return items
 
 
 async def count_articles(user: User, db: AsyncSession, *, collapsing: bool, **filters) -> int:

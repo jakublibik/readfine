@@ -18,6 +18,13 @@
           <span class="font-semibold">{{ scope_cleanup.disabled_briefings | join(', ') }}</span>.
           Left as all-feeds would have sent much larger emails - re-scope to re-enable.</p>
       {% endif %}
+      {% if scope_cleanup.emptied_searches %}
+        <p>{{ scope_cleanup.emptied_searches | length }}
+          saved search{{ 'es' if scope_cleanup.emptied_searches | length != 1 }}
+          scoped only to what you just removed will show nothing until you change
+          {{ 'it' if scope_cleanup.emptied_searches | length == 1 else 'them' }}:
+          <span class="font-semibold">{{ scope_cleanup.emptied_searches | join(', ') }}</span>.</p>
+      {% endif %}
     </div>
   {% endif %}
   {% if folders | length > 1 %}

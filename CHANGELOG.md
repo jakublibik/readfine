@@ -9,6 +9,14 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- **Saved searches.** **Save** in the header of search results keeps the search, with its filters, under a name. Saved searches are listed in the sidebar above Labels, and each opens like a feed: articles are marked read as you scroll, and **Mark all as read** marks only what the search lists. Without a status of its own, a saved search follows your unread setting. A saved search is not a snapshot: it runs again each time, over the articles as they are now. Its **Edit** link reopens the search to update it, save the changes as a new search, rename it or delete it. After changing a saved search's filters, the results header offers **Update** and **Save as new**. When a deleted feed, folder or label was the only one a saved search covered, the search keeps it and finds nothing until you change it, instead of widening to everything.
+
+### Fixed
+
+- Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
+
 ## [0.19.0] - 2026-09-26
 
 ### Upgrade notes

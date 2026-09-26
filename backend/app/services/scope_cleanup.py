@@ -17,6 +17,10 @@ user-facing report:
 
 A plain catch-up config (no briefing) is left with the emptied scope = all feeds,
 which is consistent with its own default and carries no cost surprise.
+
+Saved searches are cleaned too (`saved_search_service.strip_saved_search_references`);
+one scoped only to what was removed keeps the reference, matches nothing until
+re-scoped, and is reported.
 """
 from __future__ import annotations
 
@@ -28,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.filter import Filter
 from app.models.user import UserCatchupConfig
+from app.services.saved_search_service import strip_saved_search_references
 
 
 @dataclass
@@ -36,10 +41,11 @@ class ScopeCleanupResult:
 
     deactivated_filters: list[str] = field(default_factory=list)
     disabled_briefings: list[str] = field(default_factory=list)
+    emptied_searches: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
-        return bool(self.deactivated_filters or self.disabled_briefings)
+        return bool(self.deactivated_filters or self.disabled_briefings or self.emptied_searches)
 
 
 def _strip(value: str | None, token: str) -> tuple[str | None, bool, bool]:
@@ -108,4 +114,7 @@ async def strip_scope_references(
             c.briefing_next_send_at = None
             result.disabled_briefings.append(c.name)
 
+    result.emptied_searches = await strip_saved_search_references(
+        db, kind=kind, ref_id=ref_id, user_id=user_id,
+    )
     return result
