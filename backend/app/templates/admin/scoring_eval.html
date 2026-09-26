@@ -3,6 +3,14 @@
 {% set active = "scoring_eval" %}
 
 {% block admin_content %}
+{# A handful of engaged articles gives an AUC that is mostly their own rank, so
+   below eval.min_engaged the number is greyed out and says so. #}
+{% macro auc_class(auc, engaged) -%}
+{%- if auc is none or engaged < eval.min_engaged %}text-gray-400{% elif auc >= 0.7 %}text-green-600{% elif auc >= 0.6 %}text-amber-600{% else %}text-gray-500{% endif -%}
+{%- endmacro %}
+{% macro few_engaged(engaged) -%}
+{%- if engaged < eval.min_engaged %}<p class="text-xs text-gray-500 mt-1">Only {{ engaged|num }} engaged, too few to judge yet (it takes about {{ eval.min_engaged }}).</p>{% endif -%}
+{%- endmacro %}
 <h1 class="text-xl font-semibold text-gray-900 mb-2">Scoring eval</h1>
 <p class="text-sm text-gray-500 mb-4">
   Does a relevance score predict real engagement? Engaged =
@@ -78,11 +86,12 @@
 <div class="bg-white border border-gray-200 rounded-lg p-4 mb-8">
   <div class="flex flex-wrap items-baseline gap-x-8 gap-y-2">
     <div>
-      <span class="text-2xl font-bold {{ 'text-green-600' if eval.lexical.auc and eval.lexical.auc >= 0.7 else ('text-amber-600' if eval.lexical.auc and eval.lexical.auc >= 0.6 else 'text-gray-500') }}">{{ eval.lexical.auc|num(3) if eval.lexical.auc is not none else '—' }}</span>
+      <span class="text-2xl font-bold {{ auc_class(eval.lexical.auc, eval.lexical.engaged_total) }}">{{ eval.lexical.auc|num(3) if eval.lexical.auc is not none else '—' }}</span>
       <span class="text-sm text-gray-500 ml-2">
         AUC over {{ eval.lexical.n|num }} scored articles,
         {{ (eval.lexical.engaged_rate * 100)|num(1) }}% engaged
       </span>
+      {{ few_engaged(eval.lexical.engaged_total) }}
     </div>
   </div>
   {# The two headline numbers are not a ranking: ai_score exists only where a
@@ -102,6 +111,7 @@
       ·
       <span class="font-semibold">basic {{ eval.head_to_head.auc_lexical|num(3) if eval.head_to_head.auc_lexical is not none else '—' }}</span>
     </div>
+    {{ few_engaged(eval.head_to_head.engaged_total) }}
     <p class="text-xs text-gray-500 mt-1">
       Same articles, same reader, same engagement: this is the comparison that means something.
       In offline tests on real reading data the gap was 0.729 against 0.659, and date order alone got 0.557
@@ -131,12 +141,9 @@
     <div class="text-sm text-gray-500 mt-1">Engaged <span class="text-gray-400">({{ eval.engaged_total|num }})</span></div>
   </div>
   <div class="bg-white border border-gray-200 rounded-lg p-4">
-    {% if eval.auc is not none %}
-    <div class="text-2xl font-bold {{ 'text-green-600' if eval.auc >= 0.7 else ('text-amber-600' if eval.auc >= 0.6 else 'text-gray-500') }}">{{ eval.auc|num(3) }}</div>
-    {% else %}
-    <div class="text-2xl font-bold text-gray-400">—</div>
-    {% endif %}
+    <div class="text-2xl font-bold {{ auc_class(eval.auc, eval.engaged_total) }}">{{ eval.auc|num(3) if eval.auc is not none else '—' }}</div>
     <div class="text-sm text-gray-500 mt-1">AUC <span class="text-gray-400">(0.5 = random)</span></div>
+    {{ few_engaged(eval.engaged_total) }}
   </div>
 </div>
 {% endif %}
@@ -162,6 +169,7 @@
       </span>
     </div>
   </div>
+  {{ few_engaged(eval.exposure.engaged_total) }}
   <p class="text-sm text-gray-500">
     Neither number is the answer, and the truth is not the midpoint either.
     <strong>Everything</strong> is too high: the filter manufactured a tail of

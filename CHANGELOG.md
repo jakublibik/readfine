@@ -28,6 +28,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Search ignores accents, so `zpravy` finds `zprávy` and the other way round, and English words match in their other forms (`votes` finds `voting`). A word ending in `*` finds every word it begins (`cycl*` finds `cycling` and `cyclist`). Sorting by search relevance puts articles with the words in the title above those that only mention them in the text, and the results mark the searched words in titles and snippets.
 - On a phone, the shortcut in the top and bottom bar switches between All articles and Starred if you have no labelled articles. Until now it always offered Labels, which for such an account was an empty list.
 - The admin scoring eval counts an article as engaged the way Stats and the Relevance page count it as read: half a minute on it, an opened link, or a star at any point. It used to need a full minute and a star still in place, so its engagement rate came out lower than the reader's own figures.
+- The admin scoring eval greys out an AUC measured on fewer than 10 engaged articles and says there are too few to judge yet. On a new instance two lucky articles could show up as a green 0.93.
 
 ### Fixed
 

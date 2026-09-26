@@ -57,6 +57,11 @@ from app.services.story_service import ENGAGED_DWELL_SECONDS
 # purge runs daily and articles land in the sample by arrival, not by score.
 RETENTION_MARGIN_DAYS = 5
 
+# Below this many engaged articles an AUC is mostly the rank of those few
+# articles: two of them landing high reads as 0.93 on a fresh instance. The page
+# still prints the number but greys it out and says why, instead of colouring it.
+MIN_ENGAGED_FOR_AUC = 10
+
 
 # ── pure computation (unit-testable) ─────────────────────────────────────────
 
@@ -296,6 +301,7 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
         "presets": window_presets(purge_after_days),
         "exposure": exposure,
         "user_id": user_id,
+        "min_engaged": MIN_ENGAGED_FOR_AUC,
         "n": n,
         "engaged_total": engaged_total,
         "engaged_rate": (engaged_total / n) if n else None,
