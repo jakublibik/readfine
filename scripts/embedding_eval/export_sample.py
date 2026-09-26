@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 import app.database as db
 from app.config import settings
+from app.services.story_service import ENGAGED_DWELL_SECONDS
 
 # Same limit the scorer uses (`ai_scoring_service._CONTENT_MAX_CHARS`). Bodies are
 # exported slightly longer so that re-joining title + body and truncating to 2000
@@ -208,8 +209,8 @@ async def main() -> None:
             SELECT count(*) AS scored,
                    count(*) FILTER (WHERE a.trimmed_at IS NULL) AS usable,
                    count(*) FILTER (WHERE a.trimmed_at IS NULL
-                                      AND (s.user_starred
-                                           OR s.dwell_seconds >= 60
+                                      AND (s.ever_starred
+                                           OR s.dwell_seconds >= :dwell
                                            OR s.link_opened)) AS engaged,
                    min(s.created_at) AS first_state,
                    max(s.created_at) AS last_state
@@ -218,7 +219,8 @@ async def main() -> None:
             WHERE s.user_id = :uid AND s.ai_score IS NOT NULL
               AND s.created_at >= :since
               AND (CAST(:until AS timestamptz) IS NULL OR s.created_at < :until)
-        """), {"uid": args.user_id, "since": since, "until": until})).one()
+        """), {"uid": args.user_id, "since": since, "until": until,
+              "dwell": ENGAGED_DWELL_SECONDS})).one()
 
         # T1: past this age, purge keeps starred/archived articles whole, trims
         # merely-engaged ones (they drop out of this export, which filters on
@@ -273,7 +275,7 @@ async def main() -> None:
         # 0094), so they are NULL for the historical part of the sample.
         result = await session.stream(text("""
             SELECT s.article_id, s.created_at, s.ai_score,
-                   s.user_starred, s.dwell_seconds, s.link_opened, s.is_read,
+                   s.user_starred, s.ever_starred, s.dwell_seconds, s.link_opened, s.is_read,
                    a.title, a.url, a.feed_id, a.published_at, a.fetched_at,
                    a.readable_content, a.content,
                    j.processed_at AS scored_at, j.status AS job_status,
@@ -309,7 +311,8 @@ async def main() -> None:
                 "published_at": iso(row.published_at),
                 "feed_id": row.feed_id,
                 "ai_score": float(row.ai_score),
-                "engaged": bool(row.user_starred or (row.dwell_seconds or 0) >= 60
+                "engaged": bool(row.ever_starred
+                                or (row.dwell_seconds or 0) >= ENGAGED_DWELL_SECONDS
                                 or row.link_opened),
                 "user_starred": bool(row.user_starred),
                 "dwell_seconds": row.dwell_seconds,

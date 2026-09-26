@@ -6,7 +6,7 @@
 <h1 class="text-xl font-semibold text-gray-900 mb-2">Scoring eval</h1>
 <p class="text-sm text-gray-500 mb-4">
   Does a relevance score predict real engagement? Engaged =
-  <code>starred OR dwell ≥ 60s OR link opened</code> (<code>is_read</code> excluded -
+  <code>ever starred OR dwell ≥ 30s OR link opened</code>, the same read as in Stats and on the Relevance page (<code>is_read</code> excluded -
   it is set even for unseen articles). Observational, not randomized.
 </p>
 {% if eval.exposure and not eval.exposure.aggregate_only %}
@@ -104,7 +104,8 @@
     </div>
     <p class="text-xs text-gray-500 mt-1">
       Same articles, same reader, same engagement: this is the comparison that means something.
-      In offline tests on real reading data the gap was 0.729 against 0.659, and date order alone got 0.557.
+      In offline tests on real reading data the gap was 0.729 against 0.659, and date order alone got 0.557
+      (measured when a read still meant a minute, so not an exact match for the figures above).
     </p>
   </div>
   {% endif %}
