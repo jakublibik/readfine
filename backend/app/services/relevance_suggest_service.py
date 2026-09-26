@@ -63,6 +63,7 @@ from app.services.relevance_service import (
     idf,
     parse_terms,
     prefix_of,
+    squash,
     term_scores,
     terms_needed,
     tokenize,
@@ -95,6 +96,15 @@ REMOVE_RATIO = 0.5
 # Below this many matches a term's rate against the base is noise: two matches,
 # both read, would come out as "30x".
 MIN_LIFT_MATCHES = 5
+
+# The profile as a whole: how the articles it scored this high were read. The
+# per-term rows say which term picks well, this says whether the list does.
+# Compared the way a search compares, so "50 or more" is the 50 the list shows.
+TOP_SCORE = 50
+# The ratio waits for this many of them read: two reads out of two hundred make
+# 2x, and a third would make 3x.
+MIN_TOP_ENGAGED = 5
+_TOP_CUT = (TOP_SCORE - 0.5) / 100
 
 # A turned-down suggestion stays away this long, then may come back: interests
 # change, and after three windows it would be learned from different reading.
@@ -133,6 +143,8 @@ class Suggestions:
     terms: tuple[TermStat, ...] = ()  # every term, most matches first
     inflow: int = 0             # articles in the window
     span_days: int | None = None  # days they cover, when MAX_INFLOW cut the window short
+    top: TermStat | None = None  # the articles scoring TOP_SCORE or more, all
+                                 # terms together; None without terms
 
     @property
     def base(self) -> float:
@@ -223,19 +235,30 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
     # knowing about from the first day.
     base = n_engaged / len(rows) if rows else 0.0
     matched = {t: [0, 0] for t in terms}
+    top_n = top_e = 0
     for text, label in zip(texts, labels):
+        best = 0.0
         for term, score in term_scores(text, terms, stats):
             if score > 0:
                 matched[term][0] += 1
                 matched[term][1] += label
+            best = max(best, score)
+        # The stored score is this same maximum, squashed (lexical_score).
+        if squash(best) >= _TOP_CUT:
+            top_n += 1
+            top_e += label
     term_stats = tuple(sorted(
         (TermStat(t, n, e, (e / n) / base if enough and base and n >= MIN_LIFT_MATCHES
                   else None)
          for t, (n, e) in matched.items()),
         key=lambda st: -st.matched))
+    top = (TermStat("", top_n, top_e,
+                    (top_e / top_n) / base if enough and base and top_e >= MIN_TOP_ENGAGED
+                    else None)
+           if terms else None)
     span = (rows[0][4] - rows[-1][4]).days + 1 if len(rows) >= MAX_INFLOW else None
     if not enough:
-        return Suggestions((), n_engaged, False, term_stats, len(rows), span)
+        return Suggestions((), n_engaged, False, term_stats, len(rows), span, top)
 
     docs = [tokenize(t) for t in texts]
     items: list[Suggestion] = []
@@ -267,7 +290,7 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
                        if tok in doc)[:EXAMPLE_TITLES]
         items.append(Suggestion(ADD, tok, tok, titles, 0, 0))
 
-    return Suggestions(tuple(items), n_engaged, True, term_stats, len(rows), span)
+    return Suggestions(tuple(items), n_engaged, True, term_stats, len(rows), span, top)
 
 
 # ── editing the list as written ───────────────────────────────────────────────

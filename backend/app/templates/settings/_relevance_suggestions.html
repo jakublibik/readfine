@@ -6,6 +6,7 @@
 <div id="relevance-suggestions" class="mt-4">
 {% set days = (sugg.span_days if sugg else none) or window_days %}
 {% if sugg and sugg.terms %}
+{% include "settings/_relevance_top.html" %}
 <details class="mb-4 text-xs text-gray-500">
   <summary class="cursor-pointer select-none">How your terms did</summary>
   {% include "settings/_relevance_term_stats.html" %}

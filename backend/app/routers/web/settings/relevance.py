@@ -117,6 +117,10 @@ async def settings_relevance_suggestions(
         "window_days": suggest.WINDOW_DAYS,
         "min_engaged": suggest.MIN_ENGAGED,
         "min_lift_matches": suggest.MIN_LIFT_MATCHES,
+        "top_score": suggest.TOP_SCORE,
+        "min_top_engaged": suggest.MIN_TOP_ENGAGED,
+        # The table alone is a reload, and the summary above it has to follow.
+        "oob": part == "terms",
     })
 
 

@@ -223,6 +223,38 @@ class TestTermStats:
         [st] = out.terms
         assert (st.matched, st.engaged, st.lift) == (ss.MIN_ENGAGED - 1, ss.MIN_ENGAGED - 1, None)
 
+    def test_top_counts_the_articles_the_stored_score_puts_at_50_or_more(self):
+        """Same number as the score the list shows, not a count of its own."""
+        rows = self._rows()
+        rows += [(f"sourdough starter recipe {i}", None, True, 2000 + i, DAY0) for i in range(6)]
+        stats = _stats(rows)
+        terms = ["sourdough starter", "crypto"]
+        out = ss.compute(rows, terms, stats, set())
+        scored = [(rs.lexical_score(rs.article_text(t, b), terms, stats), e)
+                  for t, b, e, *_ in rows]
+        high = [e for sc, e in scored if round(sc * 100) >= ss.TOP_SCORE]
+        assert high, "the fixture should put some articles over the line"
+        assert (out.top.matched, out.top.engaged) == (len(high), sum(high))
+        assert out.top.lift == pytest.approx((sum(high) / len(high)) / out.base)
+
+    def test_top_without_lift_until_enough_of_them_are_read(self):
+        rows = self._rows()
+        rows += [(f"kombucha brewing guide {i}", None, i < ss.MIN_TOP_ENGAGED - 1, 2000 + i, DAY0)
+                 for i in range(10)]
+        out = ss.compute(rows, ["kombucha brewing"], _stats(rows), set())
+        assert out.enough and out.top.matched >= 10
+        assert out.top.engaged < ss.MIN_TOP_ENGAGED and out.top.lift is None
+
+    def test_no_terms_no_top(self):
+        rows = self._rows()
+        assert ss.compute(rows, [], _stats(rows), set()).top is None
+
+    def test_top_without_lift_below_min_engaged(self):
+        engaged = [f"sourdough loaf {i}" for i in range(ss.MIN_ENGAGED - 1)]
+        rows = _rows(engaged, FILLER)
+        out = ss.compute(rows, ["sourdough loaf"], _stats(rows), set())
+        assert out.top.matched > 0 and out.top.lift is None
+
     def test_span_only_when_the_inflow_cap_cut_the_window(self, monkeypatch):
         rows = self._rows()
         assert ss.compute(rows, ["crypto"], _stats(rows), set()).span_days is None

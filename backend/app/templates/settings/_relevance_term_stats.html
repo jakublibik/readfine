@@ -2,7 +2,10 @@
    removal suggestions are made from, so the two never disagree. Reloaded on its
    own after a click on a suggestion saves the list (see the route). "vs. average"
    is the term's read rate over the reader's rate for everything their feeds
-   brought in, so 1× means the term picks no better than chance. #}
+   brought in, so 1× means the term picks no better than chance. The same for the
+   whole list is `_relevance_top.html`, above the collapsed table; a reload of the
+   table alone brings it along out of band. #}
+{% if oob %}{% include "settings/_relevance_top.html" %}{% endif %}
 <div id="relevance-term-stats" class="mt-2"
      hx-get="/settings/relevance/suggestions?part=terms" hx-trigger="relevance-terms-saved from:body" hx-swap="outerHTML">
 {% if sugg and sugg.terms %}
@@ -35,7 +38,7 @@
         <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.engaged | thousands if st.matched else "–" }}</td>
         <td class="py-0.5 text-right tabular-nums whitespace-nowrap">
           {% if not st.matched %}<span class="text-amber-600">no match</span>
-          {% elif st.lift is not none %}<span class="{{ 'text-gray-400' if st.lift < 1 else 'text-gray-700' }}">{{ (st.lift | round(0 if st.lift >= 10 else 1)) | numg }}×</span>
+          {% elif st.lift is not none %}<span class="{{ 'text-gray-400' if st.lift < 1 else 'text-gray-700' }}">{{ st.lift | num(0 if st.lift >= 10 else 1) }}×</span>
           {% elif sugg.enough %}<span class="text-gray-400">too few</span>
           {% else %}<span class="text-gray-400">–</span>{% endif %}
         </td>
