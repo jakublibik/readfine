@@ -43,7 +43,8 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
 - **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
 - **Stories:** an event several of your feeds cover is one row saying how many sources filed it; unfold the rest in place, read the row to finish the story, and optionally keep repeats of what you've already read out of the list
-- **AI (bring-your-own-key):** summaries, relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini, or your own OpenAI-compatible endpoint such as Ollama)
+- **Relevance scoring:** every new article is scored against a list of terms you keep, with no AI key; suggestions from what you read offer terms to add and drop, and filters and search can act on the score
+- **AI (bring-your-own-key):** summaries, model-based relevance scoring, chat over articles, and "Catch me up" digests & scheduled briefings (Anthropic / OpenAI / Gemini, or your own OpenAI-compatible endpoint such as Ollama)
 - **Accounts:** per-user settings, admin panel, SMTP, API tokens (JWT), tiered retention/purge
 - **Import/export:** OPML (incl. Tiny Tiny RSS compatibility)
 
