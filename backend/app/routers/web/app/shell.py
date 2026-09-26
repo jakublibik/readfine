@@ -511,6 +511,9 @@ async def htmx_search_modal(
     user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     # The same sources the filter editor offers: only the scorers this reader runs.
     sources = score_sources(app_s, user_s)
+    # "any" is the Score row's own "no condition": the source picks whether to
+    # filter at all, and only a condition brings the operator and number with it.
+    score_cond = score_op in ("gte", "lt")
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {
         "user_feeds": user_feeds,
@@ -520,8 +523,9 @@ async def htmx_search_modal(
         "status_value": status or None,
         "label_value": labels or None,
         "score_sources": sources,
-        "score_source_value": score_source if score_source in sources else "relevance",
-        "score_op_value": score_op if score_op in ("gte", "lt") else None,
+        "score_source_value": (score_source if score_source in sources else "relevance")
+                              if score_cond else "any",
+        "score_op_value": score_op if score_cond else None,
         "score_val_value": score_val or "",
         "since_options": SINCE_DAYS_OPTIONS,
         "since_value": int(since_days) if since_days and since_days.isdigit() else None,

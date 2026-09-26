@@ -247,15 +247,17 @@
               a short description of what you care about, which you write yourself or have the AI generate from the articles
               you've read, in <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>.
               Where both have a score, the AI one counts: the <strong>relevance score</strong> is the AI score where
-              an article has one and the basic score otherwise. That is the number the article list shows and Catch me up
-              samples by. Combine scoring with a filter (e.g. mark anything below a threshold as read) to keep your list
+              an article has one and the basic score otherwise. That is the number the article list shows (unless a search
+              picked one scorer, then it shows that one) and Catch me up samples by. Combine scoring with a filter (e.g. mark anything below a threshold as read) to keep your list
               focused; <a href="#score-filters" class="text-blue-600 hover:underline dark:text-blue-400">which score a filter reads</a>.</p>
           </div>
 
           <div id="basic-relevance" class="py-5 first:pt-0 last:pb-0">
             <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How does basic relevance match my terms?</h4>
             <p>Terms are separated by commas, semicolons or new lines, all three alike. The list is kept exactly as you
-              wrote it in <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Relevance</a>.</p>
+              wrote it in <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Relevance</a>.
+              Saving a changed list rescores your unread articles from the last 7 days within a few minutes, and new
+              articles are scored as they arrive.</p>
             <ul class="list-disc pl-5 mt-2 space-y-1">
               <li><strong>The words of one term add up.</strong> With the term <code>urban cycling</code>, an article titled
                 "Madrid opens new urban cycling routes" scores higher than "Urban housing costs rise", which has only one

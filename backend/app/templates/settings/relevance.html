@@ -7,7 +7,7 @@
 
 {% if saved %}
 <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
-  Relevance settings saved.
+  Relevance settings saved.{% if rescoring %} Scores for the last 7 days appear within a few minutes.{% endif %}
   {% if skipped %}
   <span class="block mt-1 text-gray-700">
     Skipped {{ skipped | length }} term{{ 's' if skipped | length != 1 else '' }}, as a repeat of another term or with no word of two letters or more:
@@ -59,7 +59,7 @@
     {% else %}
       <span class="text-amber-600">No terms yet, so nothing is being scored. Three are enough to start.</span>
     {% endif %}
-    Saving rescores the last 7 days of unread articles.
+    Saving rescores the last 7 days of unread articles within a few minutes. New articles are scored as they arrive.
   </p>
   <div hx-get="/settings/relevance/suggestions" hx-trigger="load" hx-swap="outerHTML"></div>
 </section>

@@ -1528,6 +1528,20 @@ function closeSearchModal() {
   if (content) content.innerHTML = '';
 }
 
+// The Score row: Any is no condition, and picking a scorer brings the operator,
+// the number and the note with it.
+document.addEventListener('change', function (e) {
+  if (!e.target || e.target.id !== 'search-score-source') return;
+  var off = e.target.value === 'any';
+  document.querySelectorAll('.search-score-cond').forEach(function (el) {
+    // Keeps its place on a wide screen, gives it up where the columns stack.
+    el.classList.toggle('invisible', off);
+    el.classList.toggle('max-sm:hidden', off);
+  });
+  var note = document.getElementById('search-score-note');
+  if (note) note.classList.toggle('hidden', off);
+});
+
 function submitSearch() {
   var input = document.getElementById('search-input');
   if (!input) return;
@@ -1544,21 +1558,21 @@ function submitSearch() {
   // Labels: JSON array like ["any"] or ["label:3"]. Empty = no label filter.
   var labelsEl = document.getElementById('search-labels-value');
   var labelsVal = labelsEl ? labelsEl.value.trim() : '';
-  // Score: source (ai | basic | relevance), condition (any | gte | lt) and value.
-  // The row is only there when the reader has a scorer running.
+  // Score: source (any | ai | basic | relevance), condition (gte | lt) and value.
+  // Any is no condition. The row is only there when the reader has a scorer running.
   var scoreSrcEl = document.getElementById('search-score-source');
   var scoreOpEl = document.getElementById('search-score-op');
   var scoreValEl = document.getElementById('search-score-val');
-  var scoreSrc = scoreSrcEl ? scoreSrcEl.value : '';
-  var scoreOp = scoreOpEl ? scoreOpEl.value : 'any';
+  var scoreSrc = scoreSrcEl ? scoreSrcEl.value : 'any';
+  var scoreActive = scoreSrc !== 'any';
+  var scoreOp = scoreOpEl ? scoreOpEl.value : 'gte';
   var scoreVal = scoreValEl ? scoreValEl.value.trim() : '';
-  if (scoreOp !== 'any' && (scoreVal === '' || !scoreValEl.checkValidity())) {
+  if (scoreActive && (scoreVal === '' || !scoreValEl.checkValidity())) {
     scoreValEl.focus();
     if (scoreValEl.reportValidity) scoreValEl.reportValidity();
     return;
   }
-  var scoreActive = scoreOp !== 'any';
-  if (!scoreActive) scoreVal = '';
+  if (!scoreActive) { scoreSrc = ''; scoreVal = ''; }
   // Published: days back from now, empty = any time.
   var sinceEl = document.getElementById('search-since');
   var sinceVal = sinceEl ? sinceEl.value : '';
@@ -1593,8 +1607,10 @@ function submitSearch() {
   params.set('sort', sortVal);
   if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
   if (labelsVal) params.set('label_filter', labelsVal);
-  if (scoreSrc && (scoreActive || sortVal === 'score')) params.set('score_source', scoreSrc);
+  // A score sort with Any sends no source, and the router sorts by AI, else basic,
+  // the number the list shows.
   if (scoreActive) {
+    params.set('score_source', scoreSrc);
     params.set('score_op', scoreOp);
     params.set('score_val', scoreVal);
   }

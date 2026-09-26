@@ -80,6 +80,13 @@ async def settings_relevance_save(
     ctx = await _page_context(user, db)
     ctx["saved"] = True
     ctx["skipped"] = skipped_terms(raw)
+    # The rescoring is a scheduler job (every 5 minutes), so a reader going straight
+    # back to the list would find no scores yet; said only when a save made it due.
+    ctx["rescoring"] = bool(
+        s.basic_scoring_enabled and parse_terms(s.relevance_terms)
+        and (s.lexical_backfill_at is None
+             or s.lexical_backfill_at < s.relevance_terms_updated_at)
+    )
     return templates.TemplateResponse(request, "settings/relevance.html", ctx)
 
 
@@ -139,10 +146,10 @@ async def settings_relevance_suggestion_apply(
     ctx = {"chip": None, "terms_error": False}
     if term and kind == suggest.ADD:
         text = suggest.add_term(text, term)
-        done = f"Added {term} and saved your list."
+        done = f"Added {term} and saved your list. Scores update within a few minutes."
     elif term and kind == suggest.REMOVE:
         text = suggest.remove_term(text, term)
-        done = f"Removed {term} and saved your list."
+        done = f"Removed {term} and saved your list. Scores update within a few minutes."
     else:
         done = None
 
