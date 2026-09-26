@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -54,6 +54,9 @@ async def main_app(
     ai = await _ai_availability(settings, db)
     chat_available = ai.chat
     catchup_avail = ai.catchup
+    # Mobile quicklink: offer Labels only to users who actually label articles,
+    # everyone else gets All articles (checked per page load, so it follows along).
+    has_labeled = bool(await db.scalar(select(exists().where(ArticleLabel.user_id == user.id))))
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -65,6 +68,7 @@ async def main_app(
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
         "open_article_id": open_article_id,
+        "has_labeled": has_labeled,
     })
 
 

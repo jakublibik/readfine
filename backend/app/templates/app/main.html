@@ -177,7 +177,7 @@
     </svg>
   </button>
   <button id="mobile-bottom-quicklink" type="button"
-          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">{{ 'Labels' if has_labeled else 'All' }} →</button>
 </div>
 
 <!-- Mobile title bar (hideable mode, small bucket only) -->
@@ -191,8 +191,8 @@
     <span id="mobile-title-text" class="truncate text-sm font-medium text-gray-700"></span>
     <span id="mobile-title-count" class="hidden"></span>
   </div>
-  <button id="mobile-title-quicklink" type="button"
-          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+  <button id="mobile-title-quicklink" type="button" data-alt="{{ 'labels' if has_labeled else 'all' }}"
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">{{ 'Labels' if has_labeled else 'All' }} →</button>
 </div>
 
 <!-- Mobile sidebar backdrop -->

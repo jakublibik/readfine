@@ -20,6 +20,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 ### Changed
 
 - Search ignores accents, so `zpravy` finds `zprávy` and the other way round, and English words match in their other forms (`votes` finds `voting`). A word ending in `*` finds every word it begins (`cycl*` finds `cycling` and `cyclist`). Sorting by search relevance puts articles with the words in the title above those that only mention them in the text, and the results mark the searched words in titles and snippets. Upgrading rebuilds the search index, which adds a few seconds per ten thousand articles to the migration.
+- On a phone, the shortcut in the top and bottom bar switches between All articles and Starred if you have no labelled articles. Until now it always offered Labels, which for such an account was an empty list.
 
 ### Fixed
 

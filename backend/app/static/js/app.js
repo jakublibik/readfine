@@ -876,9 +876,22 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
   evt.detail.serverResponse = temp.innerHTML;
 });
 
+// Mobile quicklink toggles between two views: Labels <-> Starred for users who
+// label articles, All articles <-> Starred for everyone else (data-alt, set
+// server-side).
+function _mobileQuicklinkTarget() {
+  var link = document.getElementById('mobile-title-quicklink');
+  var useAll = link && link.dataset.alt === 'all';
+  var onAlt = useAll
+    ? (!_activeNavGet || _activeNavGet === '/htmx/articles')
+    : (_activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1);
+  if (onAlt) return { url: '/htmx/articles?starred_only=true', title: 'Starred', text: 'Starred →' };
+  if (useAll) return { url: '/htmx/articles', title: 'All articles', text: 'All →' };
+  return { url: '/htmx/articles?labeled_only=true', title: 'Labels', text: 'Labels →' };
+}
+
 function _syncMobileQuicklink() {
-  var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
-  var text = isLabels ? 'Starred →' : 'Labels →';
+  var text = _mobileQuicklinkTarget().text;
   var link = document.getElementById('mobile-title-quicklink');
   if (link) link.textContent = text;
   var bottomLink = document.getElementById('mobile-bottom-quicklink');
@@ -2968,14 +2981,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
   });
 
-  // Quicklink click: navigate to Labels or Starred
+  // Quicklink click: navigate to Labels/All articles or Starred
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
     if (!e.target.closest('#mobile-title-quicklink') && !e.target.closest('#mobile-bottom-quicklink')) return;
     _saveNavSnapshot();
-    var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
-    var targetUrl = isLabels ? '/htmx/articles?starred_only=true' : '/htmx/articles?labeled_only=true';
-    var targetTitle = isLabels ? 'Starred' : 'Labels';
+    var target = _mobileQuicklinkTarget();
+    var targetUrl = target.url;
+    var targetTitle = target.title;
     _activeNavGet = targetUrl;
     try { localStorage.setItem('lastNavItem', targetUrl); } catch (err) {}
     var titleText = document.getElementById('mobile-title-text');
