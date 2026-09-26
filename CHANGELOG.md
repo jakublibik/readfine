@@ -9,6 +9,8 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-26
+
 ### Upgrade notes
 
 - Basic relevance is on for every account, but it scores nothing until the account saves a few terms, so the article list does not change on its own after the upgrade. Articles already in the database are not scored, except the last week of unread ones once the terms are saved.
