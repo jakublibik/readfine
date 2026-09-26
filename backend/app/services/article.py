@@ -671,6 +671,8 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         ai_summary=state.ai_summary if state else None,
         ai_summary_truncated=state.ai_summary_truncated if state else False,
         ai_context=state.ai_context if state else None,
+        ai_score=state.ai_score if state else None,
+        lexical_score=state.lexical_score if state else None,
         story_id=article.story_id,
         labels=[
             {"id": r.id, "name": r.name, "color": r.color}
@@ -956,6 +958,8 @@ def _state_response(article, state, feed_title, custom_title, labels) -> Article
         is_archived=state.is_archived,
         is_saved=state.saved_at is not None,
         read_at=state.read_at,
+        ai_score=state.ai_score,
+        lexical_score=state.lexical_score,
         labels=labels,
     )
 

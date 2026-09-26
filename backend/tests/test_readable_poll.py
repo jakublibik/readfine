@@ -35,6 +35,8 @@ def make_article(**kwargs):
         "is_archived": False,
         "ai_summary": None,
         "ai_summary_truncated": False,
+        "ai_score": None,
+        "lexical_score": None,
         # No story by default: the content block carries the "same story" section, and
         # the poll re-renders that block, so the route asks every article for its group.
         "story_id": None,
@@ -105,7 +107,7 @@ class TestReadablePoll:
     def test_pending_summary_job_swaps_in_the_spinner(self, client, mock_db):
         article = make_article(readable_active=False, readable_status="success",
                                readable_content="<p>readable body</p>")
-        mock_db.scalar = AsyncMock(side_effect=[None, 42])  # settings, pending job id
+        mock_db.scalar = AsyncMock(side_effect=[None, 42, None])  # settings, pending job id, score in footer
         with (
             patch("app.routers.web.app.articles.get_article", new=AsyncMock(return_value=article)),
             patch("app.routers.web.app.articles._ai_availability", new=_with_ai()),
@@ -118,7 +120,7 @@ class TestReadablePoll:
     def test_no_summary_and_no_job_leaves_the_block_alone(self, client, mock_db):
         article = make_article(readable_active=False, readable_status="success",
                                readable_content="<p>readable body</p>")
-        mock_db.scalar = AsyncMock(side_effect=[None, None])  # settings, no job
+        mock_db.scalar = AsyncMock(side_effect=[None, None, None])  # settings, no job, score in footer
         with (
             patch("app.routers.web.app.articles.get_article", new=AsyncMock(return_value=article)),
             patch("app.routers.web.app.articles._ai_availability", new=_with_ai()),

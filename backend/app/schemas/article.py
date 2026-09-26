@@ -163,6 +163,10 @@ class ArticleResponse(BaseModel):
     ai_summary: str | None = None
     ai_summary_truncated: bool = False
     ai_context: str | None = None
+    # Both scorers' numbers, for the article's footer, which shows them side by side
+    # (the list shows only one).
+    ai_score: float | None = None
+    lexical_score: float | None = None
     labels: list[dict] = []
     # Story group this article belongs to, or None when nothing else covered it. Only
     # says a group exists — how much of it this reader may see is a separate question

@@ -1030,6 +1030,7 @@ async def htmx_article_detail(
         "chat_available": chat_available,
         "chat_messages": chat_messages,
         "related_count": related_count,
+        "show_score": bool(settings and settings.ai_score_show_in_list),
     })
 
 
@@ -1309,9 +1310,13 @@ async def _content_with_readtime_oob(
         )
         if story_dedup != DEDUP_OFF:
             related_count = await count_members(user.id, article.story_id, article.id, db)
+    # The scores in the footer are part of this block too, same reason.
+    show_score = bool(await db.scalar(
+        select(UserSettings.ai_score_show_in_list).where(UserSettings.user_id == user.id)
+    ))
     content_html = templates.env.get_template("app/partials/article_content.html").render(
         request=request, article=article, chat_available=False,
-        related_count=related_count,
+        related_count=related_count, show_score=show_score,
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (
