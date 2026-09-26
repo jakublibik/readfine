@@ -246,6 +246,16 @@ def search_score(
     return {}
 
 
+def pin_score_source(rows: list, source: str | None) -> None:
+    """Make the rows show the scorer the search filtered or sorted by.
+
+    Only "ai" and "basic" pin; AI, else basic is what a row shows anyway.
+    """
+    if source in ("ai", "basic"):
+        for row in rows:
+            row._score_source = source
+
+
 # The search's List filter: one of the reader's own lists, as the sidebar names them.
 SEARCH_STATES = ("starred", "saved", "archived")
 
@@ -647,6 +657,7 @@ async def render_list(
     # has_more counts what the query returned, not what survives collapsing: a full
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
+    pin_score_source(rows, score.get("score_source"))
     collapses = _collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
@@ -880,6 +891,7 @@ async def htmx_article_list_more(
     )
 
     has_more = len(rows) >= articles_per_page
+    pin_score_source(rows, score.get("score_source"))
     collapses = _collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
@@ -1138,6 +1150,9 @@ async def htmx_article_story_rows(
     rows = [m for m in members if m.id != article_id]
     if not rows:
         return HTMLResponse("")
+    # Only a score condition reaches here (story_scope leaves a bare score sort out),
+    # so under a list merely sorted by one scorer these rows show the usual number.
+    pin_score_source(rows, score.get("score_source"))
 
     extra_ctx: dict = {}
     if settings and getattr(settings, "ai_chat_enabled", False):

@@ -460,6 +460,22 @@ def effective_score(ai_score: float | None,
     return lexical_score, False
 
 
+def score_from(source: str | None, ai_score: float | None,
+               lexical_score: float | None) -> tuple[float | None, bool]:
+    """The score a list shows when it was filtered or sorted by one scorer.
+
+    A search on "basic ≥ 60" that showed each row's AI score would list a 40 among
+    its results, and a sort by the basic score would look unsorted. So the row shows
+    the number the list was built from: "ai" and "basic" pin that scorer (and show
+    nothing where it has no score), anything else is `effective_score`.
+    """
+    if source == "ai":
+        return ai_score, True
+    if source == "basic":
+        return lexical_score, False
+    return effective_score(ai_score, lexical_score)
+
+
 def effective_score_sql(state):
     """`effective_score` as a SQL expression over a UserArticleState (or alias).
 

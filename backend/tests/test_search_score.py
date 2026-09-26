@@ -166,3 +166,33 @@ async def test_count_matches_the_list(pg):
     items = await list_articles(user=user, db=pg, sort_order="score", **kw)
     assert await count_articles(user, pg, collapsing=True, **kw) == len(items) == 2
     assert await count_articles(user, pg, collapsing=False, q=token) == 4
+
+
+def _row(ai, lexical):
+    from app.schemas.article import ArticleListItem
+    return ArticleListItem.model_construct(ai_score=ai, lexical_score=lexical)
+
+
+def test_rows_show_the_scorer_the_search_used():
+    """A search on the basic score shows basic numbers, not the AI score beside them."""
+    from app.routers.web.app.articles import pin_score_source
+    basic, ai, either = _row(0.4, 0.72), _row(0.4, 0.72), _row(0.4, 0.72)
+    pin_score_source([basic], "basic")
+    pin_score_source([ai], "ai")
+    pin_score_source([either], "relevance")
+    assert (basic.score, basic.score_is_ai) == (0.72, False)
+    assert (ai.score, ai.score_is_ai) == (0.4, True)
+    assert (either.score, either.score_is_ai) == (0.4, True)
+
+
+def test_a_pinned_scorer_without_a_score_shows_nothing():
+    from app.routers.web.app.articles import pin_score_source
+    row = _row(None, 0.3)
+    pin_score_source([row], "ai")
+    assert row.score is None
+
+
+def test_pinned_source_stays_out_of_the_api():
+    row = _row(0.4, 0.72)
+    row._score_source = "basic"
+    assert "_score_source" not in row.model_dump()

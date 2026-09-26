@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
 
 class ArticleStateUpdate(BaseModel):
@@ -37,25 +37,33 @@ class _EffectiveScore:
     """`score` and `score_is_ai` for anything that carries both scorers' numbers.
 
     One definition for the list row and the story footer, so the two cannot show
-    different numbers for the same article.
+    different numbers for the same article. The one exception is a list searched by
+    one scorer, which sets `_score_source` so its rows show that scorer's number
+    (see `relevance_service.score_from`).
     """
     ai_score: float | None
     lexical_score: float | None
 
+    def _picked(self) -> tuple[float | None, bool]:
+        from app.services.relevance_service import score_from
+        return score_from(getattr(self, "_score_source", None), self.ai_score, self.lexical_score)
+
     @property
     def score(self) -> float | None:
-        """The best score this article has, from either scorer."""
-        from app.services.relevance_service import effective_score
-        return effective_score(self.ai_score, self.lexical_score)[0]
+        """The best score this article has, from either scorer, unless the list
+        pinned one."""
+        return self._picked()[0]
 
     @property
     def score_is_ai(self) -> bool:
         """Whether `score` came from the model rather than from word matching."""
-        from app.services.relevance_service import effective_score
-        return effective_score(self.ai_score, self.lexical_score)[1]
+        return self._picked()[1]
 
 
 class ArticleListItem(_EffectiveScore, BaseModel):
+    # Set by a list searched by one scorer ("ai" or "basic"); never serialized.
+    _score_source: str | None = PrivateAttr(default=None)
+
     id: int
     feed_id: int | None
     feed_title: str | None  # resolved from Feed or UserFeed.custom_title
