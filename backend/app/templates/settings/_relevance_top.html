@@ -1,0 +1,29 @@
+{# How the list as a whole picks: of the articles it scored `top_score` or more,
+   how many were read, against the reader's average. The basic relevance
+   counterpart of the AI score calibration in Stats. Shown above "How your terms
+   did" rather than inside it, being the one number worth seeing without opening
+   anything. Re-rendered out of band when a click on a suggestion reloads the
+   term table (`oob`), since the list changed and so did this. #}
+{% set top = sugg.top if sugg else none %}
+<div id="relevance-top" {% if oob %}hx-swap-oob="true"{% endif %} class="mb-3">
+{% if top and sugg.terms %}
+  {% set days = sugg.span_days or window_days %}
+  {% if top.matched and top.lift is not none %}
+  <div class="flex items-center gap-3">
+    <span class="text-2xl font-semibold tabular-nums {{ 'text-gray-900' if top.lift >= 1 else 'text-amber-600' }}">{{ top.lift | num(0 if top.lift >= 10 else 1) }}×</span>
+    <div class="text-sm leading-snug">
+      <div class="text-gray-700">Articles scoring {{ top_score }} or more, read against your average</div>
+      <div class="text-xs text-gray-500">{{ top.engaged | num }} of {{ top.matched | num }} read in the last {{ days }} days</div>
+    </div>
+  </div>
+  {% elif top.matched %}
+  <p class="text-sm text-gray-700">
+    You read {{ top.engaged | num }} of the {{ top.matched | num }} articles your terms scored {{ top_score }} or more
+    in the last {{ days }} days. The comparison with your average appears once you have read {{ min_top_engaged }} of them,
+    and {{ min_engaged }} articles in all.
+  </p>
+  {% else %}
+  <p class="text-sm text-gray-700">None of the articles from your feeds scored {{ top_score }} or more in the last {{ days }} days.</p>
+  {% endif %}
+{% endif %}
+</div>

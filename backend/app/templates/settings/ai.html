@@ -212,76 +212,74 @@
            {% if s.ai_scoring_enabled_default %}checked{% endif %}
            class="w-4 h-4 text-blue-600 rounded border-gray-300">
     <label for="ai_scoring_enabled_default" class="text-sm font-medium text-gray-700">
-      Enable article scoring
+      Enable AI scoring
     </label>
   </div>
-  <p class="text-xs text-gray-500 mt-1 ml-6">Score labeled articles by AI relevance using the scoring model. New feeds default to this setting. When disabled, scoring is skipped globally and AI filters are unavailable.</p>
+  <p class="text-xs text-gray-500 mt-1 ml-6">Rate labeled articles against your interest profile using the scoring model. New feeds default to this setting. When disabled, AI scoring is skipped globally and AI filters are unavailable.</p>
+  <p class="text-xs text-gray-500 mt-1 ml-6">
+    Scoring every article without a model, from a list of terms, is
+    <a href="/settings/relevance" class="text-blue-600 hover:underline">basic relevance</a>,
+    along with the option to show scores in the list.
+  </p>
 
   {# Indent and rule only from sm up: on a phone they would cost the profile
      textarea over a tenth of its width, and the block sits right under its
-     checkbox and dims with it, so the grouping still reads. #}
+     checkbox and dims with it, so the grouping still reads.
+
+     This profile is read by the model and by nothing else. Basic relevance has
+     its own term list on the Relevance page, and the two are never synchronised. #}
   <div id="scoring-dependent"
        class="mt-4 space-y-4 sm:ml-6 sm:pl-4 sm:border-l-2 sm:border-gray-100 {% if not s.ai_scoring_enabled_default %}opacity-50{% endif %}">
-    <div class="flex items-center gap-2">
-      <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
-             {% if s.ai_score_show_in_list %}checked{% endif %}
-             {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
-             class="w-4 h-4 text-blue-600 rounded border-gray-300">
-      <label for="ai_score_show_in_list" class="text-sm text-gray-700">
-        Show score in article list
-      </label>
-    </div>
-
     <div>
       <label for="ai_preference_text" class="text-sm font-medium text-gray-700">Interest profile</label>
-      <p class="text-xs text-gray-500 mb-2">What scoring rates each article against. The more specific, the better.</p>
+      <p class="text-xs text-gray-500 mb-2">
+        What the model rates each article against, in your own words. The more specific, the better.
+        You can label the lines, <code class="text-gray-600">High relevance:</code>,
+        <code class="text-gray-600">Moderate relevance:</code>, <code class="text-gray-600">Avoid:</code>,
+        which is what a generated profile looks like.
+      </p>
       {% if s.ai_scoring_enabled_default and not s.ai_preference_text %}
-      <p class="text-xs text-amber-600 mb-2">Scoring is enabled but no interest profile is set - articles will not be scored until you fill this in.</p>
+      <p class="text-xs text-amber-600 mb-2">AI scoring is on but there is no profile yet, so nothing is scored. Write one, or generate it below.</p>
       {% endif %}
 
       <textarea name="ai_preference_text" id="ai_preference_text" rows="7"
                 placeholder="e.g. High relevance: software engineering, open-source, AI research, European politics&#10;Moderate relevance: hardware, science reporting&#10;Avoid: celebrity news, sports"
                 {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
                 class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or '') }}</textarea>
-      <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / 5 000</div>
+      <div class="text-xs text-gray-400 text-right mt-0.5"><span id="pref-char-count">{{ (pref_text_submitted if pref_text_submitted is defined else (s.ai_preference_text or ''))|length }}</span> / {{ profile_max_chars | thousands }}</div>
 
-      <p class="text-xs text-gray-400 mt-1">Generated from your recently read and starred articles - <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.</p>
-      <div id="pref-cold-start-warning">
-        {% if pref_strong_count < 20 %}
-        <p class="text-xs text-amber-600 mt-1 mb-1">
-          Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far - profile will be supplemented with feed names until you reach 20. Keep reading and starring to improve accuracy.
-        </p>
-        {% endif %}
-      </div>
       <p class="text-xs text-gray-500 mt-1">
         {% if s.ai_preference_updated_at %}
           Last updated {{ s.ai_preference_updated_at | localtime('numdate') }}{% if s.ai_preference_source %} ({{ s.ai_preference_source }}){% endif %}.
         {% else %}
           Never generated.
         {% endif %}
-        {% if pref_auto_status == 'up_to_date' or pref_auto_status == 'cooldown' %}
-          Next automatic generation {{ pref_auto_detail.next_at | localtime('numdate') }}.
-        {% elif pref_auto_status == 'not_enough_new' %}
-          Next automatic generation after {{ pref_auto_detail.missing }} more article{{ 's' if pref_auto_detail.missing != 1 else '' }} you read or star.
-        {% elif pref_auto_status == 'cold_start' %}
-          Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
-        {% elif pref_auto_status == 'no_quality_model' %}
-          Automatic generation needs a main model configured.
-        {% elif pref_auto_status == 'no_api_key' %}
-          Automatic generation needs an API key for {{ provider_labels[pref_auto_detail.provider] or pref_auto_detail.provider }}.
-        {% elif pref_auto_status == 'no_endpoint' %}
-          Automatic generation needs the endpoint URL for your custom provider.
-        {% elif pref_auto_status == 'due' %}
-          The next generation runs tonight.
+      </p>
+
+      {# Whether generation is possible is one question with one answer, asked of
+         the main model slot (see quality_slot_blocker): the same one the nightly
+         job and the status line below use. #}
+      {% if gen_blocked == 'no_quality_model' %}
+      <p class="text-xs text-gray-500 mt-2">Generating the profile from your reading needs a main model, which you pick under Models above.</p>
+      {% elif gen_blocked == 'no_api_key' %}
+      <p class="text-xs text-gray-500 mt-2">Generating the profile from your reading needs an API key for {{ provider_labels[gen_blocked_detail.provider] or gen_blocked_detail.provider }}, which you can add under API Keys above.</p>
+      {% elif gen_blocked == 'no_endpoint' %}
+      <p class="text-xs text-gray-500 mt-2">Generating the profile from your reading needs the endpoint URL for your custom provider, under Models above.</p>
+      {% else %}
+      <p class="text-xs text-gray-500 mt-2">
+        {% if pref_strong_count > 80 %}
+          Generated from your recently read and starred articles: <span class="font-medium">{{ pref_strong_count }}</span> strong reading signals, the 80 most recent are used.
+        {% else %}
+          Generated from your recently read and starred articles: <span class="font-medium">{{ pref_strong_count }} / 80</span> strong reading signals available.
         {% endif %}
       </p>
-
-      {% if s.ai_preference_last_error %}
-      <p class="text-xs text-red-600 mt-1">
-        Last automatic generation failed{% if s.ai_preference_last_error_at %} ({{ s.ai_preference_last_error_at | localtime('numdate') }}){% endif %}: {{ s.ai_preference_last_error }}
-      </p>
-      {% endif %}
-
+      <div id="pref-cold-start-warning">
+        {% if pref_strong_count < 20 %}
+        <p class="text-xs text-amber-600 mt-1 mb-1">
+          Only {{ pref_strong_count }} article{{ 's' if pref_strong_count != 1 else '' }} with strong reading signals so far, so the profile will be supplemented with feed names{{ ' and your relevance terms' if s.relevance_terms and s.relevance_terms.strip() }} until you reach 20. Keep reading and starring to improve accuracy.
+        </p>
+        {% endif %}
+      </div>
       <div class="flex flex-wrap items-center gap-3 mt-2">
         <button type="button" id="btn-generate-preference"
                 hx-post="/settings/ai/generate-preference"
@@ -293,7 +291,7 @@
           ✨ Generate from reading history
         </button>
         <label class="text-sm text-gray-600 flex items-center gap-2">
-          Auto-generate
+          Regenerate automatically
           <select name="ai_preference_auto_days"
                   {% if not s.ai_scoring_enabled_default %}disabled{% endif %}
                   class="border border-gray-300 rounded px-2 py-1.5 text-sm disabled:opacity-50">
@@ -315,7 +313,25 @@
         {% endif %}
         <span id="preference-message" class="text-sm"></span>
       </div>
-      <p class="text-xs text-gray-400 mt-1">Automatic generation overwrites the profile with a freshly generated one and keeps the replaced version for one-click revert.</p>
+      <p class="text-xs text-gray-500 mt-1">
+        {% if pref_auto_status == 'up_to_date' or pref_auto_status == 'cooldown' %}
+          Next automatic generation {{ pref_auto_detail.next_at | localtime('numdate') }}.
+        {% elif pref_auto_status == 'not_enough_new' %}
+          Next automatic generation after {{ pref_auto_detail.missing }} more article{{ 's' if pref_auto_detail.missing != 1 else '' }} you read or star.
+        {% elif pref_auto_status == 'cold_start' %}
+          Automatic generation starts at {{ pref_auto_detail.needed }} strong reading signals.
+        {% elif pref_auto_status == 'due' %}
+          The next generation runs tonight.
+        {% endif %}
+        Automatic generation runs only while AI scoring is on. It overwrites the profile and keeps the replaced version for one-click revert.
+      </p>
+      {% endif %}
+
+      {% if s.ai_preference_last_error %}
+      <p class="text-xs text-red-600 mt-1">
+        Last automatic generation failed{% if s.ai_preference_last_error_at %} ({{ s.ai_preference_last_error_at | localtime('numdate') }}){% endif %}: {{ s.ai_preference_last_error }}
+      </p>
+      {% endif %}
     </div>
   </div>
 </section>

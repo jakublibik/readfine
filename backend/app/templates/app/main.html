@@ -177,7 +177,7 @@
     </svg>
   </button>
   <button id="mobile-bottom-quicklink" type="button"
-          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">{{ 'Labels' if has_labeled else 'All' }} →</button>
 </div>
 
 <!-- Mobile title bar (hideable mode, small bucket only) -->
@@ -191,8 +191,8 @@
     <span id="mobile-title-text" class="truncate text-sm font-medium text-gray-700"></span>
     <span id="mobile-title-count" class="hidden"></span>
   </div>
-  <button id="mobile-title-quicklink" type="button"
-          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">Labels →</button>
+  <button id="mobile-title-quicklink" type="button" data-alt="{{ 'labels' if has_labeled else 'all' }}"
+          class="flex-shrink-0 text-xs leading-none text-blue-500 hover:text-blue-700 bg-transparent border-0 p-0 cursor-pointer whitespace-nowrap">{{ 'Labels' if has_labeled else 'All' }} →</button>
 </div>
 
 <!-- Mobile sidebar backdrop -->
@@ -204,10 +204,11 @@
   <div class="absolute inset-0 bg-black/40" data-action="close-search"></div>
   {# min-h keeps the box from collapsing in the moment between opening the modal and
      its markup arriving (closeSearchModal empties it), so it grows into its final
-     height instead of popping open from nothing. Capped against the viewport so a
-     phone held sideways doesn't get a modal taller than the screen. #}
+     height instead of popping open from nothing. Capped against the overlay, not the
+     viewport: on a phone the overlay is fitted to the area above the keyboard
+     (openSearchModal), and vh would still measure the whole screen behind it. #}
   <div id="search-modal-content"
-       class="relative bg-white rounded-xl shadow-2xl w-[480px] max-w-[90vw] min-h-[min(24rem,70vh)] max-h-[90vh] overflow-y-auto">
+       class="relative bg-white rounded-xl shadow-2xl w-[480px] max-w-[90vw] min-h-[min(24rem,70%)] max-h-[90%] overflow-y-auto">
   </div>
 </div>
 

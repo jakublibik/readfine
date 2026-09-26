@@ -20,6 +20,8 @@ def make_settings(**kwargs):
         "ai_fast_provider": "anthropic",
         "ai_fast_model": "claude-haiku-4-5",
         "ai_scoring_enabled_default": False,
+        "basic_scoring_enabled": False,
+        "ai_preference_text": None,
         # Which slot a digest runs on is what these tests are about, so story folding
         # stays out of the way; it is covered in test_catchup_service.
         "story_dedup": "off",

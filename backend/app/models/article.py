@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlalchemy import (
     BigInteger, Boolean, Computed, DateTime, Float, Integer, SmallInteger,
-    String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint,
+    String, Text, ForeignKey, func, false, CheckConstraint, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -123,6 +123,12 @@ class UserArticleState(Base):
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     share_token: Mapped[str | None] = mapped_column(String(32), unique=True)
     ai_score: Mapped[float | None] = mapped_column(Float)
+    # BM25 of the article against the reader's interest profile, written at fetch
+    # time for every article rather than only the labeled ones. Its own column, not
+    # a fallback written into ai_score: the two scorers have to stay comparable over
+    # the same reader and the same profile, and every consumer picks which one it
+    # means. See app.services.relevance_service for what the number is worth.
+    lexical_score: Mapped[float | None] = mapped_column(Float)
     ai_summary: Mapped[str | None] = mapped_column(Text)
     # The model stopped on its output-token cap, so ai_summary ends mid-thought.
     # Kept beside the text rather than marked inside it: the summary is also served
@@ -130,6 +136,11 @@ class UserArticleState(Base):
     ai_summary_truncated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_context: Mapped[str | None] = mapped_column(Text)
     ai_filters_applied: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Relevance-score filters are waiting for this article's AI score (a label filter
+    # sent it to scoring at fetch). Cleared by the AI pass, or by the fallback over the
+    # basic score when the scoring never lands. See filter_service.
+    relevance_filters_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

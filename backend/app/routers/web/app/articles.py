@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
+from app.fetcher.story_params import SUPPRESS_THRESHOLD
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
@@ -22,12 +23,14 @@ from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
-    add_article_access_joins, article_access_predicate,
+    SCORE_SOURCES, add_article_access_joins, article_access_predicate, count_articles,
     filter_accessible_article_ids, get_article, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
+from app.services.relevance_terms_service import show_relevance_intro
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.story_service import (
     DEDUP_COLLAPSE,
     DEDUP_OFF,
@@ -224,6 +227,65 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
+def search_score(
+    score_source: str | None, score_op: str | None, score_val: float | None,
+    sort: str | None = None,
+) -> dict:
+    """The search's score knobs, cleaned up, keyed as ``list_articles`` takes them.
+
+    Holds a condition (source, operator, value) when one is set, or only the source
+    when the results are sorted by score without one. Empty means the search does
+    nothing with scores. The source falls back to AI, else basic, the number the
+    list shows.
+    """
+    src = score_source if score_source in SCORE_SOURCES else "relevance"
+    if score_op in ("gte", "lt") and score_val is not None:
+        return {"score_source": src, "score_op": score_op, "score_val": score_val}
+    if sort == "score":
+        return {"score_source": src}
+    return {}
+
+
+def pin_score_source(rows: list, source: str | None) -> None:
+    """Make the rows show the scorer the search filtered or sorted by.
+
+    Only "ai" and "basic" pin; AI, else basic is what a row shows anyway.
+    """
+    if source in ("ai", "basic"):
+        for row in rows:
+            row._score_source = source
+
+
+# The search's List filter: one of the reader's own lists, as the sidebar names them.
+SEARCH_STATES = ("starred", "saved", "archived")
+
+
+def search_state(state: str | None) -> str | None:
+    """The List filter, or None for any article."""
+    return state if state in SEARCH_STATES else None
+
+
+def search_filter_count(
+    *, read_status: str | None, scope_include: str | None, label_filter: str | None,
+    score: dict, since_days: int | None, state: str | None = None,
+) -> int:
+    """How many of the search modal's filters are on, for the results header.
+
+    The header says only how many, not which: listing them overflowed it, and the
+    modal is one click away. The sort is not a filter and does not count.
+    """
+    feed_ids, folder_ids = parse_scope_tokens(scope_include)
+    any_label, label_ids = parse_label_tokens(label_filter)
+    return sum((
+        read_status in ("unread", "read", "engaged", "not_engaged"),
+        bool(feed_ids or folder_ids),
+        bool(any_label or label_ids),
+        "score_op" in score,
+        bool(since_days),
+        bool(search_state(state)),
+    ))
+
+
 def _build_filter_params(
     *,
     feed_id: int | None,
@@ -240,6 +302,9 @@ def _build_filter_params(
     sort_order: str,
     read_status: str | None,
     label_filter: str | None,
+    score: dict,
+    since_days: int | None,
+    state: str | None = None,
 ) -> dict:
     """Active-filter dict carried into infinite-scroll pagination. Shared by the
     first-page and load-more endpoints; the caller passes the unread flag it uses
@@ -272,6 +337,11 @@ def _build_filter_params(
             params["read_status"] = read_status
         if label_filter:
             params["label_filter"] = label_filter
+        params.update(score)
+        if since_days:
+            params["since_days"] = since_days
+        if state:
+            params["state"] = state
     return params
 
 
@@ -282,7 +352,7 @@ def _build_more_qs(
     """Query string for the infinite-scroll "load more" sentinel.
 
     Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
-    and search isn't unread-filtered). Everything else uses a keyset cursor on
+    and search isn't unread-filtered), and so does the score sort. Everything else uses a keyset cursor on
     (sort_ts, id) so marking articles read mid-scroll can't shift the window and
     skip rows — see ix_articles_sort_ts.
 
@@ -298,7 +368,7 @@ def _build_more_qs(
     one scroll through one list, and a reload starts a fresh one.
     """
     params = dict(filter_params)
-    if q and q.strip():
+    if (q and q.strip()) or params.get("sort") == "score":
         params["offset"] = next_offset
     elif articles:
         params["cursor_ts"] = articles[-1].sort_ts.isoformat()
@@ -337,7 +407,7 @@ def _collapses_stories(
 
 def story_scope(
     *, feed_id=None, folder_id=None, scope_include=None, label_id=None,
-    labeled_only=False, label_filter=None, q=None,
+    labeled_only=False, label_filter=None, q=None, score=None, since_days=None,
 ) -> dict:
     """The filters that decide which members of a story belong in this view.
 
@@ -367,6 +437,14 @@ def story_scope(
         scope["label_filter"] = label_filter
     if q and q.strip():
         scope["q"] = q
+    # A score condition is part of what the list is about too, like the query: a
+    # "70 and up" search unfolds only the members at 70 and up, and counts only those
+    # on the row. The sort alone is not.
+    if score and "score_op" in score:
+        scope.update(score)
+    # So is a time window: "the last 24 hours" unfolds the members from that day.
+    if since_days:
+        scope["since_days"] = since_days
     return scope
 
 
@@ -443,6 +521,11 @@ async def htmx_article_list(
     sort: str | None = Query(None),
     read_status: str | None = Query(None),
     label_filter: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
+    state: str | None = Query(None),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -454,6 +537,8 @@ async def htmx_article_list(
         label_id=label_id, unread_only=unread_only, starred_only=starred_only,
         archived_only=archived_only, saved_only=saved_only, labeled_only=labeled_only,
         q=q, sort=sort, read_status=read_status, label_filter=label_filter,
+        score=search_score(score_source, score_op, score_val, sort),
+        since_days=since_days, state=state,
         offset=offset,
     )
 
@@ -476,6 +561,9 @@ async def render_list(
     sort: str | None = None,
     read_status: str | None = None,
     label_filter: str | None = None,
+    score: dict | None = None,
+    since_days: int | None = None,
+    state: str | None = None,
     offset: int = 0,
 ) -> HTMLResponse:
     """Render the article list for one set of filters.
@@ -494,8 +582,17 @@ async def render_list(
     settings = settings_result.scalar_one_or_none()
 
     # The search modal can submit with an empty query term as a pure filter view
-    # (scope / labels / status), so "search mode" is any of those, not just q.
-    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+    # (scope / labels / status / score / time / list), so "search mode" is any of
+    # those, not just q.
+    score = score or {}
+    state = search_state(state)
+    is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
+                 or bool(read_status) or bool(score) or bool(since_days) or bool(state))
+    # The search's List filter asks what the sidebar's lists ask. Kept apart from the
+    # view flags, which also pick the header and the empty state (Saved has its own).
+    in_starred = starred_only or state == "starred"
+    in_archived = archived_only or state == "archived"
+    in_saved = saved_only or state == "saved"
 
     sort_order = settings.default_sort_order if settings else "newest"
     # Search has its own sort selector (relevance default); other views use the
@@ -544,12 +641,15 @@ async def render_list(
         label_filter=label_filter,
         unread_only=effective_unread_only,
         read_status=read_status,
-        starred_only=starred_only,
-        archived_only=archived_only,
-        saved_only=saved_only,
+        starred_only=in_starred,
+        archived_only=in_archived,
+        saved_only=in_saved,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
+        **score,
+        since_days=since_days,
+        search=is_search,
         limit=articles_per_page,
         offset=offset,
     )
@@ -557,17 +657,32 @@ async def render_list(
     # has_more counts what the query returned, not what survives collapsing: a full
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
+    pin_score_source(rows, score.get("score_source"))
     collapses = _collapses_stories(
-        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-        archived_only=archived_only, saved_only=saved_only,
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
+        archived_only=in_archived, saved_only=in_saved,
     )
     articles, shown_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score, since_days=since_days,
         ),
     )
+
+    # How many rows the search found, for its header. First page only: the header
+    # isn't redrawn when more pages load.
+    result_count: int | None = None
+    if is_search and offset == 0:
+        result_count = await count_articles(
+            user, db, collapsing=collapses,
+            feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
+            label_id=label_id, label_filter=label_filter, read_status=read_status,
+            starred_only=in_starred, archived_only=in_archived, saved_only=in_saved,
+            labeled_only=labeled_only, q=q or None, **score, since_days=since_days,
+            search=True,
+        )
 
     # Title bar count for mobile hideable mode
     rows_drawn = row_count(story_dedup != DEDUP_OFF)
@@ -617,7 +732,8 @@ async def render_list(
         starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
-        read_status=read_status, label_filter=label_filter,
+        read_status=read_status, label_filter=label_filter, score=score,
+        since_days=since_days, state=state,
     )
 
     extra_headers: dict[str, str] = {}
@@ -634,11 +750,21 @@ async def render_list(
             user.id, [a.id for a in articles], db
         )
 
+    # The bar that points at Settings → Relevance, on the first page of a plain
+    # list only: search results and Saved have headers of their own.
+    extra_ctx["relevance_intro"] = bool(
+        articles and offset == 0 and not is_search and not saved_only
+        and show_relevance_intro(settings)
+    )
+
     if not articles and offset == 0:
         feed_count = await db.scalar(
             select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
         )
         extra_ctx["has_feeds"] = bool(feed_count)
+        # The welcome box stands in for the relevance bar while there are no
+        # articles to put the bar above.
+        extra_ctx["relevance_setup_hint"] = show_relevance_intro(settings)
     else:
         extra_ctx["has_feeds"] = True
 
@@ -653,6 +779,11 @@ async def render_list(
         saved_view=saved_only,
         search_query=q.strip() if q and q.strip() else None,
         filter_active=is_search,
+        filter_count=search_filter_count(
+            read_status=read_status, scope_include=scope_include,
+            label_filter=label_filter, score=score, since_days=since_days, state=state,
+        ),
+        result_count=result_count,
         # Search never marks rows read on scroll. Looking something up is not
         # reading it: the reader scans the results for the one they want, and the
         # rest should keep the state they had. It also sidesteps a pagination bug,
@@ -668,6 +799,7 @@ async def render_list(
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score, since_days=since_days,
         )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -696,6 +828,11 @@ async def htmx_article_list_more(
     sort: str | None = Query(None),
     read_status: str | None = Query(None),
     label_filter: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
+    state: str | None = Query(None),
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
@@ -711,7 +848,14 @@ async def htmx_article_list_more(
     )
     settings = settings_result.scalar_one_or_none()
 
-    is_search = bool(q and q.strip()) or bool(scope_include) or bool(label_filter) or bool(read_status)
+    score = search_score(score_source, score_op, score_val, sort)
+    state = search_state(state)
+    is_search = (bool(q and q.strip()) or bool(scope_include) or bool(label_filter)
+                 or bool(read_status) or bool(score) or bool(since_days) or bool(state))
+    # Same split as render_list: the List filter asks what the sidebar's lists ask.
+    in_starred = starred_only or state == "starred"
+    in_archived = archived_only or state == "archived"
+    in_saved = saved_only or state == "saved"
     sort_order = settings.default_sort_order if settings else "newest"
     if is_search:
         sort_order = sort or "relevance"
@@ -731,12 +875,15 @@ async def htmx_article_list_more(
         label_filter=label_filter,
         unread_only=unread_only,
         read_status=read_status,
-        starred_only=starred_only,
-        archived_only=archived_only,
-        saved_only=saved_only,
+        starred_only=in_starred,
+        archived_only=in_archived,
+        saved_only=in_saved,
         labeled_only=labeled_only,
         q=q or None,
         sort_order=sort_order,
+        **score,
+        since_days=since_days,
+        search=is_search,
         limit=articles_per_page,
         offset=offset,
         cursor_ts=cursor_ts,
@@ -744,9 +891,10 @@ async def htmx_article_list_more(
     )
 
     has_more = len(rows) >= articles_per_page
+    pin_score_source(rows, score.get("score_source"))
     collapses = _collapses_stories(
-        story_dedup=story_dedup, feed_id=feed_id, starred_only=starred_only,
-        archived_only=archived_only, saved_only=saved_only,
+        story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
+        archived_only=in_archived, saved_only=in_saved,
     )
     articles, next_stories = await _apply_story_collapse(
         rows, user, db, collapse=collapses, story_dedup=story_dedup,
@@ -754,6 +902,7 @@ async def htmx_article_list_more(
         scope=story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score, since_days=since_days,
         ),
     )
     filter_params = _build_filter_params(
@@ -762,7 +911,8 @@ async def htmx_article_list_more(
         starred_only=starred_only, archived_only=archived_only, saved_only=saved_only,
         labeled_only=labeled_only,
         q=q, is_search=is_search, sort_order=sort_order,
-        read_status=read_status, label_filter=label_filter,
+        read_status=read_status, label_filter=label_filter, score=score,
+        since_days=since_days, state=state,
     )
 
     extra_ctx = {}
@@ -781,6 +931,7 @@ async def htmx_article_list_more(
         "story_scope_qs": urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score, since_days=since_days,
         )),
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
@@ -879,6 +1030,7 @@ async def htmx_article_detail(
         "chat_available": chat_available,
         "chat_messages": chat_messages,
         "related_count": related_count,
+        "show_score": bool(settings and settings.ai_score_show_in_list),
     })
 
 
@@ -909,17 +1061,29 @@ async def htmx_article_related(
     member, inside the service. The group is global, so the second check is the one that
     keeps a feed the reader never subscribed to out of the footer.
     """
-    story_id = (await db.execute(
-        add_article_access_joins(select(Article.story_id), user.id)
+    row = (await db.execute(
+        add_article_access_joins(select(Article.story_id, Article.title_norm), user.id)
         .where(Article.id == article_id, article_access_predicate())
-    )).scalar_one_or_none()
+    )).one_or_none()
+    story_id = row.story_id if row else None
     if story_id is None or await _story_dedup_off(user.id, db):
         return HTMLResponse("")
 
-    members = await list_members(user.id, story_id, article_id, db)
+    # Admins get each member's similarity to this article, to check why something that
+    # repeats a read story was not kept out of unread. Empty title_norm is never matched.
+    is_admin = user.role == "admin"
+    members = await list_members(
+        user.id, story_id, article_id, db,
+        title_norm=(row.title_norm or "") if is_admin else None,
+    )
+    show_score = await db.scalar(
+        select(UserSettings.ai_score_show_in_list).where(UserSettings.user_id == user.id))
     return templates.TemplateResponse(request, "app/partials/story_members.html", {
         "article_id": article_id,
         "members": members,
+        "show_ai_score": bool(show_score),
+        "show_similarity": is_admin,
+        "suppress_threshold": SUPPRESS_THRESHOLD,
     })
 
 
@@ -936,6 +1100,10 @@ async def htmx_article_story_rows(
     labeled_only: bool = Query(False),
     label_filter: str | None = Query(None),
     q: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: float | None = Query(None, ge=0, le=100),
+    since_days: int | None = Query(None, ge=1, le=3650),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -969,6 +1137,7 @@ async def htmx_article_story_rows(
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     if settings is not None and settings.story_dedup == DEDUP_OFF:
         return HTMLResponse("")
+    score = search_score(score_source, score_op, score_val)
     members = await list_articles(
         user=user, db=db, story_id=story_id,
         sort_order=settings.default_sort_order if settings else "newest",
@@ -976,11 +1145,15 @@ async def htmx_article_story_rows(
         **story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, labeled_only=labeled_only, label_filter=label_filter, q=q,
+            score=score, since_days=since_days,
         ),
     )
     rows = [m for m in members if m.id != article_id]
     if not rows:
         return HTMLResponse("")
+    # Only a score condition reaches here (story_scope leaves a bare score sort out),
+    # so under a list merely sorted by one scorer these rows show the usual number.
+    pin_score_source(rows, score.get("score_source"))
 
     extra_ctx: dict = {}
     if settings and getattr(settings, "ai_chat_enabled", False):
@@ -1137,9 +1310,13 @@ async def _content_with_readtime_oob(
         )
         if story_dedup != DEDUP_OFF:
             related_count = await count_members(user.id, article.story_id, article.id, db)
+    # The scores in the footer are part of this block too, same reason.
+    show_score = bool(await db.scalar(
+        select(UserSettings.ai_score_show_in_list).where(UserSettings.user_id == user.id)
+    ))
     content_html = templates.env.get_template("app/partials/article_content.html").render(
         request=request, article=article, chat_available=False,
-        related_count=related_count,
+        related_count=related_count, show_score=show_score,
     )
     read_time = f"· {article.estimated_read_min} min read" if article.estimated_read_min else ""
     oob = (

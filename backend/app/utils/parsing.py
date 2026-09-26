@@ -164,14 +164,32 @@ def soften_nbsp_runs(html: str, limit: int = NBSP_RUN_LIMIT) -> str:
     return "".join(tokens)
 
 
+# Han ideographs (extension A, unified, compatibility) and kana, full- and half-width.
+# Chinese and Japanese put no spaces between words, so a run of these would count as
+# one word. Hangul is left out: Korean separates words with spaces.
+_UNSPACED_CJK_RE = re.compile(
+    "[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ]"
+)
+
+
+def count_text_words(text: str | None) -> int:
+    """Words in plain text. Chinese and Japanese characters count as half a word each,
+    about the average word length in those languages, so the 200 words a minute that
+    reading time assumes comes out near 400 characters a minute."""
+    if not text:
+        return 0
+    cjk = len(_UNSPACED_CJK_RE.findall(text))
+    rest = _UNSPACED_CJK_RE.sub(" ", text) if cjk else text
+    return len(re.findall(r"\w+", rest)) + (cjk + 1) // 2
+
+
 def count_words(html: str | None) -> int:
     """Words in an HTML body, tags stripped. Shared by every place that measures how
     much text a body holds, so reading time, the full-content detector and the
     subscribe heuristic all count the same way."""
     if not html:
         return 0
-    plain = nh3.clean(html, tags=set())
-    return len(re.findall(r"\w+", plain))
+    return count_text_words(nh3.clean(html, tags=set()))
 
 
 def safe_int(value, default=None) -> int | None:

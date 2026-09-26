@@ -1,9 +1,11 @@
 """Article service: listing, detail, state toggles, unread count management."""
 import logging
-from datetime import date, datetime, timezone
+import math
+import re
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, literal, literal_column, null, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import Text, cast, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -11,6 +13,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
+from app.services.relevance_service import effective_score_sql
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
 from app.utils.text import strip_html
@@ -123,18 +126,105 @@ def body_permanently_empty(article: Article, extract_readable: bool | None) -> b
     return True
 
 
+# The scorers a search can filter and sort by, as the filter editor names them.
+SCORE_SOURCES = ("ai", "basic", "relevance")
+
+# The time windows the search offers, in days back from now. A request takes any
+# number of days, so a view kept for later isn't bound to this menu.
+SINCE_DAYS_OPTIONS = {
+    1: "Last 24 hours", 3: "Last 3 days", 7: "Last 7 days", 30: "Last 30 days", 365: "Last 12 months",
+}
+
+
+def score_expr(source: str | None):
+    """The score column a search reads: AI, basic, or AI else basic (the default,
+    the same number the article list shows)."""
+    if source == "ai":
+        return UserArticleState.ai_score
+    if source == "basic":
+        return UserArticleState.lexical_score
+    return effective_score_sql(UserArticleState)
+
+
 def _format_date(dt: datetime | None) -> str:
     # Uses the per-request viewer timezone (set in the auth dependency).
     return format_local(dt, current_viewer_tz.get(), "short")
 
 
-_FTS_VECTOR = (
-    "to_tsvector('simple',"
-    " coalesce(articles.title,'') || ' ' ||"
-    " coalesce(articles.summary,'') || ' ' ||"
-    " coalesce(articles.content,'') || ' ' ||"
-    " coalesce(articles.readable_content,''))"
+# Accent-folded and weighted: title A, summary B, body D. Each part goes in twice, as
+# written ('simple') and stemmed ('english'), so "votes" finds "voting" while a query
+# the English parser drops as stop words ("The Who") still finds its exact words.
+# Must match the expression of idx_articles_search_fts (migration 0109) exactly, or
+# searches stop using the index.
+_FTS_TITLE = "immutable_unaccent(coalesce(articles.title, ''))"
+_FTS_SUMMARY = "immutable_unaccent(coalesce(articles.summary, ''))"
+_FTS_BODY = (
+    "immutable_unaccent(coalesce(articles.content, '') || ' ' || "
+    "coalesce(articles.readable_content, ''))"
 )
+_FTS_CONFIGS = ("simple", "english")
+_FTS_VECTOR = "(" + " || ".join(
+    f"setweight(to_tsvector('{config}', {part}), '{weight}')"
+    for part, weight in ((_FTS_TITLE, "A"), (_FTS_SUMMARY, "B"), (_FTS_BODY, "D"))
+    for config in _FTS_CONFIGS
+) + ")"
+
+# A word ending in "*" matches every word it begins ("zpráv*" finds "zprávami"). Two
+# letters at least: a one-letter prefix matches nearly everything and is slow.
+_PREFIX_WORD = re.compile(r"(\w{2,})\*")
+_SINGLE_LEXEME = re.compile(r"^'([^']+)'$")
+
+
+async def _search_tsquery(db: AsyncSession, q: str):
+    """The tsquery for a search box input: websearch syntax, accent-folded, each word
+    matching as written or stemmed, and ``word*`` a prefix match.
+
+    The query is parsed as written ('simple'), then every lexeme in it becomes
+    ``('as written' | 'stemmed')``. Doing it per word keeps the query's own logic
+    (every word, phrases, ``-word``): a stop word has no stemmed form and stays
+    required as written, where ORing a whole stemmed query would have dropped it and
+    turned "the who tour" into "tour".
+
+    websearch_to_tsquery has no prefix syntax, so the stars are taken out before it
+    parses the input, and the lexemes of the starred words are marked ``:*``, on both
+    forms ("running*" is 'running':* | 'run':*). Lexemes and stems come from Postgres
+    (lowered and unaccented as the vector is), so the rewrite finds them as the
+    parser wrote them.
+    """
+    prefixes = _PREFIX_WORD.findall(q)
+    folded = func.immutable_unaccent(re.sub(r"(\w)\*", r"\1", q))
+    written = func.websearch_to_tsquery("simple", folded)
+    try:
+        # Round-trip to PostgreSQL to catch malformed inputs before the full query
+        row = (await db.execute(select(
+            written.cast(Text),
+            *(
+                func.websearch_to_tsquery("simple", func.immutable_unaccent(word)).cast(Text)
+                for word in prefixes
+            ),
+        ))).one()
+    except Exception:
+        logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
+        return func.plainto_tsquery("simple", folded)
+
+    text_form = row[0]
+    lexemes = list(dict.fromkeys(re.findall(r"'([^']+)'", text_form)))
+    if not lexemes:
+        return written
+    starred = {m.group(1) for m in map(_SINGLE_LEXEME.match, row[1:]) if m}
+    stems = (await db.execute(select(
+        *(func.websearch_to_tsquery("english", lexeme).cast(Text) for lexeme in lexemes),
+    ))).one()
+
+    def expand(match: re.Match) -> str:
+        lexeme = match.group(1)
+        star = ":*" if lexeme in starred else ""
+        stem = _SINGLE_LEXEME.match(stems[lexemes.index(lexeme)] or "")
+        if stem is None or stem.group(1) == lexeme:
+            return f"'{lexeme}'{star}"
+        return f"( '{lexeme}'{star} | '{stem.group(1)}'{star} )"
+
+    return cast(re.sub(r"'([^']+)'", expand, text_form), TSQUERY)
 
 
 async def list_articles(
@@ -155,12 +245,26 @@ async def list_articles(
     story_ids: list[int] | None = None,
     q: str | None = None,
     sort_order: str = "newest",
+    score_source: str | None = None,
+    score_op: str | None = None,
+    score_val: float | None = None,
+    since_days: int | None = None,
+    search: bool = False,
     limit: int = 50,
     offset: int = 0,
     cursor_ts: datetime | None = None,
     cursor_id: int | None = None,
+    _count=None,
 ) -> list[ArticleListItem]:
-    """Return articles visible to the user with their read/star state."""
+    """Return articles visible to the user with their read/star state.
+
+    ``search`` marks a search view, with or without a query term. It searches what
+    a text search does (subscriptions plus what the reader keeps for good), so
+    adding a word to a pure filter view never widens what it can find.
+
+    ``_count`` is for ``count_articles`` only: a count expression to take over the
+    same filters instead of the rows, so the two can't disagree on what matches.
+    """
     # State/label views are anchored on user-owned state (star, archive, save, label)
     # that outlives the feed subscription: the feed may be unsubscribed or deleted
     # (Article.feed_id NULL), and a saved-by-URL article never had one, so the
@@ -182,7 +286,7 @@ async def list_articles(
     # of its own — a story is global, built across every feed in the instance — so it
     # carries ``article_access_predicate`` below and must keep the optional joins, or
     # a member the reader keeps only through a star would drop out of its own group.
-    searching = bool(q and q.strip())
+    searching = bool(q and q.strip()) or search
     feed_optional = (
         starred_only or archived_only or saved_only
         or label_id is not None or labeled_only or searching
@@ -241,13 +345,18 @@ async def list_articles(
 
     if folder_id is not None:
         if folder_id == 0:
-            stmt = stmt.where(UserFeed.folder_id == None)
+            # "No folder" means a subscription without one. Under the outer joins an
+            # article with no subscription at all has a NULL folder too, and must
+            # not pass for uncategorized.
+            stmt = stmt.where(UserFeed.id.is_not(None), UserFeed.folder_id == None)
         else:
             stmt = stmt.where(UserFeed.folder_id == folder_id)
 
     # Multi-select scope (same JSON format as filters/catchup: ["feed:1","folder:2"]).
-    # Empty lists mean "all feeds" — no restriction. Feed ownership is already
-    # enforced by the UserFeed join above, so unknown ids simply match nothing.
+    # Empty lists mean "all feeds" — no restriction. A scope names subscriptions, so
+    # it requires one: under the outer joins that is what keeps a kept article from
+    # a feed the reader left, or one saved by URL, out of it (and "folder:0" from
+    # matching it on its NULL folder). Unknown ids simply match nothing.
     if scope_include:
         scope_feed_ids, scope_folder_ids = parse_scope_tokens(scope_include)
         if scope_feed_ids or scope_folder_ids:
@@ -259,7 +368,7 @@ async def list_articles(
                     clauses.append(UserFeed.folder_id.is_(None))
                 else:
                     clauses.append(UserFeed.folder_id == fid)
-            stmt = stmt.where(or_(*clauses))
+            stmt = stmt.where(UserFeed.id.is_not(None), or_(*clauses))
 
     if label_id is not None:
         stmt = stmt.join(
@@ -297,13 +406,25 @@ async def list_articles(
             (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
 
-    # Search status filter (tri-state): "unread" / "read" / anything else = all.
+    # Search status filter: "unread" / "read" go by the read flag, which scrolling
+    # past and mark-all-read set too. "engaged" / "not_engaged" go by what the reader
+    # actually did, the Stats definition of read: long enough in front of it, or the
+    # original opened. Anything else = all.
     if read_status == "unread":
         stmt = stmt.where(
             (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
         )
     elif read_status == "read":
         stmt = stmt.where(UserArticleState.is_read == True)
+    elif read_status in ("engaged", "not_engaged"):
+        from app.services.story_service import ENGAGED_DWELL_SECONDS
+        engaged = (
+            (UserArticleState.dwell_seconds >= ENGAGED_DWELL_SECONDS)
+            | UserArticleState.link_opened.is_(True)
+        )
+        # No state row (outer join) means never opened: NULL counts as not engaged.
+        engaged = func.coalesce(engaged, False)
+        stmt = stmt.where(engaged if read_status == "engaged" else ~engaged)
 
     if starred_only:
         stmt = stmt.where(UserArticleState.is_starred == True)
@@ -314,31 +435,55 @@ async def list_articles(
     if saved_only:
         stmt = stmt.where(UserArticleState.saved_at.is_not(None))
 
+    # Search score condition and the "score" sort, over the scorer the reader picked.
+    # An article with no score from it (NULL) fails either comparison, so it never
+    # matches a condition and sorts last. score_val is on the 0–100 scale the list
+    # shows, and is held against the number shown there, which is rounded: a row
+    # reading 70 (stored 0.696) is "at least 70", not "below 70".
+    score = score_expr(score_source)
+    if score_op in ("gte", "lt") and score_val is not None:
+        cut = (math.ceil(score_val) - 0.5) / 100
+        stmt = stmt.where(score >= cut if score_op == "gte" else score < cut)
+
+    # Search time window: the last N days, counted back from now, so a window kept
+    # for later keeps moving with the calendar. On the date the list sorts by.
+    if since_days:
+        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        stmt = stmt.where(func.coalesce(Article.published_at, Article.fetched_at) >= since)
+
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
-        tsquery = func.websearch_to_tsquery('simple', q)
-        try:
-            # Round-trip to PostgreSQL to catch malformed inputs before the full query
-            await db.execute(select(tsquery))
-        except Exception:
-            logger.warning("websearch_to_tsquery failed for %r, falling back to plainto_tsquery", q)
-            tsquery = func.plainto_tsquery('simple', q)
+        # The query is accent-folded like the vector, so "zpravy" finds "zprávy".
+        tsquery = await _search_tsquery(db, q)
         stmt = stmt.where(fts_vec.op('@@')(tsquery))
+
+    if _count is not None:
+        return (await db.execute(stmt.with_only_columns(_count))).scalar() or 0
+
+    if q:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
         # Search honours its own sort selector; default is relevance (ts_rank).
-        if sort_order == "newest":
+        if sort_order == "score":
+            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
+        elif sort_order == "newest":
             stmt = stmt.order_by(coalesced.desc(), Article.id.desc())
         elif sort_order == "oldest":
             stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
         else:
+            # Normalization 1 divides by 1 + log(length), so a long body doesn't
+            # outrank a title match on the number of mentions alone.
             stmt = stmt.order_by(
-                func.ts_rank(fts_vec, tsquery).desc(),
+                func.ts_rank(fts_vec, tsquery, 1).desc(),
                 coalesced.desc(),
                 Article.id.desc(),
             )
     else:
         coalesced = func.coalesce(Article.published_at, Article.fetched_at)
-        if sort_order == "oldest":
+        if sort_order == "score":
+            # Offset-paged like text search: a score can't serve as a keyset cursor
+            # (it is NULL for half the list and changes when the terms do).
+            stmt = stmt.order_by(score.desc().nulls_last(), coalesced.desc(), Article.id.desc())
+        elif sort_order == "oldest":
             # id tiebreaker keeps the total order deterministic (matches
             # ix_articles_sort_ts) and is required for stable keyset pagination
             stmt = stmt.order_by(coalesced.asc(), Article.id.asc())
@@ -382,6 +527,16 @@ async def list_articles(
     ]
 
 
+async def count_articles(user: User, db: AsyncSession, *, collapsing: bool, **filters) -> int:
+    """How many rows ``list_articles`` would draw for these filters, all pages together.
+
+    One row per story where the list folds them (``collapsing``), one per article
+    otherwise; see ``story_service.row_count``. Takes the list's own filter arguments.
+    """
+    from app.services.story_service import row_count
+    return await list_articles(user, db, _count=row_count(collapsing), **filters)
+
+
 def _to_list_item(
     article, state, feed_title, custom_title, extract_readable, labels: list[dict]
 ) -> ArticleListItem:
@@ -414,6 +569,7 @@ def _to_list_item(
         is_archived=state.is_archived if state else False,
         is_saved=bool(state and state.saved_at),
         ai_score=state.ai_score if state else None,
+        lexical_score=state.lexical_score if state else None,
         labels=labels,
         # Only the group's identity. What the row says about it (how many other
         # sources, whether one was read) is user-scoped and gets annotated later.
@@ -515,6 +671,8 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         ai_summary=state.ai_summary if state else None,
         ai_summary_truncated=state.ai_summary_truncated if state else False,
         ai_context=state.ai_context if state else None,
+        ai_score=state.ai_score if state else None,
+        lexical_score=state.lexical_score if state else None,
         story_id=article.story_id,
         labels=[
             {"id": r.id, "name": r.name, "color": r.color}
@@ -800,6 +958,8 @@ def _state_response(article, state, feed_title, custom_title, labels) -> Article
         is_archived=state.is_archived,
         is_saved=state.saved_at is not None,
         read_at=state.read_at,
+        ai_score=state.ai_score,
+        lexical_score=state.lexical_score,
         labels=labels,
     )
 

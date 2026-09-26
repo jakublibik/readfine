@@ -43,12 +43,12 @@ async def _run_scoring_now(article: Article, user_id: int, db: AsyncSession) -> 
 
 
 async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) -> None:
-    """Apply AI filters for this article+user immediately."""
+    """Apply the filters that wait for the AI score (AI, and parked relevance ones)."""
     from sqlalchemy.orm import selectinload
 
     from app.models.feed import UserFeed
     from app.models.filter import Filter
-    from app.services.filter_service import FILTER_ORDER, _apply_ai_filters_for_state, is_ai_filter
+    from app.services.filter_service import FILTER_ORDER, _apply_ai_filters_for_state, filter_phase
 
     state = await db.scalar(
         select(UserArticleState).where(
@@ -65,7 +65,7 @@ async def _run_ai_filters_now(article: Article, user_id: int, db: AsyncSession) 
         .options(selectinload(Filter.conditions), selectinload(Filter.actions))
         .order_by(*FILTER_ORDER)
     )
-    ai_filters = [f for f in filters_result.scalars().all() if is_ai_filter(f)]
+    ai_filters = [f for f in filters_result.scalars().all() if filter_phase(f) != "fetch"]
 
     uf = None
     if article.feed_id is not None:

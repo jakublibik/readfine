@@ -80,6 +80,8 @@ def make_state(**kwargs):
         "article_id": 10,
         "ai_score": None,
         "ai_filters_applied": False,
+        "relevance_filters_pending": False,
+        "lexical_score": None,
         "ai_summary": None,
         "ai_summary_truncated": False,
         "is_starred": False,

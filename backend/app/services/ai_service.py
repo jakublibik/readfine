@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.ai import UserAiKey
 from app.models.user import UserSettings
+from app.services.relevance_service import parse_terms
 from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
 from app.utils.url_validator import async_validate_ai_endpoint_url, find_blocked_address
@@ -1305,6 +1306,38 @@ _PREF_INSTRUCTION = (
 )
 
 
+# Below this many strong signals (G1 + G2) the reading history is too thin to
+# stand on its own, so the generator adds what the reader told us directly:
+# their feeds and their basic relevance terms. Same number as
+# ai_profile_service.MIN_STRONG_SIGNALS.
+COLD_START_STRONG_SIGNALS = 20
+# A term list is written for keyword matching and can run long; the model needs
+# the gist, not all of it.
+_COLD_START_MAX_TERMS = 50
+
+
+def _cold_start_context(strong_count: int, feed_titles: list[str], terms: list[str]) -> str:
+    """Extra prompt context for a reader with little reading history.
+
+    Empty once there are enough strong signals. With a rich history the terms
+    would mostly repeat what the reading already shows, and the model tends to
+    overweight a short keyword the reader typed, so they are left out.
+    """
+    if strong_count >= COLD_START_STRONG_SIGNALS:
+        return ""
+    out = ""
+    if feed_titles:
+        out += "Subscribed feeds (general context):\n" + "\n".join(f"- {t}" for t in feed_titles) + "\n\n"
+    if terms:
+        out += (
+            "Topics the reader listed themselves (keywords for a simpler scorer). "
+            "Treat them as a starting point; where the reading behaviour below "
+            "points elsewhere, the behaviour wins:\n"
+            + "\n".join(f"- {t}" for t in terms[:_COLD_START_MAX_TERMS]) + "\n\n"
+        )
+    return out
+
+
 def _build_preference_prompt(groups: dict[str, list[tuple[str, str]]], feeds_str: str) -> str:
     """Assemble the preference-generation prompt from grouped (title, snippet) rows.
 
@@ -1399,21 +1432,24 @@ async def generate_preference_text(user_id: int, db: AsyncSession, client, provi
 
     strong_count = len(g1_rows) + len(g2_rows)
 
-    # Cold start fallback: include feed titles when behavioural data is sparse
-    feeds_str = ""
-    if strong_count < 20:
+    # Cold start fallback: feed titles and the reader's own relevance terms when
+    # behavioural data is sparse
+    feed_titles: list[str] = []
+    terms: list[str] = []
+    if strong_count < COLD_START_STRONG_SIGNALS:
         feeds = await db.execute(text("""
             SELECT f.title FROM feeds f
             JOIN user_feeds uf ON uf.feed_id = f.id
             WHERE uf.user_id = :uid LIMIT 25
         """), {"uid": user_id})
         feed_titles = [r[0] for r in feeds]
-        if feed_titles:
-            feeds_str = "Subscribed feeds (general context):\n" + "\n".join(f"- {t}" for t in feed_titles) + "\n\n"
+        terms = parse_terms(await db.scalar(
+            select(UserSettings.relevance_terms).where(UserSettings.user_id == user_id)
+        ))
 
     prompt = _build_preference_prompt(
         {"g1": g1_rows, "g2": g2_rows, "g3": g3_rows, "p1": p1_rows, "n1": n1_rows},
-        feeds_str,
+        _cold_start_context(strong_count, feed_titles, terms),
     )
     answer = await _complete(prompt, client, provider, model, max_tokens=500)
     return answer.text, answer.input_tokens, answer.output_tokens

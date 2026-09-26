@@ -5,8 +5,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse
-from sqlalchemy import func, select
+from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
@@ -14,8 +14,10 @@ from app.database import get_db
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
+from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
-from app.services.article import mark_scope_read
+from app.routers.web.settings.filters import score_sources
+from app.services.article import SINCE_DAYS_OPTIONS, mark_scope_read
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
@@ -42,6 +44,8 @@ async def main_app(
         await db.commit()
     settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
     settings = settings_result.scalar_one_or_none()
+    if settings and settings.onboarded_at is None:
+        return RedirectResponse("/welcome", status_code=303)
     bucket_small_max = settings.bucket_small_max if settings else 640
     bucket_medium_max = settings.bucket_medium_max if settings else 1100
     reading_font_size = settings.reading_font_size if settings else "md"
@@ -50,6 +54,9 @@ async def main_app(
     ai = await _ai_availability(settings, db)
     chat_available = ai.chat
     catchup_avail = ai.catchup
+    # Mobile quicklink: offer Labels only to users who actually label articles,
+    # everyone else gets All articles (checked per page load, so it follows along).
+    has_labeled = bool(await db.scalar(select(exists().where(ArticleLabel.user_id == user.id))))
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -61,6 +68,7 @@ async def main_app(
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
         "open_article_id": open_article_id,
+        "has_labeled": has_labeled,
     })
 
 
@@ -493,11 +501,23 @@ async def htmx_search_modal(
     sort: str | None = Query(None),
     status: str | None = Query(None),
     labels: str | None = Query(None),
+    score_source: str | None = Query(None),
+    score_op: str | None = Query(None),
+    score_val: str | None = Query(None),
+    since_days: str | None = Query(None),
+    state: str | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     user_feeds = await list_user_feeds(user, db, folder_order=await get_folder_order(db, user.id))
     user_labels = await list_labels(user, db)
+    app_s = await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    user_s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    # The same sources the filter editor offers: only the scorers this reader runs.
+    sources = score_sources(app_s, user_s)
+    # "any" is the Score row's own "no condition": the source picks whether to
+    # filter at all, and only a condition brings the operator and number with it.
+    score_cond = score_op in ("gte", "lt")
 
     return templates.TemplateResponse(request, "app/partials/search_modal.html", {
         "user_feeds": user_feeds,
@@ -506,4 +526,12 @@ async def htmx_search_modal(
         "sort_value": sort or None,
         "status_value": status or None,
         "label_value": labels or None,
+        "score_sources": sources,
+        "score_source_value": (score_source if score_source in sources else "relevance")
+                              if score_cond else "any",
+        "score_op_value": score_op if score_cond else None,
+        "score_val_value": score_val or "",
+        "since_options": SINCE_DAYS_OPTIONS,
+        "since_value": int(since_days) if since_days and since_days.isdigit() else None,
+        "state_value": state or None,
     })

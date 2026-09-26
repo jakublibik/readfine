@@ -1,0 +1,17 @@
+{# The term list's text area and the two lines under it, on the page and swapped
+   in whole (out of band) when a suggestion is applied and saved. `terms_text` is
+   what the area holds, `saved_text` what is saved (relevance-settings.js compares
+   the two), `terms_status` an optional message about the last change. #}
+<textarea name="relevance_terms" id="relevance_terms" rows="8"
+          data-saved="{{ saved_text }}"
+          {% if oob %}hx-swap-oob="true"{% endif %}
+          placeholder="sourdough baking, Formula 1, urban cycling, James Webb telescope"
+          class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono">{{ terms_text }}</textarea>
+{# Right under the list, where the edit happened: by the Save button at the bottom
+   of the page nobody sees it, least of all on a phone. #}
+<p id="relevance-terms-unsaved" {% if oob %}hx-swap-oob="true"{% endif %}
+   class="{{ '' if terms_text.strip() != saved_text.strip() else 'hidden ' }}text-sm text-amber-700 mt-1">
+  Unsaved changes. Save relevance settings at the bottom of the page to keep them.
+</p>
+<p id="relevance-terms-status" {% if oob %}hx-swap-oob="true"{% endif %}
+   class="{{ '' if terms_status else 'hidden ' }}text-sm {{ 'text-red-700' if terms_error else 'text-green-700' }} mt-1">{{ terms_status or '' }}</p>

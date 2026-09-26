@@ -37,7 +37,11 @@ from app.services.ai_service import (
     scoring_model_rejection,
     verify_ai_slot,
 )
-from app.services.ai_profile_service import AUTO_INTERVALS, preference_auto_status
+from app.services.ai_profile_service import (
+    AUTO_INTERVALS,
+    preference_auto_status,
+    quality_slot_blocker,
+)
 from app.services.stats_service import get_ai_cost_stats
 from app.utils.formats import format_thousands
 from app.templating import templates
@@ -52,16 +56,27 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # Matches the column width of user_settings.ai_custom_base_url.
 _MAX_BASE_URL_LEN = 500
 
+PROFILE_MAX_CHARS = 5000
+# Empty is a valid answer: it means "do not score". Anything else has to be long
+# enough to rate an article against, and two characters is not. The bar is low
+# on purpose, since "AI safety" is a real profile someone might stop at, and its
+# job is to catch a slip rather than to judge how someone reads.
+PROFILE_MIN_CHARS = 10
+
 
 async def _ai_page_context(user: User, db: AsyncSession) -> dict:
     from app.services.ai_service import _DEFAULT_SUMMARY_PROMPT, _DEFAULT_CONTEXT_PROMPT
     s = await _get_or_create_settings(user, db)
     keys = await list_api_keys(user.id, db)
     cost_stats = await get_ai_cost_stats(user.id, db, days=30)
-    strong_count = await get_preference_strong_count(user.id, db)
     # Same call the scheduler job makes, so the status line cannot promise a
     # run the job would skip.
     auto_status, auto_detail = await preference_auto_status(s, db)
+    # Whether the generate button is offered at all. Not "does a key exist
+    # somewhere": generation runs on the main model slot, so a slot left on
+    # "-- provider --", or pointed at a provider with no key, cannot generate no
+    # matter how many other keys are saved.
+    blocker = await quality_slot_blocker(s, db)
     # Title for the error panel's article link. Stays None once retention purge
     # clears the FK, which is why the panel treats the link as optional.
     error_article_title = None
@@ -78,10 +93,13 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "provider_labels": PROVIDER_LABELS,
-        "pref_strong_count": strong_count,
+        "pref_strong_count": await get_preference_strong_count(user.id, db),
         "pref_auto_status": auto_status,
         "pref_auto_detail": auto_detail,
         "pref_auto_intervals": AUTO_INTERVALS,
+        "gen_blocked": blocker[0] if blocker else None,
+        "gen_blocked_detail": blocker[1] if blocker else {},
+        "profile_max_chars": PROFILE_MAX_CHARS,
         "default_summary_prompt": _DEFAULT_SUMMARY_PROMPT,
         "default_context_prompt": _DEFAULT_CONTEXT_PROMPT,
         # So the field descriptions quote the same defaults the form validates
@@ -169,6 +187,8 @@ async def _prefs_error(
         ctx[f"{slot}_model_submitted"] = (form.get(f"ai_{slot}_model") or "").strip() or None
     if "ai_custom_base_url" in form:
         ctx["custom_base_url_submitted"] = (form.get("ai_custom_base_url") or "").strip() or None
+    if "ai_preference_text" in form:
+        ctx["pref_text_submitted"] = (form.get("ai_preference_text") or "").strip()
     return templates.TemplateResponse(request, "settings/ai.html", ctx)
 
 
@@ -236,6 +256,28 @@ async def settings_ai_preferences_save(
         except ValueError as exc:
             return await _prefs_error(request, user, db, str(exc), form)
 
+    # Absent while scoring is off: the profile block is disabled then, and a
+    # disabled control submits nothing, so applying it unconditionally would wipe
+    # the profile the moment someone saves with scoring turned off.
+    pref_text = None
+    if "ai_preference_text" in form:
+        pref_text = (form.get("ai_preference_text") or "").strip() or None
+        if pref_text and len(pref_text) > PROFILE_MAX_CHARS:
+            return await _prefs_error(
+                request, user, db,
+                f"Interest profile is too long ({len(pref_text)} characters). "
+                f"Maximum is {PROFILE_MAX_CHARS:,} characters.".replace(",", " "),
+                form,
+            )
+        if pref_text and len(pref_text) < PROFILE_MIN_CHARS:
+            return await _prefs_error(
+                request, user, db,
+                f"Interest profile is too short ({len(pref_text)} characters). "
+                f"Write at least {PROFILE_MIN_CHARS} characters worth of topics, "
+                f"or leave it empty to score nothing.",
+                form,
+            )
+
     fast_model = (form.get("ai_fast_model") or "").strip() or None
     # The fast slot is the one scoring runs on, and a model that always reasons has
     # nothing left of its ten tokens by the time it should answer — it would fail on
@@ -263,24 +305,13 @@ async def settings_ai_preferences_save(
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"
 
-    # Everything below belongs to scoring and is disabled in the form while
-    # scoring is off. A disabled control submits nothing, so applying these
-    # unconditionally would wipe the profile (and the schedule, and the score
-    # toggle) the moment someone saves with scoring turned off.
-    if "ai_preference_text" in form:
-        pref_text = (form.get("ai_preference_text") or "").strip() or None
-        if pref_text and len(pref_text) > 5000:
-            ctx = await _ai_page_context(user, db)
-            ctx["prefs_error"] = f"Interest profile is too long ({len(pref_text)} characters). Maximum is 5 000 characters."
-            ctx["pref_text_submitted"] = pref_text
-            return templates.TemplateResponse(request, "settings/ai.html", ctx)
-        # Order matters: the schedule and the text arrive in the same submit. A
-        # real text change stamps the timestamp (and resets the auto clock with
-        # it); switching the schedule on only stamps it when the text did not.
-        if pref_text != s.ai_preference_text:
-            s.ai_preference_text = pref_text
-            s.ai_preference_updated_at = datetime.now(timezone.utc)
-            s.ai_preference_source = "manual"
+    # Order matters, the schedule and the text arrive in the same submit: a real
+    # text change stamps the timestamp (and resets the auto clock with it),
+    # switching the schedule on only stamps it when the text did not change.
+    if "ai_preference_text" in form and pref_text != s.ai_preference_text:
+        s.ai_preference_text = pref_text
+        s.ai_preference_updated_at = datetime.now(timezone.utc)
+        s.ai_preference_source = "manual"
 
     if "ai_preference_auto_days" in form:
         try:
@@ -301,8 +332,6 @@ async def settings_ai_preferences_save(
                 s.ai_preference_updated_at = datetime.now(timezone.utc)
         s.ai_preference_auto_days = auto_days
 
-    if s.ai_scoring_enabled_default:
-        s.ai_score_show_in_list = form.get("ai_score_show_in_list") == "on"
     # Numeric limits. A rejected value falls back to its default and says so;
     # the notes are collected rather than flagged one by one, so submitting two
     # bad numbers reports both instead of hiding one behind the other.
@@ -433,19 +462,23 @@ async def settings_ai_generate_preference(
     await db.commit()
 
     strong_count = await get_preference_strong_count(user.id, db)
+    has_terms = bool((await db.scalar(
+        select(UserSettings.relevance_terms).where(UserSettings.user_id == user.id)
+    ) or "").strip())
     escaped = text_result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     warning_inner = (
         f'<p class="text-xs text-amber-600 mt-1 mb-1">'
         f'Only {strong_count} article{"s" if strong_count != 1 else ""} with strong reading signals so far — '
-        f'profile was supplemented with feed names. Keep reading and starring to improve accuracy.'
+        f'profile was supplemented with feed names{" and your relevance terms" if has_terms else ""}. Keep reading and starring to improve accuracy.'
         f'</p>'
     ) if strong_count < 20 else ""
     return HTMLResponse(
         f'<span class="text-green-600 text-sm">Generated — review and save below.</span>'
-        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="4"'
+        f'<textarea name="ai_preference_text" id="ai_preference_text" rows="7"'
         f' class="w-full border border-gray-300 rounded px-3 py-2 text-sm font-mono"'
         f' hx-swap-oob="true">{escaped}</textarea>'
         f'<div id="pref-cold-start-warning" hx-swap-oob="true">{warning_inner}</div>'
+        f'<span id="pref-char-count" hx-swap-oob="true">{len(text_result)}</span>'
     )
 
 

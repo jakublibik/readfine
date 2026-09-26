@@ -3,7 +3,13 @@ import re
 
 import pytest
 
-from app.utils.parsing import NBSP_RUN_LIMIT, rewrite_relative_urls, soften_nbsp_runs
+from app.utils.parsing import (
+    NBSP_RUN_LIMIT,
+    count_text_words,
+    count_words,
+    rewrite_relative_urls,
+    soften_nbsp_runs,
+)
 
 
 BASE = "https://example.com/2024/article-slug"
@@ -132,3 +138,30 @@ class TestSoftenNbspRuns:
         html = f"<p>On Wednesday,{NBSP}Anthropic{NBSP}and{NBSP}AMD{NBSP}announced a deal.</p>"
         once = soften_nbsp_runs(html)
         assert soften_nbsp_runs(once) == once
+
+
+class TestCountWords:
+    def test_latin_words(self):
+        assert count_words("<p>Three <b>short</b> words.</p>") == 3
+
+    def test_chinese_counts_two_characters_as_a_word(self):
+        # 8 ideographs with no spaces would otherwise be a single "word"
+        assert count_text_words("东京今天天气很好") == 4
+
+    def test_japanese_kana_and_kanji(self):
+        assert count_text_words("東京で地震が発生した") == 5
+
+    def test_mixed_latin_and_cjk(self):
+        # "OpenAI" is one word, the six ideographs three
+        assert count_text_words("OpenAI发布新的模型") == 4
+
+    def test_korean_counts_by_spaces(self):
+        assert count_text_words("서울 날씨가 좋다") == 3
+
+    def test_long_chinese_body_clears_full_content_threshold(self):
+        # A 1200-character article is a full article, not a 1-word teaser
+        assert count_words("<p>" + "中文内容。" * 300 + "</p>") > 500
+
+    def test_empty(self):
+        assert count_words(None) == 0
+        assert count_text_words("") == 0

@@ -9,9 +9,10 @@ from unittest.mock import AsyncMock, MagicMock
 from app.services.filter_service import (
     _execute_actions,
     _matches_condition,
-    _validate_ai_conditions,
+    _validate_score_conditions,
     _validate_published_at_conditions,
     evaluate_filter,
+    filter_phase,
     is_ai_filter,
 )
 
@@ -107,6 +108,44 @@ class TestTitleOrContent:
         article = make_article(title="Weather Report", content="Python is great")
         cond = make_condition("title_or_content", "not_contains", "python")
         assert _matches_condition(cond, article, None) is False
+
+
+class TestContainsUnicode:
+    def test_full_width_latin_matches_ascii(self):
+        article = make_article(title="ＡＩ研究の最前線")
+        cond = make_condition("title", "contains", "ai")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_half_width_katakana_matches_full_width(self):
+        article = make_article(title="ｶﾀｶﾅのニュース")
+        cond = make_condition("title", "contains", "カタカナ")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_decomposed_hangul_matches_composed(self):
+        import unicodedata
+        article = make_article(title=unicodedata.normalize("NFD", "서울 날씨"))
+        cond = make_condition("title", "contains", "날씨")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_chinese_substring(self):
+        article = make_article(title="东京今天天气很好")
+        cond = make_condition("title", "contains", "天气")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_casefold(self):
+        article = make_article(title="Die Straße ist gesperrt")
+        cond = make_condition("title", "contains", "STRASSE")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_not_contains_uses_the_same_folding(self):
+        article = make_article(title="ＡＩ研究")
+        cond = make_condition("title", "not_contains", "ai")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_equals_ignores_width_but_not_case(self):
+        article = make_article(author="ＡＢＣ News")
+        assert _matches_condition(make_condition("author", "equals", "ABC News"), article, None) is True
+        assert _matches_condition(make_condition("author", "equals", "abc news"), article, None) is False
 
 
 class TestNotContains:
@@ -522,8 +561,9 @@ class TestScope:
 
 # ── AI filters ────────────────────────────────────────────────────────────────
 
-def make_state(ai_score=None, ai_filters_applied=False):
-    return SimpleNamespace(ai_score=ai_score, ai_filters_applied=ai_filters_applied)
+def make_state(ai_score=None, ai_filters_applied=False, lexical_score=None):
+    return SimpleNamespace(ai_score=ai_score, ai_filters_applied=ai_filters_applied,
+                           lexical_score=lexical_score)
 
 
 class TestIsAiFilter:
@@ -547,45 +587,102 @@ class TestIsAiFilter:
         assert is_ai_filter(f) is False
 
 
-class TestValidateAiConditions:
+class TestValidateScoreConditions:
     def test_valid_gt(self):
-        _validate_ai_conditions([make_condition("ai_score", "gt", "70")])
+        _validate_score_conditions([make_condition("ai_score", "gt", "70")])
 
     def test_valid_lt(self):
-        _validate_ai_conditions([make_condition("ai_score", "lt", "30")])
+        _validate_score_conditions([make_condition("ai_score", "lt", "30")])
 
     def test_valid_equals(self):
-        _validate_ai_conditions([make_condition("ai_score", "equals", "50")])
+        _validate_score_conditions([make_condition("ai_score", "equals", "50")])
 
     def test_valid_boundary_0(self):
-        _validate_ai_conditions([make_condition("ai_score", "gt", "0")])
+        _validate_score_conditions([make_condition("ai_score", "gt", "0")])
 
     def test_valid_boundary_100(self):
-        _validate_ai_conditions([make_condition("ai_score", "lt", "100")])
+        _validate_score_conditions([make_condition("ai_score", "lt", "100")])
 
     def test_invalid_operator_contains(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_ai_conditions([make_condition("ai_score", "contains", "70")])
+            _validate_score_conditions([make_condition("ai_score", "contains", "70")])
 
     def test_invalid_operator_regex(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_ai_conditions([make_condition("ai_score", "regex", "70")])
+            _validate_score_conditions([make_condition("ai_score", "regex", "70")])
 
     def test_value_above_100(self):
         with pytest.raises(ValueError, match="between 0 and 100"):
-            _validate_ai_conditions([make_condition("ai_score", "gt", "101")])
+            _validate_score_conditions([make_condition("ai_score", "gt", "101")])
 
     def test_value_below_0(self):
         with pytest.raises(ValueError, match="between 0 and 100"):
-            _validate_ai_conditions([make_condition("ai_score", "lt", "-1")])
+            _validate_score_conditions([make_condition("ai_score", "lt", "-1")])
 
     def test_non_numeric_value(self):
         with pytest.raises(ValueError, match="must be a number"):
-            _validate_ai_conditions([make_condition("ai_score", "gt", "high")])
+            _validate_score_conditions([make_condition("ai_score", "gt", "high")])
 
     def test_non_ai_conditions_ignored(self):
         # Should not raise for regular fields
-        _validate_ai_conditions([make_condition("title", "contains", "abc")])
+        _validate_score_conditions([make_condition("title", "contains", "abc")])
+
+
+class TestFilterPhase:
+    """When a filter runs follows the latest score any of its conditions reads."""
+
+    def test_regular_filter_runs_at_fetch(self):
+        assert filter_phase(make_filter([make_condition("title", "contains", "x")])) == "fetch"
+
+    def test_basic_score_runs_at_fetch(self):
+        """The basic score is written before the filters run, so no waiting."""
+        assert filter_phase(make_filter([make_condition("basic_score", "gt", "50")])) == "fetch"
+
+    def test_relevance_score(self):
+        f = make_filter([make_condition("basic_score", "gt", "50"),
+                         make_condition("relevance_score", "gt", "50")])
+        assert filter_phase(f) == "relevance"
+
+    def test_ai_score_wins_over_the_rest(self):
+        f = make_filter([make_condition("relevance_score", "gt", "50"),
+                         make_condition("ai_score", "gt", "50")])
+        assert filter_phase(f) == "ai"
+        assert is_ai_filter(f) is True
+
+
+class TestValidateOtherScoreFields:
+    @pytest.mark.parametrize("field", ["basic_score", "relevance_score"])
+    def test_same_rules_as_ai_score(self, field):
+        _validate_score_conditions([make_condition(field, "lt", "30")])
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_score_conditions([make_condition(field, "contains", "30")])
+        with pytest.raises(ValueError, match="between 0 and 100"):
+            _validate_score_conditions([make_condition(field, "gt", "101")])
+
+
+class TestBasicAndRelevanceCondition:
+    def test_basic_reads_the_lexical_score_even_where_ai_scored(self):
+        """basic < 30 catches an article the AI gave 90; that is what Basic means."""
+        state = make_state(ai_score=0.9, lexical_score=0.1)
+        cond = make_condition("basic_score", "lt", "30")
+        assert _matches_condition(cond, make_article(), None, state) is True
+
+    def test_relevance_prefers_the_ai_score(self):
+        state = make_state(ai_score=0.9, lexical_score=0.1)
+        cond = make_condition("relevance_score", "lt", "30")
+        assert _matches_condition(cond, make_article(), None, state) is False
+
+    def test_relevance_falls_back_to_basic(self):
+        state = make_state(ai_score=None, lexical_score=0.1)
+        cond = make_condition("relevance_score", "lt", "30")
+        assert _matches_condition(cond, make_article(), None, state) is True
+
+    @pytest.mark.parametrize("field", ["basic_score", "relevance_score"])
+    def test_no_score_never_matches(self, field):
+        """A reader without terms has no basic score: NULL, not zero."""
+        state = make_state()
+        assert _matches_condition(make_condition(field, "lt", "30"), make_article(), None, state) is False
+        assert _matches_condition(make_condition(field, "lt", "30"), make_article(), None, None) is False
 
 
 class TestAiScoreCondition:

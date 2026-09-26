@@ -45,6 +45,10 @@
             <div class="ml-8 space-y-1">
               <p>Articles open in a clean reading view. Mark them <strong>read</strong>, <strong>star</strong>
                 favourites, or <strong>archive</strong> what you want to keep out of the way.</p>
+              <p><strong>Relevance</strong> scores every article by how well it matches what you follow, with no
+                API key: list a few specific topics in
+                <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Relevance</a> (see
+                <a href="#basic-relevance" class="text-blue-600 hover:underline dark:text-blue-400">How does basic relevance match my terms?</a>).</p>
               <p><strong>Labels</strong> are your own colour-coded tags for sorting articles by hand.
                 Create them in <a href="/settings/labels" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Labels</a>.</p>
               <p><strong>Filters</strong> do the tagging for you: each new article is checked against your
@@ -69,8 +73,8 @@
                 <a href="#custom-endpoint" class="text-blue-600 hover:underline dark:text-blue-400">your own endpoint</a>.</p>
               <p>Once enabled you get:</p>
               <ul class="list-disc ml-5 space-y-1">
-                <li><strong>Relevance scoring</strong>: each article gets a score based on your interests.
-                  A handy trick: add a <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">filter</a>
+                <li><strong>AI scoring</strong>: a more accurate relevance score, from a model that reads your interest
+                  profile, on the articles a filter labels. A handy trick: add a <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">filter</a>
                   that <em>marks low-score articles as read</em>, so they never clutter your list.</li>
                 <li><strong>Summaries</strong> and <strong>chat</strong> over any article.</li>
                 <li><strong>Catch me up &amp; briefings</strong>: a digest of what you missed over a period,
@@ -124,7 +128,12 @@
             <dt class="font-medium text-gray-900 dark:text-gray-100">Search from anywhere</dt>
             <dd>Press <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">/</kbd>
               to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
-              a search by feed, folder, label and read status, and sort the results.
+              a search by feed, folder, label, read status, your starred, saved or archived articles, score and how recently it was published (the last day, week, month and so on), and sort the results, best score first if you like.
+              A search with no words and just a score condition gives you a list of your best articles.
+              Besides Unread and Read, which follow the read mark (scrolling past sets it too), the status can be
+              Actually read or Not actually read: 30 seconds on the article or its original opened, as in Stats.
+              Not actually read with a score of 70 and up is a list of the good ones you missed.
+              Accents don't matter, English words match in their other forms (votes finds voting), and a word ending in * finds every word it begins: cycl* finds cycling and cyclist.
               <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">Esc</kbd>
               closes it.</dd>
           </div>
@@ -176,6 +185,8 @@
               <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">Setting up</div>
               <a href="#import" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I import from another reader?</a>
               <a href="#scrape" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What's a scrape feed?</a>
+              <a href="#scoring" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What is relevance scoring?</a>
+              <a href="#basic-relevance" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How does basic relevance match my terms?</a>
               <a href="#filters" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do filters work?</a>
               <a href="#regex" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do I use regex in a filter?</a>
             </div>
@@ -192,7 +203,6 @@
               <div class="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 dark:text-gray-500">AI</div>
               <a href="#ai-key" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Where do I get an AI key?</a>
               <a href="#custom-endpoint" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I use my own model or another provider?</a>
-              <a href="#scoring" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What is relevance scoring?</a>
               <a href="#catchup" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do Catch me up &amp; briefings work?</a>
             </div>
             <div class="break-inside-avoid mb-4">
@@ -227,6 +237,62 @@
               <a href="/settings/feeds" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Feeds</a>.</p>
           </div>
 
+          <div id="scoring" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is relevance scoring?</h4>
+            <p>Readfine can score every incoming article by how well it matches what you follow. There are two scorers.</p>
+            <p class="mt-2"><strong>Basic relevance</strong> needs no API key. It looks for your <strong>terms</strong>, a list you keep in <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Relevance</a>,
+              in the title and opening of each article. It matches words rather than meaning, so it is the weaker of the two;
+              <a href="#basic-relevance" class="text-blue-600 hover:underline dark:text-blue-400">how it matches</a>.</p>
+            <p class="mt-2"><strong>AI scoring</strong> rates labeled articles against your <strong>interest profile</strong>,
+              a short description of what you care about, which you write yourself or have the AI generate from the articles
+              you've read, in <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>.
+              Where both have a score, the AI one counts: the <strong>relevance score</strong> is the AI score where
+              an article has one and the basic score otherwise. That is the number the article list shows (unless a search
+              picked one scorer, then it shows that one) and Catch me up samples by. Combine scoring with a filter (e.g. mark anything below a threshold as read) to keep your list
+              focused; <a href="#score-filters" class="text-blue-600 hover:underline dark:text-blue-400">which score a filter reads</a>.</p>
+          </div>
+
+          <div id="basic-relevance" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How does basic relevance match my terms?</h4>
+            <p>Terms are separated by commas, semicolons or new lines, all three alike. The list is kept exactly as you
+              wrote it in <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Relevance</a>.
+              Saving a changed list rescores your unread articles from the last 7 days within a few minutes, and new
+              articles are scored as they arrive.</p>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>The words of one term add up.</strong> With the term <code>urban cycling</code>, an article titled
+                "Madrid opens new urban cycling routes" scores higher than "Urban housing costs rise", which has only one
+                of the two words. The words don't have to stand next to each other or in that order.</li>
+              <li><strong>Separate terms don't add up.</strong> An article scores by the one term it matches best. Written as two
+                terms, <code>urban, cycling</code>, the Madrid article would score only by its better word, no higher than
+                any article that just mentions cycling. So keep the
+                words of one topic together and put different topics apart.</li>
+              <li><strong>Rare words weigh more.</strong> A word that appears in few articles tells more than one that is
+                everywhere, so <code>sourdough</code> counts for more than <code>bread</code>. The same goes for your terms: specific ones
+                work better than general ones, since <code>health</code> on its own matches a large share of everything
+                that arrives.</li>
+              <li><strong>Related forms are found on their own.</strong> <code>cycling</code> also matches
+                <code>cyclist</code> and <code>cyclists</code>, at half the weight of an exact match. The same works in
+                languages with many word endings, such as Czech or Polish, with no language setting.</li>
+              <li><strong>Other languages are just more terms.</strong> If you read in two languages, add the translation:
+                <code>cycling, ciclismo</code>. Chinese, Japanese and Korean terms work too, and must appear in the article
+                as written.</li>
+            </ul>
+            <p class="mt-2">It looks at the title and the first 300 characters of each article and matches words, not
+              meaning: it cannot tell that a report from the Tour de France is about cycling unless one of your terms
+              appears in the report. That is why it is the weaker of the two scorers.</p>
+            <p class="mt-2"><strong>Suggestions.</strong> Below the list, Readfine suggests words that keep coming up in
+              articles you read (for half a minute, or opened or starred) in the last 30 days, and terms of yours that match
+              many articles you then skip. A click adds or removes the term and saves the list.
+              <strong>Why these?</strong> shows the headlines behind each suggestion, and <strong>Hide for 3 months</strong> there puts one away; it can come back
+              after that. Suggestions appear once you have read ten articles that way.</p>
+            <p class="mt-2"><strong>How your terms did.</strong> A table under the list shows, for each term, how many
+              articles it matched in the last 30 days, how many of those you read, and how that compares with your average.
+              At 3× you read what the term picks three times as often as the rest of your feeds; around 1× it picks no better
+              than chance. A term with no match may be misspelled or too narrow. If your feeds bring in more than 5,000 articles
+              in 30 days, the table and the suggestions look at the newest 5,000 (but never less than a week), and the table
+              says how many days that is.</p>
+          </div>
+
           <div id="filters" class="py-5 first:pt-0 last:pb-0">
             <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do filters work?</h4>
             <p>A filter is a set of <strong>conditions</strong> (match on title, content, author, score… with
@@ -234,10 +300,30 @@
               label, mark as read, or star. You can scope a filter to specific feeds or folders. Filters run on
               new articles as they arrive. Manage them in
               <a href="/settings/filters" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Filters</a>.</p>
+            <p class="mt-2">Filters run by their <strong>run order</strong>, from the lowest number up, and filters with the
+              same number run in name order. It matters with <strong>Stop on match</strong>: a matching filter with it
+              ticked keeps the filters after it in the same group from running on that article. Filters on the <strong>AI</strong>
+              and the <strong>AI, else basic</strong> score form their own group, listed below the others. They run after
+              the rest, so a Stop on match in the first group does not stop them.</p>
             <p class="mt-2">A new filter only sees articles that arrive after you save it. To catch up on what's
               already in your list, use <strong>Apply</strong> next to the filter, which runs it over your existing
               articles once and shows you what it will do before anything is committed. <strong>Test</strong> next to
               it checks the conditions against your articles without changing a thing.</p>
+            <p id="score-filters" class="mt-2">A <strong>score</strong> condition (0 to 100) reads one of three sources,
+              and the source also decides when the filter runs:</p>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Basic</strong>: the basic score. Every article has one as soon as it arrives, so the filter runs
+                with the others, in run order. It applies to articles the AI scored too, so <em>basic below 30 → mark
+                read</em> also catches an article the AI gave 90. A threshold of 70 lets through about one article in ten.</li>
+              <li><strong>AI</strong>: the AI score. Only articles a label filter sent to AI scoring have one, and the
+                filter runs once the score is in.</li>
+              <li><strong>AI, else basic</strong>: the relevance score, the same number the article list shows. The filter
+                runs right after the others, unless one of them sent the article to AI scoring; then it waits for the AI
+                score, and uses the basic score if scoring fails. A label it adds sends the article to AI scoring like
+                a label from any other filter.</li>
+            </ul>
+            <p class="mt-2">Each filter runs once per article. A condition whose scorer is off never matches; the filter
+              stays as it is and is marked in the list.</p>
           </div>
 
           <div id="regex" class="py-5 first:pt-0 last:pb-0">
@@ -391,8 +477,8 @@
             <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Where do I see how I'm reading?</h4>
             <p><a href="/settings/stats" class="text-blue-600 hover:underline dark:text-blue-400">Settings → Stats</a>
               shows what you actually get through: read rate, reading streak, how long you spend on an article, and
-              your most active day and hour. With an AI key it also checks how well relevance scores line up with your
-              real reading, points out <strong>missed gems</strong> the AI rated highly but you never opened, and
+              your most active day and hour. It shows how relevance scores are spread over what arrives, and with an
+              AI key it also checks how well the AI scores line up with your real reading, points out <strong>missed gems</strong> the AI rated highly but you never opened, and
               estimates what your AI usage costs.</p>
           </div>
 
@@ -442,15 +528,6 @@
                 <strong>Article content limit</strong> in Settings → AI from its 20 000 character default.</li>
               <li>Costs can't be shown for your own endpoint: the tokens are counted, the price column stays empty.</li>
             </ul>
-          </div>
-
-          <div id="scoring" class="py-5 first:pt-0 last:pb-0">
-            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">What is relevance scoring?</h4>
-            <p>With an AI key, Readfine scores incoming articles against your <strong>interest profile</strong>:
-              a short description of what you care about, which you write yourself or have the AI generate from
-              the articles you've read, in
-              <a href="/settings/ai" class="text-blue-600 hover:underline dark:text-blue-400">Settings → AI</a>. Combine scoring
-              with a filter (e.g. mark anything below a threshold as read) to keep your list focused.</p>
           </div>
 
           <div id="catchup" class="py-5 first:pt-0 last:pb-0">

@@ -96,6 +96,17 @@
   {% if article.readable_active %}
   {% include "app/partials/readable_progress.html" %}
   {% endif %}
+  {#- The footer line: labels, and on the right both scores. The list shows one
+      number (AI first); here the two sit side by side, so an AI 40 next to a
+      basic ~72 is seen for what it is. Beside the labels, not inside their
+      block, which label_picker.html replaces whole. -#}
+  {% set detail_scores = [] %}
+  {% if show_score %}
+    {% if article.ai_score is not none %}{% set _ = detail_scores.append(("AI", article.ai_score, "")) %}{% endif %}
+    {% if article.lexical_score is not none %}{% set _ = detail_scores.append(("", article.lexical_score, "~")) %}{% endif %}
+  {% endif %}
+  <div class="flex items-start gap-3">
+    <div class="flex-1 min-w-0">
   <div id="detail-labels-{{ article.id }}" class="detail-labels-area {% if article.labels %}flex flex-wrap items-center gap-x-3 gap-y-1 mt-4{% endif %}">
     {% for label in article.labels %}
       <span class="flex items-center gap-1 text-xs text-gray-500">
@@ -103,6 +114,17 @@
         {{ label.name }}
       </span>
     {% endfor %}
+  </div>
+    </div>
+    {% if detail_scores %}
+    <span class="mt-4 shrink-0 flex items-baseline gap-2 text-xs text-gray-500"
+          title="Relevance scores. AI reads the article; ~ marks the basic score, which matches your terms and is the weaker of the two.">
+      {%- for name, value, mark in detail_scores -%}
+        {%- set v = (value * 100) | round | int -%}
+        <span>{% if name %}{{ name }} {% endif %}<span class="{{ 'ai-score-high' if value >= 0.75 else ('ai-score-mid' if value >= 0.4 else 'ai-score-low') }}">{{ mark }}{{ v }}</span></span>
+      {%- endfor -%}
+    </span>
+    {% endif %}
   </div>
 
   {% include "app/partials/story_block.html" %}

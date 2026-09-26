@@ -87,6 +87,40 @@ A blank verdict is an error rather than a "no": a half-finished review would
 otherwise read as "the scorers found nothing", which is the one wrong answer this
 test could produce unnoticed.
 
+## 4. The whole corpus, across users
+
+For the multilingual questions (Cyrillic, CJK, document frequencies over a mixed
+corpus), one user's sample is not enough. `--corpus` exports every article
+fetched in the window from all feeds: title, the head of the feed description
+(what the lexical scorer reads at fetch time) and of the readable text. No user
+id, no reading state, no profile.
+
+```bash
+# on the server, after copying the script in as in section 1
+docker exec readfine-app-1 python /tmp/export_sample.py --corpus \
+    --since 2026-09-01 > ~/corpus.jsonl
+gzip ~/corpus.jsonl
+```
+
+## 5. The shipped basic scorer
+
+`run_terms_fidelity.py` runs the scorer as it ships
+(`relevance_service.bm25_raw` over a term list) next to the prototype that step
+2b of the plan measured, on both windows, and fails unless every score matches
+and the AUCs are the recorded ones. Rerun it after any change to tokenization or
+scoring. `load_sample` reads plain JSONL, so decompress the samples first (into
+a temp directory, not a synced one).
+
+```bash
+uv run --script run_terms_fidelity.py --sample sample_clean.jsonl \
+    --august-sample sample.jsonl --corpus corpus.jsonl.gz --terms-dir terms_v1
+```
+
+`run_lexical_fidelity.py`, and the fidelity block at the top of
+`run_terms_eval.py`, check the scorer as it was before the term list (AI profile
+as topics, bigram option, length normalization). That API is gone; to rerun
+them, check out `6a62e7a`.
+
 ## Notes
 
 Notes on what the runs do, because they are decisions and not details:

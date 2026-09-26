@@ -27,7 +27,7 @@ def make_article(
     feed_title: str = "Test Feed",
     published_at: datetime | None = None,
     fetched_at: datetime | None = None,
-    ai_score: float | None = None,
+    score: float | None = None,
     ai_summary: str | None = None,
     readable_content: str | None = None,
     content: str | None = None,
@@ -45,7 +45,7 @@ def make_article(
         published_at=published_at,
         fetched_at=fetched_at or datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc),
         folder_id=folder_id,
-        ai_score=ai_score,
+        score=score,
         ai_summary=ai_summary,
         readable_content=readable_content,
         content=content,
@@ -63,7 +63,7 @@ def articles_on_day(day_offset: int, count: int, base_score: float = 0.5, id_sta
         make_article(
             id=id_start + i,
             published_at=base + timedelta(minutes=i),
-            ai_score=base_score - i * 0.01,
+            score=base_score - i * 0.01,
         )
         for i in range(count)
     ]
@@ -311,15 +311,15 @@ class TestApplyCatchupLimit:
         assert len(ids) == len(set(ids))
 
     def test_high_score_articles_preferred_in_spillover(self):
-        """Spillover pass should prefer higher ai_score articles."""
+        """Spillover pass should prefer higher scoring articles."""
         # Day 1: 5 articles with low score (will fill base quota only)
         # Days 2-7: articles with varied scores
         day1 = [make_article(id=i, published_at=datetime(2024, 6, 1, tzinfo=timezone.utc),
-                              ai_score=0.1) for i in range(1, 6)]
+                              score=0.1) for i in range(1, 6)]
         high_score = [make_article(id=100+i, published_at=datetime(2024, 6, 2, tzinfo=timezone.utc),
-                                   ai_score=0.9) for i in range(20)]
+                                   score=0.9) for i in range(20)]
         low_score = [make_article(id=200+i, published_at=datetime(2024, 6, 2, tzinfo=timezone.utc),
-                                  ai_score=0.1) for i in range(80)]
+                                  score=0.1) for i in range(80)]
         articles = day1 + high_score + low_score
         result = apply_catchup_limit(articles, 30, scoring_available=True)
         result_ids = {a.id for a in result}
@@ -421,9 +421,9 @@ class TestResolveStoryMode:
 class TestFoldStories:
     def test_keeps_one_per_story_and_counts_the_rest(self):
         arts = [
-            make_article(id=1, story_id=7, ai_score=0.9),
-            make_article(id=2, story_id=7, ai_score=0.5),
-            make_article(id=3, story_id=7, ai_score=0.4),
+            make_article(id=1, story_id=7, score=0.9),
+            make_article(id=2, story_id=7, score=0.5),
+            make_article(id=3, story_id=7, score=0.4),
         ]
         kept = fold_stories(arts)
         assert [a.id for a in kept] == [1]
@@ -431,8 +431,8 @@ class TestFoldStories:
 
     def test_highest_score_represents_the_story(self):
         arts = [
-            make_article(id=1, story_id=7, ai_score=0.2),
-            make_article(id=2, story_id=7, ai_score=0.8),
+            make_article(id=1, story_id=7, score=0.2),
+            make_article(id=2, story_id=7, score=0.8),
         ]
         assert [a.id for a in fold_stories(arts)] == [2]
 
@@ -440,8 +440,8 @@ class TestFoldStories:
         # The snippet is most of what the model sees, and the first report of an event
         # is often the wire piece extraction failed on.
         arts = [
-            make_article(id=1, story_id=7, ai_score=0.5, has_readable=False),
-            make_article(id=2, story_id=7, ai_score=0.5, has_readable=True),
+            make_article(id=1, story_id=7, score=0.5, has_readable=False),
+            make_article(id=2, story_id=7, score=0.5, has_readable=True),
         ]
         assert [a.id for a in fold_stories(arts)] == [2]
 
@@ -477,19 +477,19 @@ class TestFoldStories:
 
     def test_order_is_preserved(self):
         arts = [
-            make_article(id=1, story_id=7, ai_score=0.1),
+            make_article(id=1, story_id=7, score=0.1),
             make_article(id=2),
-            make_article(id=3, story_id=7, ai_score=0.9),
+            make_article(id=3, story_id=7, score=0.9),
             make_article(id=4),
         ]
         assert [a.id for a in fold_stories(arts)] == [2, 3, 4]
 
     def test_two_stories_stay_apart(self):
         arts = [
-            make_article(id=1, story_id=7, ai_score=0.9),
-            make_article(id=2, story_id=8, ai_score=0.8),
-            make_article(id=3, story_id=7, ai_score=0.1),
-            make_article(id=4, story_id=8, ai_score=0.2),
+            make_article(id=1, story_id=7, score=0.9),
+            make_article(id=2, story_id=8, score=0.8),
+            make_article(id=3, story_id=7, score=0.1),
+            make_article(id=4, story_id=8, score=0.2),
         ]
         kept = fold_stories(arts)
         assert [a.id for a in kept] == [1, 2]
@@ -504,8 +504,8 @@ class TestFoldedCountInSampling:
     def test_coverage_breaks_a_score_tie(self):
         # Same score, same day: the one that stands for four other articles goes in.
         base = datetime(2024, 6, 1, tzinfo=timezone.utc)
-        plain = make_article(id=1, ai_score=0.5, published_at=base)
-        covered = make_article(id=2, ai_score=0.5, published_at=base,
+        plain = make_article(id=1, score=0.5, published_at=base)
+        covered = make_article(id=2, score=0.5, published_at=base,
                                story_id=7, folded_count=4)
 
         picked = apply_catchup_limit([plain, covered], limit=1, scoring_available=True)
@@ -513,8 +513,8 @@ class TestFoldedCountInSampling:
 
     def test_it_never_beats_a_better_score(self):
         base = datetime(2024, 6, 1, tzinfo=timezone.utc)
-        better = make_article(id=1, ai_score=0.9, published_at=base)
-        covered = make_article(id=2, ai_score=0.5, published_at=base,
+        better = make_article(id=1, score=0.9, published_at=base)
+        covered = make_article(id=2, score=0.5, published_at=base,
                                story_id=7, folded_count=9)
 
         picked = apply_catchup_limit([better, covered], limit=1, scoring_available=True)
@@ -592,3 +592,53 @@ class TestCatchupPromptLines:
              "sources": 3, "snippet": "the body"},
         ])
         assert "[⧉ +3] — the body" in prompt
+
+
+class TestScoringAvailable:
+    """Whether a digest has scores to sample by.
+
+    This used to be answered twice, in the catch-me-up router and in the briefing
+    service, and both read ai_scoring_enabled_default alone. A reader on basic
+    relevance has a score on every article and would have been sampled as though
+    they had none.
+    """
+
+    @staticmethod
+    def _settings(**kwargs):
+        from types import SimpleNamespace
+        return SimpleNamespace(**{
+            "ai_scoring_enabled_default": False,
+            "basic_scoring_enabled": False,
+            "relevance_terms": None,
+            **kwargs,
+        })
+
+    def test_basic_relevance_counts_even_with_ai_off_for_the_instance(self):
+        from app.services.catchup_service import scoring_available
+        s = self._settings(basic_scoring_enabled=True, relevance_terms="topics")
+        assert scoring_available(False, s) is True
+
+    def test_basic_relevance_without_terms_does_not_count(self):
+        from app.services.catchup_service import scoring_available
+        s = self._settings(basic_scoring_enabled=True)
+        assert scoring_available(True, s) is False
+
+    def test_an_ai_profile_alone_does_not_make_basic_count(self):
+        """The AI profile is the model's; basic relevance reads the terms."""
+        from app.services.catchup_service import scoring_available
+        s = self._settings(basic_scoring_enabled=True, ai_preference_text="topics")
+        assert scoring_available(True, s) is False
+
+    def test_ai_scoring_counts_while_the_instance_allows_it(self):
+        from app.services.catchup_service import scoring_available
+        s = self._settings(ai_scoring_enabled_default=True)
+        assert scoring_available(True, s) is True
+        assert scoring_available(False, s) is False
+
+    def test_neither_scorer_means_no_score(self):
+        from app.services.catchup_service import scoring_available
+        assert scoring_available(True, self._settings()) is False
+
+    def test_an_account_without_settings_has_no_score(self):
+        from app.services.catchup_service import scoring_available
+        assert scoring_available(True, None) is False

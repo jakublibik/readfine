@@ -14,29 +14,97 @@
            placeholder="Search articles…"
            class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
            autofocus>
+    <p class="mt-1 text-xs text-gray-500">End a word with * to find every word it begins: cycl* finds cycling and cyclist.</p>
   </div>
 
-  <!-- Sort + status -->
+  {% set select_cls = "w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500" %}
+  <!-- Sort + time window (counted back from now) -->
   <div class="mb-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
     <div class="flex-1">
       <label for="search-sort" class="block text-xs font-medium text-gray-600 mb-1">Sort by</label>
-      <select id="search-sort"
-              class="w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <option value="relevance"{% if not sort_value or sort_value == 'relevance' %} selected{% endif %}>Relevance</option>
+      <select id="search-sort" class="{{ select_cls }}">
+        <option value="relevance"{% if not sort_value or sort_value == 'relevance' %} selected{% endif %}>Search relevance</option>
         <option value="newest"{% if sort_value == 'newest' %} selected{% endif %}>Newest first</option>
         <option value="oldest"{% if sort_value == 'oldest' %} selected{% endif %}>Oldest first</option>
+        {% if score_sources %}
+        <option value="score"{% if sort_value == 'score' %} selected{% endif %}>Score, highest first</option>
+        {% endif %}
       </select>
     </div>
     <div class="flex-1">
-      <label for="search-status" class="block text-xs font-medium text-gray-600 mb-1">Status</label>
-      <select id="search-status"
-              class="w-full text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
-        <option value="all"{% if not status_value or status_value == 'all' %} selected{% endif %}>All</option>
-        <option value="unread"{% if status_value == 'unread' %} selected{% endif %}>Unread</option>
-        <option value="read"{% if status_value == 'read' %} selected{% endif %}>Read</option>
+      <label for="search-since" class="block text-xs font-medium text-gray-600 mb-1">Published</label>
+      <select id="search-since" class="{{ select_cls }}">
+        <option value=""{% if not since_value %} selected{% endif %}>Any time</option>
+        {% for days, label in since_options.items() %}
+        <option value="{{ days }}"{% if since_value == days %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
       </select>
     </div>
   </div>
+
+  <!-- Status + list: what the reader has done with an article -->
+  <div class="mb-4 flex flex-col sm:flex-row gap-3 sm:gap-4">
+    <div class="flex-1">
+      <label for="search-status" class="block text-xs font-medium text-gray-600 mb-1">Status</label>
+      <select id="search-status" class="{{ select_cls }}">
+        <option value="all"{% if not status_value or status_value == 'all' %} selected{% endif %}>All</option>
+        <option value="unread"{% if status_value == 'unread' %} selected{% endif %}>Unread</option>
+        <option value="read"{% if status_value == 'read' %} selected{% endif %}>Read</option>
+        <optgroup label="By time spent">
+          <option value="engaged"{% if status_value == 'engaged' %} selected{% endif %}>Actually read</option>
+          <option value="not_engaged"{% if status_value == 'not_engaged' %} selected{% endif %}>Not actually read</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="flex-1">
+      <label for="search-state" class="block text-xs font-medium text-gray-600 mb-1">List</label>
+      <select id="search-state" class="{{ select_cls }}">
+        <option value=""{% if not state_value %} selected{% endif %}>Any</option>
+        <option value="starred"{% if state_value == 'starred' %} selected{% endif %}>Starred</option>
+        <option value="saved"{% if state_value == 'saved' %} selected{% endif %}>Saved</option>
+        <option value="archived"{% if state_value == 'archived' %} selected{% endif %}>Archive</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Score: the same source choice as a filter's score condition, plus Any for no
+       condition. The operator, number and note show once a scorer is picked. -->
+  {% if score_sources %}
+  {% set source_labels = {'ai': 'AI', 'basic': 'Basic', 'relevance': 'AI, else basic'} %}
+  {#- Two columns like Status and List. Off, the condition keeps its place on a wide
+      screen (nothing jumps when it shows) and gives it up on a narrow one, where
+      the columns stack and an empty block would only push the form down. The note
+      under the row goes away entirely, so Any leaves no gap above Search in. -#}
+  {% set score_off = score_source_value == 'any' %}
+  {% set cond_off = 'invisible max-sm:hidden ' if score_off else '' %}
+  <div class="mb-4">
+    <div class="flex flex-col sm:flex-row gap-3 sm:gap-4">
+      <div class="flex-1">
+        <label for="search-score-source" class="block text-xs font-medium text-gray-600 mb-1">Score</label>
+        <select id="search-score-source" class="{{ select_cls }}">
+          <option value="any"{% if score_off %} selected{% endif %}>Any</option>
+          {% for src in score_sources %}
+          <option value="{{ src }}"{% if src == score_source_value %} selected{% endif %}>{{ source_labels[src] }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="{{ cond_off }}search-score-cond flex-1">
+        <label for="search-score-op" class="block text-xs font-medium text-gray-600 mb-1">Condition</label>
+        <div class="flex gap-2">
+          <select id="search-score-op"
+                  class="flex-1 min-w-0 text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+            <option value="gte"{% if score_op_value != 'lt' %} selected{% endif %}>at least</option>
+            <option value="lt"{% if score_op_value == 'lt' %} selected{% endif %}>below</option>
+          </select>
+          <input type="number" id="search-score-val" min="0" max="100" step="1" inputmode="numeric"
+                 aria-label="Score value" value="{{ score_val_value }}"
+                 class="w-20 text-sm border border-gray-300 rounded px-2 py-1.5 text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500">
+        </div>
+      </div>
+    </div>
+    <p id="search-score-note" class="{{ 'hidden ' if score_off }}mt-1 text-xs text-gray-500">Scores run from 0 to 100. Articles without a score don't match.</p>
+  </div>
+  {% endif %}
 
   <!-- Scope -->
   <div class="mb-4">

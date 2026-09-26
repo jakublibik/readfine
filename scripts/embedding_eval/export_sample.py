@@ -31,6 +31,8 @@ from app.config import settings
 # reproduces `normalize_content` exactly.
 CONTENT_MAX_CHARS = 2000
 BODY_EXPORT_CHARS = 2400
+# The lexical scorer reads 300; a little more leaves room to test longer inputs.
+CORPUS_BODY_CHARS = 600
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -97,9 +99,56 @@ async def export_unscored(session, args, since, until) -> tuple[int, int]:
     return written, empty_body
 
 
+async def export_corpus(session, since, until) -> tuple[int, int]:
+    """Every article fetched in the window, across all feeds, with no user data.
+
+    For the multilingual questions of the relevance plan: how tokenization and
+    prefix matching behave on Cyrillic and CJK, and what document frequencies
+    look like when the corpus mixes languages. One user's sample cannot answer
+    either, since it holds only the languages that user reads.
+
+    `body` is the feed's own description, the text the lexical scorer reads at
+    fetch time; `readable` is the extracted text where there is one, which is
+    what the corpus table is built from. Both are capped, the scorer reads 300.
+    """
+    result = await session.stream(text("""
+        SELECT a.id AS article_id, a.feed_id, f.title AS feed_title,
+               a.title, a.published_at, a.fetched_at,
+               a.content, a.readable_content
+        FROM articles a
+        JOIN feeds f ON f.id = a.feed_id
+        WHERE a.trimmed_at IS NULL
+          AND a.fetched_at >= :since
+          AND (CAST(:until AS timestamptz) IS NULL OR a.fetched_at < :until)
+        ORDER BY a.fetched_at
+    """), {"since": since, "until": until})
+
+    written = empty_body = 0
+    async for row in result:
+        body = plain_body(row.content, CORPUS_BODY_CHARS)
+        empty_body += not body
+        print(json.dumps({
+            "article_id": row.article_id,
+            "fetched_at": iso(row.fetched_at),
+            "published_at": iso(row.published_at),
+            "feed_id": row.feed_id,
+            "feed_title": row.feed_title,
+            "title": row.title,
+            "body": body,
+            "readable": (plain_body(row.readable_content, CORPUS_BODY_CHARS)
+                         if row.readable_content else None),
+        }, ensure_ascii=False), flush=False)
+        written += 1
+    return written, empty_body
+
+
 async def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--user-id", type=int, required=True)
+    ap.add_argument("--user-id", type=int)
+    ap.add_argument("--corpus", action="store_true",
+                    help="export every article in the window across all feeds, "
+                         "title and body head only, no user data (--user-id not "
+                         "needed)")
     ap.add_argument("--since", required=True,
                     help="ISO date; start of the sample window (state created_at)")
     ap.add_argument("--until", default=None, help="ISO date; optional upper bound")
@@ -118,6 +167,23 @@ async def main() -> None:
 
     engine = db.create_engine(settings.database_url)
     factory = db.create_session_factory(engine)
+
+    if args.corpus:
+        async with factory() as session:
+            print(json.dumps({
+                "type": "meta",
+                "exported_at": datetime.now(timezone.utc).isoformat(),
+                "kind": "corpus",
+                "window": {"since": since.isoformat(), "until": iso(until)},
+                "body_chars": CORPUS_BODY_CHARS,
+            }, ensure_ascii=False), flush=True)
+            written, empty_body = await export_corpus(session, since, until)
+        await engine.dispose()
+        print(f"exported {written} corpus articles (empty body={empty_body})",
+              file=sys.stderr)
+        return
+    if args.user_id is None:
+        ap.error("--user-id is required unless --corpus is given")
 
     async with factory() as session:
         # Profile texts. `prev_text` is the profile that was live before the last

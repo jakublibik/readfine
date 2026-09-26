@@ -1,5 +1,6 @@
 {% from "app/partials/error_bar.html" import error_bar %}
 {% from "app/partials/row_poll.html" import row_poll %}
+{% from "app/partials/score_badge.html" import score_badge %}
 
 {#- Where a saved-by-URL article's row says what is happening to it.
 
@@ -153,12 +154,6 @@
 {% if d == "medium" %}{% set d = "comfortable" %}{% endif %}
 {% set ld = label_display | default("indicator") %}
 {% set show_score = show_ai_score | default(false) %}
-{% if show_score and article.ai_score is not none %}
-  {% set score_int = (article.ai_score * 100) | round | int %}
-  {% if article.ai_score >= 0.75 %}{% set score_class = "ai-score-high" %}
-  {% elif article.ai_score >= 0.4 %}{% set score_class = "ai-score-mid" %}
-  {% else %}{% set score_class = "ai-score-low" %}{% endif %}
-{% endif %}
 
 {#- story_child is the id of the row this one was unfolded from.
 
@@ -239,9 +234,7 @@
               d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
       </svg>
       {% endif %}
-      {% if show_score and article.ai_score is not none %}
-      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
-      {% endif %}
+      {% if show_score %}{{ score_badge(article) }}{% endif %}
       {% if not child_of %}{{ story_marker(article) }}{% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
@@ -320,9 +313,7 @@
               d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/>
       </svg>
       {% endif %}
-      {% if show_score and article.ai_score is not none %}
-      <span class="text-xs {{ score_class }}">{{ score_int }}</span>
-      {% endif %}
+      {% if show_score %}{{ score_badge(article) }}{% endif %}
       <div id="article-labels-{{ article.id }}" class="flex items-center">
         {% if ld != "none" %}
         <button
@@ -363,7 +354,7 @@
   </div>
 
   {% if d == "summary" and article.snippet %}
-    <p class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
+    <p data-article-snippet class="text-sm text-gray-500 mt-1 line-clamp-2 pl-[26px]">{{ article.snippet }}</p>
   {% endif %}
   {% if not child_of %}{{ story_line(article, can_unfold) }}{% endif %}
   {% endif %}

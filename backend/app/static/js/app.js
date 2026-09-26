@@ -876,9 +876,22 @@ document.body.addEventListener('htmx:beforeSwap', function (evt) {
   evt.detail.serverResponse = temp.innerHTML;
 });
 
+// Mobile quicklink toggles between two views: Labels <-> Starred for users who
+// label articles, All articles <-> Starred for everyone else (data-alt, set
+// server-side).
+function _mobileQuicklinkTarget() {
+  var link = document.getElementById('mobile-title-quicklink');
+  var useAll = link && link.dataset.alt === 'all';
+  var onAlt = useAll
+    ? (!_activeNavGet || _activeNavGet === '/htmx/articles')
+    : (_activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1);
+  if (onAlt) return { url: '/htmx/articles?starred_only=true', title: 'Starred', text: 'Starred →' };
+  if (useAll) return { url: '/htmx/articles', title: 'All articles', text: 'All →' };
+  return { url: '/htmx/articles?labeled_only=true', title: 'Labels', text: 'Labels →' };
+}
+
 function _syncMobileQuicklink() {
-  var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
-  var text = isLabels ? 'Starred →' : 'Labels →';
+  var text = _mobileQuicklinkTarget().text;
   var link = document.getElementById('mobile-title-quicklink');
   if (link) link.textContent = text;
   var bottomLink = document.getElementById('mobile-bottom-quicklink');
@@ -1503,14 +1516,52 @@ function openSearchModal(prefill) {
     if (window._lastSearchSort) qs.push('sort=' + encodeURIComponent(window._lastSearchSort));
     if (window._lastSearchStatus) qs.push('status=' + encodeURIComponent(window._lastSearchStatus));
     if (window._lastSearchLabels) qs.push('labels=' + encodeURIComponent(window._lastSearchLabels));
+    if (window._lastSearchScoreSource) qs.push('score_source=' + encodeURIComponent(window._lastSearchScoreSource));
+    if (window._lastSearchScoreOp) qs.push('score_op=' + encodeURIComponent(window._lastSearchScoreOp));
+    if (window._lastSearchScoreVal) qs.push('score_val=' + encodeURIComponent(window._lastSearchScoreVal));
+    if (window._lastSearchSince) qs.push('since_days=' + encodeURIComponent(window._lastSearchSince));
+    if (window._lastSearchState) qs.push('state=' + encodeURIComponent(window._lastSearchState));
     if (qs.length) url += '?' + qs.join('&');
   }
   htmx.ajax('GET', url, { target: '#search-modal-content', swap: 'innerHTML' });
+  if (overlay && window.visualViewport && !_searchVvpListener) {
+    _searchVvpListener = function () { _fitSearchToVisualViewport(overlay); };
+    _fitSearchToVisualViewport(overlay);
+    window.visualViewport.addEventListener('resize', _searchVvpListener);
+    window.visualViewport.addEventListener('scroll', _searchVvpListener);
+  }
+}
+
+// A phone's on-screen keyboard shrinks only the visual viewport, so the fixed
+// overlay kept its full height and the lower half of the form sat behind the
+// keyboard, out of reach of the modal's own scroll. Fitting the overlay to the
+// visible area keeps the modal's foot above the keyboard (same trick as chat).
+var _searchVvpListener = null;
+function _fitSearchToVisualViewport(overlay) {
+  var vv = window.visualViewport;
+  overlay.style.top = vv.offsetTop + 'px';
+  overlay.style.height = vv.height + 'px';
+  overlay.style.bottom = 'auto';
+  // The field you tapped may have ended up below the new, shorter box.
+  var active = document.activeElement;
+  if (active && active !== document.body && overlay.contains(active)) {
+    active.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function closeSearchModal() {
   var overlay = document.getElementById('search-modal-overlay');
-  if (overlay) overlay.classList.add('hidden');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.style.top = '';
+    overlay.style.height = '';
+    overlay.style.bottom = '';
+  }
+  if (_searchVvpListener && window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', _searchVvpListener);
+    window.visualViewport.removeEventListener('scroll', _searchVvpListener);
+    _searchVvpListener = null;
+  }
   document.documentElement.classList.remove('search-modal-open');
   // Drop the contents with it. The overlay is shown the moment you open the modal,
   // but its markup is fetched, so whatever was left from last time (your previous
@@ -1523,6 +1574,20 @@ function closeSearchModal() {
   if (content) content.innerHTML = '';
 }
 
+// The Score row: Any is no condition, and picking a scorer brings the operator,
+// the number and the note with it.
+document.addEventListener('change', function (e) {
+  if (!e.target || e.target.id !== 'search-score-source') return;
+  var off = e.target.value === 'any';
+  document.querySelectorAll('.search-score-cond').forEach(function (el) {
+    // Keeps its place on a wide screen, gives it up where the columns stack.
+    el.classList.toggle('invisible', off);
+    el.classList.toggle('max-sm:hidden', off);
+  });
+  var note = document.getElementById('search-score-note');
+  if (note) note.classList.toggle('hidden', off);
+});
+
 function submitSearch() {
   var input = document.getElementById('search-input');
   if (!input) return;
@@ -1530,7 +1595,7 @@ function submitSearch() {
   // Multi-select scope: hidden input holds a JSON array like ["feed:1","folder:2"].
   var scopeEl = document.getElementById('search-scope-value');
   var scopeVal = scopeEl ? scopeEl.value.trim() : '';
-  // Sort: relevance (default) | newest | oldest.
+  // Sort: relevance (default) | newest | oldest | score.
   var sortEl = document.getElementById('search-sort');
   var sortVal = sortEl ? sortEl.value : 'relevance';
   // Status: all (default, no filter) | unread | read.
@@ -1539,17 +1604,48 @@ function submitSearch() {
   // Labels: JSON array like ["any"] or ["label:3"]. Empty = no label filter.
   var labelsEl = document.getElementById('search-labels-value');
   var labelsVal = labelsEl ? labelsEl.value.trim() : '';
+  // Score: source (any | ai | basic | relevance), condition (gte | lt) and value.
+  // Any is no condition. The row is only there when the reader has a scorer running.
+  var scoreSrcEl = document.getElementById('search-score-source');
+  var scoreOpEl = document.getElementById('search-score-op');
+  var scoreValEl = document.getElementById('search-score-val');
+  var scoreSrc = scoreSrcEl ? scoreSrcEl.value : 'any';
+  var scoreActive = scoreSrc !== 'any';
+  var scoreOp = scoreOpEl ? scoreOpEl.value : 'gte';
+  var scoreVal = scoreValEl ? scoreValEl.value.trim() : '';
+  if (scoreActive && (scoreVal === '' || !scoreValEl.checkValidity())) {
+    scoreValEl.focus();
+    if (scoreValEl.reportValidity) scoreValEl.reportValidity();
+    return;
+  }
+  if (!scoreActive) { scoreSrc = ''; scoreVal = ''; }
+  // Published: days back from now, empty = any time.
+  var sinceEl = document.getElementById('search-since');
+  var sinceVal = sinceEl ? sinceEl.value : '';
+  // List: starred | saved | archived, empty = any article.
+  var stateEl = document.getElementById('search-state');
+  var stateVal = stateEl ? stateEl.value : '';
 
   // Empty text is allowed as a pure filter view, but only when at least one
-  // filter is set — otherwise it's just "all articles", so nudge for input.
-  var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all');
+  // filter is set (sorting by score counts, that is the "best first" list);
+  // otherwise it's just "all articles", so nudge for input.
+  var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all')
+    || scoreActive || sortVal === 'score' || !!sinceVal || !!stateVal;
   if (!q && !hasFilter) { input.focus(); return; }
+  // With no words there is nothing to rank by relevance, and the list comes back
+  // newest first. Say so, so reopening the modal shows the order actually used.
+  if (!q && sortVal === 'relevance') sortVal = 'newest';
 
   window._lastSearchQuery = q;
   window._lastSearchScope = scopeVal;
   window._lastSearchSort = sortVal;
   window._lastSearchStatus = statusVal;
   window._lastSearchLabels = labelsVal;
+  window._lastSearchScoreSource = scoreSrc;
+  window._lastSearchScoreOp = scoreActive ? scoreOp : '';
+  window._lastSearchScoreVal = scoreVal;
+  window._lastSearchSince = sinceVal;
+  window._lastSearchState = stateVal;
 
   var params = new URLSearchParams();
   if (q) params.set('q', q);
@@ -1557,6 +1653,15 @@ function submitSearch() {
   params.set('sort', sortVal);
   if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
   if (labelsVal) params.set('label_filter', labelsVal);
+  // A score sort with Any sends no source, and the router sorts by AI, else basic,
+  // the number the list shows.
+  if (scoreActive) {
+    params.set('score_source', scoreSrc);
+    params.set('score_op', scoreOp);
+    params.set('score_val', scoreVal);
+  }
+  if (sinceVal) params.set('since_days', sinceVal);
+  if (stateVal) params.set('state', stateVal);
   htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
   closeSearchModal();
   // On mobile the search modal is opened from inside the sidebar overlay; close
@@ -1577,6 +1682,80 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     }
   }
 });
+
+// ── Search hits ────────────────────────────────────────────────────────────
+// Marks the searched words in the result rows' titles and snippets. Done here, not
+// on the server: it only has to catch the common case (the word in the title or at
+// the start of the text), and the server's matching (stems, the index) can't be
+// mirrored exactly anyway. Accents are ignored and a word matches by its beginning,
+// with a common English ending dropped first, so "vote" also marks "voting".
+function _foldForSearch(s) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+}
+
+function _searchHitTerms(query) {
+  var terms = [];
+  // A quoted phrase counts as its words; "-word" is excluded, so it's no hit; "or"
+  // is an operator.
+  query.replace(/"/g, ' ').split(/\s+/).forEach(function (w) {
+    if (!w || w.charAt(0) === '-' || w.toLowerCase() === 'or') return;
+    w = _foldForSearch(w.replace(/\*+$/, '')).replace(/[^\p{L}\p{N}]+/gu, '');
+    var stem = w.replace(/(ing|ed|es|s|e)$/, '');
+    if (stem.length >= 3) w = stem;
+    if (w.length >= 2) terms.push(w);
+  });
+  return terms;
+}
+
+function _highlightIn(el, terms) {
+  var text = el.textContent;
+  // Fold one character at a time, keeping where each folded one came from, so a
+  // match in the folded text maps back onto the original.
+  var folded = '', origin = [];
+  for (var i = 0; i < text.length; i++) {
+    var f = _foldForSearch(text.charAt(i));
+    for (var k = 0; k < f.length; k++) { folded += f.charAt(k); origin.push(i); }
+  }
+  var hits = [];
+  terms.forEach(function (t) {
+    var re = new RegExp('(^|[^\\p{L}\\p{N}])(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gu');
+    var m;
+    while ((m = re.exec(folded))) {
+      var start = m.index + m[1].length;
+      hits.push([origin[start], origin[start + m[2].length - 1] + 1]);
+    }
+  });
+  if (!hits.length) return;
+  hits.sort(function (a, b) { return a[0] - b[0]; });
+  var frag = document.createDocumentFragment(), pos = 0;
+  hits.forEach(function (h) {
+    if (h[0] < pos) return;  // overlaps a hit already marked
+    if (h[0] > pos) frag.appendChild(document.createTextNode(text.slice(pos, h[0])));
+    var mark = document.createElement('mark');
+    mark.className = 'search-hit';
+    mark.textContent = text.slice(h[0], h[1]);
+    frag.appendChild(mark);
+    pos = h[1];
+  });
+  if (pos < text.length) frag.appendChild(document.createTextNode(text.slice(pos)));
+  el.textContent = '';
+  el.appendChild(frag);
+}
+
+function highlightSearchHits() {
+  var list = document.getElementById('article-list');
+  var header = list && list.querySelector('[data-search-query]');
+  if (!header) return;
+  var terms = _searchHitTerms(header.getAttribute('data-search-query') || '');
+  if (!terms.length) return;
+  // Rows arrive in pages, unfolded stories and polled replacements: mark each once.
+  list.querySelectorAll('[data-article-title]:not([data-hl]), [data-article-snippet]:not([data-hl])')
+    .forEach(function (el) {
+      el.setAttribute('data-hl', '');
+      _highlightIn(el, terms);
+    });
+}
+document.body.addEventListener('htmx:afterSettle', highlightSearchHits);
 
 // ── Feedback modal ─────────────────────────────────────────────────────────
 function openFeedbackModal() {
@@ -2802,14 +2981,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
   });
 
-  // Quicklink click: navigate to Labels or Starred
+  // Quicklink click: navigate to Labels/All articles or Starred
   document.addEventListener('click', function (e) {
     if (!isMobile()) return;
     if (!e.target.closest('#mobile-title-quicklink') && !e.target.closest('#mobile-bottom-quicklink')) return;
     _saveNavSnapshot();
-    var isLabels = _activeNavGet && _activeNavGet.indexOf('labeled_only=true') !== -1;
-    var targetUrl = isLabels ? '/htmx/articles?starred_only=true' : '/htmx/articles?labeled_only=true';
-    var targetTitle = isLabels ? 'Starred' : 'Labels';
+    var target = _mobileQuicklinkTarget();
+    var targetUrl = target.url;
+    var targetTitle = target.title;
     _activeNavGet = targetUrl;
     try { localStorage.setItem('lastNavItem', targetUrl); } catch (err) {}
     var titleText = document.getElementById('mobile-title-text');

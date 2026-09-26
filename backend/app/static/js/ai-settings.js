@@ -7,10 +7,10 @@ document.addEventListener('htmx:beforeRequest', function (e) {
   if (el) el.innerHTML = '<span class="text-gray-400 text-sm">' + (btn.dataset.loadingText || 'Loading…') + '</span>';
 });
 
-// Scoring checkbox → enable/disable everything that only applies to scoring
-// (score in list, interest profile, generate, auto-update, revert), the moment
-// it is clicked. Delegated, because saving the form swaps the page in via
-// hx-boost and any handler bound to the old elements would be gone.
+// Scoring checkbox → enable/disable everything that only applies to AI scoring
+// (the interest profile, generate, auto-update, revert), the moment it is
+// clicked. Delegated, because saving the form swaps the page in via hx-boost and
+// any handler bound to the old elements would be gone.
 document.addEventListener('change', function (e) {
   if (!e.target || e.target.id !== 'ai_scoring_enabled_default') return;
   var dependent = document.getElementById('scoring-dependent');

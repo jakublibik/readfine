@@ -530,12 +530,14 @@ async def _process_ai_summaries() -> None:
 
 
 async def _process_ai_filters() -> None:
-    """Job: apply AI filters to articles that received a fresh ai_score."""
+    """Job: apply AI filters to articles that received a fresh ai_score, and run
+    parked relevance filters over the basic score where no AI score is coming."""
     if db.async_session_factory is None:
         return
-    from app.services.filter_service import process_ai_filters_batch
+    from app.services.filter_service import process_ai_filters_batch, process_relevance_fallback
     async with db.async_session_factory() as session:
         await process_ai_filters_batch(session)
+        await process_relevance_fallback(session)
 
 
 async def recompute_derived_intervals(session) -> int:
@@ -666,6 +668,38 @@ async def _purge_traffic_stats() -> None:
         await traffic_service.purge_old(session)
 
 
+async def _rebuild_lexical_corpus() -> None:
+    """Job: recount the term statistics the lexical relevance scorer reads.
+
+    Nightly and whole. Nothing scores until it has run once, so a fresh install
+    gets no relevance scores on its first day, which is also the day it has no
+    corpus to compute them from.
+    """
+    if db.async_session_factory is None:
+        return
+    from app.services import relevance_corpus_service
+    async with db.async_session_factory() as session:
+        await relevance_corpus_service.rebuild(session)
+
+
+async def _ensure_lexical_corpus() -> None:
+    """Job: get a young instance its term statistics without waiting for the night."""
+    if db.async_session_factory is None:
+        return
+    from app.services import relevance_corpus_service
+    async with db.async_session_factory() as session:
+        await relevance_corpus_service.ensure_built(session)
+
+
+async def _backfill_lexical_scores() -> None:
+    """Job: catch up accounts whose interest profile is newer than their scores."""
+    if db.async_session_factory is None:
+        return
+    from app.services.lexical_score_service import process_due_backfills
+    async with db.async_session_factory() as session:
+        await process_due_backfills(session)
+
+
 async def _sweep_thumb_cache() -> None:
     """Job: drop video thumbnails nobody has requested within the idle window."""
     from app.services.video_thumb_service import sweep_idle_thumbnails
@@ -683,8 +717,10 @@ async def _generate_due_preferences() -> None:
     if db.async_session_factory is None:
         return
 
-    from app.models.user import User, UserSettings
-    from app.services.ai_profile_service import run_auto_generation
+    from app.services.ai_profile_service import (
+        due_auto_generation_user_ids,
+        run_auto_generation,
+    )
 
     max_generations = 50
 
@@ -695,20 +731,7 @@ async def _generate_due_preferences() -> None:
         if not app_settings_row or not app_settings_row.ai_enabled:
             return
 
-        # Users inactive for a month drop out entirely; they re-enter on their
-        # next visit (last_active_at is bumped hourly while browsing).
-        active_cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-        user_ids = (await session.execute(
-            select(UserSettings.user_id)
-            .join(User, User.id == UserSettings.user_id)
-            .where(
-                UserSettings.ai_preference_auto_days > 0,
-                UserSettings.ai_scoring_enabled_default.is_(True),
-                User.is_active.is_(True),
-                User.last_active_at >= active_cutoff,
-            )
-            .order_by(UserSettings.ai_preference_updated_at.asc().nulls_first())
-        )).scalars().all()
+        user_ids = await due_auto_generation_user_ids(session)
 
     generated = skipped = failed = 0
     for user_id in user_ids:
@@ -915,6 +938,37 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _rebuild_lexical_corpus,
+        trigger="cron",
+        hour=3,
+        minute=40,
+        id="rebuild_lexical_corpus",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _ensure_lexical_corpus,
+        trigger="interval",
+        minutes=15,
+        # Also shortly after boot, so an instance upgrading into this feature has
+        # its statistics within a minute instead of at 03:40 tomorrow.
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
+        id="ensure_lexical_corpus",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
+    )
+    scheduler.add_job(
+        _backfill_lexical_scores,
+        trigger="interval",
+        minutes=5,
+        id="backfill_lexical_scores",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=120,
     )
     scheduler.add_job(
         _sweep_thumb_cache,

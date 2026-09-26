@@ -1,8 +1,8 @@
 """Web settings routes, split by area behind one aggregate ``router``.
 
 ``main.py`` includes this single router; each sub-module owns one thematic area
-(feeds, scrape, folders, filters, tokens, profile, preferences, opml, ai, stats,
-labels) and shares helpers via ``common``.
+(feeds, scrape, folders, filters, tokens, profile, preferences, opml, ai,
+relevance, stats, labels) and shares helpers via ``common``.
 """
 from fastapi import APIRouter
 
@@ -16,6 +16,7 @@ from . import (
     opml,
     preferences,
     profile,
+    relevance,
     scrape,
     stats,
     tokens,
@@ -33,4 +34,5 @@ router.include_router(profile.router)
 router.include_router(preferences.router)
 router.include_router(opml.router)
 router.include_router(ai.router)
+router.include_router(relevance.router)
 router.include_router(stats.router)

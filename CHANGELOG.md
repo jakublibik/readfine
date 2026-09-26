@@ -9,6 +9,29 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Added
+
+- Articles are scored for relevance without an API key. **Basic relevance** matches the title and opening of each new article against a list of terms you keep on **Settings → Relevance**. A term can be several words, and related forms match too (`cycling` finds `cyclist`). Until now only AI scored articles, and only those a filter had labelled. Below the list, suggestions based on what you read in the last 30 days offer terms to add and terms to drop, and a table shows how often each term, and the list as a whole, picked what you read, against your average. It is the weaker of the two scorers: it matches words rather than meaning, so a Tour de France report counts as cycling only if one of your terms appears in it. Measured against what people actually read, it ranks clearly better than date order and clearly worse than the AI score, which keeps its own profile. Saving the list scores the last week of unread articles. A new account is asked for a few topics after signing up, and an account with no terms sees a bar above the article list that leads to the setup.
+
+- The score in the article list, and now also next to the other sources of a story under an article, shows whichever scorer has an opinion, AI first. A basic score is marked with `~`, because a word-match 70 is rare where an AI 70 is common. The end of an open article shows both scores side by side. Settings → Stats, Catch me up, briefings and the admin scoring eval handle both. A filter's score condition now picks its source: **AI**, **Basic**, or **AI, else basic** (the number the list shows). Basic filters run as an article arrives, AI ones after AI scoring, and AI, else basic waits for the AI score only when one is on its way. Existing score filters keep reading the AI score.
+
+- Search can filter by score (at least or below a number, from any of the three sources) and sort the results by it, and the results then show that source's number. It can also be limited to recent articles (the last 24 hours, 3 days, 7 days, 30 days or 12 months) and to your starred, saved or archived articles. The status can go by what you actually read (30 seconds on it or its original opened, as in Stats) rather than the read mark, and the results header says how many it found. The old "Relevance" sort there is now called "Search relevance".
+
+### Changed
+
+- Search ignores accents, so `zpravy` finds `zprávy` and the other way round, and English words match in their other forms (`votes` finds `voting`). A word ending in `*` finds every word it begins (`cycl*` finds `cycling` and `cyclist`). Sorting by search relevance puts articles with the words in the title above those that only mention them in the text, and the results mark the searched words in titles and snippets. Upgrading rebuilds the search index, which adds a few seconds per ten thousand articles to the migration.
+- On a phone, the shortcut in the top and bottom bar switches between All articles and Starred if you have no labelled articles. Until now it always offered Labels, which for such an account was an empty list.
+
+### Fixed
+
+- Editing a filter with an AI score condition while AI scoring was off showed the condition as "title or content", and saving turned it into one. The condition now keeps its source, marked as off, and the filter list flags it.
+- In dark mode, the regex tips in the filter editor and the "try web scraping" link after a feed test were dark blue on a dark background and hard to read.
+- A search with no words, only filters (such as status or labels), now finds the same articles as one with words: it includes what you starred, archived or saved by URL, even from feeds you no longer follow. And searching the "no folder" group no longer lists those kept articles as if they were in it.
+- Chinese and Japanese articles were counted as a handful of words, because those languages put no spaces between words. Reading time showed 1 minute for every article, and a feed that delivers full articles in these languages was not recognised as one, so readable extraction ran on every article anyway. Two characters now count as a word.
+- On a phone, the search window now stays above the on-screen keyboard, so you can scroll to the fields at the bottom and edit them without closing the keyboard first.
+- iDNES articles were again stored as the site's consent notice ("iDNES a reklama"). The consent page now names the article it interrupted as its own address, which made it look like the article. Such a page is recognised as a wall again, and the article falls back to the text the feed delivers.
+- Filter text conditions treat width variants as the same text: full-width `ＡＩ` matches `ai`, half-width katakana matches the normal form, and Korean text stored in decomposed form matches as typed.
+
 ## [0.18.0] - 2026-09-21
 
 ### Upgrade notes

@@ -114,6 +114,29 @@ class UserSettings(Base):
     ai_preference_last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_preference_fail_count: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     ai_scoring_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Lexical scoring. On by default, and harmless when it is: without terms there
+    # is nothing to match against, so it produces no score at all.
+    basic_scoring_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # The basic profile: what the lexical scorer matches, one term per line
+    # (`relevance_service.parse_terms`). Separate from ai_preference_text on
+    # purpose: that one is a description written for a model, this is a list of
+    # words to look up, and each is kept up differently (regenerated vs edited by
+    # hand), so the two are never synchronised.
+    relevance_terms: Mapped[str | None] = mapped_column(Text)
+    relevance_terms_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # manual / onboarding: how many accounts still run on what they typed at signup.
+    relevance_terms_source: Mapped[str | None] = mapped_column(String(12))
+    # When the lexical backfill last caught this account up with its terms. The
+    # work is due whenever relevance_terms_updated_at is newer, which makes "saving a
+    # profile starts a backfill" a fact about two timestamps instead of a task
+    # somebody has to remember to enqueue, and lets a run that died halfway be
+    # picked up again on the next pass.
+    lexical_backfill_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set once the account has been through /welcome (NULL = not yet). Migration
+    # 0108 stamped every account that existed before the screen did.
+    onboarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The reader closed the "set up relevance" bar in the article list.
+    relevance_intro_dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_prompt: Mapped[str | None] = mapped_column(Text)
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)

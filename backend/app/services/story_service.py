@@ -87,16 +87,23 @@ async def count_members(
 
 
 async def list_members(
-    user_id: int, story_id: int | None, article_id: int, db: AsyncSession
+    user_id: int, story_id: int | None, article_id: int, db: AsyncSession,
+    title_norm: str | None = None,
 ) -> list[StoryMember]:
     """The other coverage, newest first, whatever state it is in.
 
     Read, starred and (from the suppression branch) hidden articles all belong here:
     the point of the footer is that it shows what the reader would otherwise not find,
     and filtering it by state would hide exactly the articles it exists to surface.
+
+    ``title_norm`` is the open article's normalised title. Given it, each member also
+    carries its similarity to that article and whether the follow-up cue applies, the
+    two things ``suppress_seen`` decided on. An admin diagnostic: the number is not
+    stored at fetch time, so it is recomputed here.
     """
     if story_id is None:
         return []
+    diag = title_norm is not None
     rows = (await db.execute(
         _members_query(
             [
@@ -110,6 +117,10 @@ async def list_members(
                 UserArticleState.is_read,
                 UserArticleState.suppressed_at,
                 UserArticleState.is_starred,
+                UserArticleState.ai_score,
+                UserArticleState.lexical_score,
+                *([func.similarity(Article.title_norm, title_norm).label("similarity"),
+                   Article.title_norm] if diag else []),
             ],
             user_id, story_id, article_id,
         )
@@ -121,6 +132,10 @@ async def list_members(
         .limit(MEMBER_LIMIT)
     )).all()
 
+    if diag:
+        # Local: app.fetcher.stories imports this module.
+        from app.fetcher.stories import reads_as_follow_up
+
     return [
         StoryMember(
             id=r.id,
@@ -131,6 +146,11 @@ async def list_members(
             is_read=bool(r.is_read),
             read_by_reader=bool(r.is_read) and r.suppressed_at is None,
             is_starred=bool(r.is_starred),
+            ai_score=r.ai_score,
+            lexical_score=r.lexical_score,
+            similarity=r.similarity if diag else None,
+            follow_up=(diag and r.title_norm is not None
+                       and reads_as_follow_up(title_norm, r.title_norm)),
         )
         for r in rows
     ]

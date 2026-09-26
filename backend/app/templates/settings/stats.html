@@ -132,45 +132,68 @@
   {% endif %}
 
   {# Score spread — over everything fetched, read or not, which is a different
-     question from what is left to read and answers what the scorer made of the month.
-     Drawn only where there is something scored to draw. #}
-  {% if ai_enabled and intake.scored > 0 %}
-  <div class="mb-6">
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
-      Score spread <span class="normal-case font-normal text-gray-400">(everything fetched)</span>
-    </h3>
+     question from what is left to read and answers what the scorers made of the month.
+
+     Two charts rather than one with two series, which is the rule for measures that
+     do not share a scale: the AI score exists only where a filter labelled the
+     article (a few hundred), the word match on everything that arrived (thousands),
+     so drawing both against the same total makes the AI series a sliver and invites
+     a comparison the numbers do not support. The share of each scorer's own scored
+     articles, printed per band, is what carries across the two charts. #}
+  {% macro score_bars(bands, fetched, scored, unscored) %}
     <div class="space-y-1.5">
       {# A band of a handful against a month of thousands rounds to nothing, and an
          empty track beside a count that says 3 reads as broken rather than as small.
          Anything that is there at all gets a sliver; only a real zero gets nothing. #}
-      {% for band in intake.bands %}
+      {% for band in bands %}
       <div class="flex items-center gap-3">
         <div class="w-20 text-right text-sm font-medium text-gray-700">{{ band.articles|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if band.articles %}{{ [[band.articles / intake.all.fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{% if band.articles %}{{ [[band.articles / fetched * 100, 1]|max, 100]|min|round|int }}{% else %}0{% endif %}%"></div>
         </div>
         <div class="w-52 text-xs text-gray-500">
           {% if band.ceiling is none %}Score {{ band.floor }} and up
           {% elif band.floor is none %}Score {{ band.ceiling }} and below
           {% else %}Score {{ band.floor }} to {{ band.ceiling }}{% endif %}
-          {# Cumulative only where it adds something: the top band already is its own
-             total, and the bottom one is what you skip rather than what is left. #}
-          {% if band.floor is not none and not loop.first %}
-          <span class="text-gray-400">({{ band.at_floor_or_better|num }} at {{ band.floor }}+)</span>
-          {% endif %}
+          {% if scored %}<span class="text-gray-400">({{ (band.articles / scored * 100)|num(1) }}% of scored)</span>{% endif %}
         </div>
       </div>
       {% endfor %}
-      {% if intake.unscored > 0 %}
+      {% if unscored > 0 %}
       <div class="flex items-center gap-3">
-        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ intake.unscored|num }}</div>
+        <div class="w-20 text-right text-sm font-medium text-gray-700">{{ unscored|num }}</div>
         <div class="flex-1 bg-gray-100 rounded-full h-2">
-          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [[intake.unscored / intake.all.fetched * 100, 1]|max, 100]|min|round|int }}%"></div>
+          <div class="bg-blue-500 h-2 rounded-full" style="width:{{ [[unscored / fetched * 100, 1]|max, 100]|min|round|int }}%"></div>
         </div>
         <div class="w-52 text-xs text-gray-500">Not scored</div>
       </div>
       {% endif %}
     </div>
+  {% endmacro %}
+
+  {% if intake.lexical_scored > 0 %}
+  <div class="mb-6">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
+      Basic relevance spread <span class="normal-case font-normal text-gray-400">(everything fetched)</span>
+    </h3>
+    {{ score_bars(intake.lexical_bands, intake.all.fetched, intake.lexical_scored,
+                  intake.all.fetched - intake.lexical_scored) }}
+  </div>
+  {% endif %}
+
+  {% if ai_enabled and intake.scored > 0 %}
+  <div class="mb-6">
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
+      AI score spread <span class="normal-case font-normal text-gray-400">(everything fetched)</span>
+    </h3>
+    {{ score_bars(intake.bands, intake.all.fetched, intake.scored, intake.unscored) }}
+    {% if intake.lexical_scored > 0 %}
+    <p class="text-xs text-gray-400 mt-1">
+      The percentages are what compares across the two charts: this score only rates articles a
+      filter labelled, basic relevance rates everything that arrives, and a word-match 70 is rare
+      where an AI 70 is common.
+    </p>
+    {% endif %}
   </div>
   {% endif %}
 
@@ -277,7 +300,7 @@
 
   {# Overlooked gems #}
   <div class="mb-5">
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(score ≥ 70, never opened)</span></h3>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">Missed gems <span class="normal-case font-normal text-gray-400">(AI score ≥ 70, never opened)</span></h3>
     {% if ai.gems %}
     <div class="overflow-x-auto">
     <table class="w-full text-sm min-w-[24rem]">
@@ -316,7 +339,7 @@
 
   {# AI got it wrong #}
   <div>
-    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(score &lt; 30, you starred it)</span></h3>
+    <h3 class="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">AI was wrong <span class="normal-case font-normal text-gray-400">(AI score &lt; 30, you starred it)</span></h3>
     {% if ai.wrong %}
     <div class="overflow-x-auto">
     <table class="w-full text-sm min-w-[24rem]">

@@ -2,8 +2,9 @@
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 
 import regex as _regex
@@ -17,12 +18,21 @@ from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
+from app.services.relevance_service import effective_score
 from app.services.scope_tokens import token_matches_article
 
 logger = logging.getLogger(__name__)
 
-_AI_CONDITION_FIELDS = frozenset({"ai_score"})
-_AI_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
+# Score conditions, one stored field per scorer. The editor shows them as a single
+# "Score" field with a source (AI / Basic / AI, else basic); these names are what
+# the database and the API carry. ``ai_score`` predates the other two and keeps its
+# name, so filters written before the split mean exactly what they meant.
+SCORE_FIELD_NAMES = {
+    "ai_score": "AI score",
+    "basic_score": "Basic score",
+    "relevance_score": "Relevance score",
+}
+_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
 
 # The value ``suppressed_by`` carries when a filter's mark-read action wrote the read.
 # Named because two places have to agree on it exactly: the action below writes it and
@@ -76,24 +86,53 @@ _RETRO_COMMIT_BATCH = 200
 _RETRO_SCORING_CHUNK = 500
 
 
+def filter_phase(f: "Filter") -> str:
+    """When a filter runs, decided by the latest number any of its conditions reads.
+
+    * ``"fetch"``: no score, or only the basic score. The basic score is written for
+      every article before the filters run (``score_new_articles``), so such a filter
+      is an ordinary one: same pass, same priority order, and its label can send the
+      article to AI scoring like any other.
+    * ``"relevance"``: reads the relevance score (AI, else basic). Runs right after
+      the fetch pass, unless that pass sent the article to AI scoring; then it waits
+      for the AI score, with the basic score as the fallback when scoring never lands
+      (``relevance_filters_pending``).
+    * ``"ai"``: reads the AI score, so it runs after scoring, as it always has.
+
+    Whichever phase, a filter is evaluated once per article.
+    """
+    fields = {c.field for c in f.conditions}
+    if "ai_score" in fields:
+        return "ai"
+    if "relevance_score" in fields:
+        return "relevance"
+    return "fetch"
+
+
 def is_ai_filter(f: "Filter") -> bool:
-    return any(c.field in _AI_CONDITION_FIELDS for c in f.conditions)
+    return filter_phase(f) == "ai"
 
 
-def _validate_ai_conditions(conditions) -> None:
+def is_score_filter(f: "Filter") -> bool:
+    """Reads any score, so evaluating it needs the reader's article state."""
+    return any(c.field in SCORE_FIELD_NAMES for c in f.conditions)
+
+
+def _validate_score_conditions(conditions) -> None:
     for c in conditions:
-        if c.field != "ai_score":
+        name = SCORE_FIELD_NAMES.get(c.field)
+        if name is None:
             continue
-        if c.operator not in _AI_SCORE_ALLOWED_OPERATORS:
+        if c.operator not in _SCORE_ALLOWED_OPERATORS:
             raise ValueError(
-                f"Operator '{c.operator}' is not allowed for ai_score — use equals, gt, or lt."
+                f"Operator '{c.operator}' is not allowed for {name} — use equals, gt, or lt."
             )
         try:
             val = float(c.value)
         except (ValueError, TypeError):
-            raise ValueError("ai_score value must be a number.")
+            raise ValueError(f"{name} value must be a number.")
         if not (0 <= val <= 100):
-            raise ValueError("ai_score value must be between 0 and 100.")
+            raise ValueError(f"{name} value must be between 0 and 100.")
 
 
 def _validate_published_at_conditions(conditions) -> None:
@@ -205,7 +244,7 @@ async def _validate_label_actions(user_id: int, actions, db: AsyncSession) -> No
 
 async def create_filter(user_id: int, payload: FilterCreate, db: AsyncSession) -> FilterResponse:
     _validate_regex_conditions(payload.conditions)
-    _validate_ai_conditions(payload.conditions)
+    _validate_score_conditions(payload.conditions)
     _validate_published_at_conditions(payload.conditions)
     await _validate_scope_list(user_id, payload.scope_include, db)
     await _validate_scope_list(user_id, payload.scope_except, db)
@@ -260,7 +299,7 @@ async def update_filter(
 
     if payload.conditions is not None:
         _validate_regex_conditions(payload.conditions)
-        _validate_ai_conditions(payload.conditions)
+        _validate_score_conditions(payload.conditions)
         _validate_published_at_conditions(payload.conditions)
 
     if payload.scope_include is not None:
@@ -329,11 +368,27 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str, s
         return article.url or ""
     if field == "published_at":
         return article.published_at
-    if field == "ai_score":
-        if state is None or state.ai_score is None:
+    if field in SCORE_FIELD_NAMES:
+        if state is None:
             return None
-        return state.ai_score * 100  # stored 0.0–1.0, UI uses 0–100
+        if field == "ai_score":
+            score = state.ai_score
+        elif field == "basic_score":
+            score = state.lexical_score
+        else:
+            score = effective_score(state.ai_score, state.lexical_score)[0]
+        return None if score is None else score * 100  # stored 0.0–1.0, UI uses 0–100
     return None
+
+
+def _fold(text: str) -> str:
+    """Text as ``contains`` compares it: NFKC, then case-folded.
+
+    NFKC makes the width variants common in CJK feeds equal to the plain forms
+    (full-width "ＡＩ" is "AI", half-width "ｶﾀｶﾅ" is "カタカナ") and composes Hangul that
+    arrives as separate jamo. casefold() rather than lower() so "ß" matches "ss".
+    """
+    return unicodedata.normalize("NFKC", text).casefold()
 
 
 def _eval_op(op: str, val: str, field_value) -> bool:
@@ -341,16 +396,17 @@ def _eval_op(op: str, val: str, field_value) -> bool:
     if field_value is None:
         return op == "not_contains"
     if op == "contains":
-        return val.lower() in str(field_value).lower()
+        return _fold(val) in _fold(str(field_value))
     if op == "not_contains":
-        return val.lower() not in str(field_value).lower()
+        return _fold(val) not in _fold(str(field_value))
     if op == "equals":
         if isinstance(field_value, datetime):
             try:
                 return field_value.date() == datetime.fromisoformat(val).date()
             except ValueError:
                 return False
-        return str(field_value) == val
+        # Case-sensitive, but the same text in another Unicode form is still equal.
+        return unicodedata.normalize("NFKC", str(field_value)) == unicodedata.normalize("NFKC", val)
     if op == "regex":
         compiled = _compile_user_regex(val)
         if compiled is None:
@@ -557,40 +613,141 @@ async def apply_filters_to_new_articles(
     for f in filters_result.scalars():
         filters_by_user.setdefault(f.user_id, []).append(f)
 
+    # The basic score was written just before this (score_new_articles), so a score
+    # condition can read it from the state row. Loaded only for the readers who have
+    # such a filter; everyone else keeps the one query above.
+    score_users = [
+        uid for uid, fs in filters_by_user.items()
+        if any(is_score_filter(f) and filter_phase(f) != "ai" for f in fs)
+    ]
+    states: dict[tuple[int, int], UserArticleState] = {}
+    if score_users:
+        states = {
+            (st.user_id, st.article_id): st
+            for st in (await db.scalars(
+                select(UserArticleState).where(
+                    UserArticleState.user_id.in_(score_users),
+                    UserArticleState.article_id.in_([a.id for a in articles]),
+                )
+            )).all()
+        }
+
     for uf in user_feeds:
         filters = filters_by_user.get(uf.user_id, [])
         if not filters:
             continue
         for article in articles:
-            await _apply_user_filters_to_article(article, uf, filters, db)
+            await _apply_user_filters_to_article(
+                article, uf, filters, db, states.get((uf.user_id, article.id)))
 
 
 async def _apply_user_filters_to_article(
-    article: Article, uf: UserFeed, filters: "list[Filter]", db: AsyncSession
+    article: Article, uf: UserFeed, filters: "list[Filter]", db: AsyncSession,
+    state: "UserArticleState | None" = None,
 ) -> None:
-    """Run one subscriber's (non-AI) filters against a single article."""
-    got_star_or_label = False
-    got_label = False
+    """Run one subscriber's fetch-time filters against a single article.
+
+    Two passes. The first is every filter that needs nothing the fetch does not
+    already have, basic-score conditions included. The second is the relevance
+    filters, run now over the basic score, or parked for the AI score when the
+    first pass sent the article to AI scoring (see ``filter_phase``).
+    """
+    fired: set[str] = set()
     for f in filters:
-        if is_ai_filter(f):
+        if filter_phase(f) != "fetch":
             continue
-        if evaluate_filter(f, article, uf):
-            action_types = {a.action_type for a in f.actions}
-            if action_types & {"star", "label"}:
-                got_star_or_label = True
-            if "label" in action_types:
-                got_label = True
+        if evaluate_filter(f, article, uf, state):
+            fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, uf.user_id, uf, db)
             if f.stop_on_match:
                 break
+    ai_expected = await _follow_up_star_or_label(article, uf, fired, db)
 
-    if got_star_or_label and uf.extract_readable and article.readable_status == "skipped":
+    relevance = [f for f in filters if filter_phase(f) == "relevance"]
+    if not relevance:
+        return
+    if ai_expected:
+        if state is None:
+            state = await _get_or_create_state(article.id, uf.user_id, db)
+        state.relevance_filters_pending = True
+        return
+    # Ran over the basic score, so a label from here goes to AI scoring like one
+    # from the first pass. These filters are done: the AI score arriving later
+    # runs only the AI filters (relevance_filters_pending stays False).
+    fired = await _run_filters_once(relevance, article, uf.user_id, uf, state, db)
+    await _follow_up_star_or_label(article, uf, fired, db)
+
+
+async def _follow_up_star_or_label(article: Article, uf: UserFeed, fired: set[str],
+                                   db: AsyncSession) -> bool:
+    """What a star or a label from a fetch-time filter sets off. Returns whether an
+    AI score is now on its way.
+
+    Either one queues the readable extraction on a feed that uses it. A label also
+    sends the article to AI scoring: straight away on a feed without extraction (or
+    with it already done), after the extraction otherwise.
+    """
+    got_label = "label" in fired
+    if fired & {"star", "label"} and uf.extract_readable and article.readable_status == "skipped":
         article.readable_status = "pending"
-
-    # Enqueue scoring for labeled articles on non-readable feeds (or feeds with readable already done)
-    if got_label and (not uf.extract_readable or article.readable_status == "success"):
+    if not got_label:
+        return False
+    if not uf.extract_readable or article.readable_status == "success":
         from app.services.ai_scoring_service import enqueue_scoring_job
-        await enqueue_scoring_job(article, uf.user_id, db)
+        return await enqueue_scoring_job(article, uf.user_id, db)
+    if article.readable_status == "pending":
+        # Scored once the extraction finishes (run_pipeline_for_article_all_users).
+        return await _scoring_would_run(article, uf, db)
+    return False
+
+
+async def _scoring_would_run(article: Article, uf: UserFeed, db: AsyncSession) -> bool:
+    """Will the readable path score this article for this reader?
+
+    The same checks ``enqueue_scoring_job`` makes once the extraction is done,
+    asked ahead of time. If the answer changes in between (the reader turns
+    scoring off), the fallback in ``process_relevance_fallback`` still runs the
+    parked filters.
+    """
+    from app.models.user import UserSettings
+    from app.services.ai_jobs import ai_enabled_globally
+    from app.services.ai_scoring_service import scoring_eligible
+
+    if not await ai_enabled_globally(db):
+        return False
+    s = await db.scalar(select(UserSettings).where(UserSettings.user_id == uf.user_id))
+    return scoring_eligible(s, uf)
+
+
+async def _get_or_create_state(article_id: int, user_id: int, db: AsyncSession) -> UserArticleState:
+    state = await db.scalar(
+        select(UserArticleState).where(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id == article_id,
+        )
+    )
+    if state is None:
+        state = UserArticleState(user_id=user_id, article_id=article_id)
+        db.add(state)
+    return state
+
+
+async def _run_filters_once(
+    filters: "list[Filter]", article: Article, user_id: int, uf: "UserFeed | None",
+    state: "UserArticleState | None", db: AsyncSession,
+) -> set[str]:
+    """Evaluate filters in order and execute actions, honouring stop-on-match.
+
+    Returns the action types of the filters that fired.
+    """
+    fired: set[str] = set()
+    for f in filters:
+        if evaluate_filter(f, article, uf, state):
+            fired |= {a.action_type for a in f.actions}
+            await _execute_actions(f, article, user_id, uf, db)
+            if f.stop_on_match:
+                break
+    return fired
 
 
 async def apply_filters_to_saved_article(
@@ -611,9 +768,9 @@ async def apply_filters_to_saved_article(
       ``user_feed``. By the same token a ``scope_except`` of ``folder:0`` will not
       exclude a saved article.
 
-    AI filters are skipped: saved articles are never scored, so ``ai_score`` is always
-    NULL and those conditions could not match anyway. Scoring is deliberately never
-    enqueued from here.
+    Score filters are skipped: saved articles are never scored by either scorer, so
+    a score condition could not match anyway. Scoring is deliberately never enqueued
+    from here.
     """
     filters_result = await db.execute(
         select(Filter)
@@ -622,7 +779,7 @@ async def apply_filters_to_saved_article(
         .order_by(*FILTER_ORDER)
     )
     for f in filters_result.scalars().all():
-        if is_ai_filter(f):
+        if is_score_filter(f):
             continue
         if evaluate_filter(f, article, None):
             await _execute_actions(f, article, user_id, None, db)
@@ -672,7 +829,7 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
     )
     filters_by_user: dict[int, list[Filter]] = {}
     for f in filters_result.scalars():
-        if is_ai_filter(f):
+        if filter_phase(f) != "fetch":
             filters_by_user.setdefault(f.user_id, []).append(f)
 
     user_feeds_result = await db.execute(
@@ -703,13 +860,87 @@ async def _apply_ai_filters_for_state(
     filters: "list[Filter]",
     db: AsyncSession,
 ) -> None:
-    """Evaluate AI filters and execute actions for a single article state. Does not commit."""
-    for f in filters:
-        if evaluate_filter(f, article, uf, state):
-            await _execute_actions(f, article, state.user_id, uf, db)
-            if f.stop_on_match:
-                break
+    """Run the filters that waited for this article's AI score. Does not commit.
+
+    *filters* are the reader's AI and relevance filters in execution order. The AI
+    ones run on every fresh AI score. The relevance ones only when the fetch parked
+    them for this score: otherwise they already ran over the basic score, and an AI
+    score arriving later (a label added by hand) must not run them a second time.
+    """
+    if not state.relevance_filters_pending:
+        filters = [f for f in filters if filter_phase(f) != "relevance"]
+    await _run_filters_once(filters, article, state.user_id, uf, state, db)
     state.ai_filters_applied = True
+    state.relevance_filters_pending = False
+
+
+# Longest a parked article waits on an extraction that never finishes. Readable
+# normally lands within minutes; a feed whose extraction got disabled halfway can
+# leave articles at "pending" for good, and their filters would never run.
+_RELEVANCE_READABLE_WAIT = timedelta(days=1)
+
+
+async def process_relevance_fallback(db: AsyncSession) -> int:
+    """Run parked relevance filters over the basic score when no AI score is coming.
+
+    The fetch parks them when a label sent the article to AI scoring. The AI score
+    normally clears the flag (``_apply_ai_filters_for_state``). This catches the
+    rest: the job failed for good or was skipped, the extraction it waited on
+    failed, or AI got switched off instance-wide with jobs still queued. Relevance
+    is then just the basic score, so that is what the filters read.
+
+    Runs even when AI is off globally, since that is one of the cases it exists for.
+    """
+    from app.services.ai_jobs import ai_enabled_globally
+
+    now = datetime.now(timezone.utc)
+    conds = [
+        UserArticleState.relevance_filters_pending == True,  # noqa: E712
+        UserArticleState.ai_score.is_(None),
+        (Article.readable_status != "pending")
+        | (UserArticleState.created_at < now - _RELEVANCE_READABLE_WAIT),
+    ]
+    if await ai_enabled_globally(db):
+        conds.append(~select(ArticleAiJob.id).where(
+            ArticleAiJob.article_id == UserArticleState.article_id,
+            ArticleAiJob.user_id == UserArticleState.user_id,
+            ArticleAiJob.operation == "scoring",
+            ArticleAiJob.status == "pending",
+        ).exists())
+    rows = (await db.execute(
+        select(UserArticleState, Article)
+        .join(Article, Article.id == UserArticleState.article_id)
+        .where(*conds)
+        .limit(_AI_FILTER_BATCH_SIZE)
+    )).all()
+    if not rows:
+        return 0
+
+    user_ids = list({st.user_id for st, _ in rows})
+    filters_by_user: dict[int, list[Filter]] = {}
+    for f in (await db.execute(
+        select(Filter)
+        .where(Filter.user_id.in_(user_ids), Filter.is_active == True)  # noqa: E712
+        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+        .order_by(*FILTER_ORDER)
+    )).scalars():
+        if filter_phase(f) == "relevance":
+            filters_by_user.setdefault(f.user_id, []).append(f)
+    feed_user_map: dict[tuple[int, int], UserFeed] = {
+        (uf.user_id, uf.feed_id): uf
+        for uf in (await db.execute(
+            select(UserFeed).where(UserFeed.user_id.in_(user_ids)))).scalars()
+    }
+
+    for state, article in rows:
+        uf = feed_user_map.get((state.user_id, article.feed_id))
+        await _run_filters_once(filters_by_user.get(state.user_id, []), article,
+                                state.user_id, uf, state, db)
+        state.relevance_filters_pending = False
+
+    await db.commit()
+    logger.info("relevance_filters: fell back to basic for %d states", len(rows))
+    return len(rows)
 
 
 # ── Test / retroactive apply ──────────────────────────────────────────────────
@@ -749,7 +980,7 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     rows = (await db.execute(articles_q)).all()
 
     states_map: dict[int, "UserArticleState"] = {}
-    if is_ai_filter(f):
+    if is_score_filter(f):
         from app.models.article import UserArticleState
         article_ids = [a.id for a, _ in rows]
         if article_ids:
@@ -873,7 +1104,7 @@ async def _plan_retroactive_apply(
     articles = (await db.execute(articles_q)).scalars().all()
 
     states_map: dict[int, UserArticleState] = {}
-    if is_ai and articles:
+    if is_score_filter(f) and articles:
         states_result = await db.execute(
             select(UserArticleState).where(
                 UserArticleState.user_id == user_id,

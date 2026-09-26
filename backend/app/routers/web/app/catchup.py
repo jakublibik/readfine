@@ -28,12 +28,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["web-app"])
 
 
-def _scoring_available(ai_on: bool, settings: UserSettings | None) -> bool:
-    if not ai_on or not settings:
-        return False
-    return bool(settings.ai_scoring_enabled_default)
-
-
 @router.get("/app/catch-me-up", response_class=HTMLResponse)
 async def catchup_page(
     request: Request,
@@ -43,6 +37,7 @@ async def catchup_page(
     from app.models.settings import AppSettings as _AS
     from app.models.user import UserCatchupConfig
     from app.services.ai_service import _DEFAULT_CATCHUP_PROMPT
+    from app.services.catchup_service import scoring_available
     from app.services.feed import list_user_feeds
     from app.services.folder_service import FOLDER_ORDER_DEFAULT
 
@@ -101,7 +96,7 @@ async def catchup_page(
     return templates.TemplateResponse(request, "app/catch_me_up.html", {
         "user": user,
         "catchup_available": True,
-        "ai_scoring_available": _scoring_available(ai_on, settings),
+        "ai_scoring_available": scoring_available(ai_on, settings),
         "user_feeds": user_feeds_data,
         "labels": user_labels,
         "saved_configs": saved_configs,
@@ -215,7 +210,7 @@ async def htmx_catchup_generate(
     from app.services.catchup_service import (
         annotate_sources, apply_catchup_limit, build_articles_meta,
         fetch_catchup_articles, fold_stories, populate_snippet_sources,
-        resolve_story_mode, validate_scope,
+        resolve_story_mode, scoring_available, validate_scope,
     )
 
     ai_on = bool(await ai_enabled_globally(db))
@@ -231,7 +226,7 @@ async def htmx_catchup_generate(
         return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Invalid scope: {html_module.escape(str(exc)[:200])}</div>')
 
     tz_str = settings.timezone if settings else "UTC"
-    scoring_available = _scoring_available(ai_on, settings)
+    has_score = scoring_available(ai_on, settings)
     collapsing, exclude_hidden = resolve_story_mode(settings)
 
     try:
@@ -262,7 +257,7 @@ async def htmx_catchup_generate(
         # not trust the pairing, and a digest is the last place to overrule that.
         if collapsing:
             articles = fold_stories(articles)
-        sampled = apply_catchup_limit(articles, article_limit, scoring_available)
+        sampled = apply_catchup_limit(articles, article_limit, has_score)
         if collapsing:
             await annotate_sources(sampled, user.id, db)
             logger.info(

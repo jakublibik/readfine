@@ -36,21 +36,21 @@ _A clean reader that adapts to your screen._
 - **Article states:** Mark articles read, star favourites, and archive what you want out of the way.
 - **Labels:** Your own colour-coded tags for sorting articles by hand.
 - **Mark read on scroll:** Optionally mark articles read as they scroll past. Search results are left alone.
-- **Search:** Full-text search across your articles, scoped by feed, folder, status, or label. Open it from anywhere with the `/` shortcut.
+- **Search:** Full-text search across your articles that ignores accents and matches English word forms, with `word*` for word beginnings. Filter by feed, folder, status, label, score, publish date, or your starred, saved and archived articles. Open it from anywhere with the `/` shortcut.
 - **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it. Also in the API, so a phone shortcut or a bookmarklet can save a link without opening the app.
 - **Share by link:** Hand a single article to someone with no Readfine account. The link reads without signing in and stays live until you revoke it.
 
-## Filtering & scoring
+## Scoring & filtering
 
 _Trim the stream down to what matters._
 
-- **Filters:** Match on title, content, author, URL, or AI score, then automatically add a label, mark read, star, or archive.
+- **Relevance scoring:** Every incoming article is scored against a list of terms you keep, with no AI key. Related word forms match, and so do Chinese, Japanese and Korean terms. Suggestions learned from what you read offer words to add and terms to drop. It matches words rather than meaning, so it is the weaker scorer; with an AI key, labeled articles are also rated by a model. A filter can act on either score, or on the AI one where it exists (for example, mark anything below a threshold as read).
+- **Filters:** Match on title, content, author, URL, or relevance score, then automatically add a label, mark read, star, or archive.
 - **Regex and AND/OR:** Combine conditions with AND/OR and match with regular expressions (Python syntax) when plain "contains" is not enough.
 - **Feed & folder scoping:** Restrict any filter to specific feeds or folders.
 - **Retroactive apply:** Run a filter over existing articles, not just new ones.
 - **One story, several sources:** Headlines are matched across your feeds, so an event several newsrooms cover under as many addresses is one row saying how many sources filed it. Open the rest in place or from the foot of the article; reading the row finishes the story. Catch me up and briefings fold the same stories and note how many sources filed each one. Optionally, an article that repeats one you have already read is kept out of the list altogether.
 - **Duplicates across feeds:** A story that two of your feeds both carry is not put in front of you twice. The first copy stays unread and the later one arrives already marked read, so it is still there if you want it.
-- **Relevance scoring:** With an AI key, each incoming article is scored against your interest profile, so you can surface or hide articles by score (a filter can mark anything below a threshold as read).
 
 ## AI (bring your own key)
 
@@ -59,7 +59,7 @@ _Optional AI on your own provider key._
 - **Summaries:** A one-tap summary of any article, plus an option to have starred articles summarized automatically.
 - **Context:** The summary tells you what an article says; context tells you what you need to know around it. Background, what led up to it, why it matters. You can add a focus for a single article when there is something specific you want filled in.
 - **Chat over articles:** Ask questions about an article and get answers grounded in its text.
-- **Interest profile:** Describe what you care about, or have the AI draft it from what you read; it drives scoring and digests.
+- **Interest profile:** Describe what you care about, or have the AI draft it from what you read; the model rates articles against it.
 - **Profile on a schedule:** Have the profile regenerate itself every 2 or 4 weeks as your reading shifts, with the replaced version one click away.
 - **Catch me up:** An on-demand digest of what happened in your feeds over a period and scope you choose.
 - **Scheduled briefings:** The same digest on a schedule, delivered to your inbox.
