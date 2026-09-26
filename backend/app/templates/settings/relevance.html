@@ -22,9 +22,18 @@
 
 {# What is running, in words. Nothing on this page moves or hides depending on
    these answers: a setting that changes place according to another setting is
-   worse than one that is always visible. #}
-<p class="text-sm text-gray-600 mb-6">
+   worse than one that is always visible.
+
+   The explanations here and under the terms matter on the first visit and are in
+   the way after it, so they fold away once there are terms to score by. <details>
+   rather than a script, as for "How your terms did" below. #}
+{% set explain_open = "open" if not term_count else "" %}
+<p class="text-sm text-gray-600">
   Readfine scores how well an article matches what you follow, and can sort and filter by it.
+</p>
+<details class="mt-1 mb-6 text-sm text-gray-600" {{ explain_open }}>
+  <summary class="cursor-pointer select-none text-xs text-gray-500">How scoring works</summary>
+  <p class="mt-1">
   {% if s.basic_scoring_enabled %}
     <span class="font-medium">Basic relevance</span> reads the title and the opening of every article that arrives and looks for your terms in it. It needs no API key.
   {% else %}
@@ -35,7 +44,8 @@
   {% elif app_ai_enabled() %}
     <a href="/settings/ai" class="text-blue-600 hover:underline">AI scoring</a> rates labeled articles with a model and is noticeably more accurate, but it needs an API key.
   {% endif %}
-</p>
+  </p>
+</details>
 
 <form method="POST" action="/settings/relevance" hx-boost="true" class="space-y-8">
 
@@ -45,7 +55,9 @@
   {% set terms_text = terms_submitted if terms_submitted is defined else (s.relevance_terms or '') %}
   {% set saved_text = s.relevance_terms or '' %}
   {% include "settings/_relevance_terms_textarea.html" %}
-  <p class="text-xs text-gray-500 mt-1">
+  <details class="text-xs text-gray-500 mt-1" {{ explain_open }}>
+  <summary class="cursor-pointer select-none">Tips for terms</summary>
+  <p class="mt-1">
     Separate terms with commas, semicolons or new lines. A term can be several words, such as
     <code class="text-gray-600">urban cycling</code>: an article with more of them scores higher, and they don't have
     to stand together. Related forms are found too (<code class="text-gray-600">cycling</code> also finds
@@ -53,6 +65,7 @@
     <code class="text-gray-600">health</code> on its own matches almost everything.
     <a href="/help#basic-relevance" class="text-blue-600 hover:underline">How matching works</a>
   </p>
+  </details>
   <p class="text-xs text-gray-500 mt-1">
     {% if term_count %}
       {{ term_count }} term{{ 's' if term_count != 1 else '' }}{% if s.relevance_terms_updated_at %}, updated {{ s.relevance_terms_updated_at | localtime('numdate') }}{% endif %}.

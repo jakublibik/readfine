@@ -159,8 +159,9 @@ class TestEngagedLabel:
     def test_query_excludes_is_read(self):
         src = inspect.getsource(get_scoring_eval)
         assert "is_read" not in src
-        assert "dwell_seconds >= 60" in src
-        assert "user_starred" in src
+        assert "dwell_seconds >= :dwell" in src
+        assert "ENGAGED_DWELL_SECONDS" in src
+        assert "ever_starred" in src
         assert "link_opened" in src
 
     def test_supports_optional_user_filter(self):

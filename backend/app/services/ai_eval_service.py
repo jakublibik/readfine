@@ -5,10 +5,12 @@ no new logging or tables. `ai_score` is written once at scoring time; engagement
 accrues on the same row afterwards, so scores from before/after a profile change
 can be compared by limiting the time window.
 
-Engaged label = `user_starred OR dwell_seconds >= 60 OR link_opened`. `is_read`
-is deliberately excluded: it is set even for articles the user never saw
-(mark-all-read, auto-read on scroll), so it carries no signal — consistent with
-the profile-generation groups.
+Engaged label = `ever_starred OR dwell_seconds >= ENGAGED_DWELL_SECONDS OR
+link_opened`, the "read" the reader sees in Stats and on the Relevance page, so
+the numbers here and there count the same thing. `is_read` is deliberately
+excluded: it is set even for articles the user never saw (mark-all-read,
+auto-read on scroll), so it carries no signal. Profile generation still groups
+by 60 seconds; that decides what the profile learns from and is a separate call.
 
 Caveats, in descending order of how much they move the number:
 
@@ -49,9 +51,16 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.story_service import ENGAGED_DWELL_SECONDS
+
 # Keep the window clear of the purge horizon rather than ending exactly on it:
 # purge runs daily and articles land in the sample by arrival, not by score.
 RETENTION_MARGIN_DAYS = 5
+
+# Below this many engaged articles an AUC is mostly the rank of those few
+# articles: two of them landing high reads as 0.93 on a fresh instance. The page
+# still prints the number but greys it out and says why, instead of colouring it.
+MIN_ENGAGED_FOR_AUC = 10
 
 
 # ── pure computation (unit-testable) ─────────────────────────────────────────
@@ -226,14 +235,14 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
         "SELECT default_purge_after_days FROM app_settings WHERE id = 1"))
     days, retention = effective_window(days, purge_after_days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    params = {"cutoff": cutoff}
+    params = {"cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS}
     user_clause = ""
     if user_id is not None:
         user_clause = " AND user_id = :uid"
         params["uid"] = user_id
     rows = (await db.execute(text(f"""
         SELECT ai_score, lexical_score,
-               (user_starred OR dwell_seconds >= 60 OR link_opened) AS engaged
+               (ever_starred OR dwell_seconds >= :dwell OR link_opened) AS engaged
         FROM user_article_states
         WHERE (ai_score IS NOT NULL OR lexical_score IS NOT NULL)
           AND created_at >= :cutoff{user_clause}
@@ -292,6 +301,7 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
         "presets": window_presets(purge_after_days),
         "exposure": exposure,
         "user_id": user_id,
+        "min_engaged": MIN_ENGAGED_FOR_AUC,
         "n": n,
         "engaged_total": engaged_total,
         "engaged_rate": (engaged_total / n) if n else None,
