@@ -1511,11 +1511,44 @@ function openSearchModal(prefill) {
     if (qs.length) url += '?' + qs.join('&');
   }
   htmx.ajax('GET', url, { target: '#search-modal-content', swap: 'innerHTML' });
+  if (overlay && window.visualViewport && !_searchVvpListener) {
+    _searchVvpListener = function () { _fitSearchToVisualViewport(overlay); };
+    _fitSearchToVisualViewport(overlay);
+    window.visualViewport.addEventListener('resize', _searchVvpListener);
+    window.visualViewport.addEventListener('scroll', _searchVvpListener);
+  }
+}
+
+// A phone's on-screen keyboard shrinks only the visual viewport, so the fixed
+// overlay kept its full height and the lower half of the form sat behind the
+// keyboard, out of reach of the modal's own scroll. Fitting the overlay to the
+// visible area keeps the modal's foot above the keyboard (same trick as chat).
+var _searchVvpListener = null;
+function _fitSearchToVisualViewport(overlay) {
+  var vv = window.visualViewport;
+  overlay.style.top = vv.offsetTop + 'px';
+  overlay.style.height = vv.height + 'px';
+  overlay.style.bottom = 'auto';
+  // The field you tapped may have ended up below the new, shorter box.
+  var active = document.activeElement;
+  if (active && active !== document.body && overlay.contains(active)) {
+    active.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 function closeSearchModal() {
   var overlay = document.getElementById('search-modal-overlay');
-  if (overlay) overlay.classList.add('hidden');
+  if (overlay) {
+    overlay.classList.add('hidden');
+    overlay.style.top = '';
+    overlay.style.height = '';
+    overlay.style.bottom = '';
+  }
+  if (_searchVvpListener && window.visualViewport) {
+    window.visualViewport.removeEventListener('resize', _searchVvpListener);
+    window.visualViewport.removeEventListener('scroll', _searchVvpListener);
+    _searchVvpListener = null;
+  }
   document.documentElement.classList.remove('search-modal-open');
   // Drop the contents with it. The overlay is shown the moment you open the modal,
   // but its markup is fetched, so whatever was left from last time (your previous

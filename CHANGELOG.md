@@ -27,6 +27,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - In dark mode, the regex tips in the filter editor and the "try web scraping" link after a feed test were dark blue on a dark background and hard to read.
 - A search with no words, only filters (such as status or labels), now finds the same articles as one with words: it includes what you starred, archived or saved by URL, even from feeds you no longer follow. And searching the "no folder" group no longer lists those kept articles as if they were in it.
 - Chinese and Japanese articles were counted as a handful of words, because those languages put no spaces between words. Reading time showed 1 minute for every article, and a feed that delivers full articles in these languages was not recognised as one, so readable extraction ran on every article anyway. Two characters now count as a word.
+- On a phone, the search window now stays above the on-screen keyboard, so you can scroll to the fields at the bottom and edit them without closing the keyboard first.
 - Filter text conditions treat width variants as the same text: full-width `ＡＩ` matches `ai`, half-width katakana matches the normal form, and Korean text stored in decomposed form matches as typed.
 
 ## [0.18.0] - 2026-09-21
