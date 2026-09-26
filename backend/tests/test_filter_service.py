@@ -110,6 +110,44 @@ class TestTitleOrContent:
         assert _matches_condition(cond, article, None) is False
 
 
+class TestContainsUnicode:
+    def test_full_width_latin_matches_ascii(self):
+        article = make_article(title="ＡＩ研究の最前線")
+        cond = make_condition("title", "contains", "ai")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_half_width_katakana_matches_full_width(self):
+        article = make_article(title="ｶﾀｶﾅのニュース")
+        cond = make_condition("title", "contains", "カタカナ")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_decomposed_hangul_matches_composed(self):
+        import unicodedata
+        article = make_article(title=unicodedata.normalize("NFD", "서울 날씨"))
+        cond = make_condition("title", "contains", "날씨")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_chinese_substring(self):
+        article = make_article(title="东京今天天气很好")
+        cond = make_condition("title", "contains", "天气")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_casefold(self):
+        article = make_article(title="Die Straße ist gesperrt")
+        cond = make_condition("title", "contains", "STRASSE")
+        assert _matches_condition(cond, article, None) is True
+
+    def test_not_contains_uses_the_same_folding(self):
+        article = make_article(title="ＡＩ研究")
+        cond = make_condition("title", "not_contains", "ai")
+        assert _matches_condition(cond, article, None) is False
+
+    def test_equals_ignores_width_but_not_case(self):
+        article = make_article(author="ＡＢＣ News")
+        assert _matches_condition(make_condition("author", "equals", "ABC News"), article, None) is True
+        assert _matches_condition(make_condition("author", "equals", "abc news"), article, None) is False
+
+
 class TestNotContains:
     def test_no_match_returns_true(self):
         article = make_article(title="Weather Report")

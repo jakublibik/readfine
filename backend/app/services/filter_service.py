@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -380,21 +381,32 @@ def _get_field_value(article: Article, user_feed: UserFeed | None, field: str, s
     return None
 
 
+def _fold(text: str) -> str:
+    """Text as ``contains`` compares it: NFKC, then case-folded.
+
+    NFKC makes the width variants common in CJK feeds equal to the plain forms
+    (full-width "ＡＩ" is "AI", half-width "ｶﾀｶﾅ" is "カタカナ") and composes Hangul that
+    arrives as separate jamo. casefold() rather than lower() so "ß" matches "ss".
+    """
+    return unicodedata.normalize("NFKC", text).casefold()
+
+
 def _eval_op(op: str, val: str, field_value) -> bool:
     """Evaluate a single operator/value against a field value."""
     if field_value is None:
         return op == "not_contains"
     if op == "contains":
-        return val.lower() in str(field_value).lower()
+        return _fold(val) in _fold(str(field_value))
     if op == "not_contains":
-        return val.lower() not in str(field_value).lower()
+        return _fold(val) not in _fold(str(field_value))
     if op == "equals":
         if isinstance(field_value, datetime):
             try:
                 return field_value.date() == datetime.fromisoformat(val).date()
             except ValueError:
                 return False
-        return str(field_value) == val
+        # Case-sensitive, but the same text in another Unicode form is still equal.
+        return unicodedata.normalize("NFKC", str(field_value)) == unicodedata.normalize("NFKC", val)
     if op == "regex":
         compiled = _compile_user_regex(val)
         if compiled is None:
