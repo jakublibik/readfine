@@ -40,10 +40,10 @@
      Which filters are on is left to the modal; the header only says how many. #}
   {% set results_word = "result" if result_count == 1 else "results" %}
   {% if search_query %}
-  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{% if result_count is not none %}{{ "{:,}".format(result_count) }} {{ results_word }} for{% else %}Results for:{% endif %}</span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{% if result_count is not none %}{{ result_count | num }} {{ results_word }} for{% else %}Results for:{% endif %}</span>
   <strong class="text-gray-800 truncate min-w-0" title="{{ search_query }}">{{ search_query }}</strong>
   {% elif result_count is not none %}
-  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{{ "{:,}".format(result_count) }} filtered {{ results_word }}</span>
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{{ result_count | num }} filtered {{ results_word }}</span>
   {% else %}
   <span class="text-gray-500 whitespace-nowrap flex-shrink-0">Filtered results</span>
   {% endif %}

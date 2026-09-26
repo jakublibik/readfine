@@ -14,12 +14,12 @@
     {% if sugg.engaged %}
       you read 1 in {{ (sugg.inflow / sugg.engaged) | round | int }} of the articles from your feeds.
     {% else %}
-      you have not read any of the {{ sugg.inflow | thousands }} articles from your feeds.
+      you have not read any of the {{ sugg.inflow | num }} articles from your feeds.
     {% endif %}
     Read means half a minute on the article, an opened link or a star.
   </p>
   {% if not sugg.enough %}
-  <p class="mt-1">The comparison with your average appears once you have read {{ min_engaged }} articles (so far: {{ sugg.engaged }}).</p>
+  <p class="mt-1">The comparison with your average appears once you have read {{ min_engaged }} articles (so far: {{ sugg.engaged | num }}).</p>
   {% endif %}
   <table class="mt-2 w-full max-w-md">
     <thead>
@@ -34,8 +34,8 @@
       {% for st in sugg.terms %}
       <tr class="border-t border-gray-100">
         <td class="py-0.5 pr-3 text-gray-700 break-words">{{ st.term }}</td>
-        <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.matched | thousands }}</td>
-        <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.engaged | thousands if st.matched else "–" }}</td>
+        <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.matched | num }}</td>
+        <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.engaged | num if st.matched else "–" }}</td>
         <td class="py-0.5 text-right tabular-nums whitespace-nowrap">
           {% if not st.matched %}<span class="text-amber-600">no match</span>
           {% elif st.lift is not none %}<span class="{{ 'text-gray-400' if st.lift < 1 else 'text-gray-700' }}">{{ st.lift | num(0 if st.lift >= 10 else 1) }}×</span>

@@ -17,7 +17,7 @@
   <p class="text-xs text-gray-500">
     Suggestions for your list appear once you have read {{ min_engaged }} articles properly
     (read for half a minute, opened the link or starred) in the last {{ days }} days.
-    So far: {{ sugg.engaged }}.
+    So far: {{ sugg.engaged | num }}.
   </p>
 {% elif not sugg.items %}
   <p class="text-xs text-gray-500">No suggestions for your list right now.</p>
@@ -56,8 +56,8 @@
           <span class="text-green-700">+ {{ x.term }}</span>: comes up in articles you read, such as
           {% for t in x.titles %}“{{ t }}”{{ ", " if not loop.last }}{% endfor %}.
         {% else %}
-          <span class="text-red-700">− {{ x.term }}</span>: matched {{ x.matched }} articles in the last
-          {{ days }} days, and you read {{ x.engaged }} of them.
+          <span class="text-red-700">− {{ x.term }}</span>: matched {{ x.matched | num }} articles in the last
+          {{ days }} days, and you read {{ x.engaged | num }} of them.
         {% endif %}
         <button type="button" class="ml-1 text-gray-500 underline hover:text-gray-700"
                 hx-post="/settings/relevance/suggestions/dismiss" hx-vals='{{ vals | tojson }}' hx-swap="none">Hide for 3 months</button>
