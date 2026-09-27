@@ -16,6 +16,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 ### Fixed
 
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
+- A search with a score condition (for example, relevance at least 60) is much faster. It used to go through every article on the instance, not just yours, and on a large instance it took over a tenth of a second each time.
 
 ## [0.19.0] - 2026-09-26
 
