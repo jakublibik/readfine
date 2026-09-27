@@ -215,6 +215,22 @@ class TestTermStats:
         assert [(st.term, st.matched) for st in out.terms] == [
             ("crypto", 20), ("sourdough", 4), ("bike commuting", 0)]
 
+    def test_a_term_the_statistics_do_not_have_is_told_apart_from_no_match(self):
+        """Both match nothing, but only one of them could: the other scores zero
+        on every article until the statistics count its words."""
+        rows = self._rows()
+        texts = [rs.article_text(t, b) for t, b, *_ in rows]
+        stats = rs.build_corpus_stats(texts + ["kayak trip"], min_df=1)
+        out = ss.compute(rows, ["kayak", "zqxw", "特朗普"], stats, set())
+        by_term = {st.term: (st.matched, st.known) for st in out.terms}
+        assert by_term == {"kayak": (0, True), "zqxw": (0, False), "特朗普": (0, False)}
+
+    def test_known_through_a_prefix_or_a_cjk_bigram(self):
+        stats = rs.build_corpus_stats(["válka na východě", "特朗普访华"], min_df=1)
+        assert rs.term_known("válkou", stats)  # only its prefix "valk" is counted
+        assert rs.term_known("特朗普", stats)
+        assert not rs.term_known("中美", stats)
+
     def test_counted_below_min_engaged_but_without_lift(self):
         engaged = [f"sourdough loaf {i}" for i in range(ss.MIN_ENGAGED - 1)]
         rows = _rows(engaged, FILLER)

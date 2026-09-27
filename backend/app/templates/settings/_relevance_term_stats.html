@@ -37,7 +37,8 @@
         <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.matched | num }}</td>
         <td class="py-0.5 pr-3 text-right tabular-nums">{{ st.engaged | num if st.matched else "–" }}</td>
         <td class="py-0.5 text-right tabular-nums whitespace-nowrap">
-          {% if not st.matched %}<span class="text-amber-600">no match</span>
+          {% if not st.matched and not st.known %}<span class="text-gray-400">not counted yet</span>
+          {% elif not st.matched %}<span class="text-amber-600">no match</span>
           {% elif st.lift is not none %}<span class="{{ 'text-gray-400' if st.lift < 1 else 'text-gray-700' }}">{{ st.lift | num(0 if st.lift >= 10 else 1) }}×</span>
           {% elif sugg.enough %}<span class="text-gray-400">too few</span>
           {% else %}<span class="text-gray-400">–</span>{% endif %}
@@ -50,6 +51,10 @@
     Above 1× a term picks articles you read more often than your feeds on average, around 1× it picks no better
     than chance. Fewer than {{ min_lift_matches }} matches are too few to tell. A term with no match at all may be
     misspelled, or too narrow for your feeds.
+    {% if sugg.terms | rejectattr("known") | list %}
+    "Not counted yet" means the term's words are too rare in the last month's articles to score. Words from a
+    feed you added today are counted overnight, and the term starts matching then.
+    {% endif %}
   </p>
 {% endif %}
 </div>

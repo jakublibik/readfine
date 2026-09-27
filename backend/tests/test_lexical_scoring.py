@@ -206,11 +206,12 @@ async def _only_due_account(session, user_id: int) -> None:
     """Park every other account, so a due-count is about this test's user.
 
     The due query is instance-wide by design and the dev database has real
-    accounts in it, several of which are due the moment the column exists. Rolled
-    back with everything else.
+    accounts in it, several of which are due the moment the column exists. Parked
+    in the future, since a corpus build later in the test would otherwise make
+    them due again. Rolled back with everything else.
     """
     await session.execute(
-        text("UPDATE user_settings SET lexical_backfill_at = now() "
+        text("UPDATE user_settings SET lexical_backfill_at = now() + interval '1 day' "
              "WHERE user_id <> :uid"),
         {"uid": user_id},
     )
@@ -311,6 +312,29 @@ class TestBackfill:
         assert await lss.process_due_backfills(pg) == 1
         monkeypatch.setattr(lss, "backfill_user", real_backfill)
         assert await lss.process_due_backfills(pg) == 1
+
+    async def test_a_corpus_rebuild_rescores_what_scored_zero_before_it(self, pg):
+        """A word new to the instance (a feed added today) scores zero until the
+        statistics count it, and the articles scored meanwhile keep that zero
+        unless the rebuild makes the account due again."""
+        user, feed = await _setup(pg)
+        settings = await pg.get(UserSettings, user.id)
+        settings.relevance_terms_updated_at = NOW
+        await pg.flush()
+        await _only_due_account(pg, user.id)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+        article.published_at = NOW - timedelta(days=1)
+        await pg.flush()
+        await rcs.rebuild(pg, window_days=1, min_df=3)  # one article: TOPIC unknown
+
+        assert await lss.process_due_backfills(pg) == 1
+        assert (await _state(pg, user, article)).lexical_score == 0.0
+        assert await lss.process_due_backfills(pg) == 0
+
+        await _corpus(pg)  # now TOPIC clears min_df
+        assert await lss.process_due_backfills(pg) == 1
+        assert (await _state(pg, user, article)).lexical_score > 0
+        assert await lss.process_due_backfills(pg) == 0
 
     async def test_a_new_ai_profile_does_not_make_it_due(self, pg):
         """Regenerating the AI profile leaves the lexical score as it was."""

@@ -12,11 +12,13 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 ### Added
 
 - **Saved searches.** **Save** in the header of search results keeps the search, with its filters, under a name in the sidebar above Labels, with a count like the other entries. A saved search is not a snapshot: it runs again each time you open it, and it reads like a feed, marked read as you scroll, with **Mark all as read** covering only what it lists. Without a status of its own, it follows your unread setting. **Edit** reopens the search to update it, save it as a new one, rename it or delete it. A new account that lists its topics on the welcome screen starts with one, **Top picks**: the last week's articles scoring 60 or more, best first. In the API, `GET /api/v1/saved-searches` lists them and `GET /api/v1/articles?view_id=` returns what one lists.
+- In **Settings → Relevance**, the table of how your terms did now says "not counted yet" for a term whose words are too rare in the last month's articles to score, instead of "no match". That usually means a feed added today, whose words are counted overnight.
 
 ### Fixed
 
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
 - In Saved, an article scrolled up under the header at the top of the list is marked read as it goes out of sight. It used to count as read only once it had passed the header too, so one left under it stayed unread.
+- Articles that came in before a word of your relevance terms was counted (for example, from a feed added the same day) are scored again after the nightly recount. They used to keep a score of 0 until you saved your terms.
 - A search with a score condition (for example, relevance at least 60) is much faster. It used to go through every article on the instance, not just yours, and on a large instance it took over a tenth of a second each time.
 
 ## [0.19.0] - 2026-09-26

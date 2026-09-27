@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
 from app.models.feed import UserFeed
+from app.models.relevance import LexicalCorpus
 from app.models.user import UserSettings
 from app.services import relevance_corpus_service
 from app.services.relevance_service import (
@@ -219,19 +220,26 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
 
 
 async def process_due_backfills(db: AsyncSession) -> int:
-    """Catch up the accounts whose terms are newer than their last backfill.
+    """Catch up the accounts whose last backfill is older than their terms or the corpus.
 
-    Only the basic terms make an account due. Regenerating the AI profile does
-    not touch the lexical score, so it has nothing to catch up.
+    Saving the terms makes an account due, and so does a rebuild of the corpus
+    statistics: an article scored before a word was in the table scored zero on
+    it, and keeps that zero until something scores it again. A feed added today
+    is what makes this visible, its vocabulary counts only from the next build.
+    Regenerating the AI profile does not touch the lexical score, so it has
+    nothing to catch up.
     """
+    built_at = await db.scalar(
+        select(LexicalCorpus.built_at).where(LexicalCorpus.id == 1))
+    stale = UserSettings.lexical_backfill_at < UserSettings.relevance_terms_updated_at
+    if built_at is not None:
+        stale = or_(stale, UserSettings.lexical_backfill_at < built_at)
     due = dict((await db.execute(
         select(UserSettings.user_id, UserSettings.relevance_terms_updated_at)
         .where(UserSettings.basic_scoring_enabled == True,  # noqa: E712
                UserSettings.relevance_terms.isnot(None),
                UserSettings.relevance_terms_updated_at.isnot(None),
-               or_(UserSettings.lexical_backfill_at.is_(None),
-                   UserSettings.lexical_backfill_at
-                   < UserSettings.relevance_terms_updated_at))
+               or_(UserSettings.lexical_backfill_at.is_(None), stale))
         .order_by(UserSettings.lexical_backfill_at.asc().nulls_first())
         .limit(_BACKFILL_USERS_PER_RUN)
     )).all())
@@ -251,12 +259,14 @@ async def process_due_backfills(db: AsyncSession) -> int:
         if terms is not None:
             written = await backfill_user(db, user_id, terms, stats)
             logger.info("lexical backfill: user=%s wrote %d scores", user_id, written)
-        # Stamped with the save it caught up with, not with the time it finished.
-        # Terms saved while this ran (a few suggestion clicks in a row) are newer
-        # than that, so the account stays due and the next pass scores them. A
-        # save between the query above and `load_terms` only costs a repeat run.
+        # Stamped with the save or the build it caught up with, whichever is
+        # newer, not with the time it finished. Terms saved while this ran (a few
+        # suggestion clicks in a row) are newer than that, so the account stays
+        # due and the next pass scores them. A save between the query above and
+        # `load_terms`, or a build during the run, only costs a repeat run.
         settings = await db.get(UserSettings, user_id)
-        settings.lexical_backfill_at = terms_updated_at
+        settings.lexical_backfill_at = (max(terms_updated_at, built_at)
+                                        if built_at is not None else terms_updated_at)
         await db.commit()
         done += 1
     return done

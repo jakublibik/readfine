@@ -64,6 +64,7 @@ from app.services.relevance_service import (
     parse_terms,
     prefix_of,
     squash,
+    term_known,
     term_scores,
     terms_needed,
     tokenize,
@@ -133,6 +134,7 @@ class TermStat:
     engaged: int                # how many of those were engaged with
     lift: float | None          # their engagement rate over the base rate; None
                                 # below MIN_ENGAGED overall or MIN_LIFT_MATCHES here
+    known: bool = True          # the corpus statistics have a word of it (term_known)
 
 
 @dataclass(frozen=True)
@@ -249,7 +251,7 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
             top_e += label
     term_stats = tuple(sorted(
         (TermStat(t, n, e, (e / n) / base if enough and base and n >= MIN_LIFT_MATCHES
-                  else None)
+                  else None, n > 0 or term_known(t, stats))
          for t, (n, e) in matched.items()),
         key=lambda st: -st.matched))
     top = (TermStat("", top_n, top_e,
