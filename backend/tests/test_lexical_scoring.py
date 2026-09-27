@@ -336,6 +336,31 @@ class TestBackfill:
         assert (await _state(pg, user, article)).lexical_score > 0
         assert await lss.process_due_backfills(pg) == 0
 
+    async def test_a_save_goes_before_accounts_due_only_to_a_rebuild(self, pg, monkeypatch):
+        """After the nightly build every account is due, and working through them
+        takes hours; a reader who saves their terms meanwhile is not queued behind."""
+        rebuilt, _ = await _setup(pg)
+        saved, _ = await _setup(pg)
+        for user, backfill, terms_at in ((rebuilt, NOW - timedelta(days=2), NOW - timedelta(days=3)),
+                                         (saved, NOW - timedelta(days=1), NOW)):
+            s = await pg.get(UserSettings, user.id)
+            s.lexical_backfill_at = backfill
+            s.relevance_terms_updated_at = terms_at
+        await pg.flush()
+        await pg.execute(
+            text("UPDATE user_settings SET lexical_backfill_at = now() + interval '1 day' "
+                 "WHERE user_id NOT IN (:a, :b)"),
+            {"a": rebuilt.id, "b": saved.id},
+        )
+        await _corpus(pg)
+        monkeypatch.setattr(lss, "_BACKFILL_USERS_PER_RUN", 1)
+
+        assert await lss.process_due_backfills(pg) == 1
+        await pg.refresh(s := await pg.get(UserSettings, saved.id))
+        assert s.lexical_backfill_at >= NOW
+        await pg.refresh(r := await pg.get(UserSettings, rebuilt.id))
+        assert r.lexical_backfill_at < NOW
+
     async def test_a_new_ai_profile_does_not_make_it_due(self, pg):
         """Regenerating the AI profile leaves the lexical score as it was."""
         user, _feed = await self._due_setup(pg)

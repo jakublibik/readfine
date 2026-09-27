@@ -50,10 +50,10 @@
   <p class="mt-2">
     Above 1× a term picks articles you read more often than your feeds on average, around 1× it picks no better
     than chance. Fewer than {{ min_lift_matches }} matches are too few to tell. A term with no match at all may be
-    misspelled, or too narrow for your feeds.
+    too narrow for your feeds.
     {% if sugg.terms | rejectattr("known") | list %}
-    "Not counted yet" means the term's words are too rare in the last month's articles to score. Words from a
-    feed you added today are counted overnight, and the term starts matching then.
+    "Not counted yet" means the term's words are too rare in the last month's articles to score. It may be
+    misspelled, or new to your feeds: words from a feed you added today are counted overnight.
     {% endif %}
   </p>
 {% endif %}

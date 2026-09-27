@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -231,16 +231,21 @@ async def process_due_backfills(db: AsyncSession) -> int:
     """
     built_at = await db.scalar(
         select(LexicalCorpus.built_at).where(LexicalCorpus.id == 1))
-    stale = UserSettings.lexical_backfill_at < UserSettings.relevance_terms_updated_at
-    if built_at is not None:
-        stale = or_(stale, UserSettings.lexical_backfill_at < built_at)
+    saved = or_(UserSettings.lexical_backfill_at.is_(None),
+                UserSettings.lexical_backfill_at < UserSettings.relevance_terms_updated_at)
+    stale = (or_(saved, UserSettings.lexical_backfill_at < built_at)
+             if built_at is not None else saved)
     due = dict((await db.execute(
         select(UserSettings.user_id, UserSettings.relevance_terms_updated_at)
         .where(UserSettings.basic_scoring_enabled == True,  # noqa: E712
                UserSettings.relevance_terms.isnot(None),
                UserSettings.relevance_terms_updated_at.isnot(None),
-               or_(UserSettings.lexical_backfill_at.is_(None), stale))
-        .order_by(UserSettings.lexical_backfill_at.asc().nulls_first())
+               stale)
+        # A save goes first: the page promises its rescoring within minutes, and
+        # after a nightly build every account with terms is due, which takes
+        # hours to work through on an instance with a few hundred of them.
+        .order_by(case((saved, 0), else_=1),
+                  UserSettings.lexical_backfill_at.asc().nulls_first())
         .limit(_BACKFILL_USERS_PER_RUN)
     )).all())
     if not due:
