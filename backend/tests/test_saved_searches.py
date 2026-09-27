@@ -481,20 +481,41 @@ async def test_count_over_budget_shows_nothing_and_leaves_the_session_usable(pg,
 
 
 @pytest.mark.asyncio
-async def test_count_route_refuses_another_users_search(pg):
-    from fastapi import HTTPException
-
-    from app.routers.web.app.saved_searches import htmx_saved_search_count
+async def test_counts_route_answers_for_the_readers_own_searches_only(pg, monkeypatch):
+    from app.routers.web.app import saved_searches as route
 
     owner = await _user(pg)
-    intruder = await _user(pg)
-    s = await _save(pg, owner, "mine")
-    with pytest.raises(HTTPException) as exc:
-        await htmx_saved_search_count(search_id=s.id, user=intruder, db=pg)
-    assert exc.value.status_code == 404
-    # The owner gets the badge: grey total 0 for a search that finds nothing.
-    resp = await htmx_saved_search_count(search_id=s.id, user=owner, db=pg)
-    assert "mark-read-badge" in resp.body.decode()
+    other = await _user(pg)
+    a = await _save(pg, owner, "a")
+    slow = await _save(pg, owner, "slow", q="y")
+    theirs = await _save(pg, other, "theirs")
+
+    real = route.count_saved_search
+
+    async def count(db, user, search, **kw):
+        # One over budget: an empty placeholder, which drops the badge it had.
+        return None if search.id == slow.id else await real(db, user, search, **kw)
+
+    monkeypatch.setattr(route, "count_saved_search", count)
+    body = (await route.htmx_saved_search_counts(user=owner, db=pg)).body.decode()
+    # Grey total 0 for a search that finds nothing, out of band into its placeholder.
+    assert f'<span id="saved-count-{a.id}" class="ml-auto" data-saved-count hx-swap-oob="outerHTML"><span class="mark-read-badge' in body
+    assert f'<span id="saved-count-{slow.id}" class="ml-auto" data-saved-count hx-swap-oob="outerHTML"></span>' in body
+    assert f"saved-count-{theirs.id}" not in body
+
+
+@pytest.mark.asyncio
+async def test_top_picks_losing_the_name_race_keeps_the_session(pg, monkeypatch):
+    user = await _user(pg)
+    # As if a second /welcome had checked the name before the first one saved it.
+    await _save(pg, user, svc.TOP_PICKS_NAME)
+
+    async def not_taken(*a, **kw):
+        return False
+
+    monkeypatch.setattr(svc, "_name_taken", not_taken)
+    await svc.create_top_picks(pg, user.id)
+    assert [s.name for s in await svc.list_saved_searches(pg, user.id)] == [svc.TOP_PICKS_NAME]
 
 
 # ── API ───────────────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ from app.services.saved_search_service import (
     create_saved_search,
     delete_saved_search,
     get_saved_search,
+    list_saved_searches,
     mark_saved_search_read,
     update_saved_search,
 )
@@ -148,28 +149,34 @@ async def htmx_mark_saved_search_read(
     return HTMLResponse("", headers={"HX-Trigger": "sidebarRefresh"})
 
 
-@router.get("/htmx/saved-searches/{search_id}/count", response_class=HTMLResponse)
-async def htmx_saved_search_count(
-    search_id: int,
+@router.get("/htmx/saved-searches/counts", response_class=HTMLResponse)
+async def htmx_saved_search_counts(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """A saved search's sidebar badge, loaded after the sidebar so a slow search
-    never holds it up. Empty when the count ran out of its time budget."""
-    saved = await _own(db, user, search_id)
+    """The sidebar badges of all the reader's saved searches, loaded after the
+    sidebar so a slow search never holds it up.
+
+    One request for them all: the sidebar is redrawn on every change of an article's
+    state, and a request per search held a database connection each, as many at once
+    as the reader has searches. Counted one after another on this one connection,
+    each under its own time budget, so a slow search delays the rest by that budget
+    at most. Each badge goes out of band into its placeholder; a search that ran out
+    of time gets an empty one, which drops the badge it had.
+    """
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
-    state = saved.params.get("state")
-    collapsing = _collapses_stories(
-        story_dedup=settings.story_dedup if settings else DEDUP_COLLAPSE, feed_id=None,
-        starred_only=state == "starred", archived_only=state == "archived",
-        saved_only=state == "saved",
-    )
-    counts = await count_saved_search(db, user, saved, collapsing=collapsing)
-    if counts is None:
-        return HTMLResponse("")
-    unread, total = counts
-    # Tagged with the search, so app.js can carry it over a sidebar refresh.
-    return HTMLResponse(
-        f'<span class="ml-auto" data-saved-badge="{saved.id}">'
-        f"{_badge_html(unread, total or 0)}</span>"
-    )
+    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
+    parts = []
+    for saved in await list_saved_searches(db, user.id):
+        state = saved.params.get("state")
+        collapsing = _collapses_stories(
+            story_dedup=story_dedup, feed_id=None, starred_only=state == "starred",
+            archived_only=state == "archived", saved_only=state == "saved",
+        )
+        counts = await count_saved_search(db, user, saved, collapsing=collapsing)
+        badge = _badge_html(counts[0], counts[1] or 0) if counts is not None else ""
+        parts.append(
+            f'<span id="saved-count-{saved.id}" class="ml-auto" data-saved-count '
+            f'hx-swap-oob="outerHTML">{badge}</span>'
+        )
+    return HTMLResponse("".join(parts))

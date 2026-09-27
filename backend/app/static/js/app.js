@@ -923,19 +923,24 @@ function _autoLoadArticleList() {
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
 }
 
-// The remembered view is the browser's, not the account's: a saved search deleted
-// on another device, or another account's from an earlier login in this browser,
-// comes back as a 404. Forget it and open All articles, without an error toast.
-// _restoredNavGet (declared above _autoLoadArticleList) is cleared by the first
-// list that loads, so only the restore itself is caught here.
+// A view that is gone comes back as a 404: the one remembered from last time (the
+// browser's, not the account's, so it can be another account's from an earlier
+// login), or a saved search deleted on another device and clicked in a sidebar that
+// has not caught up. Forget it and open All articles, with a word only when the
+// reader clicked it. _restoredNavGet (declared above _autoLoadArticleList) is
+// cleared by the first list that loads, so it marks only the restore itself.
 document.body.addEventListener('htmx:afterSettle', function (e) {
   if (e.detail.target && e.detail.target.id === 'article-list') _restoredNavGet = null;
 });
 document.body.addEventListener('htmx:responseError', function (e) {
   var d = e.detail;
-  if (!_restoredNavGet || !d || !d.target || d.target.id !== 'article-list') return;
+  if (!d || !d.target || d.target.id !== 'article-list') return;
   if (!d.xhr || d.xhr.status !== 404) return;
+  var path = (d.pathInfo && d.pathInfo.requestPath) || '';
+  var restoring = !!_restoredNavGet;
+  if (!restoring && path.indexOf('saved_search_id=') === -1) return;
   d._rfHandled = true;
+  if (!restoring) showToast('That saved search no longer exists.', 'warning');
   _restoredNavGet = null;
   _activeNavGet = '/htmx/articles';
   try {
@@ -2801,15 +2806,14 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   document.body.addEventListener('htmx:beforeSwap', function (e) {
     if (e.detail.target.id !== 'sidebar') return;
     carried = {};
-    e.detail.target.querySelectorAll('.mark-read-row [data-saved-badge]').forEach(function (b) {
-      carried[b.dataset.savedBadge] = b.outerHTML;
+    e.detail.target.querySelectorAll('[data-saved-count]').forEach(function (b) {
+      if (b.innerHTML) carried[b.id] = b.innerHTML;
     });
   });
   document.body.addEventListener('htmx:afterSwap', function (e) {
     if (e.detail.target.id !== 'sidebar') return;
     e.detail.target.querySelectorAll('[data-saved-count]').forEach(function (p) {
-      var html = carried[p.dataset.savedCount];
-      if (html) p.innerHTML = html;
+      if (carried[p.id]) p.innerHTML = carried[p.id];
     });
     carried = {};
   });

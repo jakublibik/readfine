@@ -135,7 +135,13 @@ async def create_top_picks(db: AsyncSession, user_id: int) -> None:
     """
     if await _name_taken(db, user_id, TOP_PICKS_NAME, exclude_id=None):
         return
-    await create_saved_search(db, user_id, name=TOP_PICKS_NAME, params=TOP_PICKS_PARAMS)
+    # In a savepoint: a second /welcome submitted at the same moment loses the race
+    # on the unique name, and that must not fail the reader's welcome.
+    try:
+        async with db.begin_nested():
+            await create_saved_search(db, user_id, name=TOP_PICKS_NAME, params=TOP_PICKS_PARAMS)
+    except SavedSearchError:
+        pass
 
 
 async def update_saved_search(

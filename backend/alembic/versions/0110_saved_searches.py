@@ -28,7 +28,6 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
     )
-    op.create_index("ix_saved_searches_user_id", "saved_searches", ["user_id"])
     op.create_index(
         "uq_saved_searches_user_name", "saved_searches",
         ["user_id", sa.text("lower(name)")], unique=True,
@@ -37,5 +36,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("uq_saved_searches_user_name", table_name="saved_searches")
-    op.drop_index("ix_saved_searches_user_id", table_name="saved_searches")
     op.drop_table("saved_searches")

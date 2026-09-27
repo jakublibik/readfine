@@ -18,7 +18,8 @@ class SavedSearch(Base):
     an exclude list can be added later as one more key, without a migration.
 
     Names are unique per user regardless of case: two entries called "Tech" in the
-    sidebar could only be told apart by opening them.
+    sidebar could only be told apart by opening them. That index leads with user_id,
+    so it serves the per-user lookups too and there is no index of user_id alone.
     """
 
     __tablename__ = "saved_searches"
@@ -28,7 +29,7 @@ class SavedSearch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     params: Mapped[dict] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

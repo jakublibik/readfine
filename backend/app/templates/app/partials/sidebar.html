@@ -231,10 +231,17 @@
   {#- Saved searches: first in the scrolling part, alphabetical, with no header of
       their own (unlike Labels, there is no "all of them" view for one to open) and
       so nothing to fold. Styled like the top nav entries, with a small grey
-      magnifier after the name to tell them apart. The rail shows no counts: each
-      one is a request of its own, and the rail would double them. -#}
+      magnifier after the name to tell them apart. The rail shows no counts.
+
+      The counts load after the sidebar, all in one request (the hidden span), so a
+      slow search never holds it up and a refresh costs one request, not one per
+      search. The answer replaces each saved-count-{id} out of band; app.js puts the
+      previous badge in the new placeholder until it does. The span needs its own
+      sync: #sidebar's this:abort would otherwise reach it. -#}
   {% if saved_searches %}
   <div class="px-2 py-3 space-y-1 border-b border-gray-200">
+    <span hidden hx-get="/htmx/saved-searches/counts" hx-trigger="load"
+          hx-swap="none" hx-sync="this:drop"></span>
     {% for s in saved_searches %}
       <div class="group relative mark-read-row">
         <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
@@ -243,13 +250,7 @@
            hx-push-url="false">
           <span class="truncate">{{ s.name }}</span>
           <svg class="w-2.5 h-2.5 flex-shrink-0 ml-1.5 mt-0.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
-          {#- The count loads on its own, so a slow search never holds up the sidebar.
-              Its own sync, target and swap: it would otherwise inherit the link's,
-              and #sidebar's this:abort would have the badges cancel one another.
-              app.js puts the previous badge in here while the new one loads. -#}
-          <span class="ml-auto" data-saved-count="{{ s.id }}"
-                hx-get="/htmx/saved-searches/{{ s.id }}/count" hx-trigger="load"
-                hx-target="this" hx-swap="outerHTML" hx-sync="this:drop"></span>
+          <span id="saved-count-{{ s.id }}" class="ml-auto" data-saved-count></span>
         </a>
         <button class="{{ mark_read_btn }}"
                 title="Mark all as read"
