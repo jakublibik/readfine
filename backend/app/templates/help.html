@@ -130,6 +130,8 @@
               to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
               a search by feed, folder, label, read status, your starred, saved or archived articles, score and how recently it was published (the last day, week, month and so on), and sort the results, best score first if you like.
               A search with no words and just a score condition gives you a list of your best articles.
+              <strong>Save</strong> in the results header keeps a search in the sidebar; see
+              <a href="#saved-searches" class="text-blue-600 hover:underline dark:text-blue-400">How do saved searches work?</a>.
               Besides Unread and Read, which follow the read mark (scrolling past sets it too), the status can be
               Actually read or Not actually read: 30 seconds on the article or its original opened, as in Stats.
               Not actually read with a score of 70 and up is a list of the good ones you missed.
@@ -200,6 +202,7 @@
               <a href="#layout" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do I customize the layout?</a>
               <a href="#stories" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Several of my feeds carry the same story</a>
               <a href="#saved" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">What is Saved?</a>
+              <a href="#saved-searches" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">How do saved searches work?</a>
               <a href="#install" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I install Readfine as an app?</a>
               <a href="#share" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Can I share an article?</a>
               <a href="#stats" class="block py-0.5 text-blue-600 hover:underline dark:text-blue-400">Where do I see how I'm reading?</a>
@@ -450,6 +453,30 @@
               readable extraction as a normal article. Saved articles stay until you remove them, so
               <a href="#purge" class="text-blue-600 hover:underline dark:text-blue-400">retention</a> never takes them
               away.</p>
+          </div>
+
+          <div id="saved-searches" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do saved searches work?</h4>
+            <p>Run a search, then choose <strong>Save</strong> in the header above the results and give it a name.
+              It appears in the sidebar above Labels, with its count, and stays there until you delete it. A saved
+              search is not a snapshot: each time you open it, it runs again over your articles as they are now, so
+              a search for a topic keeps picking up new coverage of it.</p>
+            <p class="mt-2">Opened from the sidebar, a saved search behaves like a feed. Articles are marked read
+              as you scroll past them, and <strong>Mark all as read</strong> (the tick that appears when you hover the
+              row) marks only what the search lists. If you saved it with a status, such as Unread or Not actually
+              read, it keeps to that status. Without one, it follows your unread setting, the same as a folder does.</p>
+            <p class="mt-2"><strong>Edit</strong> in its header reopens the search window with everything filled in.
+              Change what you like, then save the changes into it, save them as a new search, rename it or delete it.
+              A search needs at least a word or one filter to be saved; the sort alone is not enough.</p>
+            <p class="mt-2">If you delete a feed, folder or label a saved search used, it is taken out of the
+              search. When it was the only one, the search keeps it and finds nothing until you change it, rather
+              than quietly widening to all your articles. Its Edit window says so.</p>
+            <p class="mt-2">A new account that lists its topics on the welcome screen starts with one,
+              <strong>Top picks</strong>: the last week's articles with a
+              <a href="#scoring" class="text-blue-600 hover:underline dark:text-blue-400">relevance score</a> of 60 or
+              more, best first. It is an ordinary saved search, so you can change it or delete it. The count next to a
+              saved search is left out when counting it would take too long, which can happen with a search
+              over a lot of labelled articles.</p>
           </div>
 
           <div id="install" class="py-5 first:pt-0 last:pb-0">

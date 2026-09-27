@@ -13,7 +13,11 @@
   {% if saved_search %}
   <input type="hidden" id="saved-search-id" value="{{ saved_search.id }}">
   <div class="mb-4 pb-4 border-b border-gray-200">
-    <label for="saved-search-name" class="block text-xs font-medium text-gray-600 mb-1">Name</label>
+    <div class="flex items-baseline justify-between mb-1">
+      <label for="saved-search-name" class="text-xs font-medium text-gray-600">Name</label>
+      <a href="/help#saved-searches" target="_blank" rel="noopener noreferrer"
+         class="text-xs text-blue-600 hover:underline">How saved searches work</a>
+    </div>
     <input type="text" id="saved-search-name" maxlength="100" value="{{ saved_search.name }}"
            class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
     {% if missing_references %}
