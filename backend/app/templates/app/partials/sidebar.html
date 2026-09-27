@@ -230,17 +230,18 @@
 
   {#- Saved searches: first in the scrolling part, alphabetical, with no header of
       their own (unlike Labels, there is no "all of them" view for one to open) and
-      so nothing to fold. A grey magnifier stands where a label has its colour dot.
-      The counts come with step 4 of the saved-search plan. -#}
+      so nothing to fold. Styled like the top nav entries, with a small grey
+      magnifier after the name to tell them apart. The counts come with step 4 of
+      the saved-search plan. -#}
   {% if saved_searches %}
-  <div class="px-2 py-3 border-b border-gray-200">
+  <div class="px-2 py-3 space-y-1 border-b border-gray-200">
     {% for s in saved_searches %}
       <div class="group relative mark-read-row">
-        <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm text-gray-700 hover:bg-gray-100 cursor-pointer"
+        <a class="nav-item flex items-center pl-3.5 pr-3 py-1.5 rounded text-sm font-bold text-gray-700 hover:bg-gray-100 cursor-pointer"
            hx-get="/htmx/articles?saved_search_id={{ s.id }}" hx-target="#article-list" hx-swap="innerHTML"
            hx-push-url="false">
-          <svg class="w-3 h-3 flex-shrink-0 mr-2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
-          <span class="flex-1 truncate">{{ s.name }}</span>
+          <span class="truncate">{{ s.name }}</span>
+          <svg class="w-2.5 h-2.5 flex-shrink-0 ml-1.5 mt-0.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
         </a>
         <button class="{{ mark_read_btn }}"
                 title="Mark all as read"
