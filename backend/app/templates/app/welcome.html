@@ -4,7 +4,8 @@
 {% block content %}
 <div class="min-h-screen flex items-start sm:items-center justify-center px-4 pt-12 pb-8 sm:py-8">
   <div class="w-full max-w-lg">
-    <h1 class="text-2xl font-semibold text-center mb-6">Welcome to Readfine</h1>
+    <h1 class="text-2xl font-semibold text-center mb-1">Welcome to Readfine</h1>
+    <p class="text-sm text-gray-500 text-center mb-6">Step 1 of 2</p>
 
     <form hx-post="/welcome" hx-target="#welcome-error" hx-swap="innerHTML"
           class="bg-white shadow rounded-lg p-6 space-y-4">
@@ -16,7 +17,7 @@
         </p>
         <textarea name="relevance_terms" id="relevance_terms" rows="4" maxlength="{{ terms_max_chars }}"
                   placeholder="sourdough baking, Formula 1, urban cycling"
-                  class="w-full border border-gray-300 rounded px-3 py-2 text-sm"></textarea>
+                  class="w-full border border-gray-300 rounded px-3 py-2 text-sm">{{ relevance_terms }}</textarea>
         <p class="text-xs text-gray-500 mt-1">
           Separate topics with commas. Three are enough to start, and you can change them any time in Settings → Relevance.
         </p>

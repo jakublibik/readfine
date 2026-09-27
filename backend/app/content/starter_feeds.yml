@@ -1,0 +1,59 @@
+# Starter feeds offered on the second welcome step to an account with no feeds yet.
+#
+# Each category becomes a folder of that name when chosen. `keywords` pre-check the
+# category when one of them appears among the topics typed on the first step
+# (compared word by word, lowercase, accents ignored).
+#
+# Self-hosters can offer their own list by mounting a file over this one in the
+# container (/app/app/content/starter_feeds.yml), since an edit inside the image is
+# lost on upgrade. It is read once per process, so restart the app after changing it.
+# Keep the feeds public, stable and the list short: it is a way to start, not a
+# catalog. An empty list turns the starter option off, and so does a file that fails
+# to parse (the error is logged): the step then offers only the import and
+# add-your-own ways.
+
+categories:
+  - id: technology
+    name: Technology
+    keywords: [tech, technology, software, programming, computers, gadgets, ai, apple, google, linux, security, startups]
+    feeds:
+      - title: Ars Technica
+        url: https://feeds.arstechnica.com/arstechnica/index
+      - title: The Verge
+        url: https://www.theverge.com/rss/index.xml
+
+  - id: science
+    name: Science
+    keywords: [science, space, astronomy, physics, biology, climate, nasa, research, health, medicine]
+    feeds:
+      - title: NASA
+        url: https://www.nasa.gov/feed/
+      - title: New Scientist
+        url: https://www.newscientist.com/feed/
+
+  - id: world
+    name: World news
+    keywords: [news, world, politics, economy, europe, international, elections]
+    feeds:
+      - title: BBC News World
+        url: https://feeds.bbci.co.uk/news/world/rss.xml
+      - title: NPR News
+        url: https://feeds.npr.org/1001/rss.xml
+
+  - id: food
+    name: Food
+    keywords: [food, cooking, recipes, baking, sourdough, cuisine, restaurants, vegetarian, vegan]
+    feeds:
+      - title: Bon Appétit
+        url: https://www.bonappetit.com/feed/rss
+      - title: 101 Cookbooks
+        url: https://www.101cookbooks.com/feed
+
+  - id: sport
+    name: Sport
+    keywords: [sport, sports, football, soccer, tennis, cycling, formula, f1, rugby, cricket, olympics]
+    feeds:
+      - title: BBC Sport
+        url: https://feeds.bbci.co.uk/sport/rss.xml
+      - title: The Guardian Sport
+        url: https://www.theguardian.com/uk/sport/rss

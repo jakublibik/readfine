@@ -378,9 +378,90 @@ class TestBackfill:
         await pg.flush()
         assert await lss.process_due_backfills(pg) == 0
 
+    async def test_subscribing_to_a_feed_already_here_scores_its_articles(self, pg, monkeypatch):
+        from app.services import feed as feed_service
+
+        async def no_check(url):
+            return None
+
+        monkeypatch.setattr(feed_service, "async_validate_feed_url", no_check)
+        user, feed = await self._due_setup(pg)
+        await lss.process_due_backfills(pg)
+        # Someone else's feed, with an article in it from before this reader came.
+        other = Feed(feed_url=f"https://ex.invalid/{uuid.uuid4().hex}.xml", title="o",
+                     subscriber_count=1)
+        pg.add(other)
+        await pg.flush()
+        article = await _article(pg, other, f"{TOPIC} findings published")
+        # And one in a feed the reader had: the subscription only scores its own.
+        untouched = await _article(pg, feed, f"{TOPIC} findings published")
+
+        await feed_service.subscribe(
+            user=user, url=other.feed_url, folder_id=None, custom_title=None,
+            fetch_auth_user=None, fetch_auth_pass=None, db=pg, trigger_initial_fetch=False,
+        )
+        assert (await _state(pg, user, article)).lexical_score > 0
+        assert await _state(pg, user, untouched) is None
+
     async def test_an_account_that_never_saved_terms_is_not_due(self, pg):
         user, _feed = await _setup(pg, terms=None)
         await _only_due_account(pg, user.id)
         await _corpus(pg)
         assert await lss.process_due_backfills(pg) == 0
 
+
+@pytest_asyncio.fixture
+async def pg_savepoint():
+    """Like `pg`, but a rollback in the code under test stays inside the test.
+
+    Needed where that code rolls back on its own: under `pg` the rollback would
+    take the test's rows with it.
+    """
+    engine = create_async_engine(app_settings.database_url)
+    try:
+        conn = await engine.connect()
+    except Exception as exc:
+        await engine.dispose()
+        from tests.conftest import db_unreachable
+        db_unreachable(exc)
+    trans = await conn.begin()
+    session = AsyncSession(bind=conn, expire_on_commit=False,
+                           join_transaction_mode="create_savepoint")
+    try:
+        yield session
+    finally:
+        await session.close()
+        await trans.rollback()
+        await conn.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_scoring_on_subscribe_keeps_the_subscription(pg_savepoint, monkeypatch):
+    from app.services import feed as feed_service
+
+    pg = pg_savepoint
+
+    async def no_check(url):
+        return None
+
+    async def broken(db, *a, **kw):
+        # After a query, as a real failure would be: only then is there a
+        # transaction for the rollback to undo and objects for it to expire.
+        await db.execute(text("SELECT 1"))
+        raise RuntimeError("scoring broke")
+
+    monkeypatch.setattr(feed_service, "async_validate_feed_url", no_check)
+    monkeypatch.setattr(lss, "score_subscribed_feed", broken)
+    user, _feed = await _setup(pg)
+    other = Feed(feed_url=f"https://ex.invalid/{uuid.uuid4().hex}.xml", title="o",
+                 subscriber_count=1)
+    pg.add(other)
+    await pg.flush()
+
+    uf = await feed_service.subscribe(
+        user=user, url=other.feed_url, folder_id=None, custom_title=None,
+        fetch_auth_user=None, fetch_auth_pass=None, db=pg, trigger_initial_fetch=False,
+    )
+    # What callers read next, after the rollback in the failure path.
+    assert uf.feed.title == "o" and uf.feed_id == other.id and user.email

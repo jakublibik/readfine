@@ -49,7 +49,9 @@ async def main_app(
     settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
     settings = settings_result.scalar_one_or_none()
     if settings and settings.onboarded_at is None:
-        return RedirectResponse("/welcome", status_code=303)
+        # Topics already answered: pick up the welcome where it was left.
+        step = "/welcome/feeds" if settings.relevance_terms else "/welcome"
+        return RedirectResponse(step, status_code=303)
     bucket_small_max = settings.bucket_small_max if settings else 640
     bucket_medium_max = settings.bucket_medium_max if settings else 1100
     reading_font_size = settings.reading_font_size if settings else "md"

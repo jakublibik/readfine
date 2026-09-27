@@ -28,6 +28,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 - [Installation](#installation)
 - [Client IP setting (login lockout)](#client-ip-setting-login-lockout)
 - [If you open registration](#if-you-open-registration)
+- [Starter feeds for new accounts](#starter-feeds-for-new-accounts)
 - [Updating](#updating)
 - [Backups](#backups)
 - [Useful commands](#useful-commands)
@@ -248,6 +249,33 @@ and stays invisible to real visitors.
 
 If you don't need public signup, leave registration closed and add people with invitation
 links from the admin panel. That removes the problem entirely.
+
+---
+
+## Starter feeds for new accounts
+
+The welcome screen offers a new account a few well-known English feeds to start with,
+grouped by topic. The list is
+[`backend/app/content/starter_feeds.yml`](backend/app/content/starter_feeds.yml), and each
+topic becomes a folder when someone picks it.
+
+To offer your own list, copy that file next to `docker-compose.yml`, edit it, and mount it
+over the built-in one in `docker-compose.override.yml`:
+
+```yaml
+services:
+  app:
+    volumes:
+      - ./starter_feeds.yml:/app/app/content/starter_feeds.yml:ro
+```
+
+Then run `docker compose up -d`. The file is read once when the app starts, so restart the
+app after each change (`docker compose restart app`). Editing the copy inside the image
+does not last, because an update replaces it.
+
+An empty list (`categories: []`) turns the starter feeds off, and the welcome screen offers
+only the OPML import and adding feeds by hand. A file that cannot be read does the same,
+and the app log says why.
 
 ---
 

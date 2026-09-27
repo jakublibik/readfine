@@ -178,8 +178,11 @@ _BACKFILL_USERS_PER_RUN = 5
 
 
 async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
-                        stats: CorpusStats, *, days: int = BACKFILL_DAYS) -> int:
+                        stats: CorpusStats, *, days: int = BACKFILL_DAYS,
+                        feed_id: int | None = None) -> int:
     """Score the reader's recent unread articles against their current terms.
+
+    With `feed_id`, only that feed's (see `score_subscribed_feed`).
 
     Deliberately not everything unread: on an account with twelve thousand unread
     articles every save of the terms would otherwise write twelve thousand rows.
@@ -193,7 +196,7 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
     written = 0
     last_id = 0
     while True:
-        rows = (await db.execute(
+        stmt = (
             select(Article.id, Article.title,
                    func.coalesce(
                        func.nullif(func.left(Article.readable_content, _BODY_CHARS), ""),
@@ -209,7 +212,10 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
                        UserArticleState.is_read == False))  # noqa: E712
             .order_by(Article.id)
             .limit(_BACKFILL_CHUNK)
-        )).all()
+        )
+        if feed_id is not None:
+            stmt = stmt.where(Article.feed_id == feed_id)
+        rows = (await db.execute(stmt)).all()
         if not rows:
             break
         last_id = rows[-1][0]
@@ -217,6 +223,23 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
             db, [Scorable(*r) for r in rows], {user_id: terms}, stats)
         await db.commit()
     return written
+
+
+async def score_subscribed_feed(db: AsyncSession, user_id: int, feed_id: int) -> int:
+    """Score a feed the reader just subscribed to that was already on the instance.
+
+    Its articles came in before this subscriber did, so the fetch-time scoring
+    never saw them for this reader, and nothing about the account says it is
+    behind. Same window as the backfill, over this one feed only, so it is quick
+    enough to do while the reader waits.
+    """
+    terms_by_user = await load_terms(db, [user_id])
+    if not terms_by_user:
+        return 0
+    stats = await stats_for(db, terms_by_user)
+    if stats is None:
+        return 0
+    return await backfill_user(db, user_id, terms_by_user[user_id], stats, feed_id=feed_id)
 
 
 async def process_due_backfills(db: AsyncSession) -> int:
