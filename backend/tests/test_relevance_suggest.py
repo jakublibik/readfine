@@ -147,6 +147,21 @@ class TestCompute:
         rows = self._reading()
         assert "weather" not in {s.term for s in ss.compute(rows, [], _stats(rows), set()).adds}
 
+    def test_a_word_read_no_more_often_than_it_comes_in_ranks_lower(self):
+        # "likely" is in more engaged articles than "sourdough", so it weighs
+        # more, but it is in unread ones too and "sourdough" is in no other.
+        engaged = ([f"sourdough starter {i}" for i in range(3)]
+                   + [f"likely story{i}" for i in range(4)]
+                   + [f"misc story{i}" for i in range(5)])
+        filler = [f"weather report number{i}" for i in range(1000)]
+        rows = _rows(engaged, [f"likely outcome{i}" for i in range(6)] + filler)
+        stats = _stats(rows)
+        ranked = ss._rocchio([rs.tokenize(rs.article_text(t, b))
+                              for t, b, e, *_ in rows if e], stats)
+        assert ranked["likely"][0] > ranked["sourdough"][0]
+        adds = [s.term for s in ss.compute(rows, [], stats, set()).adds]
+        assert adds.index("sourdough") < adds.index("likely")
+
     def test_stopwords_are_not_suggested(self):
         engaged = ([f"about sourdough {i}" for i in range(4)]
                    + [f"misc story{i}" for i in range(8)])

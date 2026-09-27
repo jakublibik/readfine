@@ -16,6 +16,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Changed
 
+- Suggested terms in **Settings → Relevance** are more often about what you actually read. A word now ranks higher the more often it shows up in the articles you read compared with everything your feeds bring in. Common words like `likely` or `humanity` used to make the list just because they are frequent in longer articles.
 - The user table in **Admin → Users** shows more of how each account uses relevance. **Terms** counts a user's relevance terms, grayed out while they are still the list from signup or basic scoring is off. **Scored 7d** counts articles scored by AI in the last week, and **Filters** adds in brackets how many filters use a score. Hovering **AI 7d** breaks the number down by operation, and catch-up runs now count towards it. The Role column is gone; the admin gets a small badge next to their name instead.
 
 ### Fixed

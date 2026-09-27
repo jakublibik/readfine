@@ -136,15 +136,28 @@ def rocchio(train_docs, train_lab, tables):
 
 def pick_add(ranked: dict, profile_tokens, inflow_df: dict, n_inflow: int, m: int,
              min_support: int = 3, max_df_share: float = 0.01,
-             stop: set | None = None) -> list[str]:
+             stop: set | None = None, min_lift: float = 0.0,
+             n_engaged: int = 0, rank_lift: bool = False) -> list[str]:
     """Top candidates that are specific enough to be a topic.
 
     Commonness is measured over the reader's own inflow, not the instance: half
     the instance is Cyrillic and CJK, which makes English function words look
     rare there. The first run without this suggested `may`, `could`, `they`.
     """
+    def lift(t, sup):
+        df = inflow_df.get(t, 0)
+        return (sup / n_engaged) / (df / n_inflow) if df and n_engaged else 0.0
+
+    def key(x):
+        t, (score, sup) = x
+        if rank_lift:
+            return -score * math.log(max(lift(t, sup), 1.0))
+        return -score
+
     out = []
-    for t, (score, sup) in sorted(ranked.items(), key=lambda x: -x[1][0]):
+    for t, (score, sup) in sorted(ranked.items(), key=key):
+        if min_lift and lift(t, sup) < min_lift:
+            continue
         if sup < min_support or len(t) < 4 or t.isdigit():
             continue
         if stop and t in stop:
@@ -183,6 +196,8 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--filters", default="0.01:0",
                     help="comma list of max_df_share:stoplist(0/1) settings")
+    ap.add_argument("--lifts", type=lambda v: [float(x) for x in v.split(",")],
+                    default=[], help="comma list of min engaged/inflow lift for Rocchio")
     ap.add_argument("--skip-calibration", action="store_true")
     args = ap.parse_args()
     from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
@@ -262,6 +277,14 @@ def main() -> None:
                                               max_df_share=share, stop=st)
             adds[f"rocchio {tag}"] = pick_add(ro, ptoks, inflow_df, n_inflow, 20,
                                               max_df_share=share, stop=st)
+        n_eng = int(tr_l.sum())
+        for L in args.lifts:
+            adds[f"rocchio lift>={L:g}"] = pick_add(
+                ro, ptoks, inflow_df, n_inflow, 20, stop=stop_all, min_lift=L,
+                n_engaged=n_eng)
+        adds["rocchio x loglift"] = pick_add(ro, ptoks, inflow_df, n_inflow, 20,
+                                             stop=stop_all, n_engaged=n_eng,
+                                             rank_lift=True)
         adds["shipped"] = [s.term for s in
                            ss.compute(shipped_rows, terms, shipped_stats, set()).adds]
         plans[pname] = {"terms": terms, "adds": adds}
