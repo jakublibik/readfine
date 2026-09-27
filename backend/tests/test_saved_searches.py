@@ -432,3 +432,103 @@ async def test_mark_read_marks_exactly_what_the_view_lists(pg):
     assert not await _is_read(pg, user, too_new)
     # Only this reader's state changes.
     assert not await _is_read(pg, other, match)
+
+
+# ── sidebar badge ─────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_count_is_unread_else_total(pg):
+    user = await _user(pg)
+    feed = await _feed(pg, user)
+    token = "zcount" + uuid.uuid4().hex[:10]
+    a = await _art(pg, feed, f"{token} one")
+    b = await _art(pg, feed, f"{token} two")
+    await _art(pg, feed, f"{token} three", read=True, user=user)
+    await _art(pg, feed, "something else")
+    s = await _save(pg, user, "count", q=token)
+
+    assert await svc.count_saved_search(pg, user, s, collapsing=True) == (2, None)
+    for art in (a, b):
+        pg.add(UserArticleState(user_id=user.id, article_id=art.id, is_read=True))
+    await pg.flush()
+    # Nothing unread: the grey total, as the other badges show it.
+    assert await svc.count_saved_search(pg, user, s, collapsing=True) == (0, 3)
+
+
+@pytest.mark.asyncio
+async def test_count_over_budget_shows_nothing_and_leaves_the_session_usable(pg, monkeypatch):
+    from sqlalchemy import text
+
+    user = await _user(pg)
+    s = await _save(pg, user, "slow")
+    before = (await pg.execute(text("SHOW statement_timeout"))).scalar()
+
+    async def slow_count(user, db, **kw):
+        await db.execute(text("SELECT pg_sleep(0.5)"))
+        return 1
+
+    monkeypatch.setattr(svc, "count_articles", slow_count)
+    assert await svc.count_saved_search(pg, user, s, collapsing=True, budget_ms=20) is None
+    assert (await pg.execute(text("SELECT 1"))).scalar() == 1
+
+    # A count within budget leaves no timeout behind for what follows.
+    async def fast_count(user, db, **kw):
+        return 0
+
+    monkeypatch.setattr(svc, "count_articles", fast_count)
+    assert await svc.count_saved_search(pg, user, s, collapsing=True, budget_ms=20) == (0, 0)
+    assert (await pg.execute(text("SHOW statement_timeout"))).scalar() == before
+
+
+@pytest.mark.asyncio
+async def test_count_route_refuses_another_users_search(pg):
+    from fastapi import HTTPException
+
+    from app.routers.web.app.saved_searches import htmx_saved_search_count
+
+    owner = await _user(pg)
+    intruder = await _user(pg)
+    s = await _save(pg, owner, "mine")
+    with pytest.raises(HTTPException) as exc:
+        await htmx_saved_search_count(search_id=s.id, user=intruder, db=pg)
+    assert exc.value.status_code == 404
+    # The owner gets the badge: grey total 0 for a search that finds nothing.
+    resp = await htmx_saved_search_count(search_id=s.id, user=owner, db=pg)
+    assert "mark-read-badge" in resp.body.decode()
+
+
+# ── API ───────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_api_view_id_lists_the_search_and_refuses_another_users(pg):
+    from fastapi import HTTPException
+
+    from app.routers.api.v1.articles import get_articles
+    from app.routers.api.v1.saved_searches import get_saved_searches
+
+    owner = await _user(pg)
+    intruder = await _user(pg)
+    feed = await _feed(pg, owner)
+    token = "zapi" + uuid.uuid4().hex[:10]
+    unread = await _art(pg, feed, f"{token} unread")
+    read = await _art(pg, feed, f"{token} read", read=True, user=owner)
+    await _art(pg, feed, "something else")
+    s = await _save(pg, owner, "api", q=token)
+    await _save(pg, intruder, "theirs")
+
+    # Route defaults are Query objects when called directly; pass them all.
+    base = dict(feed_id=None, folder_id=None, unread_only=False, starred_only=False,
+                archived_only=False, saved_only=False, q=None, limit=50, offset=0)
+    rows = await get_articles(**base | {"view_id": s.id, "q": "ignored"}, user=owner, db=pg)
+    assert {r.id for r in rows} == {unread.id, read.id}
+    rows = await get_articles(**base | {"view_id": s.id, "unread_only": True}, user=owner, db=pg)
+    assert [r.id for r in rows] == [unread.id]
+
+    with pytest.raises(HTTPException) as exc:
+        await get_articles(**base | {"view_id": s.id}, user=intruder, db=pg)
+    assert exc.value.status_code == 404
+
+    assert [x.name for x in await get_saved_searches(user=owner, db=pg)] == ["api"]
+    from app.schemas.saved_search import SavedSearchResponse
+    out = SavedSearchResponse.model_validate((await get_saved_searches(user=owner, db=pg))[0])
+    assert out.params == {"q": token}

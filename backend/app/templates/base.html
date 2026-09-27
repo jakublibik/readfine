@@ -260,6 +260,11 @@
       html[data-bucket="small"][data-sidebar-mode="hideable-up"] .app-shell {
         padding-top: calc(var(--mobile-bar-h) + var(--sat));
       }
+      /* A saved search's header says what the bar already does (name, count, Edit),
+         so the bar takes over. Hidden, not removed: Edit reads the search from it. */
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] .saved-search-header {
+        display: none;
+      }
 
       /* Hideable-up: scrollable bottom bar */
       #mobile-bottom-bar { display: none; }

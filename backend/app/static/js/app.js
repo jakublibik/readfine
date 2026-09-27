@@ -965,11 +965,44 @@ function _setTitleBarCount(count, type) {
     return;
   }
   badge.textContent = count;
-  if (type === 'starred') {
+  if (type === 'starred' || type === 'total') {
     badge.className = 'flex-shrink-0 text-[13px] font-medium text-gray-400 relative -top-[0.5px]';
   } else {
     badge.className = 'flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full';
   }
+}
+
+// The mobile title bar stands in for a saved search's own header, which base.html
+// hides while the bar is shown: the search's name (as it is now, so a rename via
+// Update shows too) and its Edit. Edit goes through the hidden header's data, as the
+// header's own link does.
+function _syncMobileTitleForView() {
+  var header = document.querySelector('#article-list [data-saved-search-name]');
+  var edit = document.getElementById('mobile-title-edit');
+  if (edit) edit.classList.toggle('hidden', !header);
+  if (!header) return;
+  var titleEl = document.getElementById('mobile-title-text');
+  var name = header.dataset.savedSearchName.slice(0, 40);
+  if (titleEl) titleEl.textContent = name;
+  try { localStorage.setItem('mobile_title_text', name); } catch (err) {}
+}
+
+// A row of the open list read or unread again (delta -1 / +1): the unread counts
+// drawn over the list follow it, the mobile title bar and a saved search's header.
+function _adjustUnreadCounts(delta) {
+  if (window._titleBarCountType === 'unread') {
+    var badge = document.getElementById('mobile-title-count');
+    if (badge && !badge.classList.contains('hidden')) {
+      _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) + delta), 'unread');
+    }
+  }
+  var el = document.querySelector('#article-list [data-view-unread-count]');
+  if (!el) return;
+  // Server-formatted with the reader's grouping ("1,234" / "1 234"); keep it.
+  var text = el.textContent;
+  var sep = (text.match(/\d(\D)\d{3}/) || [])[1] || ',';
+  var n = Math.max(0, parseInt(text.replace(/\D/g, ''), 10) + delta);
+  el.textContent = String(n).replace(/\B(?=(\d{3})+(?!\d))/g, sep);
 }
 
 // Batched mark-as-read — collects IDs and sends one request per debounce window
@@ -1029,6 +1062,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent);
   _setTitleBarCount(cfg.titleBarCount, cfg.titleBarCountType);
+  _syncMobileTitleForView();
 
   var list = document.getElementById('article-list');
   if (!list) return;
@@ -1094,12 +1128,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
           titleEl.classList.add('font-medium', 'text-gray-800');
         }
         _queueMarkRead(id);
-        if (window._titleBarCountType === 'unread') {
-          var badge = document.getElementById('mobile-title-count');
-          if (badge && !badge.classList.contains('hidden')) {
-            _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
-          }
-        }
+        _adjustUnreadCounts(-1);
       }
     });
   }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px -' + bottomOffset + 'px 0px' });
@@ -2211,14 +2240,8 @@ document.addEventListener('articleReadChanged', function (e) {
   var row = document.getElementById('article-row-' + detail.id);
   if (!row) return;
   var isRead = detail.isRead;
-  if (window._titleBarCountType === 'unread') {
-    var badge = document.getElementById('mobile-title-count');
-    if (badge && !badge.classList.contains('hidden')) {
-      var wasRead = row.dataset.isRead === 'true';
-      if (isRead && !wasRead) _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
-      else if (!isRead && wasRead) _setTitleBarCount(parseInt(badge.textContent, 10) + 1, 'unread');
-    }
-  }
+  var wasRead = row.dataset.isRead === 'true';
+  if (isRead !== wasRead) _adjustUnreadCounts(isRead ? -1 : 1);
   row.classList.toggle('opacity-75', isRead);
   row.dataset.isRead = isRead ? 'true' : 'false';
   var title = row.querySelector('p, [data-article-title]');
@@ -2732,6 +2755,30 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   });
 })();
 
+// ── Saved search badges across a sidebar refresh ─────────────────────────
+// A saved search's count loads after the sidebar (see sidebar.html), so every
+// refresh would draw its row without a badge for a moment and the whole block would
+// flicker. The badge it had goes into the new placeholder until the new count
+// replaces it; a search that has since gone over budget loses it then.
+(function () {
+  var carried = {};
+  document.body.addEventListener('htmx:beforeSwap', function (e) {
+    if (e.detail.target.id !== 'sidebar') return;
+    carried = {};
+    e.detail.target.querySelectorAll('.mark-read-row [data-saved-badge]').forEach(function (b) {
+      carried[b.dataset.savedBadge] = b.outerHTML;
+    });
+  });
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target.id !== 'sidebar') return;
+    e.detail.target.querySelectorAll('[data-saved-count]').forEach(function (p) {
+      var html = carried[p.dataset.savedCount];
+      if (html) p.innerHTML = html;
+    });
+    carried = {};
+  });
+})();
+
 // ── Sidebar collapsible sections ──────────────────────────────────────────
 function restoreSidebarCollapse(animate) {
   document.querySelectorAll('.collapse-toggle[data-collapse]').forEach(function (btn) {
@@ -3167,7 +3214,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!item) return;
     _saveNavSnapshot();
     var titleEl = item.querySelector('span.flex-1');
-    var title = (titleEl ? titleEl.textContent : (item.getAttribute('title') || '')).trim().slice(0, 40);
+    var title = (item.dataset.navTitle
+      || (titleEl ? titleEl.textContent : (item.getAttribute('title') || ''))).trim().slice(0, 40);
     var titleText = document.getElementById('mobile-title-text');
     if (titleText) titleText.textContent = title;
     try { localStorage.setItem('mobile_title_text', title); } catch (err) {}

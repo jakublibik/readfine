@@ -36,13 +36,16 @@
     reopens the modal filled in with it. -#}
 <div data-list-header data-search-header data-saved-search-id="{{ saved_search.id }}"
      data-saved-search-values="{{ saved_search_values }}"
+     data-saved-search-name="{{ saved_search.name }}"
      {% if search_query %} data-search-query="{{ search_query }}"{% endif %}
      class="flex items-center gap-2 px-4 py-2.5 saved-search-header bg-gray-50 border-b border-gray-200 text-sm leading-6 sticky top-0 z-10">
   <svg class="w-3.5 h-3.5 flex-shrink-0 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z"/></svg>
   <strong class="text-gray-800 truncate min-w-0 dark:text-gray-100" title="{{ saved_search.name }}">{{ saved_search.name }}</strong>
   {% if result_count is not none %}
   <span class="text-gray-400 flex-shrink-0" aria-hidden="true">·</span>
-  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{{ result_count | num }} {{ "unread" if view_unread else ("article" if result_count == 1 else "articles") }}</span>
+  {#- An unread count follows reading, as the sidebar badge does (_adjustUnreadCounts
+      in app.js); a count over every status does not change with it. -#}
+  <span class="text-gray-500 whitespace-nowrap flex-shrink-0">{% if view_unread %}<span data-view-unread-count>{{ result_count | num }}</span> unread{% else %}{{ result_count | num }} {{ "article" if result_count == 1 else "articles" }}{% endif %}</span>
   {% endif %}
   <button data-action="open-search-again"
           class="ml-auto text-blue-600 hover:underline whitespace-nowrap flex-shrink-0 bg-transparent border-0 cursor-pointer p-0 text-sm"

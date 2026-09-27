@@ -225,6 +225,7 @@ def create_app() -> FastAPI:
     from app.routers.api.v1.articles import router as api_articles_router
     from app.routers.api.v1.labels import router as api_labels_router
     from app.routers.api.v1.filters import router as api_filters_router
+    from app.routers.api.v1.saved_searches import router as api_saved_searches_router
 
     app.include_router(web_auth_router)
     app.include_router(web_app_router)
@@ -239,6 +240,7 @@ def create_app() -> FastAPI:
     app.include_router(api_articles_router, prefix="/api/v1")
     app.include_router(api_labels_router, prefix="/api/v1")
     app.include_router(api_filters_router, prefix="/api/v1")
+    app.include_router(api_saved_searches_router, prefix="/api/v1")
 
     from starlette.exceptions import HTTPException as _StarletteHTTPException
 

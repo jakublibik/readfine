@@ -804,6 +804,11 @@ async def render_list(
         # The rows on the list are all unread, so what it counts is.
         title_bar_count = result_count
         title_bar_count_type = "unread"
+    elif view:
+        # Over every status: the grey total, which the mobile title bar shows in
+        # place of the saved search's own header.
+        title_bar_count = result_count
+        title_bar_count_type = "total"
 
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,

@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, literal, select
+from sqlalchemy import func, literal, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -22,12 +22,16 @@ from app.models.feed import Folder, UserFeed
 from app.models.label import Label
 from app.models.saved_search import SavedSearch
 from app.models.user import User
-from app.services.article import list_articles
+from app.services.article import count_articles, list_articles
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.search_params import list_kwargs, normalize_search_params
 
 MAX_SAVED_SEARCHES = 50
 MAX_NAME_LENGTH = 100
+
+# How long a sidebar badge may take to count, per statement; see count_saved_search.
+COUNT_BUDGET_MS = 100
+_QUERY_CANCELED = "57014"
 
 # Keys that only shape the order. A set holding nothing else would be the whole
 # archive under another name, and the list renderer wouldn't treat it as a search.
@@ -197,6 +201,62 @@ async def has_missing_references(db: AsyncSession, user_id: int, params: Mapping
     return False
 
 
+def view_filters(params: Mapping[str, Any]) -> dict:
+    """A stored parameter set as ``list_articles`` filters, without the sort: what
+    the saved search lists, for everything that has to cover exactly that."""
+    kw = list_kwargs(params)
+    return dict(
+        q=kw["q"], read_status=kw["read_status"],
+        scope_include=kw["scope_include"], label_filter=kw["label_filter"],
+        **kw["score"], since_days=kw["since_days"],
+        starred_only=kw["state"] == "starred", archived_only=kw["state"] == "archived",
+        saved_only=kw["state"] == "saved", search=True,
+    )
+
+
+async def count_saved_search(
+    db: AsyncSession, user: User, search: SavedSearch, *, collapsing: bool,
+    budget_ms: int = COUNT_BUDGET_MS,
+) -> tuple[int, int | None] | None:
+    """The sidebar badge of a saved search: ``(unread, total)``, or None when
+    counting took longer than ``budget_ms``.
+
+    Counted as the list draws it (``collapsing``, see ``story_service.row_count``).
+    Like the other badges it shows the unread rows when there are some and the grey
+    total otherwise, so the total is only counted when nothing is unread (and is
+    None when it was not needed).
+
+    Most searches count in a few milliseconds, but what a saved search asks is up to
+    the reader, and some shapes cannot use an index (any label over thousands of
+    labelled articles took 114 ms on production data). Rather than guess from the
+    parameters, each count gets a statement timeout and a search that runs out of it
+    shows no number. It is inside a savepoint, so the timeout goes away with it and
+    a cancelled statement leaves the session usable.
+    """
+    filters = view_filters(search.params)
+    try:
+        async with db.begin_nested():
+            await db.execute(text(f"SET LOCAL statement_timeout = {int(budget_ms)}"))
+            unread = await count_articles(
+                user, db, collapsing=collapsing, **{**filters, "unread_only": True},
+            )
+            total = None if unread else await count_articles(
+                user, db, collapsing=collapsing, **filters,
+            )
+            await db.execute(text("SET LOCAL statement_timeout = DEFAULT"))
+    except DBAPIError as exc:
+        if _sqlstate(exc) != _QUERY_CANCELED:
+            raise
+        return None
+    return unread, total
+
+
+def _sqlstate(exc: DBAPIError) -> str | None:
+    # The asyncpg dialect's own error carries it, or the asyncpg error behind it.
+    return getattr(exc.orig, "sqlstate", None) or getattr(
+        getattr(exc.orig, "__cause__", None), "sqlstate", None)
+
+
 async def mark_saved_search_read(
     db: AsyncSession, user: User, search: SavedSearch, *, before: datetime,
 ) -> None:
@@ -208,13 +268,8 @@ async def mark_saved_search_read(
     the whole group. Stamped ``suppressed_by='bulk'`` like the sidebar's other
     mark-all-read (see ``mark_scope_read``). The caller owns the commit.
     """
-    kw = list_kwargs(search.params)
     ids = (await list_articles(
-        user, db, q=kw["q"], read_status=kw["read_status"],
-        scope_include=kw["scope_include"], label_filter=kw["label_filter"],
-        **kw["score"], since_days=kw["since_days"],
-        starred_only=kw["state"] == "starred", archived_only=kw["state"] == "archived",
-        saved_only=kw["state"] == "saved", search=True, _ids=True,
+        user, db, **view_filters(search.params), _ids=True,
     )).where(Article.fetched_at <= before).subquery()
     now = datetime.now(timezone.utc)
     stmt = pg_insert(UserArticleState).from_select(

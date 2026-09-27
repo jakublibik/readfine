@@ -14,6 +14,8 @@ from app.schemas.article import (
 )
 from app.services.article import get_article, list_articles, update_article_state
 from app.services.saved_article_service import save_article_by_url
+from app.services.saved_search_service import get_saved_search, view_filters
+from app.services.search_params import list_kwargs
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
@@ -27,11 +29,29 @@ async def get_articles(
     archived_only: bool = Query(False),
     saved_only: bool = Query(False),
     q: str | None = Query(None),
+    view_id: int | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Articles visible to the reader, newest first unless a saved search says
+    otherwise.
+
+    ``view_id`` lists what one of the reader's saved searches lists (see
+    ``GET /saved-searches``), in its stored order. Its stored filters replace the
+    others here, except ``unread_only``, which narrows it further. Another reader's
+    saved search, or one that no longer exists, is a **404**.
+    """
+    if view_id is not None:
+        saved = await get_saved_search(db, user.id, view_id)
+        if saved is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Saved search not found")
+        return await list_articles(
+            user=user, db=db, **view_filters(saved.params),
+            sort_order=list_kwargs(saved.params)["sort"],
+            unread_only=unread_only, limit=limit, offset=offset,
+        )
     return await list_articles(
         user=user,
         db=db,

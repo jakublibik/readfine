@@ -12,20 +12,26 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from markupsafe import escape
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.saved_search import SavedSearch
-from app.models.user import User
+from app.models.user import User, UserSettings
 from app.services.saved_search_service import (
     SavedSearchError,
+    count_saved_search,
     create_saved_search,
     delete_saved_search,
     get_saved_search,
     mark_saved_search_read,
     update_saved_search,
 )
+from app.services.story_service import DEDUP_COLLAPSE
+
+from .articles import _collapses_stories
+from .common import _badge_html
 
 router = APIRouter(tags=["web-app"])
 
@@ -140,3 +146,30 @@ async def htmx_mark_saved_search_read(
     await mark_saved_search_read(db, user, saved, before=before_dt)
     await db.commit()
     return HTMLResponse("", headers={"HX-Trigger": "sidebarRefresh"})
+
+
+@router.get("/htmx/saved-searches/{search_id}/count", response_class=HTMLResponse)
+async def htmx_saved_search_count(
+    search_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A saved search's sidebar badge, loaded after the sidebar so a slow search
+    never holds it up. Empty when the count ran out of its time budget."""
+    saved = await _own(db, user, search_id)
+    settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    state = saved.params.get("state")
+    collapsing = _collapses_stories(
+        story_dedup=settings.story_dedup if settings else DEDUP_COLLAPSE, feed_id=None,
+        starred_only=state == "starred", archived_only=state == "archived",
+        saved_only=state == "saved",
+    )
+    counts = await count_saved_search(db, user, saved, collapsing=collapsing)
+    if counts is None:
+        return HTMLResponse("")
+    unread, total = counts
+    # Tagged with the search, so app.js can carry it over a sidebar refresh.
+    return HTMLResponse(
+        f'<span class="ml-auto" data-saved-badge="{saved.id}">'
+        f"{_badge_html(unread, total or 0)}</span>"
+    )
