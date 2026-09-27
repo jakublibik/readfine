@@ -170,3 +170,45 @@ async def test_query_any_label_spans_folders(pg):
     ctx = await _setup(pg)
     ids = await _ids(pg, ctx, q=ctx["token"], label_filter=json.dumps(["any"]))
     assert ids == {ctx["a_unread_l1"].id, ctx["b_unread_l2"].id}
+
+
+async def test_has_articles_answers_what_the_list_would(pg):
+    """The adaptive unread probe (has_articles) says yes exactly where the list has
+    a row: a view with nothing unread left is a no, and another reader's unread
+    article in a feed this reader never subscribed to does not count."""
+    from app.services.article import has_articles
+
+    ctx = await _setup(pg)
+    other = User(email=f"combo_other_{uuid.uuid4().hex[:12]}@test.invalid",
+                 password_hash="x", display_name="o")
+    pg.add(other)
+    await pg.flush()
+    foreign = await _feed(pg, other, None)
+    await _art(pg, foreign, ctx["token"])
+
+    user = ctx["user"]
+    views = [
+        {},
+        {"folder_id": ctx["fa"].id},
+        {"folder_id": ctx["fb"].id},
+        {"label_id": ctx["l1"].id},
+        {"labeled_only": True},
+        {"feed_id": foreign.id},
+        {"scope_include": json.dumps([f"folder:{ctx['fa'].id}"])},
+    ]
+
+    async def agree():
+        for view in views:
+            listed = await list_articles(user=user, db=pg, unread_only=True, limit=1, **view)
+            assert await has_articles(user, pg, unread_only=True, **view) is bool(listed), view
+
+    await agree()
+    assert await has_articles(user, pg, unread_only=True, feed_id=foreign.id) is False
+
+    # Reading L1's article leaves label L1 and folder A with nothing unread.
+    pg.add(UserArticleState(user_id=user.id, article_id=ctx["a_unread_l1"].id, is_read=True))
+    await pg.flush()
+    await agree()
+    assert await has_articles(user, pg, unread_only=True, label_id=ctx["l1"].id) is False
+    assert await has_articles(user, pg, unread_only=True, folder_id=ctx["fa"].id) is False
+    assert await has_articles(user, pg, unread_only=True, folder_id=ctx["fb"].id) is True

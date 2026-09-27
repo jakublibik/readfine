@@ -562,6 +562,20 @@ async def count_articles(user: User, db: AsyncSession, *, collapsing: bool, **fi
     return await list_articles(user, db, _count=row_count(collapsing), **filters)
 
 
+async def has_articles(user: User, db: AsyncSession, **filters) -> bool:
+    """Whether ``list_articles`` would return any row for these filters.
+
+    Asked as EXISTS over the unordered match, not as a one-row page of the list. Under
+    the list's date ordering, LIMIT 1 lets the planner walk ix_articles_sort_ts, which
+    covers every article on the instance, in the hope of an early match. In a view with
+    no match (a label or feed with nothing unread) that walk reads the whole table:
+    110 ms against 3 ms on 168k articles, growing with the instance rather than with
+    the reader. Without the ordering the planner starts from the view's own rows.
+    """
+    stmt = await list_articles(user, db, _ids=True, **filters)
+    return bool(await db.scalar(select(stmt.exists())))
+
+
 def _to_list_item(
     article, state, feed_title, custom_title, extract_readable, labels: list[dict]
 ) -> ArticleListItem:

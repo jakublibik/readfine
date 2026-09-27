@@ -24,6 +24,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - In Saved, an article scrolled up under the header at the top of the list is marked read as it goes out of sight. It used to count as read only once it had passed the header too, so one left under it stayed unread.
 - Articles that came in before a word of your relevance terms was counted (for example, from a feed added the same day) are scored again after the nightly recount. They used to keep a score of 0 until you saved your terms.
 - A search with a score condition (for example, relevance at least 60) is much faster. It used to go through every article on the instance, not just yours, and on a large instance it took over a tenth of a second each time.
+- The sidebar and the article list load faster on a large instance. Opening a label, feed or folder with nothing unread left went through every article on the instance to find that out, and the counts next to Labels, Starred, Archived and Saved did much the same. Both now look only at your own articles.
 
 ## [0.19.0] - 2026-09-26
 

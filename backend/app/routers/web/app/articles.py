@@ -26,7 +26,7 @@ from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
     add_article_access_joins, article_access_predicate, count_articles,
-    filter_accessible_article_ids, get_article, list_articles,
+    filter_accessible_article_ids, get_article, has_articles, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
 from app.services.label_service import list_labels
@@ -392,10 +392,7 @@ async def saved_view_unread_only(
         return True
     if unread_filter == "show_all":
         return False
-    probe = await list_articles(
-        user=user, db=db, **filters, search=True, unread_only=True, limit=1,
-    )
-    return len(probe) > 0
+    return await has_articles(user, db, **filters, search=True, unread_only=True)
 
 
 def _collapses_stories(
@@ -696,14 +693,13 @@ async def render_list(
         elif unread_filter == "show_all":
             effective_unread_only = False
         else:  # adaptive
-            probe = await list_articles(
-                user=user, db=db,
+            effective_unread_only = await has_articles(
+                user, db,
                 feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
                 label_id=label_id,
                 labeled_only=labeled_only,
-                unread_only=True, limit=1,
+                unread_only=True,
             )
-            effective_unread_only = len(probe) > 0
 
     rows = await list_articles(
         user=user,
