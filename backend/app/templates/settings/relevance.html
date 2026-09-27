@@ -74,7 +74,14 @@
     {% endif %}
     Saving rescores the last 7 days of unread articles within a few minutes. New articles are scored as they arrive.
   </p>
-  <div hx-get="/settings/relevance/suggestions" hx-trigger="load" hx-swap="outerHTML"></div>
+  <div hx-get="/settings/relevance/suggestions" hx-trigger="load" hx-swap="outerHTML"
+       class="mt-4 flex items-center gap-2 text-xs text-gray-500">
+    <svg class="animate-spin h-3.5 w-3.5 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4z"/>
+    </svg>
+    Checking how your terms did…
+  </div>
 </section>
 
 {# ── Basic relevance ───────────────────────────────────────────────────────── #}
