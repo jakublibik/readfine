@@ -898,6 +898,9 @@ function _syncMobileQuicklink() {
   if (bottomLink) bottomLink.textContent = text;
 }
 
+// The nav item restored on page load, until its list arrives (see below).
+var _restoredNavGet = null;
+
 // Restore last-selected nav on page load; fall back to All Articles.
 // A ?view=starred|labeled deep-link (e.g. from the Stats page) overrides the
 // saved nav and is consumed from the URL, like ?open_article_id.
@@ -915,9 +918,36 @@ function _autoLoadArticleList() {
     url = saved || '/htmx/articles';
   }
   _activeNavGet = url;
+  _restoredNavGet = url;
   _syncMobileQuicklink();
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
 }
+
+// The remembered view is the browser's, not the account's: a saved search deleted
+// on another device, or another account's from an earlier login in this browser,
+// comes back as a 404. Forget it and open All articles, without an error toast.
+// _restoredNavGet (declared above _autoLoadArticleList) is cleared by the first
+// list that loads, so only the restore itself is caught here.
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _restoredNavGet = null;
+});
+document.body.addEventListener('htmx:responseError', function (e) {
+  var d = e.detail;
+  if (!_restoredNavGet || !d || !d.target || d.target.id !== 'article-list') return;
+  if (!d.xhr || d.xhr.status !== 404) return;
+  d._rfHandled = true;
+  _restoredNavGet = null;
+  _activeNavGet = '/htmx/articles';
+  try {
+    localStorage.removeItem('lastNavItem');
+    localStorage.setItem('mobile_title_text', 'All articles');
+  } catch (err) {}
+  var titleText = document.getElementById('mobile-title-text');
+  if (titleText) titleText.textContent = 'All articles';
+  _syncMobileQuicklink();
+  htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+  htmx.trigger(document.body, 'sidebarRefresh');
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _autoLoadArticleList);
 } else {
@@ -1087,8 +1117,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var seen = new Set();
 
   // No inset needed for the mobile title bar: the shell reserves its height (see
-  // base.html), so the list's own top edge already sits below it.
-  var topOffset = 0;
+  // base.html), so the list's own top edge already sits below it. A list header
+  // (Saved, a saved search) is another matter: it is sticky inside the list, so a
+  // row that has gone under it is out of sight but still inside the list's box, and
+  // would only count as read one header height later, or not at all if the reader
+  // stopped with it there. offsetHeight is 0 where the header is hidden (a saved
+  // search under the mobile title bar).
+  var listHeader = list.querySelector('[data-list-header]');
+  var topOffset = listHeader ? listHeader.offsetHeight : 0;
   var bottomOffset = 0;
 
   // Where the list's own top edge sits, in the viewport coordinates the entry
