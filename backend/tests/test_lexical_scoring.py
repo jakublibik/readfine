@@ -324,8 +324,15 @@ class TestBackfill:
         await _only_due_account(pg, user.id)
         article = await _article(pg, feed, f"{TOPIC} findings published")
         article.published_at = NOW - timedelta(days=1)
+        # Words other than TOPIC that clear min_df, so the build is usable on an
+        # empty database too (CI): a build with no terms at all scores nothing.
+        for i in range(3):
+            u = uuid.uuid4().hex
+            pg.add(Article(feed_id=None, guid=u, guid_hash=u,
+                           title=f"unrelated background {i}", content="<p>body</p>",
+                           fetched_at=NOW - timedelta(minutes=5)))
         await pg.flush()
-        await rcs.rebuild(pg, window_days=1, min_df=3)  # one article: TOPIC unknown
+        await rcs.rebuild(pg, window_days=1, min_df=3)  # TOPIC unknown
 
         assert await lss.process_due_backfills(pg) == 1
         assert (await _state(pg, user, article)).lexical_score == 0.0
