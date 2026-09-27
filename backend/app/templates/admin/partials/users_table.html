@@ -2,13 +2,14 @@
   <thead class="bg-gray-50 border-b border-gray-200">
     <tr>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">User</th>
-      <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Role</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Status</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Feeds</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Articles</th>
       <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Articles genuinely read in the last 7 days (marked read with dwell ≥ 30s)">Read 7d</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500">Filters</th>
-      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="AI operations in the last 7 days (summaries, scoring, context, chat, catch-up)">AI 7d</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="All filters (of which use a score condition)">Filters</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Basic relevance terms. Gray: still the list from signup, or basic scoring is off">Terms</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="Articles scored by AI in the last 7 days">Scored 7d</th>
+      <th class="text-right px-2 py-2 text-xs font-medium text-gray-500" title="AI operations in the last 7 days (summaries, scoring, context, chat, catch-up). Hover a number for the breakdown">AI 7d</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Last active</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500" title="Days since last active">Idle</th>
       <th class="text-left px-2 py-2 text-xs font-medium text-gray-500">Joined</th>
@@ -20,15 +21,13 @@
     {% set u = item.user %}
     <tr>
       <td class="px-2 py-2">
-        <div class="font-medium text-gray-900">{{ u.display_name }}</div>
+        <div class="font-medium text-gray-900">
+          {{ u.display_name }}
+          {% if u.role == "admin" %}
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 text-purple-700 align-middle">admin</span>
+          {% endif %}
+        </div>
         <div class="text-xs text-gray-400">{{ u.email }}</div>
-      </td>
-      <td class="px-2 py-2">
-        {% if u.role == "admin" %}
-          <span class="px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700">admin</span>
-        {% else %}
-          <span class="text-gray-500">user</span>
-        {% endif %}
       </td>
       <td class="px-2 py-2">
         {% if not u.email_verified %}
@@ -42,8 +41,34 @@
       <td class="px-2 py-2 text-right text-gray-600">{{ item.feed_count|num }}</td>
       <td class="px-2 py-2 text-right text-gray-600">{{ item.article_count|num }}</td>
       <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count|num }}</td>
-      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}">{{ item.filter_count|num }}</td>
-      <td class="px-2 py-2 text-right whitespace-nowrap {{ 'text-gray-700' if item.ai_ops_recent else 'text-gray-300' }}">
+      <td class="px-2 py-2 text-right whitespace-nowrap {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}"
+          {% if item.score_filter_count %}title="{{ item.score_filter_count|num }} of {{ item.filter_count|num }} filters use a score"{% endif %}>
+        {{ item.filter_count|num }}{% if item.score_filter_count %} ({{ item.score_filter_count|num }}){% endif %}
+      </td>
+      {% set t = item.terms %}
+      {% if t and t.count %}
+        {% set edited = t.source == "manual" %}
+        {% if not t.enabled %}
+          {% set terms_title = "Basic scoring is off" %}
+        {% elif edited %}
+          {% set terms_title = "Edited " ~ (t.updated_at | localtime('long')) if t.updated_at else "Edited" %}
+        {% else %}
+          {% set terms_title = "From signup, not edited since" %}
+        {% endif %}
+        <td class="px-2 py-2 text-right {{ 'text-gray-600' if edited and t.enabled else 'text-gray-300' }}"
+            title="{{ terms_title }}">{{ t.count|num }}</td>
+      {% else %}
+        <td class="px-2 py-2 text-right text-gray-300">—</td>
+      {% endif %}
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.ai_scoring_recent else 'text-gray-300' }}">
+        {% if item.ai_scoring_recent %}{{ item.ai_scoring_recent|num }}{% else %}—{% endif %}
+      </td>
+      {% set ai_labels = {"summary": "summaries", "scoring": "scoring", "context": "context",
+                          "chat": "chat", "catch_me_up": "catch-up",
+                          "preference_generation": "AI profile",
+                          "css_selector_generation": "scrape selector"} %}
+      <td class="px-2 py-2 text-right whitespace-nowrap {{ 'text-gray-700' if item.ai_ops_recent else 'text-gray-300' }}"
+          {% if item.ai_ops_breakdown %}title="{% for op, n in item.ai_ops_breakdown %}{{ ai_labels.get(op, op) }} {{ n|num }}{% if not loop.last %}&#10;{% endif %}{% endfor %}"{% endif %}>
         {% if item.ai_ops_recent %}{{ item.ai_ops_recent|num }}{% else %}—{% endif %}
       </td>
       <td class="px-2 py-2 text-gray-400 whitespace-nowrap">

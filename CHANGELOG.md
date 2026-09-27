@@ -14,6 +14,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - **Saved searches.** **Save** in the header of search results keeps the search, with its filters, under a name in the sidebar above Labels, with a count like the other entries. A saved search is not a snapshot: it runs again each time you open it, and it reads like a feed, marked read as you scroll, with **Mark all as read** covering only what it lists. Without a status of its own, it follows your unread setting. **Edit** reopens the search to update it, save it as a new one, rename it or delete it. A new account that lists its topics on the welcome screen starts with one, **Top picks**: the last week's articles scoring 60 or more, best first. In the API, `GET /api/v1/saved-searches` lists them and `GET /api/v1/articles?view_id=` returns what one lists.
 - In **Settings → Relevance**, the table of how your terms did now says "not counted yet" for a term whose words are too rare in the last month's articles to score, instead of "no match". Such a term may be misspelled, or new to your feeds: words from a feed added today are counted overnight.
 
+### Changed
+
+- The user table in **Admin → Users** shows more of how each account uses relevance. **Terms** counts a user's relevance terms, grayed out while they are still the list from signup or basic scoring is off. **Scored 7d** counts articles scored by AI in the last week, and **Filters** adds in brackets how many filters use a score. Hovering **AI 7d** breaks the number down by operation, and catch-up runs now count towards it. The Role column is gone; the admin gets a small badge next to their name instead.
+
 ### Fixed
 
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
