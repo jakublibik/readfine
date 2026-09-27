@@ -532,3 +532,31 @@ async def test_api_view_id_lists_the_search_and_refuses_another_users(pg):
     from app.schemas.saved_search import SavedSearchResponse
     out = SavedSearchResponse.model_validate((await get_saved_searches(user=owner, db=pg))[0])
     assert out.params == {"q": token}
+
+
+# ── Top picks on /welcome ─────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_welcome_with_terms_creates_top_picks_once(pg):
+    from app.routers.web.app.welcome import welcome_save
+
+    user = await _user(pg)
+    await welcome_save(request=None, relevance_terms="rust\npostgres", skip="", user=user, db=pg)
+    [s] = await svc.list_saved_searches(pg, user.id)
+    assert s.name == svc.TOP_PICKS_NAME
+    assert s.params == normalize_search_params(svc.TOP_PICKS_PARAMS)
+
+    # Deleted, it stays deleted: /welcome only creates it on the first pass.
+    await svc.delete_saved_search(pg, s)
+    await pg.flush()
+    await welcome_save(request=None, relevance_terms="rust", skip="", user=user, db=pg)
+    assert await svc.list_saved_searches(pg, user.id) == []
+
+
+@pytest.mark.asyncio
+async def test_welcome_skip_creates_nothing(pg):
+    from app.routers.web.app.welcome import welcome_save
+
+    user = await _user(pg)
+    await welcome_save(request=None, relevance_terms="", skip="1", user=user, db=pg)
+    assert await svc.list_saved_searches(pg, user.id) == []

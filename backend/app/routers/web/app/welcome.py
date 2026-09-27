@@ -20,6 +20,7 @@ from app.models.user import User
 from app.routers.web.settings.common import _get_or_create_settings
 from app.services.relevance_service import parse_terms
 from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
+from app.services.saved_search_service import create_top_picks
 from app.templating import templates
 
 router = APIRouter(tags=["web-app"])
@@ -64,6 +65,10 @@ async def welcome_save(
         save_terms(s, raw, source="onboarding")
         # A score nobody can see does not show that the answer did anything.
         s.ai_score_show_in_list = True
+        # And a view of what scores best shows what it is for. First pass only: a
+        # repeated POST must not bring back a Top picks the reader deleted.
+        if not s.onboarded_at:
+            await create_top_picks(db, user.id)
     if not s.onboarded_at:
         s.onboarded_at = datetime.now(timezone.utc)
     await db.commit()

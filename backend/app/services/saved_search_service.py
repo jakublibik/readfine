@@ -116,6 +116,28 @@ async def create_saved_search(
     return search
 
 
+TOP_PICKS_NAME = "Top picks"
+# The best-scored articles of the last week, best first: the score the list shows (AI,
+# else basic) at 60 or more, which on production data let through about one article
+# in eight. No status of its own, so it follows the reader's unread setting.
+TOP_PICKS_PARAMS = {
+    "score_source": "relevance", "score_op": "gte", "score_val": 60,
+    "since_days": 7, "sort": "score",
+}
+
+
+async def create_top_picks(db: AsyncSession, user_id: int) -> None:
+    """The saved search a new account gets with its first term list, on /welcome.
+
+    Only there: it answers the question the reader just answered, and doing it once
+    per account needs no flag, since /welcome runs once. A reader who deletes it
+    does not get it back, and one who skipped the question can save it from a search.
+    """
+    if await _name_taken(db, user_id, TOP_PICKS_NAME, exclude_id=None):
+        return
+    await create_saved_search(db, user_id, name=TOP_PICKS_NAME, params=TOP_PICKS_PARAMS)
+
+
 async def update_saved_search(
     db: AsyncSession, search: SavedSearch, *, name: str | None = None,
     params: Mapping[str, Any] | None = None,
