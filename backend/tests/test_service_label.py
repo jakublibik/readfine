@@ -194,8 +194,11 @@ class TestDeleteLabel:
         label = _make_label()
         db.execute.return_value = _scalar_result(label)
 
-        result = await delete_label(user, label_id=1, db=db)
+        # Saved-search cleanup runs against the real DB in test_saved_searches.py.
+        with patch("app.services.label_service.strip_saved_search_references", AsyncMock()) as strip:
+            result = await delete_label(user, label_id=1, db=db)
 
+        strip.assert_awaited_once_with(db, kind="label", ref_id=label.id, user_id=user.id)
         db.delete.assert_awaited_once_with(label)
         db.commit.assert_awaited_once()
         assert result is label

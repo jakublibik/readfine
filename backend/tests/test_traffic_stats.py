@@ -293,6 +293,7 @@ class FakeSession:
         self.on_visitor_write = None  # fires once, before the first visitor_daily write
         self.commits = 0
         self.rollbacks = 0
+        self.signup_sources_cleared = 0
 
     async def execute(self, stmt, params=None):
         sql = " ".join(str(stmt).split())
@@ -324,6 +325,8 @@ class FakeSession:
                 hook, self.on_visitor_write = self.on_visitor_write, None
                 hook()
             self.visitors[(params["day"], params["path"])] = params["visitors"]
+        elif sql.startswith("UPDATE users SET signup_source = NULL"):
+            self.signup_sources_cleared += 1
         else:
             raise AssertionError(f"unexpected statement: {sql}")
         return FakeResult()
@@ -498,6 +501,7 @@ async def test_switching_off_writes_the_last_minute_and_empties_the_process():
     assert not ts.get_enabled()
     assert ts._visitors == {}
     assert ts._views == {}
+    assert db.signup_sources_cleared == 1
 
 
 @pytest.mark.asyncio

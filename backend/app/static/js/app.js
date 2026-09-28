@@ -898,6 +898,9 @@ function _syncMobileQuicklink() {
   if (bottomLink) bottomLink.textContent = text;
 }
 
+// The nav item restored on page load, until its list arrives (see below).
+var _restoredNavGet = null;
+
 // Restore last-selected nav on page load; fall back to All Articles.
 // A ?view=starred|labeled deep-link (e.g. from the Stats page) overrides the
 // saved nav and is consumed from the URL, like ?open_article_id.
@@ -915,9 +918,41 @@ function _autoLoadArticleList() {
     url = saved || '/htmx/articles';
   }
   _activeNavGet = url;
+  _restoredNavGet = url;
   _syncMobileQuicklink();
   htmx.ajax('GET', url, { target: '#article-list', swap: 'innerHTML' });
 }
+
+// A view that is gone comes back as a 404: the one remembered from last time (the
+// browser's, not the account's, so it can be another account's from an earlier
+// login), or a saved search deleted on another device and clicked in a sidebar that
+// has not caught up. Forget it and open All articles, with a word only when the
+// reader clicked it. _restoredNavGet (declared above _autoLoadArticleList) is
+// cleared by the first list that loads, so it marks only the restore itself.
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _restoredNavGet = null;
+});
+document.body.addEventListener('htmx:responseError', function (e) {
+  var d = e.detail;
+  if (!d || !d.target || d.target.id !== 'article-list') return;
+  if (!d.xhr || d.xhr.status !== 404) return;
+  var path = (d.pathInfo && d.pathInfo.requestPath) || '';
+  var restoring = !!_restoredNavGet;
+  if (!restoring && path.indexOf('saved_search_id=') === -1) return;
+  d._rfHandled = true;
+  if (!restoring) showToast('That saved search no longer exists.', 'warning');
+  _restoredNavGet = null;
+  _activeNavGet = '/htmx/articles';
+  try {
+    localStorage.removeItem('lastNavItem');
+    localStorage.setItem('mobile_title_text', 'All articles');
+  } catch (err) {}
+  var titleText = document.getElementById('mobile-title-text');
+  if (titleText) titleText.textContent = 'All articles';
+  _syncMobileQuicklink();
+  htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+  htmx.trigger(document.body, 'sidebarRefresh');
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _autoLoadArticleList);
 } else {
@@ -965,11 +1000,44 @@ function _setTitleBarCount(count, type) {
     return;
   }
   badge.textContent = count;
-  if (type === 'starred') {
+  if (type === 'starred' || type === 'total') {
     badge.className = 'flex-shrink-0 text-[13px] font-medium text-gray-400 relative -top-[0.5px]';
   } else {
     badge.className = 'flex-shrink-0 text-xs font-medium bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full';
   }
+}
+
+// The mobile title bar stands in for a saved search's own header, which base.html
+// hides while the bar is shown: the search's name (as it is now, so a rename via
+// Update shows too) and its Edit. Edit goes through the hidden header's data, as the
+// header's own link does.
+function _syncMobileTitleForView() {
+  var header = document.querySelector('#article-list [data-saved-search-name]');
+  var edit = document.getElementById('mobile-title-edit');
+  if (edit) edit.classList.toggle('hidden', !header);
+  if (!header) return;
+  var titleEl = document.getElementById('mobile-title-text');
+  var name = header.dataset.savedSearchName.slice(0, 40);
+  if (titleEl) titleEl.textContent = name;
+  try { localStorage.setItem('mobile_title_text', name); } catch (err) {}
+}
+
+// A row of the open list read or unread again (delta -1 / +1): the unread counts
+// drawn over the list follow it, the mobile title bar and a saved search's header.
+function _adjustUnreadCounts(delta) {
+  if (window._titleBarCountType === 'unread') {
+    var badge = document.getElementById('mobile-title-count');
+    if (badge && !badge.classList.contains('hidden')) {
+      _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) + delta), 'unread');
+    }
+  }
+  var el = document.querySelector('#article-list [data-view-unread-count]');
+  if (!el) return;
+  // Server-formatted with the reader's grouping ("1,234" / "1 234"); keep it.
+  var text = el.textContent;
+  var sep = (text.match(/\d(\D)\d{3}/) || [])[1] || ',';
+  var n = Math.max(0, parseInt(text.replace(/\D/g, ''), 10) + delta);
+  el.textContent = String(n).replace(/\B(?=(\d{3})+(?!\d))/g, sep);
 }
 
 // Batched mark-as-read — collects IDs and sends one request per debounce window
@@ -1029,6 +1097,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   if (!cfgEl) return;
   var cfg = JSON.parse(cfgEl.textContent);
   _setTitleBarCount(cfg.titleBarCount, cfg.titleBarCountType);
+  _syncMobileTitleForView();
 
   var list = document.getElementById('article-list');
   if (!list) return;
@@ -1053,8 +1122,14 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   var seen = new Set();
 
   // No inset needed for the mobile title bar: the shell reserves its height (see
-  // base.html), so the list's own top edge already sits below it.
-  var topOffset = 0;
+  // base.html), so the list's own top edge already sits below it. A list header
+  // (Saved, a saved search) is another matter: it is sticky inside the list, so a
+  // row that has gone under it is out of sight but still inside the list's box, and
+  // would only count as read one header height later, or not at all if the reader
+  // stopped with it there. offsetHeight is 0 where the header is hidden (a saved
+  // search under the mobile title bar).
+  var listHeader = list.querySelector('[data-list-header]');
+  var topOffset = listHeader ? listHeader.offsetHeight : 0;
   var bottomOffset = 0;
 
   // Where the list's own top edge sits, in the viewport coordinates the entry
@@ -1094,12 +1169,7 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
           titleEl.classList.add('font-medium', 'text-gray-800');
         }
         _queueMarkRead(id);
-        if (window._titleBarCountType === 'unread') {
-          var badge = document.getElementById('mobile-title-count');
-          if (badge && !badge.classList.contains('hidden')) {
-            _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
-          }
-        }
+        _adjustUnreadCounts(-1);
       }
     });
   }, { root: list, threshold: 0.1, rootMargin: '-' + topOffset + 'px 0px -' + bottomOffset + 'px 0px' });
@@ -1499,7 +1569,11 @@ document.body.addEventListener('click', function (e) {
 });
 
 // ── Search modal ───────────────────────────────────────────────────────────
-function openSearchModal(prefill) {
+// The saved search the list came from (window._activeSavedSearchId): set when one
+// runs, kept while the reader tries changes to it with Search, so reopening the
+// modal from those results edits it again with Update / Save as new at hand.
+// Cleared by a fresh search and by leaving search for a feed or list.
+function openSearchModal(prefill, savedId) {
   var el = document.getElementById('full-menu-dropdown');
   if (el) el.classList.add('hidden');
   var overlay = document.getElementById('search-modal-overlay');
@@ -1509,9 +1583,17 @@ function openSearchModal(prefill) {
   // Only restore the previous query/scope when reopening from the results header
   // (prefill); a fresh search from the menu or the "/" shortcut starts empty.
   window._searchPrefill = !!prefill;
+  if (!prefill && !savedId) window._activeSavedSearchId = null;
   var url = '/htmx/search-modal';
-  if (prefill) {
+  if (savedId && !prefill) {
+    // The pencil in the saved list: the server fills the form from what is stored.
+    url += '?saved_id=' + encodeURIComponent(savedId);
+  } else if (prefill) {
     var qs = [];
+    if (window._activeSavedSearchId) {
+      qs.push('saved_id=' + encodeURIComponent(window._activeSavedSearchId));
+      qs.push('edited=true');
+    }
     if (window._lastSearchScope) qs.push('scope=' + encodeURIComponent(window._lastSearchScope));
     if (window._lastSearchSort) qs.push('sort=' + encodeURIComponent(window._lastSearchSort));
     if (window._lastSearchStatus) qs.push('status=' + encodeURIComponent(window._lastSearchStatus));
@@ -1588,9 +1670,11 @@ document.addEventListener('change', function (e) {
   if (note) note.classList.toggle('hidden', off);
 });
 
-function submitSearch() {
+// The modal's search as the list endpoint's parameters, remembered as the last
+// search on the way. Null (with focus on the field to fix) when it can't run.
+function collectSearch() {
   var input = document.getElementById('search-input');
-  if (!input) return;
+  if (!input) return null;
   var q = input.value.trim();
   // Multi-select scope: hidden input holds a JSON array like ["feed:1","folder:2"].
   var scopeEl = document.getElementById('search-scope-value');
@@ -1616,7 +1700,7 @@ function submitSearch() {
   if (scoreActive && (scoreVal === '' || !scoreValEl.checkValidity())) {
     scoreValEl.focus();
     if (scoreValEl.reportValidity) scoreValEl.reportValidity();
-    return;
+    return null;
   }
   if (!scoreActive) { scoreSrc = ''; scoreVal = ''; }
   // Published: days back from now, empty = any time.
@@ -1631,7 +1715,7 @@ function submitSearch() {
   // otherwise it's just "all articles", so nudge for input.
   var hasFilter = !!scopeVal || !!labelsVal || (statusVal && statusVal !== 'all')
     || scoreActive || sortVal === 'score' || !!sinceVal || !!stateVal;
-  if (!q && !hasFilter) { input.focus(); return; }
+  if (!q && !hasFilter) { input.focus(); return null; }
   // With no words there is nothing to rank by relevance, and the list comes back
   // newest first. Say so, so reopening the modal shows the order actually used.
   if (!q && sortVal === 'relevance') sortVal = 'newest';
@@ -1646,28 +1730,204 @@ function submitSearch() {
   window._lastSearchScoreVal = scoreVal;
   window._lastSearchSince = sinceVal;
   window._lastSearchState = stateVal;
+  return lastSearchParams();
+}
 
+// The last search (window._lastSearch*) as the list endpoint's parameters. Also what
+// the results header saves, since that is the search those results came from.
+function lastSearchParams() {
   var params = new URLSearchParams();
-  if (q) params.set('q', q);
-  if (scopeVal) params.set('scope_include', scopeVal);
-  params.set('sort', sortVal);
-  if (statusVal && statusVal !== 'all') params.set('read_status', statusVal);
-  if (labelsVal) params.set('label_filter', labelsVal);
+  if (window._lastSearchQuery) params.set('q', window._lastSearchQuery);
+  if (window._lastSearchScope) params.set('scope_include', window._lastSearchScope);
+  params.set('sort', window._lastSearchSort || 'relevance');
+  var status = window._lastSearchStatus;
+  if (status && status !== 'all') params.set('read_status', status);
+  if (window._lastSearchLabels) params.set('label_filter', window._lastSearchLabels);
   // A score sort with Any sends no source, and the router sorts by AI, else basic,
   // the number the list shows.
-  if (scoreActive) {
-    params.set('score_source', scoreSrc);
-    params.set('score_op', scoreOp);
-    params.set('score_val', scoreVal);
+  if (window._lastSearchScoreOp) {
+    params.set('score_source', window._lastSearchScoreSource);
+    params.set('score_op', window._lastSearchScoreOp);
+    params.set('score_val', window._lastSearchScoreVal);
   }
-  if (sinceVal) params.set('since_days', sinceVal);
-  if (stateVal) params.set('state', stateVal);
-  htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
+  if (window._lastSearchSince) params.set('since_days', window._lastSearchSince);
+  if (window._lastSearchState) params.set('state', window._lastSearchState);
+  return params;
+}
+
+function _closeSearchForResults() {
   closeSearchModal();
   // On mobile the search modal is opened from inside the sidebar overlay; close
   // it so the results are immediately visible instead of hidden behind it.
   if (window._closeMobileSidebarOverlay) window._closeMobileSidebarOverlay();
 }
+
+// Run the last search. With a saved search it relates to, the results header says
+// whether it still matches that one (Saved) or offers Update / Save as new.
+function _runLastSearch() {
+  var params = lastSearchParams();
+  if (window._activeSavedSearchId) params.set('saved_ref', window._activeSavedSearchId);
+  htmx.ajax('GET', '/htmx/articles?' + params.toString(), { target: '#article-list', swap: 'innerHTML' });
+}
+
+function submitSearch() {
+  if (!collectSearch()) return;
+  // Trying changes to a saved search keeps it the one being edited.
+  var savedIdEl = document.getElementById('saved-search-id');
+  window._activeSavedSearchId = savedIdEl ? savedIdEl.value : null;
+  _runLastSearch();
+  _closeSearchForResults();
+}
+
+// ── Saved searches ─────────────────────────────────────────────────────────
+// Saving never swaps the list: the results stay search results, and a saved search
+// behaves like a feed only when opened from the sidebar. The server answers with a
+// savedSearchesChanged event, or puts a mistake on the form's error line.
+var _savingFrom = null;  // 'modal' | 'header', for the event handler below
+
+function runSavedSearch(id) {
+  htmx.ajax('GET', '/htmx/articles?saved_search_id=' + encodeURIComponent(id),
+    { target: '#article-list', swap: 'innerHTML' });
+  _closeSearchForResults();
+}
+
+function _postSavedSearch(url, params, extra, from) {
+  var values = {};
+  params.forEach(function (v, k) { values[k] = v; });
+  Object.keys(extra).forEach(function (k) { values[k] = extra[k]; });
+  _savingFrom = from;
+  htmx.ajax('POST', url, { swap: 'none', values: values });
+}
+
+function _savedSearchUrl(id) {
+  return id ? '/htmx/saved-searches/' + encodeURIComponent(id) : '/htmx/saved-searches';
+}
+
+// The edit form in the search window: Update, or Save as new under the name typed.
+function saveSearchFromModal(asNew) {
+  var params = collectSearch();
+  if (!params) return;
+  var nameEl = document.getElementById('saved-search-name');
+  var errEl = document.getElementById('saved-search-error');
+  if (errEl) errEl.textContent = '';
+  if (!nameEl || !nameEl.value.trim()) {
+    if (nameEl) nameEl.focus();
+    if (errEl) errEl.textContent = 'Give the search a name.';
+    return;
+  }
+  var savedIdEl = document.getElementById('saved-search-id');
+  _postSavedSearch(_savedSearchUrl(asNew ? null : savedIdEl && savedIdEl.value), params,
+    { name: nameEl.value, error_target: 'saved-search-error' }, 'modal');
+}
+
+// The results header: the name field that opens under it, and Update.
+function _headerSaveForm(show) {
+  var header = document.querySelector('[data-search-header]');
+  var form = header && header.querySelector('[data-save-search-form]');
+  if (!form) return;
+  form.classList.toggle('hidden', !show);
+  var err = document.getElementById('header-save-error');
+  if (err) err.textContent = '';
+  if (show) document.getElementById('header-save-name').focus();
+}
+
+function saveSearchFromHeader() {
+  var nameEl = document.getElementById('header-save-name');
+  var errEl = document.getElementById('header-save-error');
+  if (errEl) errEl.textContent = '';
+  if (!nameEl || !nameEl.value.trim()) {
+    if (nameEl) nameEl.focus();
+    if (errEl) errEl.textContent = 'Give the search a name.';
+    return;
+  }
+  _postSavedSearch(_savedSearchUrl(null), lastSearchParams(),
+    { name: nameEl.value, error_target: 'header-save-error' }, 'header');
+}
+
+function updateSearchFromHeader(id) {
+  // No name in the form: the saved search keeps its own.
+  _postSavedSearch(_savedSearchUrl(id), lastSearchParams(),
+    { error_target: 'header-save-error' }, 'header');
+}
+
+function deleteSavedSearch(id, name) {
+  if (!confirm('Delete the saved search “' + name + '”?')) return;
+  htmx.ajax('POST', '/htmx/saved-searches/' + encodeURIComponent(id) + '/delete', { swap: 'none' });
+}
+
+document.body.addEventListener('savedSearchesChanged', function (e) {
+  var from = _savingFrom;
+  _savingFrom = null;
+  window._activeSavedSearchId = String(e.detail.id);
+  // A new or renamed search has to show up in the sidebar.
+  htmx.trigger(document.body, 'sidebarRefresh');
+  if (from === 'modal') {
+    var current = document.querySelector('[data-search-header]');
+    if (current && current.dataset.savedSearchId === String(e.detail.id)) {
+      // Edited from its own view: back to that view, with the new parameters.
+      runSavedSearch(e.detail.id);
+    } else {
+      // Edited from search results: back to them, now of the saved parameters.
+      _runLastSearch();
+      _closeSearchForResults();
+    }
+    return;
+  }
+  // From the header: the results are already these, only the header changes.
+  var header = document.querySelector('[data-search-header]');
+  if (!header) return;
+  header.dataset.savedRef = e.detail.id;
+  _headerSaveForm(false);
+  var area = header.querySelector('[data-save-search-area]');
+  if (area) {
+    area.innerHTML = '<span class="text-gray-400" aria-hidden="true">·</span>' +
+      '<span class="text-gray-500 whitespace-nowrap"></span>';
+    area.lastChild.textContent = 'Saved';
+    area.lastChild.title = 'Saved as “' + e.detail.name + '”';
+  }
+});
+
+document.body.addEventListener('savedSearchDeleted', function (e) {
+  closeSearchModal();
+  htmx.trigger(document.body, 'sidebarRefresh');
+  if (String(window._activeSavedSearchId) !== String(e.detail.id)) return;
+  window._activeSavedSearchId = null;
+  var header = document.querySelector('[data-search-header]');
+  if (header && header.dataset.savedSearchId) {
+    // Viewing the deleted search, which was the active sidebar item: go to All
+    // articles, through its own nav item so the sidebar highlights it.
+    var all = document.querySelector('#sidebar-full .nav-item[hx-get="/htmx/articles"]');
+    if (all) all.click();
+    else htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+  } else if (header) {
+    // Results of a search related to it: the same results, now unsaved.
+    _runLastSearch();
+  }
+});
+
+// A list that arrives with a saved search's header (or a search related to one)
+// makes it the active one; a saved search's also sets the last search to its
+// parameters. A list without any search header ends search.
+document.body.addEventListener('htmx:afterSettle', function (evt) {
+  if (!evt.detail.target || evt.detail.target.id !== 'article-list') return;
+  var header = evt.detail.target.querySelector('[data-search-header]');
+  if (!header) { window._activeSavedSearchId = null; return; }
+  if (header.dataset.savedRef) { window._activeSavedSearchId = header.dataset.savedRef; return; }
+  if (!header.dataset.savedSearchId) return;
+  window._activeSavedSearchId = header.dataset.savedSearchId;
+  var v;
+  try { v = JSON.parse(header.dataset.savedSearchValues || '{}'); } catch (err) { return; }
+  window._lastSearchQuery = v.q || '';
+  window._lastSearchScope = v.scope || '';
+  window._lastSearchSort = v.sort || '';
+  window._lastSearchStatus = v.status || '';
+  window._lastSearchLabels = v.labels || '';
+  window._lastSearchScoreSource = v.score_source || '';
+  window._lastSearchScoreOp = v.score_op || '';
+  window._lastSearchScoreVal = v.score_val || '';
+  window._lastSearchSince = v.since_days || '';
+  window._lastSearchState = v.state || '';
+});
 
 // Focus search input when modal loads
 document.body.addEventListener('htmx:afterSettle', function (evt) {
@@ -1800,6 +2060,10 @@ document.addEventListener('keydown', function (e) {
     closeSearchModal(); closeFeedbackModal(); return;
   }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
+  // Enter in a name field saves: the edited search in the window, a new one under
+  // the results header.
+  if (e.key === 'Enter' && e.target.id === 'saved-search-name') { saveSearchFromModal(false); return; }
+  if (e.key === 'Enter' && e.target.id === 'header-save-name') { saveSearchFromHeader(); return; }
   if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
     e.preventDefault();
     openSearchModal();
@@ -1913,6 +2177,15 @@ document.addEventListener('click', function (e) {
   if (action === 'open-feedback-modal') { openFeedbackModal(); return; }
   if (action === 'close-feedback-modal') { closeFeedbackModal(); return; }
   if (action === 'submit-search') { submitSearch(); return; }
+  if (action === 'run-saved-search') { runSavedSearch(el.dataset.savedId); return; }
+  if (action === 'edit-saved-search') { openSearchModal(false, el.dataset.savedId); return; }
+  if (action === 'save-search-new') { saveSearchFromModal(true); return; }
+  if (action === 'save-search-update') { saveSearchFromModal(false); return; }
+  if (action === 'open-save-search-inline') { _headerSaveForm(true); return; }
+  if (action === 'close-save-search-inline') { _headerSaveForm(false); return; }
+  if (action === 'save-search-inline') { saveSearchFromHeader(); return; }
+  if (action === 'update-search-inline') { updateSearchFromHeader(el.dataset.savedId); return; }
+  if (action === 'delete-saved-search') { deleteSavedSearch(el.dataset.savedId, el.dataset.savedName); return; }
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
     // Clearing search returns to the active nav category (where you were before
@@ -2008,14 +2281,8 @@ document.addEventListener('articleReadChanged', function (e) {
   var row = document.getElementById('article-row-' + detail.id);
   if (!row) return;
   var isRead = detail.isRead;
-  if (window._titleBarCountType === 'unread') {
-    var badge = document.getElementById('mobile-title-count');
-    if (badge && !badge.classList.contains('hidden')) {
-      var wasRead = row.dataset.isRead === 'true';
-      if (isRead && !wasRead) _setTitleBarCount(Math.max(0, parseInt(badge.textContent, 10) - 1), 'unread');
-      else if (!isRead && wasRead) _setTitleBarCount(parseInt(badge.textContent, 10) + 1, 'unread');
-    }
-  }
+  var wasRead = row.dataset.isRead === 'true';
+  if (isRead !== wasRead) _adjustUnreadCounts(isRead ? -1 : 1);
   row.classList.toggle('opacity-75', isRead);
   row.dataset.isRead = isRead ? 'true' : 'false';
   var title = row.querySelector('p, [data-article-title]');
@@ -2529,6 +2796,29 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   });
 })();
 
+// ── Saved search badges across a sidebar refresh ─────────────────────────
+// A saved search's count loads after the sidebar (see sidebar.html), so every
+// refresh would draw its row without a badge for a moment and the whole block would
+// flicker. The badge it had goes into the new placeholder until the new count
+// replaces it; a search that has since gone over budget loses it then.
+(function () {
+  var carried = {};
+  document.body.addEventListener('htmx:beforeSwap', function (e) {
+    if (e.detail.target.id !== 'sidebar') return;
+    carried = {};
+    e.detail.target.querySelectorAll('[data-saved-count]').forEach(function (b) {
+      if (b.innerHTML) carried[b.id] = b.innerHTML;
+    });
+  });
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    if (e.detail.target.id !== 'sidebar') return;
+    e.detail.target.querySelectorAll('[data-saved-count]').forEach(function (p) {
+      if (carried[p.id]) p.innerHTML = carried[p.id];
+    });
+    carried = {};
+  });
+})();
+
 // ── Sidebar collapsible sections ──────────────────────────────────────────
 function restoreSidebarCollapse(animate) {
   document.querySelectorAll('.collapse-toggle[data-collapse]').forEach(function (btn) {
@@ -2597,6 +2887,7 @@ function _autoAdvanceParam(hx) {
   if (/[?&]feed_id=/.test(hx)) return 'feed_id';
   if (/[?&]folder_id=/.test(hx)) return 'folder_id';
   if (/[?&]label_id=/.test(hx)) return 'label_id';
+  if (/[?&]saved_search_id=/.test(hx)) return 'saved_search_id';
   return null; // special rows (All / Starred / Archived / Labels header)
 }
 
@@ -2963,7 +3254,8 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (!item) return;
     _saveNavSnapshot();
     var titleEl = item.querySelector('span.flex-1');
-    var title = (titleEl ? titleEl.textContent : (item.getAttribute('title') || '')).trim().slice(0, 40);
+    var title = (item.dataset.navTitle
+      || (titleEl ? titleEl.textContent : (item.getAttribute('title') || ''))).trim().slice(0, 40);
     var titleText = document.getElementById('mobile-title-text');
     if (titleText) titleText.textContent = title;
     try { localStorage.setItem('mobile_title_text', title); } catch (err) {}

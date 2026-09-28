@@ -147,6 +147,21 @@ class TestCompute:
         rows = self._reading()
         assert "weather" not in {s.term for s in ss.compute(rows, [], _stats(rows), set()).adds}
 
+    def test_a_word_read_no_more_often_than_it_comes_in_ranks_lower(self):
+        # "likely" is in more engaged articles than "sourdough", so it weighs
+        # more, but it is in unread ones too and "sourdough" is in no other.
+        engaged = ([f"sourdough starter {i}" for i in range(3)]
+                   + [f"likely story{i}" for i in range(4)]
+                   + [f"misc story{i}" for i in range(5)])
+        filler = [f"weather report number{i}" for i in range(1000)]
+        rows = _rows(engaged, [f"likely outcome{i}" for i in range(6)] + filler)
+        stats = _stats(rows)
+        ranked = ss._rocchio([rs.tokenize(rs.article_text(t, b))
+                              for t, b, e, *_ in rows if e], stats)
+        assert ranked["likely"][0] > ranked["sourdough"][0]
+        adds = [s.term for s in ss.compute(rows, [], stats, set()).adds]
+        assert adds.index("sourdough") < adds.index("likely")
+
     def test_stopwords_are_not_suggested(self):
         engaged = ([f"about sourdough {i}" for i in range(4)]
                    + [f"misc story{i}" for i in range(8)])
@@ -214,6 +229,22 @@ class TestTermStats:
         out = ss.compute(rows, ["bike commuting", "sourdough", "crypto"], _stats(rows), set())
         assert [(st.term, st.matched) for st in out.terms] == [
             ("crypto", 20), ("sourdough", 4), ("bike commuting", 0)]
+
+    def test_a_term_the_statistics_do_not_have_is_told_apart_from_no_match(self):
+        """Both match nothing, but only one of them could: the other scores zero
+        on every article until the statistics count its words."""
+        rows = self._rows()
+        texts = [rs.article_text(t, b) for t, b, *_ in rows]
+        stats = rs.build_corpus_stats(texts + ["kayak trip"], min_df=1)
+        out = ss.compute(rows, ["kayak", "zqxw", "特朗普"], stats, set())
+        by_term = {st.term: (st.matched, st.known) for st in out.terms}
+        assert by_term == {"kayak": (0, True), "zqxw": (0, False), "特朗普": (0, False)}
+
+    def test_known_through_a_prefix_or_a_cjk_bigram(self):
+        stats = rs.build_corpus_stats(["válka na východě", "特朗普访华"], min_df=1)
+        assert rs.term_known("válkou", stats)  # only its prefix "valk" is counted
+        assert rs.term_known("特朗普", stats)
+        assert not rs.term_known("中美", stats)
 
     def test_counted_below_min_engaged_but_without_lift(self):
         engaged = [f"sourdough loaf {i}" for i in range(ss.MIN_ENGAGED - 1)]

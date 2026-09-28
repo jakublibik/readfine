@@ -14,7 +14,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.models.article import Article, UserArticleState
+from app.models.article import (
+    SUPPRESSED_BY_SIMILAR, SUPPRESSED_BY_STORY, Article, UserArticleState,
+)
 from app.models.feed import Feed, UserFeed
 from app.schemas.article import ArticleListItem, StoryMember, SuppressedArticle
 from app.services.article import add_article_access_joins, article_access_predicate
@@ -30,17 +32,6 @@ DEDUP_OFF = "off"
 DEDUP_COLLAPSE = "collapse"
 DEDUP_SUPPRESS = "collapse_suppress"
 DEDUP_VALUES = (DEDUP_OFF, DEDUP_COLLAPSE, DEDUP_SUPPRESS)
-
-# The value ``suppressed_by`` carries when the machine read is "the reader finished the
-# story this belongs to". Named because two functions have to agree on it exactly:
-# ``mark_group_read`` writes it and ``reopen_group`` is allowed to undo nothing else.
-SUPPRESSED_BY_STORY = "story"
-
-# And the one the suppression rule writes (fetcher.stories.suppress_seen): this article
-# repeats news the reader has already read. The same column also carries reads written
-# by the URL dedup, by a filter and by finishing a story, so everything the settings
-# page says about suppression keys on this value alone.
-SUPPRESSED_BY_SIMILAR = "similar"
 
 # How far back the list of hidden articles in settings reaches. The same 7 days as the
 # counter above it on purpose: the list is meant to be that number, not something near

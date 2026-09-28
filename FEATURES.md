@@ -37,6 +37,7 @@ _A clean reader that adapts to your screen._
 - **Labels:** Your own colour-coded tags for sorting articles by hand.
 - **Mark read on scroll:** Optionally mark articles read as they scroll past. Search results are left alone.
 - **Search:** Full-text search across your articles that ignores accents and matches English word forms, with `word*` for word beginnings. Filter by feed, folder, status, label, score, publish date, or your starred, saved and archived articles. Open it from anywhere with the `/` shortcut.
+- **Saved searches:** Keep a search in the sidebar with its own count. It runs again each time you open it and reads like a feed, marked read as you scroll. New accounts start with Top picks, the week's best-scored articles. Also in the API.
 - **Save by URL:** Paste a link to keep an article that is not in any of your feeds. It goes through the same readable extraction, lands in Saved, and is kept until you remove it. Also in the API, so a phone shortcut or a bookmarklet can save a link without opening the app.
 - **Share by link:** Hand a single article to someone with no Readfine account. The link reads without signing in and stays live until you revoke it.
 
@@ -85,7 +86,7 @@ _Multi-user, with the operator controls to match._
 - **Admin panel:** Manage users and instance-wide settings.
 - **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
-- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
+- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day, plus the domain each new account came from, shown by source under the registration funnel. Signed-in traffic is left out.
 - **Retention & purge:** Tiered retention rules that purge old articles automatically.
 - **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.
 

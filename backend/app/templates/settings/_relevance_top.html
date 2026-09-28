@@ -12,7 +12,7 @@
   <div class="flex items-center gap-3">
     <span class="text-2xl font-semibold tabular-nums {{ 'text-gray-900' if top.lift >= 1 else 'text-amber-600' }}">{{ top.lift | num(0 if top.lift >= 10 else 1) }}×</span>
     <div class="text-sm leading-snug">
-      <div class="text-gray-700">Articles scoring {{ top_score }} or more, read against your average</div>
+      <div class="text-gray-700">How often you read articles scoring {{ top_score }} or more, compared with all articles</div>
       <div class="text-xs text-gray-500">{{ top.engaged | num }} of {{ top.matched | num }} read in the last {{ days }} days</div>
     </div>
   </div>

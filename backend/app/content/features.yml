@@ -134,6 +134,11 @@ categories:
           word forms, with `word*` for word beginnings. Filter by feed, folder, status,
           label, score, publish date, or your starred, saved and archived articles.
           Open it from anywhere with the `/` shortcut.
+      - title: Saved searches
+        desc: >-
+          Keep a search in the sidebar with its own count. It runs again each time you
+          open it and reads like a feed, marked read as you scroll. New accounts start
+          with Top picks, the week's best-scored articles. Also in the API.
       - title: Save by URL
         desc: >-
           Paste a link to keep an article that is not in any of your feeds. It goes
@@ -273,7 +278,8 @@ categories:
         desc: >-
           Optional visitor counts for the pages anyone can reach, shown in the admin
           panel. No analytics service, no cookie, no stored IP address: the database
-          holds counts per hour and per day and nothing else. Signed-in traffic is
+          holds counts per hour and per day, plus the domain each new account came
+          from, shown by source under the registration funnel. Signed-in traffic is
           left out.
       - title: Retention & purge
         desc: Tiered retention rules that purge old articles automatically.

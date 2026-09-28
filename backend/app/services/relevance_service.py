@@ -383,6 +383,25 @@ def term_scores(text: str, terms: Sequence[str],
         yield unit.term, score
 
 
+def term_known(term: str, stats: CorpusStats) -> bool:
+    """Whether the statistics have any word of `term`, so it can score at all.
+
+    A term they do not know scores zero on every article (unknown terms are not
+    smoothed), which the reader cannot tell apart from a term that simply found
+    nothing. Usually a misspelling, or a word new to the instance: a feed added
+    today is counted by the next build. `stats` needs the term's prefixes loaded
+    (`relevance_corpus_service.with_prefixes`).
+    """
+    for unit in _units((term,)):
+        for t in unit.tokens:
+            if stats.doc_freq.get(t):
+                return True
+            p = None if unit.contiguous else prefix_of(t)
+            if p and stats.prefix_freq.get(p):
+                return True
+    return False
+
+
 def _word_score(q: str, counts: Mapping[str, int], stats: CorpusStats) -> float:
     """One query word against one article: exact match, else its prefix.
 

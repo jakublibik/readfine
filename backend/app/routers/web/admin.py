@@ -20,6 +20,7 @@ from app.models.user import User
 from app.services.host_rate_limit_service import flush as flush_host_rate_limits
 from app.services.admin_service import (
     clear_feed_error,
+    count_active_readers,
     create_invitation,
     delete_feed,
     delete_user,
@@ -148,17 +149,21 @@ async def admin_scoring_eval(
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 
+async def _users_ctx(db: AsyncSession, user: User) -> dict:
+    """The users table and the counts in its heading, which a toggle or a delete
+    refreshes along with it."""
+    users = await list_users(db)
+    active = await count_active_readers(db, datetime.now(timezone.utc))
+    return {"users": users, "current_user": user, "active_7d": active[7]}
+
+
 @router.get("/users", response_class=HTMLResponse)
 async def admin_users(
     request: Request,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    users = await list_users(db)
-    return templates.TemplateResponse(request, "admin/users.html", {
-        "users": users,
-        "current_user": user,
-    })
+    return templates.TemplateResponse(request, "admin/users.html", await _users_ctx(db, user))
 
 
 @router.post("/users/{user_id}/activate", response_class=HTMLResponse)
@@ -172,11 +177,9 @@ async def admin_toggle_active(
     if target:
         action = "user_activate" if target.is_active else "user_deactivate"
         await log_audit(db, user.id, action, target_type="user", target_id=target.id)
-    users = await list_users(db)
-    return templates.TemplateResponse(request, "admin/partials/users_table.html", {
-        "users": users,
-        "current_user": user,
-    })
+    return templates.TemplateResponse(
+        request, "admin/partials/users_table.html", await _users_ctx(db, user),
+    )
 
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse)
@@ -189,11 +192,9 @@ async def admin_delete_user(
     deleted = await delete_user(db, user_id, admin_id=user.id)
     if deleted:
         await log_audit(db, user.id, "user_delete", target_type="user", target_id=user_id)
-    users = await list_users(db)
-    return templates.TemplateResponse(request, "admin/partials/users_table.html", {
-        "users": users,
-        "current_user": user,
-    })
+    return templates.TemplateResponse(
+        request, "admin/partials/users_table.html", await _users_ctx(db, user),
+    )
 
 
 # ── App Settings ──────────────────────────────────────────────────────────────

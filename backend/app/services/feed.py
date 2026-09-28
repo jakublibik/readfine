@@ -369,6 +369,27 @@ async def _raise_if_already_subscribed_private(
         raise AlreadySubscribed()
 
 
+async def _score_existing_articles(db: AsyncSession, user: User, feed: Feed) -> None:
+    """Give the reader relevance scores on a shared feed's articles from before them.
+
+    Only newly fetched articles are scored as they come in, so without this a feed
+    that was already on the instance shows no scores until the next nightly pass.
+    The subscription is committed by now and must not depend on this.
+    """
+    from app.services.lexical_score_service import score_subscribed_feed
+    user_id, feed_id = user.id, feed.id
+    try:
+        await score_subscribed_feed(db, user_id, feed_id)
+    except Exception:
+        logger.warning("Scoring feed %s for user %s on subscribe failed",
+                       feed_id, user_id, exc_info=True)
+        await db.rollback()
+        # The rollback expires both, and the caller reads them on; a lazy load is
+        # not allowed here.
+        await db.refresh(user)
+        await db.refresh(feed)
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -472,6 +493,7 @@ async def subscribe(
             await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
             feed = await _existing_public_feed(url)
 
+    is_new_feed = feed is None
     if feed is None:
         title = (
             custom_title
@@ -522,6 +544,8 @@ async def subscribe(
     except IntegrityError:
         await db.rollback()
         raise AlreadySubscribed()
+    if not is_new_feed:
+        await _score_existing_articles(db, user, feed)
     await db.refresh(user_feed)
     user_feed.feed = feed
 
@@ -697,6 +721,8 @@ async def subscribe_scrape(
     except IntegrityError:
         await db.rollback()
         raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
+    if not is_new_feed:
+        await _score_existing_articles(db, user, feed)
     await db.refresh(user_feed)
 
     # Mark in-progress synchronously before spawning (see subscribe() for why).

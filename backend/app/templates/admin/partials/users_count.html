@@ -1,0 +1,4 @@
+{# Heading counts on the users page. "Active" is the dashboard's: read something
+   themselves in the last 7 days (admin_service.count_active_readers). #}
+<span id="users-count"{% if oob %} hx-swap-oob="true"{% endif %} class="text-sm font-normal text-gray-400"
+      title="Active: accounts that read at least one article themselves in the last 7 days.">({{ (users | length)|num }} · {{ active_7d|num }} active 7d)</span>

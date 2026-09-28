@@ -50,10 +50,10 @@ from app.fetcher.story_params import (
     SUPPRESS_THRESHOLD,
     WINDOW_HOURS,
 )
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_SIMILAR, Article, UserArticleState
 from app.models.feed import UserFeed
 from app.models.user import UserSettings
-from app.services.story_service import DEDUP_SUPPRESS, SUPPRESSED_BY_SIMILAR
+from app.services.story_service import DEDUP_SUPPRESS
 
 logger = logging.getLogger(__name__)
 

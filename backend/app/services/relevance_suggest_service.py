@@ -20,7 +20,11 @@ click is not interest.
   once. A candidate must appear in at least `MIN_SUPPORT` engaged stories, be at most `MAX_INFLOW_SHARE` of the
   reader's inflow (a word in every other headline is not a topic), not be a
   stopword and not be covered already by a term the reader has, exactly or
-  through the scorer's prefix match.
+  through the scorer's prefix match. Candidates are ranked by centroid weight
+  times the log of their lift, how much more often they occur in the engaged
+  stories than in the whole inflow. The weight alone put `likely` and
+  `humanity` on top: frequent in the longer texts a reader tends to read, rare
+  only next to the headlines of news feeds (2026-09-27, see the eval below).
 - **Remove**: a term that matched at least `MIN_MATCHES` articles in the window
   and led to engagement at under `REMOVE_RATIO` of the reader's base rate.
 
@@ -32,7 +36,9 @@ the question is what happens when this term matches.
 Measured offline (step 2b, E7, and 2026-09-24 for an empty list; see
 `scripts/embedding_eval/run_terms_suggest.py`): five Rocchio suggestions lift a
 three-term list from AUC 0.545 to 0.678 and an empty one from 0.500 to 0.628,
-and dropping the flagged terms from a full list gains a little (+0.006). The
+and dropping the flagged terms from a full list gains a little (+0.006).
+Ranking by lift as well (2026-09-27) moved the empty list's gain from +0.129
+to +0.148 (within the noise) and cleaned up the top five more visibly. The
 words are a mixed bag (`brain`, `aging` next to `problem`), which is why each
 comes with the headlines it was learned from.
 
@@ -43,6 +49,7 @@ would be suggested and then never match.
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -64,6 +71,7 @@ from app.services.relevance_service import (
     parse_terms,
     prefix_of,
     squash,
+    term_known,
     term_scores,
     terms_needed,
     tokenize,
@@ -133,6 +141,7 @@ class TermStat:
     engaged: int                # how many of those were engaged with
     lift: float | None          # their engagement rate over the base rate; None
                                 # below MIN_ENGAGED overall or MIN_LIFT_MATCHES here
+    known: bool = True          # the corpus statistics have a word of it (term_known)
 
 
 @dataclass(frozen=True)
@@ -198,9 +207,16 @@ def _rocchio(docs: list[list[str]], stats: CorpusStats) -> dict[str, tuple[float
 
 
 def _pick_add(ranked: dict[str, tuple[float, int]], profile_tokens: set[str],
-              inflow_df: dict[str, int], n_inflow: int, skip: set[str]) -> list[str]:
+              inflow_df: dict[str, int], n_inflow: int, n_engaged: int,
+              skip: set[str]) -> list[str]:
+    def rank(item: tuple[str, tuple[float, int]]) -> float:
+        t, (w, sup) = item
+        df = inflow_df.get(t, 0)
+        lift = (sup / n_engaged) / (df / n_inflow) if df else 0.0
+        return w * math.log(max(lift, 1.0))
+
     out: list[str] = []
-    for t, (_w, sup) in sorted(ranked.items(), key=lambda x: -x[1][0]):
+    for t, (_w, sup) in sorted(ranked.items(), key=lambda x: -rank(x)):
         if sup < MIN_SUPPORT or len(t) < MIN_TOKEN_CHARS or t.isdigit():
             continue
         if t in STOPWORDS or t in skip:
@@ -249,7 +265,7 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
             top_e += label
     term_stats = tuple(sorted(
         (TermStat(t, n, e, (e / n) / base if enough and base and n >= MIN_LIFT_MATCHES
-                  else None)
+                  else None, n > 0 or term_known(t, stats))
          for t, (n, e) in matched.items()),
         key=lambda st: -st.matched))
     top = (TermStat("", top_n, top_e,
@@ -285,7 +301,7 @@ def compute(rows: list[tuple[str | None, str | None, bool, int, date]], terms: l
             days.setdefault(tok, set()).add(day)
     skip = {k for k, kind in dismissed if kind == ADD}
     skip |= {tok for tok in ranked if len(days.get(tok, ())) < MIN_DAYS}
-    for tok in _pick_add(ranked, profile_tokens, inflow_df, len(docs), skip):
+    for tok in _pick_add(ranked, profile_tokens, inflow_df, len(docs), len(per_story), skip):
         titles = tuple(title for title, doc, _ in per_story.values()
                        if tok in doc)[:EXAMPLE_TITLES]
         items.append(Suggestion(ADD, tok, tok, titles, 0, 0))

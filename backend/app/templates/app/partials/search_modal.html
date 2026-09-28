@@ -1,6 +1,6 @@
 <div class="p-5">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="text-base font-semibold text-gray-800">Search &amp; filter</h2>
+    <h2 class="text-base font-semibold text-gray-800">{% if saved_search %}Edit saved search{% else %}Search &amp; filter{% endif %}</h2>
     <button data-action="close-search" class="text-gray-400 hover:text-gray-600 bg-transparent border-0 cursor-pointer p-1">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -8,9 +8,30 @@
     </button>
   </div>
 
+  {#- Editing a saved search: its name first, since that is what is being edited.
+      A fresh search has no saving here; it is saved from the results header. -#}
+  {% if saved_search %}
+  <input type="hidden" id="saved-search-id" value="{{ saved_search.id }}">
+  <div class="mb-4 pb-4 border-b border-gray-200">
+    <div class="flex items-baseline justify-between mb-1">
+      <label for="saved-search-name" class="text-xs font-medium text-gray-600">Name</label>
+      <a href="/help#saved-searches" target="_blank" rel="noopener noreferrer"
+         class="text-xs text-blue-600 hover:underline">How saved searches work</a>
+    </div>
+    <input type="text" id="saved-search-name" maxlength="100" value="{{ saved_search.name }}"
+           class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    {% if missing_references %}
+    {#- Deleting the last feed, folder or label of a saved search leaves it in
+        (see strip_saved_search_references), so the search shows nothing. -#}
+    <p class="mt-2 text-xs text-amber-700">A feed, folder or label this search used was deleted, so it finds nothing. Change Search in or Labels below.</p>
+    {% endif %}
+    <p id="saved-search-error" class="mt-1 text-xs text-red-600 empty:hidden" role="alert"></p>
+  </div>
+  {% endif %}
+
   <!-- Search input -->
   <div class="mb-4">
-    <input type="text" id="search-input"
+    <input type="text" id="search-input" value="{{ q_value }}"
            placeholder="Search articles…"
            class="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
            autofocus>
@@ -123,15 +144,29 @@
   </div>
   {% endif %}
 
+  {% set primary_cls = "px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded cursor-pointer border-0" %}
+  {% set secondary_cls = "px-4 py-2 text-sm text-gray-600 hover:text-gray-800 bg-transparent border-0 cursor-pointer" %}
+  {% if saved_search %}
+  <!-- Actions for a saved search. Search runs the changes without keeping them;
+       reopening the modal from the results comes back here to keep them after all. -->
+  <div class="flex flex-wrap items-center justify-end gap-2">
+    <button type="button" data-action="delete-saved-search" data-saved-id="{{ saved_search.id }}"
+            data-saved-name="{{ saved_search.name }}"
+            class="mr-auto px-0 py-2 text-sm text-red-600 hover:text-red-700 bg-transparent border-0 cursor-pointer">
+      Delete
+    </button>
+    <button type="button" data-action="submit-search" class="{{ secondary_cls }}">Search</button>
+    <button type="button" data-action="save-search-new"
+            class="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-300 rounded bg-transparent cursor-pointer">
+      Save as new
+    </button>
+    <button type="button" data-action="save-search-update" class="{{ primary_cls }}">Update</button>
+  </div>
+  {% else %}
   <!-- Actions -->
   <div class="flex items-center justify-end gap-2">
-    <button type="button" data-action="close-search"
-            class="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 bg-transparent border-0 cursor-pointer">
-      Cancel
-    </button>
-    <button type="button" data-action="submit-search"
-            class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded cursor-pointer border-0">
-      Search
-    </button>
+    <button type="button" data-action="close-search" class="{{ secondary_cls }}">Cancel</button>
+    <button type="button" data-action="submit-search" class="{{ primary_cls }}">Search</button>
   </div>
+  {% endif %}
 </div>

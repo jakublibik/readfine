@@ -263,6 +263,16 @@
     </div>
   </div>
   {% endfor %}
+  {# Where the accounts came from: the referrer when they opened the landing or the
+     registration page. Internal means a page of this site sent them there. #}
+  {% if traffic.funnel.signup_sources %}
+  <p class="text-xs text-gray-500 pt-2 leading-relaxed">
+    Accounts by source:
+    {% for s in traffic.funnel.signup_sources %}
+    <span class="whitespace-nowrap {{ 'text-gray-400' if s.muted else 'text-gray-700' }}">{{ s.source }} <span class="tabular-nums">{{ s.count|num }}</span></span>{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
   {% if traffic.funnel.signups_from %}
   <p class="text-xs text-gray-500 pt-2">
     Accounts created counts from {{ traffic.funnel.signups_from.strftime('%Y-%m-%d') }},

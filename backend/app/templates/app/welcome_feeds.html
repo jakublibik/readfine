@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Welcome – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-start sm:items-center justify-center px-4 pt-12 pb-8 sm:py-8">
+  <div class="w-full max-w-lg">
+    <h1 class="text-2xl font-semibold text-center mb-1">Welcome to Readfine</h1>
+    <p class="text-sm text-gray-500 text-center mb-6">Step 2 of 2</p>
+
+    <form hx-post="/welcome/feeds" hx-target="#welcome-error" hx-swap="innerHTML"
+          hx-indicator="#welcome-spinner" hx-disabled-elt="find button"
+          class="bg-white shadow rounded-lg p-6 space-y-5">
+      <h2 class="text-base font-medium text-gray-900">Where should your articles come from?</h2>
+
+      {% if categories %}
+      <div>
+        <p class="text-sm text-gray-600 mb-3">
+          Start with a few well-known feeds. Each topic becomes a folder, and you can remove
+          any of them later.
+        </p>
+        <div class="space-y-2">
+          {% for c in categories %}
+          <label class="flex items-start gap-2 text-sm cursor-pointer">
+            <input type="checkbox" name="category" value="{{ c.id }}" class="mt-0.5"
+                   {% if c.id in checked %}checked{% endif %}>
+            <span>
+              <span class="font-medium text-gray-900">{{ c.name }}</span>
+              <span class="text-gray-500">· {{ c.feeds | map(attribute="title") | join(", ") }}</span>
+            </span>
+          </label>
+          {% endfor %}
+        </div>
+        {# The indicator is only transparent while idle, so it keeps its width; on a
+           narrow screen it squeezed the button into two lines. It wraps instead. #}
+        <div class="flex items-center gap-3 mt-4">
+          <button type="submit" name="choice" value="starter"
+                  class="shrink-0 whitespace-nowrap px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 border-0 cursor-pointer">Add these feeds</button>
+          <span id="welcome-spinner" class="htmx-indicator min-w-0 text-sm text-gray-500">Adding feeds, this can take a few seconds…</span>
+        </div>
+      </div>
+      {% endif %}
+
+      <p id="welcome-error" class="text-sm text-red-700"></p>
+
+      <div class="border-t border-gray-200 pt-4 space-y-3">
+        {% if categories %}<p class="text-sm text-gray-600">Or bring your own:</p>{% endif %}
+        <div class="flex flex-wrap gap-3">
+          <button type="submit" name="choice" value="import"
+                  class="px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded hover:bg-gray-50 bg-white cursor-pointer">Import an OPML file</button>
+          <button type="submit" name="choice" value="manual"
+                  class="px-4 py-2 border border-gray-300 text-gray-700 text-sm rounded hover:bg-gray-50 bg-white cursor-pointer">Add feeds myself</button>
+        </div>
+        <p class="text-xs text-gray-500">
+          Moving from another reader? Export your subscriptions as OPML there and import them here.
+        </p>
+      </div>
+
+      <a href="/welcome" class="inline-block text-sm text-gray-500 hover:text-gray-700">← Back to topics</a>
+    </form>
+  </div>
+</div>
+{% endblock %}

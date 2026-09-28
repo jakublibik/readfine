@@ -260,6 +260,11 @@
       html[data-bucket="small"][data-sidebar-mode="hideable-up"] .app-shell {
         padding-top: calc(var(--mobile-bar-h) + var(--sat));
       }
+      /* A saved search's header says what the bar already does (name, count, Edit),
+         so the bar takes over. Hidden, not removed: Edit reads the search from it. */
+      html[data-bucket="small"][data-sidebar-mode="hideable-up"] .saved-search-header {
+        display: none;
+      }
 
       /* Hideable-up: scrollable bottom bar */
       #mobile-bottom-bar { display: none; }
@@ -350,6 +355,9 @@
       html.dark .bg-white    { background-color: #1e1e1e; }
       html.dark .article-list-loading { background-color: rgba(30, 30, 30, 0.8); }
       html.dark .bg-gray-50  { background-color: #141414; }
+      /* The saved search header is gray-50 over a white list; the dark gray-50 sits
+         too close to the dark list, so it takes the gray-100 step instead. */
+      html.dark .saved-search-header { background-color: #2a2a2a; }
       html.dark .bg-gray-100 { background-color: #2a2a2a; }
       html.dark .bg-gray-200 { background-color: #363636; }
       html.dark .text-gray-900 { color: #f0f0f0; }

@@ -206,11 +206,12 @@ async def _only_due_account(session, user_id: int) -> None:
     """Park every other account, so a due-count is about this test's user.
 
     The due query is instance-wide by design and the dev database has real
-    accounts in it, several of which are due the moment the column exists. Rolled
-    back with everything else.
+    accounts in it, several of which are due the moment the column exists. Parked
+    in the future, since a corpus build later in the test would otherwise make
+    them due again. Rolled back with everything else.
     """
     await session.execute(
-        text("UPDATE user_settings SET lexical_backfill_at = now() "
+        text("UPDATE user_settings SET lexical_backfill_at = now() + interval '1 day' "
              "WHERE user_id <> :uid"),
         {"uid": user_id},
     )
@@ -312,6 +313,61 @@ class TestBackfill:
         monkeypatch.setattr(lss, "backfill_user", real_backfill)
         assert await lss.process_due_backfills(pg) == 1
 
+    async def test_a_corpus_rebuild_rescores_what_scored_zero_before_it(self, pg):
+        """A word new to the instance (a feed added today) scores zero until the
+        statistics count it, and the articles scored meanwhile keep that zero
+        unless the rebuild makes the account due again."""
+        user, feed = await _setup(pg)
+        settings = await pg.get(UserSettings, user.id)
+        settings.relevance_terms_updated_at = NOW
+        await pg.flush()
+        await _only_due_account(pg, user.id)
+        article = await _article(pg, feed, f"{TOPIC} findings published")
+        article.published_at = NOW - timedelta(days=1)
+        # Words other than TOPIC that clear min_df, so the build is usable on an
+        # empty database too (CI): a build with no terms at all scores nothing.
+        for i in range(3):
+            u = uuid.uuid4().hex
+            pg.add(Article(feed_id=None, guid=u, guid_hash=u,
+                           title=f"unrelated background {i}", content="<p>body</p>",
+                           fetched_at=NOW - timedelta(minutes=5)))
+        await pg.flush()
+        await rcs.rebuild(pg, window_days=1, min_df=3)  # TOPIC unknown
+
+        assert await lss.process_due_backfills(pg) == 1
+        assert (await _state(pg, user, article)).lexical_score == 0.0
+        assert await lss.process_due_backfills(pg) == 0
+
+        await _corpus(pg)  # now TOPIC clears min_df
+        assert await lss.process_due_backfills(pg) == 1
+        assert (await _state(pg, user, article)).lexical_score > 0
+        assert await lss.process_due_backfills(pg) == 0
+
+    async def test_a_save_goes_before_accounts_due_only_to_a_rebuild(self, pg, monkeypatch):
+        """After the nightly build every account is due, and working through them
+        takes hours; a reader who saves their terms meanwhile is not queued behind."""
+        rebuilt, _ = await _setup(pg)
+        saved, _ = await _setup(pg)
+        for user, backfill, terms_at in ((rebuilt, NOW - timedelta(days=2), NOW - timedelta(days=3)),
+                                         (saved, NOW - timedelta(days=1), NOW)):
+            s = await pg.get(UserSettings, user.id)
+            s.lexical_backfill_at = backfill
+            s.relevance_terms_updated_at = terms_at
+        await pg.flush()
+        await pg.execute(
+            text("UPDATE user_settings SET lexical_backfill_at = now() + interval '1 day' "
+                 "WHERE user_id NOT IN (:a, :b)"),
+            {"a": rebuilt.id, "b": saved.id},
+        )
+        await _corpus(pg)
+        monkeypatch.setattr(lss, "_BACKFILL_USERS_PER_RUN", 1)
+
+        assert await lss.process_due_backfills(pg) == 1
+        await pg.refresh(s := await pg.get(UserSettings, saved.id))
+        assert s.lexical_backfill_at >= NOW
+        await pg.refresh(r := await pg.get(UserSettings, rebuilt.id))
+        assert r.lexical_backfill_at < NOW
+
     async def test_a_new_ai_profile_does_not_make_it_due(self, pg):
         """Regenerating the AI profile leaves the lexical score as it was."""
         user, _feed = await self._due_setup(pg)
@@ -322,9 +378,90 @@ class TestBackfill:
         await pg.flush()
         assert await lss.process_due_backfills(pg) == 0
 
+    async def test_subscribing_to_a_feed_already_here_scores_its_articles(self, pg, monkeypatch):
+        from app.services import feed as feed_service
+
+        async def no_check(url):
+            return None
+
+        monkeypatch.setattr(feed_service, "async_validate_feed_url", no_check)
+        user, feed = await self._due_setup(pg)
+        await lss.process_due_backfills(pg)
+        # Someone else's feed, with an article in it from before this reader came.
+        other = Feed(feed_url=f"https://ex.invalid/{uuid.uuid4().hex}.xml", title="o",
+                     subscriber_count=1)
+        pg.add(other)
+        await pg.flush()
+        article = await _article(pg, other, f"{TOPIC} findings published")
+        # And one in a feed the reader had: the subscription only scores its own.
+        untouched = await _article(pg, feed, f"{TOPIC} findings published")
+
+        await feed_service.subscribe(
+            user=user, url=other.feed_url, folder_id=None, custom_title=None,
+            fetch_auth_user=None, fetch_auth_pass=None, db=pg, trigger_initial_fetch=False,
+        )
+        assert (await _state(pg, user, article)).lexical_score > 0
+        assert await _state(pg, user, untouched) is None
+
     async def test_an_account_that_never_saved_terms_is_not_due(self, pg):
         user, _feed = await _setup(pg, terms=None)
         await _only_due_account(pg, user.id)
         await _corpus(pg)
         assert await lss.process_due_backfills(pg) == 0
 
+
+@pytest_asyncio.fixture
+async def pg_savepoint():
+    """Like `pg`, but a rollback in the code under test stays inside the test.
+
+    Needed where that code rolls back on its own: under `pg` the rollback would
+    take the test's rows with it.
+    """
+    engine = create_async_engine(app_settings.database_url)
+    try:
+        conn = await engine.connect()
+    except Exception as exc:
+        await engine.dispose()
+        from tests.conftest import db_unreachable
+        db_unreachable(exc)
+    trans = await conn.begin()
+    session = AsyncSession(bind=conn, expire_on_commit=False,
+                           join_transaction_mode="create_savepoint")
+    try:
+        yield session
+    finally:
+        await session.close()
+        await trans.rollback()
+        await conn.close()
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_scoring_on_subscribe_keeps_the_subscription(pg_savepoint, monkeypatch):
+    from app.services import feed as feed_service
+
+    pg = pg_savepoint
+
+    async def no_check(url):
+        return None
+
+    async def broken(db, *a, **kw):
+        # After a query, as a real failure would be: only then is there a
+        # transaction for the rollback to undo and objects for it to expire.
+        await db.execute(text("SELECT 1"))
+        raise RuntimeError("scoring broke")
+
+    monkeypatch.setattr(feed_service, "async_validate_feed_url", no_check)
+    monkeypatch.setattr(lss, "score_subscribed_feed", broken)
+    user, _feed = await _setup(pg)
+    other = Feed(feed_url=f"https://ex.invalid/{uuid.uuid4().hex}.xml", title="o",
+                 subscriber_count=1)
+    pg.add(other)
+    await pg.flush()
+
+    uf = await feed_service.subscribe(
+        user=user, url=other.feed_url, folder_id=None, custom_title=None,
+        fetch_auth_user=None, fetch_auth_pass=None, db=pg, trigger_initial_fetch=False,
+    )
+    # What callers read next, after the rollback in the failure path.
+    assert uf.feed.title == "o" and uf.feed_id == other.id and user.email

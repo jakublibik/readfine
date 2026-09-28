@@ -6,7 +6,7 @@
 """
 from fastapi import APIRouter
 
-from . import ai, articles, catchup, feedback, media, share, shell, welcome
+from . import ai, articles, catchup, feedback, media, saved_searches, share, shell, welcome
 
 router = APIRouter()
 router.include_router(shell.router)
@@ -15,5 +15,6 @@ router.include_router(ai.router)
 router.include_router(catchup.router)
 router.include_router(feedback.router)
 router.include_router(media.router)
+router.include_router(saved_searches.router)
 router.include_router(share.router)
 router.include_router(welcome.router)

@@ -126,6 +126,9 @@ class ArticleListItem(_EffectiveScore, BaseModel):
     # coalesce(published_at, fetched_at) used for keyset pagination cursor;
     # excluded from API JSON (internal pagination concern only)
     sort_ts: datetime | None = Field(default=None, exclude=True)
+    # The leading sort value when it isn't the date (score, or text rank), for the
+    # same cursor; None there means the row had no score. Internal, like sort_ts.
+    sort_key: float | None = Field(default=None, exclude=True)
 
     model_config = {"from_attributes": False}
 

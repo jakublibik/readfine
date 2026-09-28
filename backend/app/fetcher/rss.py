@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_URL, Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
@@ -561,7 +561,7 @@ def _dedup_state(row) -> dict:
         "article_id": row.article_id,
         "is_read": True,
         "suppressed_at": datetime.now(timezone.utc),
-        "suppressed_by": "url",
+        "suppressed_by": SUPPRESSED_BY_URL,
     }
 
 

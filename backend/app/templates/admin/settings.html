@@ -148,7 +148,9 @@
             Aggregated counts for the landing, sign-in and info pages, shown under
             <a href="/admin/traffic" class="underline hover:text-gray-600">Traffic</a>.
             Signed-in traffic is not counted. Nothing per-visit is stored: no IP
-            address, no user agent, no cookie, no third party.
+            address, no user agent, no cookie, no third party. A new account keeps
+            the domain that sent it; switching this off removes that from every
+            account, for good.
           </p>
         </div>
         <input type="checkbox" name="traffic_stats_enabled" value="true"

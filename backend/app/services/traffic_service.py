@@ -79,6 +79,14 @@ _BOT_RE = re.compile(
 _UTM_CLEAN_RE = re.compile(r"[^a-z0-9._-]")
 _HOST_CLEAN_RE = re.compile(r"[^a-z0-9.-]")
 
+# Where an account came from, as users.signup_source keeps it: what _source_for gives
+# (a utm tag, a host, direct), internal for a referrer on this site, or invite. The
+# value travels through the browser, so it is checked against this again on the way
+# back in, and anything else (a full URL, a path, junk) is dropped.
+SIGNUP_SOURCE_INTERNAL = "internal"
+SIGNUP_SOURCE_INVITE = "invite"
+_SIGNUP_SOURCE_RE = re.compile(r"utm:[a-z0-9._-]{1,60}|[a-z0-9.-]{1,80}")
+
 
 # ── Process state ─────────────────────────────────────────────────────────────
 # Mirrors AppSettings.traffic_stats_enabled so the hot path costs no query. Set at
@@ -137,6 +145,18 @@ async def apply_enabled(db: AsyncSession, enabled: bool) -> None:
         except Exception as exc:
             logger.warning("Traffic stats: final flush on disable failed: %s", exc)
         discard_state()
+    if not enabled:
+        # The privacy page mentions the signup source only while counting is on, so
+        # the data goes with the sentence. On every save while off, not just the
+        # switch, so a failed attempt is made good by the next save.
+        try:
+            await db.execute(text(
+                "UPDATE users SET signup_source = NULL WHERE signup_source IS NOT NULL"
+            ))
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.error("Traffic stats: clearing signup sources failed: %s", exc)
 
 
 def discard_state() -> None:
@@ -165,8 +185,12 @@ def _is_bot(user_agent: str) -> bool:
     return bool(_BOT_RE.search(user_agent))
 
 
-def _source_for(request: Request) -> str:
-    """Normalized traffic source: a campaign tag, a referring host, or "direct"."""
+def _source_for(request: Request, own_site: str = "direct") -> str:
+    """Normalized traffic source: a campaign tag, a referring host, or "direct".
+
+    A referrer on this site is folded into "direct" for page counts, where it would
+    only say someone clicked around; own_site lets the signup source tell it apart.
+    """
     utm = request.query_params.get("utm_source")
     if utm:
         value = _UTM_CLEAN_RE.sub("", utm.lower())[:60]
@@ -183,12 +207,34 @@ def _source_for(request: Request) -> str:
         own = (request.url.hostname or "").lower().removeprefix("www.")
         if host and host != own:
             return host
+        if host:
+            return own_site
 
     # Most of the time this is what we get, and it does not mean "typed the address
     # in": a link from an email, a mobile app or an https→http hop sends nothing, and
     # a cross-origin referrer is trimmed to the bare origin by the sending page's
     # policy. The admin page says so next to the table.
     return "direct"
+
+
+def clean_signup_source(value: str | None) -> str | None:
+    """The value if it has the shape of a signup source, else None."""
+    value = (value or "").strip().lower()
+    return value if _SIGNUP_SOURCE_RE.fullmatch(value) else None
+
+
+def signup_source_for(request: Request) -> str | None:
+    """Where someone opening the landing or the registration page came from.
+
+    None while counting is off: nothing is worked out, so nothing can be stored. An
+    explicit ?src= wins, which is how the landing hands its own referrer on to the
+    registration page (its links carry it, no cookie). Otherwise the referrer, with a
+    page of this site kept apart as internal.
+    """
+    if not _enabled:
+        return None
+    return (clean_signup_source(request.query_params.get("src"))
+            or _source_for(request, own_site=SIGNUP_SOURCE_INTERNAL))
 
 
 def record(request: Request, response: Response) -> None:
@@ -643,6 +689,25 @@ async def _top_sources(
     return [{"source": r.source, "views": int(r.views or 0)} for r in rows]
 
 
+# How many signup sources the funnel names before folding the rest into "other".
+SIGNUP_SOURCES_SHOWN = 5
+
+
+def _top_signup_sources(rows) -> list[dict]:
+    """The largest sources by accounts, the rest summed as "other". Accounts with no
+    source (made before it was recorded, by an admin, or while counting was off) are
+    their own "not recorded" line, never part of "other"."""
+    known = [r for r in rows if r.source is not None]
+    out = [{"source": r.source, "count": int(r.n)} for r in known[:SIGNUP_SOURCES_SHOWN]]
+    rest = sum(int(r.n) for r in known[SIGNUP_SOURCES_SHOWN:])
+    if rest:
+        out.append({"source": "other", "count": rest, "muted": True})
+    unknown = sum(int(r.n) for r in rows if r.source is None)
+    if unknown:
+        out.append({"source": "not recorded", "count": unknown, "muted": True})
+    return out
+
+
 async def _funnel(db: AsyncSession, tz: str, lower: datetime, start: date) -> dict:
     """Landing → register page → account created. All three are sums, which is fine:
     these are views and rows, not visitors.
@@ -672,14 +737,20 @@ async def _funnel(db: AsyncSession, tz: str, lower: datetime, start: date) -> di
     first_hour = await db.scalar(text("SELECT MIN(hour) FROM page_view_hourly"))
     clipped = first_hour is not None and first_hour > window_start
     since = first_hour if clipped else window_start
-    signups = await db.scalar(
-        text("SELECT COUNT(*) FROM users WHERE created_at >= :since"),
+    source_rows = (await db.execute(
+        text("""
+            SELECT signup_source AS source, COUNT(*) AS n
+            FROM users WHERE created_at >= :since
+            GROUP BY signup_source ORDER BY n DESC, signup_source
+        """),
         {"since": since},
-    )
+    )).fetchall()
+    signups = sum(int(r.n) for r in source_rows)
     return {
         "landing": by_path.get("/", 0),
         "register": by_path.get("/register", 0),
-        "signups": int(signups or 0),
+        "signups": signups,
+        "signup_sources": _top_signup_sources(source_rows),
         # None unless counting started inside the window, in which case this is the
         # day the sign-up step actually covers.
         "signups_from": since.astimezone(zone).date() if clipped else None,

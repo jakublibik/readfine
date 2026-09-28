@@ -3,11 +3,12 @@ labels / share / readable extraction)."""
 import asyncio
 import json
 import logging
+import math
 import secrets
 from datetime import datetime
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import case, delete as sa_delete, func, null, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,18 +20,23 @@ from app.fetcher.story_params import SUPPRESS_THRESHOLD
 from app.models.article import Article, ArticleAiChat, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
+from app.models.saved_search import SavedSearch
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.schemas.article import ArticleStateUpdate
 from app.services.article import (
-    SCORE_SOURCES, add_article_access_joins, article_access_predicate, count_articles,
-    filter_accessible_article_ids, get_article, list_articles,
+    add_article_access_joins, article_access_predicate, count_articles,
+    filter_accessible_article_ids, get_article, has_articles, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result
 from app.services.relevance_terms_service import show_relevance_intro
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
+from app.services.saved_search_service import get_saved_search
+from app.services.search_params import (
+    list_kwargs, modal_values, normalize_search_params, search_score, search_state,
+)
 from app.services.story_service import (
     DEDUP_COLLAPSE,
     DEDUP_OFF,
@@ -44,6 +50,7 @@ from app.services.story_service import (
     next_shown as next_shown_stories,
     parse_shown as parse_shown_stories,
 )
+from app.services.user import touch_last_active
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html
@@ -141,6 +148,7 @@ async def htmx_set_read_batch(
     # like any other row and do not close the rest of their group; the browser is the
     # only place that knows which those are.
     unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    await touch_last_active(user, db)
     await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
@@ -227,25 +235,6 @@ async def _get_chat_article_ids(user_id: int, article_ids: list[int], db: AsyncS
     return {r[0] for r in rows.all()}
 
 
-def search_score(
-    score_source: str | None, score_op: str | None, score_val: float | None,
-    sort: str | None = None,
-) -> dict:
-    """The search's score knobs, cleaned up, keyed as ``list_articles`` takes them.
-
-    Holds a condition (source, operator, value) when one is set, or only the source
-    when the results are sorted by score without one. Empty means the search does
-    nothing with scores. The source falls back to AI, else basic, the number the
-    list shows.
-    """
-    src = score_source if score_source in SCORE_SOURCES else "relevance"
-    if score_op in ("gte", "lt") and score_val is not None:
-        return {"score_source": src, "score_op": score_op, "score_val": score_val}
-    if sort == "score":
-        return {"score_source": src}
-    return {}
-
-
 def pin_score_source(rows: list, source: str | None) -> None:
     """Make the rows show the scorer the search filtered or sorted by.
 
@@ -254,15 +243,6 @@ def pin_score_source(rows: list, source: str | None) -> None:
     if source in ("ai", "basic"):
         for row in rows:
             row._score_source = source
-
-
-# The search's List filter: one of the reader's own lists, as the sidebar names them.
-SEARCH_STATES = ("starred", "saved", "archived")
-
-
-def search_state(state: str | None) -> str | None:
-    """The List filter, or None for any article."""
-    return state if state in SEARCH_STATES else None
 
 
 def search_filter_count(
@@ -345,16 +325,34 @@ def _build_filter_params(
     return params
 
 
+def _keyed_sort(filter_params: dict) -> bool:
+    """Whether the list leads with a sort key other than the date: the score, or the
+    rank of a text search (see list_articles)."""
+    sort = filter_params.get("sort")
+    return sort == "score" or (bool(filter_params.get("q")) and sort not in ("newest", "oldest"))
+
+
+def _parse_cursor_key(value: str | None) -> float | None:
+    """``cursor_key`` back as a number; empty (a row without a score) or unreadable
+    is None, which list_articles reads as "after the last scored row"."""
+    if not value:
+        return None
+    try:
+        key = float(value)
+    except ValueError:
+        return None
+    return key if math.isfinite(key) else None
+
+
 def _build_more_qs(
-    filter_params: dict, articles, q: str | None, next_offset: int,
-    shown_stories: list[int] | None = None,
+    filter_params: dict, articles, shown_stories: list[int] | None = None,
 ) -> str:
     """Query string for the infinite-scroll "load more" sentinel.
 
-    Search (FTS) keeps offset pagination (ts_rank ordering can't be keyset-paged,
-    and search isn't unread-filtered), and so does the score sort. Everything else uses a keyset cursor on
-    (sort_ts, id) so marking articles read mid-scroll can't shift the window and
-    skip rows — see ix_articles_sort_ts.
+    Every list pages by a keyset cursor on (sort_ts, id), led by the score or the
+    text rank where the list sorts by one (``cursor_key``, empty for a row without a
+    score), so marking articles read mid-scroll can't shift the window and skip rows
+    — see ix_articles_sort_ts and list_articles.
 
     ``articles`` has to be the page as the query returned it, before story collapsing
     drops the folded-away rows. Taking the cursor off the last row still on screen
@@ -368,14 +366,35 @@ def _build_more_qs(
     one scroll through one list, and a reload starts a fresh one.
     """
     params = dict(filter_params)
-    if (q and q.strip()) or params.get("sort") == "score":
-        params["offset"] = next_offset
-    elif articles:
-        params["cursor_ts"] = articles[-1].sort_ts.isoformat()
-        params["cursor_id"] = articles[-1].id
+    if articles:
+        last = articles[-1]
+        params["cursor_ts"] = last.sort_ts.isoformat()
+        params["cursor_id"] = last.id
+        if _keyed_sort(filter_params):
+            params["cursor_key"] = "" if last.sort_key is None else repr(last.sort_key)
     if shown_stories:
         params["shown_stories"] = ",".join(str(i) for i in shown_stories)
     return urlencode(params)
+
+
+async def saved_view_unread_only(
+    user: User, db: AsyncSession, unread_filter: str, *,
+    read_status: str | None, show_read: bool, filters: dict,
+) -> bool:
+    """Whether a saved search opened as a view lists only unread articles.
+
+    One with a status of its own keeps it exactly (that filter does the work, so
+    this is False), as does "Show read too". Without one it reads like a feed and
+    the reader's unread setting applies: adaptive lists the unread ones, or
+    everything when none are left. ``filters`` are the search's own, for that probe.
+    """
+    if read_status or show_read:
+        return False
+    if unread_filter == "unread_only":
+        return True
+    if unread_filter == "show_all":
+        return False
+    return await has_articles(user, db, **filters, search=True, unread_only=True)
 
 
 def _collapses_stories(
@@ -527,10 +546,43 @@ async def htmx_article_list(
     since_days: int | None = Query(None, ge=1, le=3650),
     state: str | None = Query(None),
     offset: int = Query(0, ge=0),
+    saved_search_id: int | None = Query(None),
+    show_read: bool = Query(False),
+    saved_ref: int | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """The article list as a view of its own. Everything below is in render_list."""
+    """The article list as a view of its own. Everything below is in render_list.
+
+    ``saved_search_id`` opens a saved search as a view, with its stored parameters;
+    any others in the request are ignored. ``show_read`` shows it this once without
+    its status (the empty view's "Show read too").
+
+    ``saved_ref`` marks an ordinary search as coming from that saved search (saved
+    from these results, or opened for editing). It changes only the header, which
+    then says whether the search still matches what is stored.
+    """
+    if saved_search_id is not None:
+        saved = await get_saved_search(db, user.id, saved_search_id)
+        if saved is None:
+            raise HTTPException(status_code=404)
+        kw = list_kwargs(saved.params)
+        if show_read:
+            kw["read_status"] = None
+        return await render_list(
+            request, user=user, db=db, **kw, saved_search=saved, show_read=show_read,
+        )
+    search_ref = None
+    if saved_ref is not None:
+        # One that is gone (or not theirs) just leaves an ordinary search.
+        ref = await get_saved_search(db, user.id, saved_ref)
+        if ref is not None:
+            search_ref = {"search": ref, "matches": normalize_search_params({
+                "q": q, "sort": sort, "read_status": read_status,
+                "scope_include": scope_include, "label_filter": label_filter,
+                "score_source": score_source, "score_op": score_op, "score_val": score_val,
+                "since_days": since_days, "state": state,
+            }) == ref.params}
     return await render_list(
         request, user=user, db=db,
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
@@ -539,7 +591,7 @@ async def htmx_article_list(
         q=q, sort=sort, read_status=read_status, label_filter=label_filter,
         score=search_score(score_source, score_op, score_val, sort),
         since_days=since_days, state=state,
-        offset=offset,
+        offset=offset, search_ref=search_ref,
     )
 
 
@@ -565,8 +617,18 @@ async def render_list(
     since_days: int | None = None,
     state: str | None = None,
     offset: int = 0,
+    saved_search: SavedSearch | None = None,
+    show_read: bool = False,
+    search_ref: dict | None = None,
 ) -> HTMLResponse:
     """Render the article list for one set of filters.
+
+    ``saved_search`` is the saved search these filters come from, opened as a view.
+    It filters as a search does, but reads like a feed: rows mark themselves read on
+    scroll, and with no status of its own it follows the reader's unread setting.
+    ``show_read`` drops that setting for this once. ``search_ref`` is the saved
+    search an ordinary search relates to (``{"search", "matches"}``), for the search
+    header.
 
     Kept apart from the route so the other endpoint that answers with a list
     (htmx_save_url, which re-renders Saved after an import) can ask for one without
@@ -608,7 +670,18 @@ async def render_list(
     density = (settings.list_density_mobile if is_mobile else settings.list_density_web) if settings else "comfortable"
 
     # Resolve effective unread filter
-    if is_search or starred_only or archived_only or saved_only:
+    view = saved_search is not None
+    if view:
+        effective_unread_only = await saved_view_unread_only(
+            user, db, settings.unread_filter if settings else "adaptive",
+            read_status=read_status, show_read=show_read,
+            filters=dict(
+                scope_include=scope_include, label_filter=label_filter,
+                starred_only=in_starred, archived_only=in_archived, saved_only=in_saved,
+                q=q or None, **score, since_days=since_days,
+            ),
+        )
+    elif is_search or starred_only or archived_only or saved_only:
         # Search uses its own status selector (read_status below); other
         # state-based views always show everything.
         effective_unread_only = False
@@ -622,14 +695,13 @@ async def render_list(
         elif unread_filter == "show_all":
             effective_unread_only = False
         else:  # adaptive
-            probe = await list_articles(
-                user=user, db=db,
+            effective_unread_only = await has_articles(
+                user, db,
                 feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
                 label_id=label_id,
                 labeled_only=labeled_only,
-                unread_only=True, limit=1,
+                unread_only=True,
             )
-            effective_unread_only = len(probe) > 0
 
     rows = await list_articles(
         user=user,
@@ -679,6 +751,7 @@ async def render_list(
             user, db, collapsing=collapses,
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
             label_id=label_id, label_filter=label_filter, read_status=read_status,
+            unread_only=effective_unread_only,
             starred_only=in_starred, archived_only=in_archived, saved_only=in_saved,
             labeled_only=labeled_only, q=q or None, **score, since_days=since_days,
             search=True,
@@ -725,6 +798,15 @@ async def render_list(
             )
         )).scalar() or 0
         title_bar_count_type = "starred"
+    elif view and (effective_unread_only or read_status == "unread"):
+        # The rows on the list are all unread, so what it counts is.
+        title_bar_count = result_count
+        title_bar_count_type = "unread"
+    elif view:
+        # Over every status: the grey total, which the mobile title bar shows in
+        # place of the saved search's own header.
+        title_bar_count = result_count
+        title_bar_count_type = "total"
 
     filter_params = _build_filter_params(
         feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
@@ -784,12 +866,21 @@ async def render_list(
             label_filter=label_filter, score=score, since_days=since_days, state=state,
         ),
         result_count=result_count,
+        saved_search=saved_search,
+        search_ref=search_ref,
+        # What the client remembers as the last search, so the header's edit
+        # button reopens the modal filled in with this one.
+        saved_search_values=(json.dumps(modal_values(saved_search.params))
+                             if saved_search else None),
+        # The status the view was opened with ("unread" also for the unread
+        # setting), for its header count and its empty state.
+        view_unread=view and (effective_unread_only or read_status == "unread"),
+        view_filtered=view and bool(effective_unread_only or read_status),
         # Search never marks rows read on scroll. Looking something up is not
         # reading it: the reader scans the results for the one they want, and the
-        # rest should keep the state they had. It also sidesteps a pagination bug,
-        # since text search pages by offset (ts_rank can't be keyset-paged) and a
-        # read-status filter shrinking the result set under that offset skips rows.
-        mark_read_on_scroll=mark_read_on_scroll and not is_search,
+        # rest should keep the state they had. A saved search opened from the
+        # sidebar is read, not looked up, and marks them like a feed does.
+        mark_read_on_scroll=mark_read_on_scroll and (not is_search or view),
         density=density,
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
@@ -803,7 +894,7 @@ async def render_list(
         )),
         has_more=has_more,
         # Cursor off the raw page, see _build_more_qs.
-        more_qs=_build_more_qs(filter_params, rows, q, len(rows), shown_stories),
+        more_qs=_build_more_qs(filter_params, rows, shown_stories),
         title_bar_count=title_bar_count,
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
@@ -836,6 +927,9 @@ async def htmx_article_list_more(
     offset: int = Query(0, ge=0),
     cursor_ts: datetime | None = Query(None),
     cursor_id: int | None = Query(None),
+    # The score or text rank of the last row, where the list sorts by one; empty
+    # means that row had no score (see _build_more_qs).
+    cursor_key: str | None = Query(None),
     # Stories the pages above already have a row for, put there by the sentinel this
     # request came from. Kept as a string and parsed in the service: it is a list the
     # client hands back, so its length and contents are checked rather than declared.
@@ -888,6 +982,7 @@ async def htmx_article_list_more(
         offset=offset,
         cursor_ts=cursor_ts,
         cursor_id=cursor_id,
+        cursor_key=_parse_cursor_key(cursor_key),
     )
 
     has_more = len(rows) >= articles_per_page
@@ -936,7 +1031,7 @@ async def htmx_article_list_more(
         "has_more": has_more,
         # Cursor off the raw page, see _build_more_qs.
         "more_qs": _build_more_qs(
-            filter_params, rows, q, offset + len(rows), next_stories
+            filter_params, rows, next_stories
         ),
         **extra_ctx,
     })
@@ -949,6 +1044,7 @@ async def htmx_article_detail(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await touch_last_active(user, db)
     # Auto-trigger readable extraction if feed has it enabled and article wasn't extracted yet
     trigger_row = (await db.execute(
         select(
