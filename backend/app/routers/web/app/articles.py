@@ -30,7 +30,7 @@ from app.services.article import (
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
 from app.services.label_service import list_labels
-from app.services.readable_service import apply_readable_result
+from app.services.readable_service import apply_readable_result, claim_queued_readable
 from app.services.relevance_terms_service import show_relevance_intro
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.saved_search_service import get_saved_search
@@ -89,6 +89,11 @@ async def _extract_readable_bg(
             select(Article).where(Article.id == article_id)
         )).scalar_one_or_none()
         if not article:
+            return
+        if article.readable_status != "pending":
+            # The batch worker got to it first (an opened article can already be in
+            # the batch it is working through). Its result stands and its pipeline
+            # has run; applying ours on top would run the pipeline a second time.
             return
         apply_readable_result(article, content, error, http_status, published_at)
         # Mirror the batch readable path: once readable finishes, complete any
@@ -1081,6 +1086,24 @@ async def htmx_article_detail(
             trigger_row.fetch_auth_user,
             trigger_row.fetch_auth_pass_encrypted,
         ))
+    elif (
+        trigger_row is not None
+        and trigger_row.extract_readable is not None  # the reader subscribes to the feed
+        and trigger_row.readable_status == "pending"
+        and trigger_row.url
+    ):
+        # Still waiting in the batch queue, which works through the whole instance
+        # in id order at 20 a minute; after a large import or a burst of sign-ups
+        # that is hours. The reader who opened it goes first.
+        claimed = await claim_queued_readable(db, article_id)
+        await db.commit()
+        if claimed:
+            asyncio.create_task(_extract_readable_bg(
+                article_id,
+                trigger_row.url,
+                trigger_row.fetch_auth_user,
+                trigger_row.fetch_auth_pass_encrypted,
+            ))
 
     article = await get_article(user, article_id, db)
     if not article:

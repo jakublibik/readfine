@@ -78,3 +78,20 @@ class TestExtractReadableBg:
             await _extract_readable_bg(7, "https://example.com/a", None, None)
 
         pipe.assert_not_awaited()
+
+    async def test_batch_result_stands_when_it_finished_first(self):
+        # The batch can already be working on the article the reader opened.
+        article = SimpleNamespace(id=7, feed_id=5, readable_status="success")
+        db = _db_with_article(article)
+
+        with (
+            patch("app.database.async_session_factory", _session_factory(db)),
+            patch("app.services.readable_service.extract_readable", return_value=("body text", None, 200, None)),
+            patch("app.routers.web.app.articles.apply_readable_result") as apply,
+            patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
+        ):
+            await _extract_readable_bg(7, "https://example.com/a", None, None)
+
+        apply.assert_not_called()
+        pipe.assert_not_awaited()
+        db.commit.assert_not_awaited()

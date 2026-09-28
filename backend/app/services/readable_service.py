@@ -11,7 +11,7 @@ import nh3
 import trafilatura
 from bs4 import BeautifulSoup
 from readability import Document
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
@@ -1297,6 +1297,38 @@ async def store_saved_extraction(
     if result.content or article.readable_status == "failed":
         await finalize_for_all_savers(article, db)
     await db.commit()
+
+
+# How long a queued article a reader opened is left to the extraction the open
+# started, before the batch worker takes it back.
+_OPEN_CLAIM_MINUTES = 5
+
+
+async def claim_queued_readable(db: AsyncSession, article_id: int) -> bool:
+    """Take a feed article still waiting for its first extraction out of the queue.
+
+    For a reader who opened it: the batch below works through the whole instance in
+    id order, so after a large import the article could wait hours. The claim pushes
+    readable_next_retry_at out, which the batch query passes by, and brings it back
+    to the batch if the caller's attempt never reports (a restart mid-extraction).
+    Only a first attempt is claimed: one in backoff keeps its schedule. A single
+    conditional UPDATE, so of two tabs opening the article at once only one wins.
+    The caller commits.
+    """
+    result = await db.execute(
+        update(Article).where(
+            Article.id == article_id,
+            Article.readable_status == "pending",
+            func.coalesce(Article.readable_retries, 0) == 0,
+            Article.readable_next_retry_at.is_(None),
+            Article.feed_id.isnot(None),
+            Article.trimmed_at.is_(None),
+        ).values(
+            readable_next_retry_at=datetime.now(timezone.utc)
+            + timedelta(minutes=_OPEN_CLAIM_MINUTES),
+        )
+    )
+    return bool(result.rowcount)
 
 
 async def process_pending_readable(db: AsyncSession) -> int:
