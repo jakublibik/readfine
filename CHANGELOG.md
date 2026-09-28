@@ -30,6 +30,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- Article titles from some feeds, The Verge and other WordPress sites among them, showed HTML codes instead of characters, for example `Can an &#8216;eSUV&#8217; e-bike`. Such titles are now stored as plain text, and titles already stored are fixed when you upgrade.
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
 - In Saved, an article scrolled up under the header at the top of the list is marked read as it goes out of sight. It used to count as read only once it had passed the header too, so one left under it stayed unread.
 - When you subscribe to a feed someone else on the instance already reads, its unread articles from the last week now get a relevance score right away. They used to stay unscored until the next night.

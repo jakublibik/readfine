@@ -29,6 +29,7 @@ from app.utils.parsing import (
     rewrite_relative_urls,
     soften_nbsp_runs,
 )
+from app.utils.text import feed_title_text
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_conditional,
@@ -391,7 +392,7 @@ async def _save_articles(
             guid_hash=guid_hash,
             url=article_url,
             url_normalized=normalize_url(article_url),
-            title=(entry.get("title") or "Untitled")[:1000],
+            title=(feed_title_text(entry.get("title"), entry.get("title_detail")) or "Untitled")[:1000],
             author=_extract_author(entry),
             content=content,
             content_source=content_source,

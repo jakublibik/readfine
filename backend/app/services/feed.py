@@ -22,6 +22,7 @@ from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_claus
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import auth_pair, encrypt, feed_auth
+from app.utils.text import feed_title_text
 from app.utils.url_validator import (
     async_validate_feed_url,
     redact_url,
@@ -497,7 +498,7 @@ async def subscribe(
     if feed is None:
         title = (
             custom_title
-            or parsed.feed.get("title")
+            or feed_title_text(parsed.feed.get("title"), parsed.feed.get("title_detail"))
             or url
         )
         site_url = parsed.feed.get("link")
