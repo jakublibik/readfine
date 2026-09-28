@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update the Readfine STAGING instance: pull a branch, rebuild, run migrations,
-# and tail the app log so you can confirm the update applied cleanly before
+# and follow the app log so you can confirm the update applied cleanly before
 # promoting the same commit to production.
 #
 # Run from a dedicated staging clone (e.g. ~/readfine-staging) — NOT the
@@ -23,7 +23,7 @@ git pull --ff-only origin "$BRANCH"
 echo "==> Building + starting staging (migrations run on startup)"
 "${COMPOSE[@]}" up -d --build
 
-echo "==> Recent app logs:"
-"${COMPOSE[@]}" logs --tail=40 app
-echo
 echo "Done. Verify your staging URL, then deploy the same commit to production."
+echo
+echo "==> Following the app log (Ctrl+C to stop; staging keeps running):"
+"${COMPOSE[@]}" logs -f -t --tail=40 app

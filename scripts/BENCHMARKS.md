@@ -25,8 +25,65 @@ and flags shapes that look wrong, which is how an unknown failure gets noticed.
 The corpus is news and blogs only. It answers "would this change hurt ordinary
 articles" and says nothing about documentation, wikis or forums.
 
-Last recorded finding: the heading-repair work (see the `0.9.x` entry in `CHANGELOG.md`)
+The app reads its settings from `backend/.env`, so without those variables in the
+environment the command above stops on missing settings. Running it from `backend/`
+works: `uv run python ../scripts/benchmark_extraction.py`.
+
+Earlier finding: the heading-repair work (see the `0.9.x` entry in `CHANGELOG.md`)
 changed the stored text of 1 page out of 181, and that one came out better.
+
+### Text divs next to a paragraph, 2026-09-28
+
+Trafilatura drops the text of a `<div>` that holds only text, which lost every
+ingredient on Bon Appétit (`<p>3</p><div>large bunches kale</div>`).
+`readable_service._paragraph_text_divs` now turns such a div into a `<p>` when it sits
+next to a `<p>`. Measured on trafilatura alone, the column the pipeline follows here:
+
+| | F1 | pages changed |
+|---|---|---|
+| before | 0.9590 | |
+| a text div next to a `<p>` (shipped) | 0.9584 | 9: 4 better, 5 worse |
+| every text div | lower | 50, most slightly worse |
+
+The corpus has no recipes, so it can only show the cost: the one real loss is CNN
+(0.967 to 0.828), whose paragraphs are divs and lose their ticker links as `<p>`.
+Converting every text div let page furniture into the body, which is why it was not
+taken.
+
+A `<p>` holding only an amount (digits and fractions, or nothing) is then merged into
+the converted div after it, so an ingredient reads `3 large bunches kale` on one line
+as the site shows it, not the number on a line of its own. It changes none of the
+181 pages.
+
+A first measurement credited this change with 0.9644. That run had passed each page
+through BeautifulSoup (`str(BeautifulSoup(html, "lxml"))`) before converting, and the
+round trip on its own scores 0.9650, lifting Barron's from 0.000 to 0.989 and RT from
+0.804 to 0.900. Keep the two apart when measuring anything that rewrites the page.
+
+### Layout whitespace and class names, 2026-09-28
+
+The round trip above changes three things: whitespace-only text becomes a single
+newline, class lists lose their padding, and a few attribute values are normalized
+(`defer="defer"` to `""`, `UTF-8` to `utf-8`). Taken one at a time on the parsed tree:
+
+| | F1 | pages changed |
+|---|---|---|
+| before | 0.9590 | |
+| whitespace-only text and tails to `\n` | 0.9645 | 6 |
+| class lists trimmed | 0.9596 | 1 |
+| both (shipped as `_normalize_markup_whitespace`) | 0.9650 | 7 |
+| the full BeautifulSoup round trip | 0.9650 | 2 |
+
+Both together reproduce the round trip, without parsing the page twice (7 ms on a
+1.3 MB page). Barron's needs the whitespace: no single run of blank lines matters, it
+is their sum across the article body, which trafilatura counts, until the print
+disclaimer outscores the article. RT needs the classes: `"nav__item  "` slips past
+trafilatura's boilerplate rules, and trimmed it does not. The other five changed pages
+differ in whitespace only. `<pre>`, `<code>` and `<textarea>` are left alone, and so is
+`&nbsp;`.
+
+With both changes in, `benchmark_extraction.py` reads 0.964 for the pipeline as
+shipped, from 0.958.
 
 ## Story matching
 

@@ -36,8 +36,19 @@
     relevance: 'Neither scorer is on, so this condition never matches.',
   };
 
+  // A score reads like the search: "at least 60" takes in everything the list shows
+  // as 60 and up (filter_service._score_matches). gt and equals are only ever shown
+  // for a condition saved with them.
+  var SCORE_OP_LABELS = { gte: 'at least', lt: 'below', gt: 'more than', equals: 'equals' };
+  var SCORE_EQUALS_HINT = 'A score is never exactly a whole number, so equals never ' +
+    'matches. Use at least or below.';
+
   function getOperatorsForField(field) {
     return FIELD_OPERATORS[field] || OPERATORS;
+  }
+
+  function opLabel(field, op) {
+    return field === 'score' ? (SCORE_OP_LABELS[op] || op) : op;
   }
 
   function getPlaceholderForField(field) {
@@ -54,8 +65,13 @@
     var field = fieldSel.value;
     var ops = getOperatorsForField(field);
     var currentOp = opSel.value;
+    // A score condition saved with an operator the editor no longer offers keeps it,
+    // so opening and saving the filter does not change what it does.
+    var savedOp = opSel.getAttribute('data-saved') || '';
+    if (field === 'score' && savedOp && ops.indexOf(savedOp) === -1) ops = ops.concat(savedOp);
     opSel.innerHTML = ops.map(function (o) {
-      return '<option value="' + o + '"' + (o === currentOp ? ' selected' : '') + '>' + o + '</option>';
+      return '<option value="' + o + '"' + (o === currentOp ? ' selected' : '') + '>' +
+        opLabel(field, o) + '</option>';
     }).join('');
     // If current operator not in allowed list, reset to first
     if (ops.indexOf(currentOp) === -1) opSel.value = ops[0];
@@ -94,7 +110,11 @@
     srcSel.classList.toggle('hidden', !isScore);
     hidden.value = isScore ? srcSel.value : '';
     if (!hint) return;
-    if (isScore && srcSel.value) {
+    var opSel = row.querySelector('[name="cond_operator"]');
+    if (isScore && opSel && opSel.value === 'equals') {
+      hint.textContent = SCORE_EQUALS_HINT;
+      hint.className = 'cond-hint basis-full text-xs text-amber-700';
+    } else if (isScore && srcSel.value) {
       var off = SCORE_SOURCES.indexOf(srcSel.value) === -1;
       hint.textContent = off ? SOURCE_OFF_HINTS[srcSel.value] : SOURCE_HINTS[srcSel.value];
       hint.className = 'cond-hint basis-full text-xs ' + (off ? 'text-amber-700' : 'text-gray-500');
@@ -152,7 +172,7 @@
 
   function wireOperatorHint(row) {
     var op = row.querySelector('[name="cond_operator"]');
-    if (op) op.addEventListener('change', updateRegexHintUI);
+    if (op) op.addEventListener('change', function () { updateRegexHintUI(); updateSourceUI(row); });
   }
 
   document.getElementById('add-condition').addEventListener('click', function () {

@@ -1003,3 +1003,38 @@ class TestScopeWithoutAFeed:
 
         assert changed is True
         assert state.is_starred is True
+
+
+class TestScoreComparison:
+    """A score condition compares like the search: on the whole number the list shows."""
+
+    @staticmethod
+    def _match(op, value, score, field="relevance_score"):
+        state = make_state(lexical_score=score)
+        return _matches_condition(make_condition(field, op, value), make_article(), None, state)
+
+    def test_at_least_takes_in_what_the_list_shows_as_that_number(self):
+        assert self._match("gte", "60", 0.595) is True   # shown as 60
+        assert self._match("gte", "60", 0.594) is False  # shown as 59
+
+    def test_below_is_the_rest(self):
+        assert self._match("lt", "60", 0.594) is True
+        assert self._match("lt", "60", 0.595) is False
+
+    def test_gt_is_at_least_the_next_whole_number(self):
+        assert self._match("gt", "74", 0.745) is True    # shown as 75
+        assert self._match("gt", "74", 0.743) is False   # shown as 74, used to match
+        assert self._match("gt", "74.5", 0.745) is True  # same as gt 74
+
+    def test_no_score_never_matches(self):
+        assert self._match("gte", "0", None) is False
+        assert self._match("lt", "100", None) is False
+
+    def test_equals_still_never_matches(self):
+        # Kept as it was: making it match now would start a filter that did nothing.
+        assert self._match("equals", "60", 0.6) is False
+
+    def test_validation_takes_gte_for_a_score_only(self):
+        _validate_score_conditions([make_condition("basic_score", "gte", "60")])
+        with pytest.raises(ValueError, match="only for a score"):
+            _validate_score_conditions([make_condition("title", "gte", "60")])

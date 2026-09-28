@@ -5,7 +5,8 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import feedparser
-from sqlalchemy import delete, exists, func, select, update
+from sqlalchemy import delete, exists, func, literal, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.redirects import url_conflict
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BACKLOG, Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
@@ -22,6 +23,7 @@ from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_claus
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 from app.utils.crypto import auth_pair, encrypt, feed_auth
+from app.utils.text import feed_title_text
 from app.utils.url_validator import (
     async_validate_feed_url,
     redact_url,
@@ -390,6 +392,55 @@ async def _score_existing_articles(db: AsyncSession, user: User, feed: Feed) -> 
         await db.refresh(feed)
 
 
+# A feed already on the instance comes with everything it has stored, up to the
+# retention horizon: about 900 articles for The Verge at 60 days, where the same
+# feed added fresh brings the 15 in its RSS. What the new subscriber gets unread is
+# the last week, the window the relevance backfill and Top picks look at, and at
+# least the newest few, so a slow blog still shows its last posts, as it would fresh.
+_BACKLOG_UNREAD_DAYS = 7
+_BACKLOG_UNREAD_MIN = 10
+
+
+async def _mark_backlog_read(db: AsyncSession, user: User, feed: Feed) -> None:
+    """Mark a shared feed's older articles read for a reader who just subscribed.
+
+    Stamped suppressed_by='backlog', so they count as no one's reading and stay
+    in Show read and search. A reader coming back to a feed keeps the state rows
+    they already have (the ones unsubscribe left: starred, archived, saved). The
+    subscription is committed by now and must not depend on this.
+    """
+    user_id, feed_id = user.id, feed.id
+    now = datetime.now(timezone.utc)
+    when = func.coalesce(Article.published_at, Article.fetched_at)
+    live = (Article.feed_id == feed_id, Article.trimmed_at.is_(None))
+    newest = (select(Article.id).where(*live)
+              .order_by(when.desc(), Article.id.desc()).limit(_BACKLOG_UNREAD_MIN))
+    backlog = select(
+        literal(user_id), Article.id, literal(True), literal(False), literal(False),
+        literal(now), literal(now), literal(SUPPRESSED_BY_BACKLOG),
+    ).where(
+        *live,
+        when < now - timedelta(days=_BACKLOG_UNREAD_DAYS),
+        Article.id.not_in(newest),
+    )
+    try:
+        await db.execute(
+            pg_insert(UserArticleState).from_select(
+                ["user_id", "article_id", "is_read", "is_starred", "is_archived",
+                 "read_at", "suppressed_at", "suppressed_by"],
+                backlog,
+            ).on_conflict_do_nothing(index_elements=["user_id", "article_id"])
+        )
+        await db.commit()
+    except Exception:
+        logger.warning("Marking the backlog of feed %s read for user %s failed",
+                       feed_id, user_id, exc_info=True)
+        await db.rollback()
+        # As in _score_existing_articles: the caller reads both on.
+        await db.refresh(user)
+        await db.refresh(feed)
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -497,7 +548,7 @@ async def subscribe(
     if feed is None:
         title = (
             custom_title
-            or parsed.feed.get("title")
+            or feed_title_text(parsed.feed.get("title"), parsed.feed.get("title_detail"))
             or url
         )
         site_url = parsed.feed.get("link")
@@ -545,6 +596,7 @@ async def subscribe(
         await db.rollback()
         raise AlreadySubscribed()
     if not is_new_feed:
+        await _mark_backlog_read(db, user, feed)
         await _score_existing_articles(db, user, feed)
     await db.refresh(user_feed)
     user_feed.feed = feed
@@ -722,6 +774,7 @@ async def subscribe_scrape(
         await db.rollback()
         raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     if not is_new_feed:
+        await _mark_backlog_read(db, user, feed)
         await _score_existing_articles(db, user, feed)
     await db.refresh(user_feed)
 

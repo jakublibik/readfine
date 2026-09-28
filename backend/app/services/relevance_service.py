@@ -495,6 +495,19 @@ def score_from(source: str | None, ai_score: float | None,
     return effective_score(ai_score, lexical_score)
 
 
+def score_cut(value: float) -> float:
+    """Where "at least `value`" starts, on the 0–100 scale a reader types.
+
+    A list shows a score rounded to a whole number, so "at least 60" has to take
+    in everything shown as 60, a stored 59.5 included, or a row showing 60 would be
+    missing from its own results. "Below 60" is the rest. A fractional value
+    counts as the next whole number, which is the first one a list can show above it.
+    Shared by the search and the filters, so the same number means the same thing
+    in both.
+    """
+    return math.ceil(value) - 0.5
+
+
 def effective_score_sql(state):
     """`effective_score` as a SQL expression over a UserArticleState (or alias).
 

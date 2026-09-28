@@ -1,6 +1,5 @@
 """Article service: listing, detail, state toggles, unread count management."""
 import logging
-import math
 import re
 from datetime import date, datetime, timedelta, timezone
 
@@ -13,7 +12,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
-from app.services.relevance_service import effective_score_sql
+from app.services.relevance_service import effective_score_sql, score_cut
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
 from app.utils.text import strip_html
@@ -452,7 +451,7 @@ async def list_articles(
     # (144 ms against 4 ms on production data).
     score = score_expr(score_source)
     if score_op in ("gte", "lt") and score_val is not None:
-        cut = (math.ceil(score_val) - 0.5) / 100
+        cut = score_cut(score_val) / 100
         stmt = stmt.where(
             UserArticleState.user_id == user.id,
             score >= cut if score_op == "gte" else score < cut,
