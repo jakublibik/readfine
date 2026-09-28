@@ -13,7 +13,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.article import Article, ArticleAiJob, UserArticleState
+from app.models.article import (
+    SUPPRESSED_BY_FILTER, Article, ArticleAiJob, UserArticleState,
+)
 from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
@@ -33,11 +35,6 @@ SCORE_FIELD_NAMES = {
     "relevance_score": "Relevance score",
 }
 _SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
-
-# The value ``suppressed_by`` carries when a filter's mark-read action wrote the read.
-# Named because two places have to agree on it exactly: the action below writes it and
-# the backlog stats count it to say how much reading the filters took off the pile.
-SUPPRESSED_BY_FILTER = "filter"
 
 # Canonical filter ordering. Every place that lists or executes filters must use
 # this same ordering, so the settings list shows filters in the exact order they

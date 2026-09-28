@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BULK, Article, UserArticleState
 from app.models.feed import Folder, UserFeed
 from app.models.label import Label
 from app.models.saved_search import SavedSearch
@@ -305,11 +305,11 @@ async def mark_saved_search_read(
          "suppressed_at", "suppressed_by"],
         select(
             literal(user.id), ids.c.id, literal(True), literal(False), literal(False),
-            literal(now), literal(now), literal("bulk"),
+            literal(now), literal(now), literal(SUPPRESSED_BY_BULK),
         ),
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
-        set_={"is_read": True, "read_at": now, "suppressed_at": now, "suppressed_by": "bulk"},
+        set_={"is_read": True, "read_at": now, "suppressed_at": now, "suppressed_by": SUPPRESSED_BY_BULK},
         where=(UserArticleState.__table__.c.is_read == False),  # noqa: E712
     )
     await db.execute(stmt)

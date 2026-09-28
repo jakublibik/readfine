@@ -27,7 +27,7 @@ from app.fetcher.stories import (
     assign_stories_global,
     reads_as_follow_up,
 )
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_STORY, Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User, UserSettings
 from app.schemas.article import ArticleStateUpdate
@@ -41,7 +41,6 @@ from app.services.story_service import (
     DEDUP_COLLAPSE,
     DEDUP_OFF,
     DEDUP_SUPPRESS,
-    SUPPRESSED_BY_STORY,
     count_suppressed,
     list_suppressed,
 )

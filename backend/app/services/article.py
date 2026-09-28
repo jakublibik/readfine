@@ -8,7 +8,7 @@ from sqlalchemy import Text, and_, cast, func, literal, literal_column, null, or
 from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BULK, Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
@@ -782,7 +782,7 @@ async def mark_scope_read(
                 UserArticleState.article_id.in_(scope_articles),
                 UserArticleState.is_read == False,
             )
-            .values(is_read=True, read_at=now, suppressed_at=now, suppressed_by="bulk")
+            .values(is_read=True, read_at=now, suppressed_at=now, suppressed_by=SUPPRESSED_BY_BULK)
         )
         await db.commit()
         return
@@ -819,7 +819,7 @@ async def mark_scope_read(
     insert_select = scoped_select(
         literal(user.id), Article.id,
         literal(True), literal(False), literal(False), literal(now),
-        literal(now), literal("bulk"),
+        literal(now), literal(SUPPRESSED_BY_BULK),
     )
     stmt = pg_insert(UserArticleState).from_select(
         ["user_id", "article_id", "is_read", "is_starred", "is_archived", "read_at",
@@ -828,7 +828,7 @@ async def mark_scope_read(
     ).on_conflict_do_update(
         index_elements=["user_id", "article_id"],
         set_={"is_read": True, "read_at": now,
-              "suppressed_at": now, "suppressed_by": "bulk"},
+              "suppressed_at": now, "suppressed_by": SUPPRESSED_BY_BULK},
         where=(UserArticleState.__table__.c.is_read == False),
     )
     await db.execute(stmt)

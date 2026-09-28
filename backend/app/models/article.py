@@ -77,6 +77,24 @@ class Article(Base):
         return self.readable_status == "pending" and not self.readable_retries
 
 
+# The values UserArticleState.suppressed_by takes, one per writer. Named in one place
+# because writers and readers have to agree on them exactly (story_service's reopen may
+# undo only its own reads, the settings counter shows only the similar ones, the backlog
+# stats count filter and url), and a new writer belongs here too.
+SUPPRESSED_BY_URL = "url"          # fetcher.rss: the same link in two feeds
+SUPPRESSED_BY_FILTER = "filter"    # filter_service: a mark_read action
+SUPPRESSED_BY_STORY = "story"      # story_service: the reader finished the story
+SUPPRESSED_BY_BULK = "bulk"        # mark everything in a view (or saved search) read
+SUPPRESSED_BY_SIMILAR = "similar"  # fetcher.stories: repeats a story already read
+
+# The read_at values that are the reader's own doing, for counting active days: an
+# unmarked read, or a mark-all-read they chose to make. It lists what counts rather
+# than what does not, so a new automatic writer above stays out until someone decides
+# otherwise. 'story' is left out because the day already carries the article whose
+# reading finished the story.
+USER_READ_SUPPRESSED_BY = (None, SUPPRESSED_BY_BULK)
+
+
 class UserArticleState(Base):
     __tablename__ = "user_article_states"
 
@@ -88,13 +106,10 @@ class UserArticleState(Base):
     # off is_read, and without this marker an automatic read would count as having seen
     # it and cascade into suppressing coverage nobody ever laid eyes on.
     suppressed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Which machine wrote it: 'url' (same link in two feeds), 'filter' (a mark_read
-    # action), 'story' (the reader finished the story this belongs to), 'bulk' (mark
-    # everything in a view read, which says they will not read these rather than that
-    # they have), 'similar' (it repeats a story they had already read). Only the last
-    # one is the opt-in suppression, and the settings counter has to show that one
-    # alone, or the number the reader watches the threshold by counts four other
-    # things as well.
+    # Which machine wrote it, one of the SUPPRESSED_BY_* values above. 'bulk' says the
+    # reader will not read these rather than that they have. Only 'similar' is the
+    # opt-in suppression, and the settings counter has to show that one alone, or the
+    # number the reader watches the threshold by counts four other things as well.
     suppressed_by: Mapped[str | None] = mapped_column(String(12))
     # When the suppression rule took this article out of the reader's unread list. The
     # two columns above are the live decision and every human read clears them, which

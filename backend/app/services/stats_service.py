@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
-from app.services.filter_service import SUPPRESSED_BY_FILTER
+from app.models.article import SUPPRESSED_BY_FILTER, SUPPRESSED_BY_URL
 # The same number everywhere it is asked: half a minute in front of an article is what
 # counts as having read it. It decides something in story_service (it clears the
 # machine's suppressed_at), which is why that is where it lives.
@@ -250,12 +250,6 @@ async def get_feed_stats(user_id: int, db: AsyncSession, days: int = 30) -> list
 # the 25s too, and a band whose edge meant something else would be read wrong.
 SCORE_BANDS = ((75, None), (50, 74), (26, 49), (None, 25))
 
-# The value the cross-feed URL dedup stamps (fetcher.rss._dedup_state). Named here
-# rather than imported because importing the fetcher into the stats service to read one
-# string is not worth the dependency; ``SUPPRESSED_BY_FILTER`` comes from the service
-# that writes it, which is next door.
-_SUPPRESSED_BY_URL = "url"
-
 # How an article that arrived in the window ended up, in the order the block lists
 # them. The three machine reads never reached the reader at all; what is left either
 # sat under another article's row or was a row itself.
@@ -381,7 +375,7 @@ async def get_intake_stats(
         """),
         {
             "uid": user_id, "cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS,
-            "by_filter": SUPPRESSED_BY_FILTER, "by_url": _SUPPRESSED_BY_URL,
+            "by_filter": SUPPRESSED_BY_FILTER, "by_url": SUPPRESSED_BY_URL,
         },
     )).one()
 

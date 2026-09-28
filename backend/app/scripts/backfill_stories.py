@@ -41,6 +41,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
+from app.models.article import SUPPRESSED_BY_SIMILAR, SUPPRESSED_BY_STORY
 from app.fetcher.story_params import (
     COLLAPSE_THRESHOLD,
     MAX_GROUP_SIZE,
@@ -308,8 +309,8 @@ async def _reset(conn) -> int:
     result = await conn.execute(text("""
         UPDATE user_article_states
         SET is_read = false, read_at = NULL, suppressed_at = NULL, suppressed_by = NULL
-        WHERE suppressed_by IN ('story', 'similar')
-    """))
+        WHERE suppressed_by IN (:story, :similar)
+    """), {"story": SUPPRESSED_BY_STORY, "similar": SUPPRESSED_BY_SIMILAR})
     return result.rowcount or 0
 
 
