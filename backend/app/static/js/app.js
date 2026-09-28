@@ -965,6 +965,13 @@ document.body.addEventListener('htmx:responseError', function (e) {
   d._rfHandled = true;
   if (!restoring) showToast('That saved search no longer exists.', 'warning');
   _restoredNavGet = null;
+  _openAllArticles();
+});
+
+// Open All articles in place of a view that is gone. Not by clicking its nav item:
+// that request inherits the sidebar's hx-sync="this:abort" and is dropped while a
+// sidebar refresh is in flight, which is just when a view has gone away.
+function _openAllArticles() {
   _activeNavGet = '/htmx/articles';
   try {
     localStorage.removeItem('lastNavItem');
@@ -973,9 +980,10 @@ document.body.addEventListener('htmx:responseError', function (e) {
   var titleText = document.getElementById('mobile-title-text');
   if (titleText) titleText.textContent = 'All articles';
   _syncMobileQuicklink();
+  _highlightNav(_activeNavGet);
   htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
   htmx.trigger(document.body, 'sidebarRefresh');
-});
+}
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _autoLoadArticleList);
 } else {
@@ -1849,6 +1857,9 @@ function _headerSaveForm(show) {
   var form = header && header.querySelector('[data-save-search-form]');
   if (!form) return;
   form.classList.toggle('hidden', !show);
+  // The form has its own Save; the link that opened it would be a second one.
+  var area = header.querySelector('[data-save-search-area]');
+  if (area) area.classList.toggle('hidden', show);
   var err = document.getElementById('header-save-error');
   if (err) err.textContent = '';
   if (show) document.getElementById('header-save-name').focus();
@@ -1873,8 +1884,8 @@ function updateSearchFromHeader(id) {
     { error_target: 'header-save-error' }, 'header');
 }
 
-function deleteSavedSearch(id, name) {
-  if (!confirm('Delete the saved search “' + name + '”?')) return;
+// The button asks twice itself (swap-confirm), like the other deletes.
+function deleteSavedSearch(id) {
   htmx.ajax('POST', '/htmx/saved-searches/' + encodeURIComponent(id) + '/delete', { swap: 'none' });
 }
 
@@ -1917,11 +1928,8 @@ document.body.addEventListener('savedSearchDeleted', function (e) {
   window._activeSavedSearchId = null;
   var header = document.querySelector('[data-search-header]');
   if (header && header.dataset.savedSearchId) {
-    // Viewing the deleted search, which was the active sidebar item: go to All
-    // articles, through its own nav item so the sidebar highlights it.
-    var all = document.querySelector('#sidebar-full .nav-item[hx-get="/htmx/articles"]');
-    if (all) all.click();
-    else htmx.ajax('GET', '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+    // Viewing the deleted search, which was the active sidebar item.
+    _openAllArticles();
   } else if (header) {
     // Results of a search related to it: the same results, now unsaved.
     _runLastSearch();
@@ -2208,7 +2216,7 @@ document.addEventListener('click', function (e) {
   if (action === 'close-save-search-inline') { _headerSaveForm(false); return; }
   if (action === 'save-search-inline') { saveSearchFromHeader(); return; }
   if (action === 'update-search-inline') { updateSearchFromHeader(el.dataset.savedId); return; }
-  if (action === 'delete-saved-search') { deleteSavedSearch(el.dataset.savedId, el.dataset.savedName); return; }
+  if (action === 'delete-saved-search') { deleteSavedSearch(el.dataset.savedId); return; }
   if (action === 'select-all') { el.select(); return; }
   if (action === 'refresh-articles') {
     // Clearing search returns to the active nav category (where you were before

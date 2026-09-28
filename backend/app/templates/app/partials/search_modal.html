@@ -151,10 +151,9 @@
        reopening the modal from the results comes back here to keep them after all. -->
   <div class="flex flex-wrap items-center justify-end gap-2">
     <button type="button" data-action="delete-saved-search" data-saved-id="{{ saved_search.id }}"
-            data-saved-name="{{ saved_search.name }}"
-            class="mr-auto px-0 py-2 text-sm text-red-600 hover:text-red-700 bg-transparent border-0 cursor-pointer">
-      Delete
-    </button>
+            data-confirm-text="Confirm delete"
+            data-confirm-class="mr-auto px-0 py-2 text-sm font-medium text-red-700 hover:text-red-800 bg-transparent border-0 cursor-pointer"
+            class="swap-confirm mr-auto px-0 py-2 text-sm text-red-600 hover:text-red-700 bg-transparent border-0 cursor-pointer">Delete</button>
     <button type="button" data-action="submit-search" class="{{ secondary_cls }}">Search</button>
     <button type="button" data-action="save-search-new"
             class="px-4 py-2 text-sm text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-300 rounded bg-transparent cursor-pointer">
