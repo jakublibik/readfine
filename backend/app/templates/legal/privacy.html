@@ -64,7 +64,7 @@
           </tr>
           <tr>
             <td class="px-3 py-2 whitespace-nowrap">Where you came from when you signed up</td>
-            <td class="px-3 py-2">Seeing which links bring new accounts; the referring site's domain only</td>
+            <td class="px-3 py-2">Seeing which links bring new accounts; only the referring site's domain or the campaign tag in the link</td>
             <td class="px-3 py-2 whitespace-nowrap">Art. 6(1)(f) GDPR</td>
           </tr>
           {% endif %}
@@ -81,8 +81,11 @@
       using a key that is thrown away and regenerated every day. No record of an
       individual visit is written down: the database holds nothing but counts per hour
       and per day. The one exception is when you create an account: it keeps the
-      domain of the site that linked you here (or a note that nothing did), never the
-      full address. Pages you see while signed in are not counted at all.
+      domain of the site that linked you here or the campaign tag in that link, never
+      the full address. Without either, it only notes that you came from another
+      page of this site or with no referrer, and an account made from an invitation
+      keeps just that it was one. Pages you see while signed in are not counted at
+      all.
     </p>
     {% else %}
     <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
