@@ -124,5 +124,5 @@
   </tbody>
 </table>
 {% if request.headers.get('hx-request') %}
-<span id="users-count" hx-swap-oob="true" class="text-sm font-normal text-gray-400">({{ (users | length)|num }})</span>
+{% with oob = true %}{% include "admin/partials/users_count.html" %}{% endwith %}
 {% endif %}

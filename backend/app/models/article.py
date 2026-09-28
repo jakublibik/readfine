@@ -87,11 +87,11 @@ SUPPRESSED_BY_STORY = "story"      # story_service: the reader finished the stor
 SUPPRESSED_BY_BULK = "bulk"        # mark everything in a view (or saved search) read
 SUPPRESSED_BY_SIMILAR = "similar"  # fetcher.stories: repeats a story already read
 
-# The read_at values that are the reader's own doing, for counting active days: an
-# unmarked read, or a mark-all-read they chose to make. It lists what counts rather
-# than what does not, so a new automatic writer above stays out until someone decides
-# otherwise. 'story' is left out because the day already carries the article whose
-# reading finished the story.
+# The suppressed_by values that make a read the reader's own doing, for counting active
+# readers (admin_service.count_active_readers): an unmarked read, or a mark-all-read
+# they chose to make. It lists what counts rather than what does not, so a new
+# automatic writer above stays out until someone decides otherwise. 'story' is left
+# out because the day already carries the article whose reading finished the story.
 USER_READ_SUPPRESSED_BY = (None, SUPPRESSED_BY_BULK)
 
 

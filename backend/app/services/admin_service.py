@@ -2,11 +2,12 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, func, literal, select
+from sqlalchemy import case, delete, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.article import (
+    USER_READ_SUPPRESSED_BY,
     AiUsageLog,
     Article,
     ArticleAiChat,
@@ -576,13 +577,44 @@ async def list_feed_fetch_errors(
     return rows
 
 
+# The windows the dashboard counts active readers over, in days.
+ACTIVE_READER_WINDOWS = (7, 30)
+
+
+async def count_active_readers(db: AsyncSession, now: datetime) -> dict[int, int]:
+    """Distinct users who read something themselves in each window, by window length.
+
+    Reading, not logging in: a reader app is in use when articles get read. A read
+    counts when it was the reader's own (USER_READ_SUPPRESSED_BY), so a filter that
+    marks things read or the dedup, which run in the fetcher with nobody there, do not
+    make an account look active every day. No dwell threshold, unlike Read 7d in the
+    user table: someone who skims titles and scrolls on is using the app.
+
+    Bounded by retention: the state row goes with its article, which the default 60
+    days keeps well past the longest window.
+    """
+    allowed = [v for v in USER_READ_SUPPRESSED_BY if v is not None]
+    own_read = or_(
+        UserArticleState.suppressed_by.is_(None),
+        UserArticleState.suppressed_by.in_(allowed),
+    )
+    longest = max(ACTIVE_READER_WINDOWS)
+    row = (await db.execute(
+        select(*(
+            func.count(UserArticleState.user_id.distinct()).filter(
+                UserArticleState.read_at >= now - timedelta(days=d)
+            )
+            for d in ACTIVE_READER_WINDOWS
+        ))
+        .where(UserArticleState.read_at >= now - timedelta(days=longest), own_read)
+    )).one()
+    return {d: n or 0 for d, n in zip(ACTIVE_READER_WINDOWS, row)}
+
+
 async def get_dashboard_stats(db: AsyncSession) -> dict:
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=30)
     user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
-    active_user_count = (await db.execute(
-        select(func.count(User.id)).where(User.is_active == True)
-    )).scalar() or 0
     feed_count = (await db.execute(select(func.count(Feed.id)))).scalar() or 0
     article_count = (await db.execute(select(func.count(Article.id)))).scalar() or 0
     error_feed_count = (await db.execute(
@@ -646,7 +678,7 @@ async def get_dashboard_stats(db: AsyncSession) -> dict:
     redirect_conflicts_list = await list_redirect_conflicts(db)
     return {
         "user_count": user_count,
-        "active_user_count": active_user_count,
+        "active_readers": await count_active_readers(db, now),
         "feed_count": feed_count,
         "article_count": article_count,
         "error_feed_count": error_feed_count,
