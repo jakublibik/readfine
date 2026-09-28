@@ -30,10 +30,12 @@
           </label>
           {% endfor %}
         </div>
+        {# The indicator is only transparent while idle, so it keeps its width; on a
+           narrow screen it squeezed the button into two lines. It wraps instead. #}
         <div class="flex items-center gap-3 mt-4">
           <button type="submit" name="choice" value="starter"
-                  class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 border-0 cursor-pointer">Add these feeds</button>
-          <span id="welcome-spinner" class="htmx-indicator text-sm text-gray-500">Adding feeds, this can take a few seconds…</span>
+                  class="shrink-0 whitespace-nowrap px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 border-0 cursor-pointer">Add these feeds</button>
+          <span id="welcome-spinner" class="htmx-indicator min-w-0 text-sm text-gray-500">Adding feeds, this can take a few seconds…</span>
         </div>
       </div>
       {% endif %}
