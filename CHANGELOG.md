@@ -31,6 +31,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- The full text of some pages lost lines written as plain text blocks beside ordinary paragraphs. On Bon Appétit recipes only the quantities of the ingredients were left (`3`, `¼`, `5`), and ingredients without a quantity, such as salt, were missing altogether; now each ingredient reads as one line with its amount, and a list item made of short paragraphs, like the recipe's time and yield, is spaced as one item. Full text also comes out right on more sites: on some pages, Barron's among them, extraction used to return a print notice instead of the article, and on others a related-story promo ended up in the text. Articles fetched before the fix keep the text they have.
 - Article titles from some feeds, The Verge and other WordPress sites among them, showed HTML codes instead of characters, for example `Can an &#8216;eSUV&#8217; e-bike`. Such titles are now stored as plain text, and titles already stored are fixed when you upgrade.
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
 - In Saved, an article scrolled up under the header at the top of the list is marked read as it goes out of sight. It used to count as read only once it had passed the header too, so one left under it stayed unread.

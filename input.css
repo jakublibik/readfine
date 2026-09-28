@@ -41,6 +41,14 @@ html.dark { color-scheme: dark; }
    `pre` keeps scrolling, white-space: pre wins over overflow-wrap. */
 .article-body { overflow-wrap: anywhere; }
 
+/* A list item whose content comes wrapped in paragraphs. Typography spaces them like
+   paragraphs of prose (1.25em around, 0.75em between), so a pair such as Bon Appétit's
+   "Total Time" / "25 minutes" read as two loose blocks with the bullet on the first.
+   Kept together inside the item; the item's own margin still separates the items. */
+.article-body li > p { margin-top: 0.5em; margin-bottom: 0.5em; }
+.article-body li > p:first-child { margin-top: 0; }
+.article-body li > p:last-child { margin-bottom: 0; }
+
 /* Layout tables (no header cells — e.g. Reddit RSS image+meta wrappers):
    unwrap to normal block flow so the image sits above the text instead of
    being forced side-by-side and overflowing. */

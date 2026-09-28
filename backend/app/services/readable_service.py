@@ -331,13 +331,121 @@ def _extract_with_trafilatura(html: str, url: str,
     attempt, made only behind the gate that has already established the headings were
     lost (see the call site).
     """
-    result = trafilatura.extract(html, url=url, output_format="html",
+    tree = trafilatura.load_html(html)
+    if tree is None:
+        return None
+    _normalize_markup_whitespace(tree)
+    _paragraph_text_divs(tree)
+    result = trafilatura.extract(tree, url=url, output_format="html",
                                  include_comments=False, include_tables=True,
                                  include_links=True, include_images=True,
                                  favor_precision=favor_precision)
     if not result:
         return None
     return _to_html_tags(result)
+
+
+# Where whitespace is content and must reach the extractor as written.
+_PRESERVE_WHITESPACE = frozenset({"pre", "textarea", "code"})
+# ASCII only: a &nbsp; is put there on purpose and is not layout.
+_LAYOUT_WHITESPACE = " \t\n\r\f"
+
+
+def _normalize_markup_whitespace(tree) -> None:
+    """Make the page's layout whitespace and class lists plain, in place.
+
+    Neither changes how a browser shows the page, and both change what trafilatura
+    picks. It counts the source's indentation, so on Barron's the runs of blank
+    lines between the article's paragraphs added up until the print disclaimer won,
+    and the article came out as nothing. Its boilerplate rules compare class names,
+    and RT's padded ones (`"nav__item  "`) slipped past them, so a related-story
+    promo stayed in the body. On the Zyte benchmark (scripts/BENCHMARKS.md) this
+    changes 7 of 181 pages: Barron's goes from 0.000 to 0.989, RT from 0.804 to
+    0.900, the other five differ in whitespace only.
+
+    It is what passing the page through BeautifulSoup does to these two things, which
+    is how it was found, without parsing the page a second time.
+    """
+    for el in tree.iter():
+        if not isinstance(el.tag, str):
+            continue
+        cls = el.get("class")
+        if cls is not None:
+            el.set("class", " ".join(cls.split()))
+        in_preserved = any(anc.tag in _PRESERVE_WHITESPACE for anc in el.iterancestors())
+        if (el.text is not None and not el.text.strip(_LAYOUT_WHITESPACE)
+                and not in_preserved and el.tag not in _PRESERVE_WHITESPACE):
+            el.text = "\n"
+        if el.tail is not None and not el.tail.strip(_LAYOUT_WHITESPACE) and not in_preserved:
+            el.tail = "\n"
+
+
+# What makes a <div> more than a run of text. A div holding any of these is a
+# container, and _paragraph_text_divs leaves it alone.
+_BLOCK_TAGS = frozenset({
+    "p", "div", "ul", "ol", "dl", "table", "h1", "h2", "h3", "h4", "h5", "h6",
+    "section", "article", "blockquote", "pre", "figure", "li", "header", "footer",
+    "nav", "aside", "form", "main", "hr", "iframe", "video", "picture", "img", "svg",
+    "script", "style", "noscript", "button", "select", "textarea", "input",
+})
+
+
+def _paragraph_text_divs(tree) -> None:
+    """Turn a <div> of plain text that sits next to a <p> into a <p>, in place.
+
+    Trafilatura drops the text of such a div. Bon Appétit writes every ingredient as
+    `<p>3</p><div>large bunches kale…</div>`, so the recipe came out as a column of
+    bare quantities, and an ingredient with no quantity was gone altogether. A <p>
+    sibling is the sign that the div is one of the article's paragraphs written
+    another way. The Zyte benchmark (scripts/BENCHMARKS.md) is news and blogs, where
+    this pattern is rare: it changes 9 of 181 pages, 4 for the better, and moves F1
+    from 0.9590 to 0.9584, most of that one CNN page whose paragraphs are divs and
+    lose their ticker links as <p>. Converting every text div instead changed 50
+    pages, most of them slightly worse, by letting page furniture into the body.
+
+    A div inside a <p> is left as it is: a <p> in a <p> makes the parser close the
+    outer one early and move the text around it.
+    """
+    targets = []
+    for div in tree.iter("div"):
+        parent = div.getparent()
+        if parent is None or not any(child.tag == "p" for child in parent):
+            continue
+        if not div.text_content().strip():
+            continue
+        if any(isinstance(el.tag, str) and el.tag in _BLOCK_TAGS
+               for el in div.iterdescendants()):
+            continue
+        if any(anc.tag == "p" for anc in div.iterancestors()):
+            continue
+        targets.append(div)
+    for div in targets:
+        _merge_quantity(div)
+        div.tag = "p"
+
+
+# A paragraph holding only an amount: digits, fractions and their separators, or
+# nothing at all (an ingredient with no quantity, such as salt).
+_QUANTITY_RE = re.compile(r"[\d\s½¼¾⅓⅔⅛⅜⅝⅞/.,–-]{0,8}")
+
+
+def _merge_quantity(div) -> None:
+    """Put an amount paragraph in front of the text div after it, as one line.
+
+    Bon Appétit sets `<p>3</p><div>large bunches kale</div>` side by side with its
+    own CSS, which we do not carry, so as two paragraphs every ingredient took two
+    lines with the number alone on the first. An empty amount just goes.
+    """
+    prev = div.getprevious()
+    if (prev is None or prev.tag != "p" or len(prev)
+            or (prev.tail or "").strip(_LAYOUT_WHITESPACE)):
+        return
+    amount = (prev.text or "").strip()
+    if not _QUANTITY_RE.fullmatch(amount):
+        return
+    if amount:
+        div.text = f"{amount} {div.text or ''}"
+    div.getparent().remove(prev)
 
 
 _META_REFRESH_RE = re.compile(
