@@ -5,7 +5,7 @@
         Mirrors filter_service.filter_phase. -#}
     {%- set score_source_fields = {'ai_score': 'ai', 'basic_score': 'basic', 'relevance_score': 'relevance'} -%}
     {%- set score_names = {'ai_score': 'Score · AI', 'basic_score': 'Score · Basic', 'relevance_score': 'Score · AI, else basic'} -%}
-    {%- set op_symbols = {'gt': '>', 'lt': '<', 'equals': '='} -%}
+    {%- set op_symbols = {'gte': '≥', 'gt': '>', 'lt': '<', 'equals': '='} -%}
     {%- set late_fields = ['ai_score', 'relevance_score'] -%}
     {%- set sources_on = score_sources if score_sources is defined else [] -%}
     {%- set regular_filters = [] -%}

@@ -169,8 +169,8 @@
              so every row sends one cond_source and the lists stay aligned. #}
           <select class="border border-gray-300 rounded px-2 py-1.5 text-sm cond-source-select hidden" aria-label="Score source"></select>
           <input type="hidden" name="cond_source" value="{{ c_source }}" data-saved="{{ c_source }}">
-          <select name="cond_operator" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
-            {% for op in ['contains','not_contains','equals','regex','gt','lt'] %}
+          <select name="cond_operator" data-saved="{{ c.operator }}" class="border border-gray-300 rounded px-2 py-1.5 text-sm">
+            {% for op in ['contains','not_contains','equals','regex','gt','gte','lt'] %}
               <option value="{{ op }}" {% if c.operator == op %}selected{% endif %}>{{ op }}</option>
             {% endfor %}
           </select>
@@ -251,6 +251,6 @@
   {% endif %}
 </form>
 
-<script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if score_sources %},"score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"scoreOperators":["equals","gt","lt"],"scoreSources":{{ score_sources|tojson }},"actionTypes":["label","mark_read","star","archive"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
+<script type="application/json" id="filter-edit-cfg" nonce="{{ request.state.csp_nonce }}">{"fields":["title_or_content","title","content","author","url","published_at"{% if score_sources %},"score"{% endif %}],"operators":["contains","not_contains","equals","regex","gt","lt"],"scoreOperators":["gte","lt"],"scoreSources":{{ score_sources|tojson }},"actionTypes":["label","mark_read","star","archive"],"labels":[{% for l in labels %}{"id":{{ l.id }},"name":{{ l.name|tojson }}}{% if not loop.last %},{% endif %}{% endfor %}]}</script>
 {% endblock %}
 {% block scripts %}<script src="{{ static_url('js/filter-edit.js') }}"></script>{% endblock %}

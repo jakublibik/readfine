@@ -1,6 +1,7 @@
 """Filter service: CRUD, condition evaluation, and filter application during fetch."""
 import json
 import logging
+import math
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -20,7 +21,7 @@ from app.models.feed import Folder, UserFeed
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
-from app.services.relevance_service import effective_score
+from app.services.relevance_service import effective_score, score_cut
 from app.services.scope_tokens import token_matches_article
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,11 @@ SCORE_FIELD_NAMES = {
     "basic_score": "Basic score",
     "relevance_score": "Relevance score",
 }
-_SCORE_ALLOWED_OPERATORS = frozenset({"equals", "gt", "lt"})
+# The editor offers "at least" (gte) and "below" (lt), the same two as the search.
+# gt and equals stay valid for conditions saved before, and for API clients; gt
+# compares like "at least" the next whole number. equals compares the exact text of
+# the score, which is never a whole number, so it never matches.
+_SCORE_ALLOWED_OPERATORS = frozenset({"gte", "lt", "gt", "equals"})
 
 # Canonical filter ordering. Every place that lists or executes filters must use
 # this same ordering, so the settings list shows filters in the exact order they
@@ -119,10 +124,13 @@ def _validate_score_conditions(conditions) -> None:
     for c in conditions:
         name = SCORE_FIELD_NAMES.get(c.field)
         if name is None:
+            if c.operator == "gte":
+                raise ValueError("Operator 'gte' (at least) is only for a score.")
             continue
         if c.operator not in _SCORE_ALLOWED_OPERATORS:
             raise ValueError(
-                f"Operator '{c.operator}' is not allowed for {name} — use equals, gt, or lt."
+                f"Operator '{c.operator}' is not allowed for {name}. "
+                "Use gte (at least) or lt (below)."
             )
         try:
             val = float(c.value)
@@ -450,7 +458,25 @@ def _matches_condition(condition: FilterCondition, article: Article, user_feed: 
             return title_match and content_match
         return title_match or content_match
 
-    return _eval_op(op, val, _get_field_value(article, user_feed, condition.field, state))
+    field_value = _get_field_value(article, user_feed, condition.field, state)
+    if condition.field in SCORE_FIELD_NAMES and op in ("gte", "gt", "lt"):
+        return _score_matches(op, val, field_value)
+    return _eval_op(op, val, field_value)
+
+
+def _score_matches(op: str, val: str, score: float | None) -> bool:
+    """A score condition, compared the way the search compares: on the whole number
+    the list shows (relevance_service.score_cut). gt N is "at least" N + 1."""
+    if score is None:
+        return False
+    try:
+        cv = float(val)
+    except ValueError:
+        return False
+    if op == "gt":
+        cv = math.floor(cv) + 1
+    cut = score_cut(cv)
+    return score >= cut if op in ("gte", "gt") else score < cut
 
 
 def _parse_scope_list(value: str | None) -> list[str] | None:

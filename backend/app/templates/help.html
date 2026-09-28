@@ -319,8 +319,10 @@
               already in your list, use <strong>Apply</strong> next to the filter, which runs it over your existing
               articles once and shows you what it will do before anything is committed. <strong>Test</strong> next to
               it checks the conditions against your articles without changing a thing.</p>
-            <p id="score-filters" class="mt-2">A <strong>score</strong> condition (0 to 100) reads one of three sources,
-              and the source also decides when the filter runs:</p>
+            <p id="score-filters" class="mt-2">A <strong>score</strong> condition is <strong>at least</strong> or
+              <strong>below</strong> a number from 0 to 100, compared like in the search: <em>at least 60</em> takes in
+              every article the list shows as 60 or more. It reads one of three sources, and the source also decides
+              when the filter runs:</p>
             <ul class="list-disc pl-5 mt-2 space-y-1">
               <li><strong>Basic</strong>: the basic score. Every article has one as soon as it arrives, so the filter runs
                 with the others, in run order. It applies to articles the AI scored too, so <em>basic below 30 → mark

@@ -7,7 +7,8 @@ FieldType = Literal[
     "title_or_content", "title", "content", "author", "url", "published_at",
     "ai_score", "basic_score", "relevance_score",
 ]
-OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "lt"]
+# gte ("at least") is for scores only, see filter_service._validate_score_conditions.
+OperatorType = Literal["contains", "not_contains", "equals", "regex", "gt", "gte", "lt"]
 ActionType = Literal["label", "mark_read", "star", "archive"]
 MatchOperator = Literal["AND", "OR"]
 
