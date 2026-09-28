@@ -86,6 +86,7 @@ SUPPRESSED_BY_FILTER = "filter"    # filter_service: a mark_read action
 SUPPRESSED_BY_STORY = "story"      # story_service: the reader finished the story
 SUPPRESSED_BY_BULK = "bulk"        # mark everything in a view (or saved search) read
 SUPPRESSED_BY_SIMILAR = "similar"  # fetcher.stories: repeats a story already read
+SUPPRESSED_BY_BACKLOG = "backlog"  # services.feed: older than the subscription
 
 # The suppressed_by values that make a read the reader's own doing, for counting active
 # readers (admin_service.count_active_readers): an unmarked read, or a mark-all-read

@@ -6,7 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import UserSettings
-from app.models.article import SUPPRESSED_BY_FILTER, SUPPRESSED_BY_URL
+from app.models.article import SUPPRESSED_BY_BACKLOG, SUPPRESSED_BY_FILTER, SUPPRESSED_BY_URL
 # The same number everywhere it is asked: half a minute in front of an article is what
 # counts as having read it. It decides something in story_service (it clears the
 # machine's suppressed_at), which is why that is where it lives.
@@ -320,6 +320,8 @@ async def get_intake_stats(
                     FROM article_labels WHERE user_id = :uid
                 ) al ON al.article_id = a.id
                 WHERE a.fetched_at >= :cutoff
+                  -- Came before the reader subscribed, so it never came at them.
+                  AND uas.suppressed_by IS DISTINCT FROM :by_backlog
             ), ranked AS (
                 -- Two ranks, because the two columns fold differently. The first is the
                 -- list as it stands; the second is the list filtered to one reader's
@@ -376,6 +378,7 @@ async def get_intake_stats(
         {
             "uid": user_id, "cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS,
             "by_filter": SUPPRESSED_BY_FILTER, "by_url": SUPPRESSED_BY_URL,
+            "by_backlog": SUPPRESSED_BY_BACKLOG,
         },
     )).one()
 
