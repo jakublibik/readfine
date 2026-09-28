@@ -2,7 +2,7 @@
 manual feed refresh, search modal)."""
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -26,6 +26,7 @@ from app.services.saved_search_service import (
 )
 from app.services.search_params import modal_values, normalize_search_params
 from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
+from app.services.user import touch_last_active
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html, _badge_total_html
@@ -42,10 +43,7 @@ async def main_app(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    now = datetime.now(timezone.utc)
-    if not user.last_active_at or user.last_active_at < now - timedelta(hours=1):
-        user.last_active_at = now
-        await db.commit()
+    await touch_last_active(user, db)
     settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
     settings = settings_result.scalar_one_or_none()
     if settings and settings.onboarded_at is None:

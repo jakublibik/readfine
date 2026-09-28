@@ -4,7 +4,7 @@ import os
 os.environ["ALLOWED_HOSTS"] = '["testserver","localhost","127.0.0.1"]'
 
 from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -90,6 +90,9 @@ def make_mock_user(id: int = 1, role: str = "user") -> SimpleNamespace:
         is_active=True,
         created_at=datetime(2024, 1, 1),
         password_hash="dummy",
+        # Far ahead, so touch_last_active never writes: the mock is shared across tests
+        # and a write would both mutate it and add a commit the route tests do not expect.
+        last_active_at=datetime(2100, 1, 1, tzinfo=timezone.utc),
     )
 
 

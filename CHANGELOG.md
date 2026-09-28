@@ -28,6 +28,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Articles that came in before a word of your relevance terms was counted (for example, from a feed added the same day) are scored again after the nightly recount. They used to keep a score of 0 until you saved your terms.
 - A search with a score condition (for example, relevance at least 60) is much faster. It used to go through every article on the instance, not just yours, and on a large instance it took over a tenth of a second each time.
 - The sidebar and the article list load faster on a large instance. Opening a label, feed or folder with nothing unread left went through every article on the instance to find that out, and the counts next to Labels, Starred, Archived and Saved did much the same. Both now look only at your own articles.
+- **Last active** in **Admin → Users** stays current for someone who reads in an installed app or a tab they leave open. It used to change only when the app was loaded or on login, so such a reader looked inactive, and after a month without a reload their automatic reading profile stopped being updated. Opening an article, reading by scrolling and changing an article over the API now count too.
 
 ## [0.19.0] - 2026-09-26
 

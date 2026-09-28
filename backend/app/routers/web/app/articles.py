@@ -50,6 +50,7 @@ from app.services.story_service import (
     next_shown as next_shown_stories,
     parse_shown as parse_shown_stories,
 )
+from app.services.user import touch_last_active
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html
@@ -147,6 +148,7 @@ async def htmx_set_read_batch(
     # like any other row and do not close the rest of their group; the browser is the
     # only place that knows which those are.
     unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    await touch_last_active(user, db)
     await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
@@ -1042,6 +1044,7 @@ async def htmx_article_detail(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await touch_last_active(user, db)
     # Auto-trigger readable extraction if feed has it enabled and article wasn't extracted yet
     trigger_row = (await db.execute(
         select(

@@ -16,6 +16,7 @@ from app.services.article import get_article, list_articles, update_article_stat
 from app.services.saved_article_service import save_article_by_url
 from app.services.saved_search_service import get_saved_search, view_filters
 from app.services.search_params import list_kwargs
+from app.services.user import touch_last_active
 
 router = APIRouter(prefix="/articles", tags=["articles"])
 
@@ -128,6 +129,7 @@ async def patch_article_state(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
+    await touch_last_active(user, db)
     article = await update_article_state(user, article_id, payload, db)
     if not article:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Article not found")
