@@ -69,7 +69,10 @@
       </a>
       <nav class="flex items-center gap-2 sm:gap-3 text-sm">
         <a href="/login" class="px-3 py-1.5 rounded text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">Sign in</a>
-        <a href="/register" class="px-3 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700">Sign up</a>
+        {# register_url is /register plus ?src= with where the visitor came from, while
+           public page counting is on. Link sign-ups to it rather than to /register, or
+           every account from the landing is recorded as "internal". #}
+        <a href="{{ register_url }}" class="px-3 py-1.5 rounded bg-blue-600 text-white font-medium hover:bg-blue-700">Sign up</a>
       </nav>
     </div>
   </header>
@@ -92,7 +95,7 @@
         Built with AI (Claude Code), and I use it every day myself.
       </p>
       <div class="mt-8 flex items-center justify-center gap-3">
-        <a href="/register" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Create a free account</a>
+        <a href="{{ register_url }}" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Create a free account</a>
         <a href="#features" class="px-5 py-2.5 rounded-lg border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900">See features</a>
       </div>
       <p class="mt-4 text-sm text-gray-500 dark:text-gray-400">
@@ -258,7 +261,7 @@
              class="px-5 py-2.5 rounded-lg border border-gray-300 dark:border-gray-700 hover:bg-white dark:hover:bg-gray-800 font-medium">
             View on GitHub
           </a>
-          <a href="/register" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Create an account</a>
+          <a href="{{ register_url }}" class="px-5 py-2.5 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700">Create an account</a>
         </div>
         <p class="text-xs text-gray-500 dark:text-gray-500 mt-6 text-center">
           Built with AI (Claude Code), in the open, on GitHub.

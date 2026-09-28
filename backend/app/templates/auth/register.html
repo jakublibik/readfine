@@ -36,6 +36,9 @@
             {% if invite_token %}
             <input type="hidden" name="invite_token" value="{{ invite_token }}">
             {% endif %}
+            {% if signup_source %}
+            <input type="hidden" name="signup_source" value="{{ signup_source }}">
+            {% endif %}
             <div>
                 <label class="block text-sm font-medium mb-1" for="display_name">Display name <span class="text-gray-400 font-normal">(optional)</span></label>
                 <input id="display_name" name="display_name" type="text"

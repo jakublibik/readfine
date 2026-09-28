@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
@@ -27,6 +27,7 @@ from app.models.settings import AppSettings
 
 logger = logging.getLogger(__name__)
 
+from app.services import traffic_service
 from app.templating import templates
 
 router = APIRouter(tags=["web-auth"])
@@ -58,8 +59,16 @@ async def root(request: Request, db: AsyncSession = Depends(get_db)):
     if registration_open:
         # Operator-provided marketing landing (gitignored). Falls back to /login when absent
         # (open-source default) — landing.example.html is a starter template, never rendered live.
+        # register_url hands the visitor's referrer on to /register (see
+        # traffic_service.signup_source_for). The link differs per visitor, so a shared
+        # cache in front of / (a CDN "cache everything" rule) would give everyone the
+        # first visitor's source.
+        src = traffic_service.signup_source_for(request)
+        register_url = "/register" + (f"?{urlencode({'src': src})}" if src else "")
         try:
-            return templates.TemplateResponse(request, "landing.html", {"base_url": str(request.base_url)})
+            return templates.TemplateResponse(request, "landing.html", {
+                "base_url": str(request.base_url), "register_url": register_url,
+            })
         except TemplateNotFound:
             pass
     return RedirectResponse(url="/login", status_code=302)
@@ -170,7 +179,9 @@ async def register_page(request: Request, invite: str | None = None, db: AsyncSe
     if not registration_open:
         return templates.TemplateResponse(request, "auth/registration_disabled.html")
 
-    return templates.TemplateResponse(request, "auth/register.html")
+    return templates.TemplateResponse(request, "auth/register.html", {
+        "signup_source": traffic_service.signup_source_for(request),
+    })
 
 
 @router.post("/register", response_class=HTMLResponse)
@@ -182,6 +193,7 @@ async def register(
     confirm_password: str = Form(...),
     display_name: str = Form(""),
     invite_token: str = Form(""),
+    signup_source: str = Form(""),
     tz: str = Form("", alias="timezone"),
     fmt: str = Form("", alias="format_profile"),
     form_ts: str = Form(""),
@@ -196,6 +208,8 @@ async def register(
     def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
                "prefill_email": email, "prefill_display_name": display_name,
+               # Or a typo in the password would lose where they came from.
+               "signup_source": signup_source,
                # Keep the stamp this submit came with instead of minting a new one,
                # so a retry does not start the fill-time clock over. See carry_form_ts.
                "form_ts_carry": carry_form_ts(form_ts), **extra}
@@ -267,11 +281,21 @@ async def register(
     if needs_verification:
         token = generate_token()
 
+    # Checked again: the hidden field comes back from the browser and anyone can
+    # edit it. Nothing is kept while counting is off, whatever the form says.
+    if not traffic_service.get_enabled():
+        source = None
+    elif inv:
+        source = traffic_service.SIGNUP_SOURCE_INVITE
+    else:
+        source = traffic_service.clean_signup_source(signup_source)
+
     user = User(
         email=email,
         password_hash=hash_password(password),
         display_name=display_name,
         role="user",
+        signup_source=source,
         email_verified=not needs_verification,
         email_verification_token_hash=hash_token(token) if token else None,
         email_verification_expires_at=datetime.now(timezone.utc) + timedelta(hours=24) if token else None,
@@ -290,12 +314,10 @@ async def register(
     try:
         await db.commit()
     except IntegrityError:
+        # Two submits racing past the lookup above; the loser gets the same answer.
         await db.rollback()
-        return templates.TemplateResponse(
-            request, "auth/register.html",
-            {"error": "This email is already registered", "invite_token": invite_token},
-            status_code=status.HTTP_409_CONFLICT,
-        )
+        return _err("This email is already registered.",
+                    http_status=status.HTTP_409_CONFLICT, email_taken=True)
 
     if needs_verification:
         verify_url = str(request.base_url) + f"verify-email?token={token}"

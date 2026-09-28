@@ -86,7 +86,7 @@ _Multi-user, with the operator controls to match._
 - **Admin panel:** Manage users and instance-wide settings.
 - **Invite-only registration:** Keep sign-ups closed and hand out invitation links instead. Each one works once, can be tied to a specific address, can expire on a date you set, and can be revoked before anyone uses it.
 - **Email (SMTP):** Address verification, password reset, and briefing delivery.
-- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day and nothing else. Signed-in traffic is left out.
+- **Public page traffic:** Optional visitor counts for the pages anyone can reach, shown in the admin panel. No analytics service, no cookie, no stored IP address: the database holds counts per hour and per day, plus the domain each new account came from, shown by source under the registration funnel. Signed-in traffic is left out.
 - **Retention & purge:** Tiered retention rules that purge old articles automatically.
 - **API tokens:** A JSON API authenticated with JWT tokens, for scripts and integrations.
 

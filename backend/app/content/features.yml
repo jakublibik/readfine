@@ -278,7 +278,8 @@ categories:
         desc: >-
           Optional visitor counts for the pages anyone can reach, shown in the admin
           panel. No analytics service, no cookie, no stored IP address: the database
-          holds counts per hour and per day and nothing else. Signed-in traffic is
+          holds counts per hour and per day, plus the domain each new account came
+          from, shown by source under the registration funnel. Signed-in traffic is
           left out.
       - title: Retention & purge
         desc: Tiered retention rules that purge old articles automatically.

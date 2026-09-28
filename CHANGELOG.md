@@ -9,6 +9,10 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
+
 ### Added
 
 - **Saved searches.** **Save** in the header of search results keeps the search, with its filters, under a name in the sidebar above Labels, with a count like the other entries. A saved search is not a snapshot: it runs again each time you open it, and it reads like a feed, marked read as you scroll, with **Mark all as read** covering only what it lists. Without a status of its own, it follows your unread setting. **Edit** reopens the search to update it, save it as a new one, rename it or delete it. A new account that lists its topics on the welcome screen starts with one, **Top picks**: the last week's articles scoring 60 or more, best first. In the API, `GET /api/v1/saved-searches` lists them and `GET /api/v1/articles?view_id=` returns what one lists.
@@ -20,6 +24,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - Suggested terms in **Settings → Relevance** are more often about what you actually read. A word now ranks higher the more often it shows up in the articles you read compared with everything your feeds bring in. Common words like `likely` or `humanity` used to make the list just because they are frequent in longer articles.
 - The user table in **Admin → Users** shows more of how each account uses relevance. **Terms** counts a user's relevance terms, grayed out while they are still the list from signup or basic scoring is off. **Scored 7d** counts articles scored by AI in the last week, and **Filters** adds in brackets how many filters use a score. Hovering **AI 7d** breaks the number down by operation, and catch-up runs now count towards it. The Role column is gone; the admin gets a small badge next to their name instead.
 - **Active** on the admin dashboard's Users card now means accounts that read at least one article in the last 7 days (hover for the last 30). It used to count accounts that were not disabled. **Admin → Users** shows the same number next to the heading. It counts reading, not logins, and leaves out articles marked read by a filter or by duplicate detection.
+- With public page counting on, a new account keeps where it came from: the domain of the site that linked to the landing or registration page, a `utm_source` tag, or `direct`. **Admin → Traffic** breaks down the accounts created by source under the registration funnel. Nothing else is stored, and switching counting off clears it from every account. The privacy page says so while counting is on.
 
 ### Fixed
 
