@@ -517,6 +517,26 @@ document.body.addEventListener('htmx:afterRequest', function (e) {
 // Nav active state — persists across sidebarRefresh swaps
 var _activeNavGet = null;
 var _navSnapshot = null;
+// When #sidebar last swapped in fresh counts (any trigger). Navigation refreshes
+// the sidebar only when this is older than _NAV_SIDEBAR_REFRESH_MS: counts don't
+// change on a view switch, but a refresh here heals one that got dropped elsewhere.
+var _sidebarSwappedAt = 0;
+var _NAV_SIDEBAR_REFRESH_MS = 60000;
+
+// Each nav target is rendered twice (collapsed rail + full sidebar); highlight
+// every copy so whichever one is visible shows the active state.
+function _highlightNav(url) {
+  document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
+  if (!url) return;
+  document.querySelectorAll('.nav-item[hx-get="' + url + '"]').forEach(function (i) {
+    i.classList.add('active');
+  });
+}
+
+function _refreshSidebarAfterNav() {
+  if (Date.now() - _sidebarSwappedAt < _NAV_SIDEBAR_REFRESH_MS) return;
+  htmx.trigger(document.body, 'sidebarRefresh');
+}
 
 function _saveNavSnapshot() {
   var titleEl = document.getElementById('mobile-title-text');
@@ -533,11 +553,7 @@ function _revertNavSnapshot() {
   _activeNavGet = snap.url;
   try { if (snap.url) localStorage.setItem('lastNavItem', snap.url); } catch (e) {}
   // Restore the desktop sidebar active highlight to the previous nav item.
-  if (snap.url) {
-    document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
-    var prev = document.querySelector('.nav-item[hx-get="' + snap.url + '"]');
-    if (prev) prev.classList.add('active');
-  }
+  if (snap.url) _highlightNav(snap.url);
   var titleEl = document.getElementById('mobile-title-text');
   if (titleEl && snap.title !== null) {
     titleEl.textContent = snap.title;
@@ -843,11 +859,18 @@ document.addEventListener('click', function (e) {
   var navItem = e.target.closest('.nav-item');
   if (!navItem) return;
   _saveNavSnapshot(); // capture previous nav state so a failed list load can revert
-  document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
-  navItem.classList.add('active');
   _activeNavGet = navItem.getAttribute('hx-get');
+  if (_activeNavGet) _highlightNav(_activeNavGet);
+  else {
+    document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
+    navItem.classList.add('active');
+  }
   try { if (_activeNavGet) localStorage.setItem('lastNavItem', _activeNavGet); } catch (err) {}
-  if (_activeNavGet) htmx.trigger(document.body, 'sidebarRefresh');
+  if (_activeNavGet) _refreshSidebarAfterNav();
+});
+
+document.body.addEventListener('htmx:afterSwap', function (evt) {
+  if (evt.detail.target.id === 'sidebar') _sidebarSwappedAt = Date.now();
 });
 
 document.body.addEventListener('htmx:beforeSwap', function (evt) {
@@ -2941,8 +2964,7 @@ function _markReadAutoAdvance(clickedRow) {
   }
 
   _saveNavSnapshot();
-  document.querySelectorAll('.nav-item').forEach(function (i) { i.classList.remove('active'); });
-  nextA.classList.add('active');
+  _highlightNav(url);
   _activeNavGet = url;
   try { localStorage.setItem('lastNavItem', url); } catch (err) {}
   _syncMobileQuicklink();
@@ -3287,8 +3309,9 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     if (titleText) titleText.textContent = targetTitle;
     try { localStorage.setItem('mobile_title_text', targetTitle); } catch (err) {}
     _syncMobileQuicklink();
+    _highlightNav(targetUrl);
     htmx.ajax('GET', targetUrl, { target: '#article-list', swap: 'innerHTML' });
-    htmx.trigger(document.body, 'sidebarRefresh');
+    _refreshSidebarAfterNav();
   });
 
   // Detail back button: close fullscreen detail

@@ -11,6 +11,8 @@ RUN uv export --frozen --no-dev --no-emit-project --format requirements-txt -o /
     && uv pip install --system -r /tmp/requirements.txt
 
 COPY backend/ .
+# Release notes for the in-app /changelog page (app/utils/changelog.py).
+COPY CHANGELOG.md ./
 
 # Install the project itself (metadata only, deps already installed above) so
 # importlib.metadata.version("readfine") resolves at runtime instead of falling

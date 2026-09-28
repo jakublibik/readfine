@@ -7,6 +7,9 @@ All notable changes to Readfine are documented here. The format is based on
 While the version is `0.x`, minor releases may include breaking changes (database
 migrations, config changes); `1.0.0` will mark the first API/stability commitment.
 
+See [`RELEASING.md`](RELEASING.md) for versioning rules and the full pre-release checklist.
+The app shows this file at `/changelog`, with the `### Upgrade notes` sections for admins only.
+
 ## [Unreleased]
 
 ### Upgrade notes
@@ -19,6 +22,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - The welcome screen for a new account has a second step: where your articles should come from. You can start with a few well-known English feeds on topics like technology, science, world news, food and sport, each topic in its own folder, import an OPML file, or add feeds yourself. Topics that match what you typed on the first step are checked for you. Self-hosters can offer their own list or turn it off, see "Starter feeds for new accounts" in the README.
 - In **Settings → Relevance**, the table of how your terms did now says "not counted yet" for a term whose words are too rare in the last month's articles to score, instead of "no match". Such a term may be misspelled, or new to your feeds: words from a feed added today are counted overnight.
 - With public page counting on, a new account keeps where it came from: the domain of the site that linked to the landing or registration page, a `utm_source` tag, `invite`, `internal` (another page of this site) or `direct` (no referrer). **Admin → Traffic** breaks down the accounts created by source under the registration funnel. Nothing else is stored, and switching counting off clears it from every account. The privacy page says so while counting is on.
+- **What's new** at the bottom of the user menu shows which version of Readfine the server runs and opens the release notes of that version, at `/changelog`. The page is public and linked in the footer of the landing, help and legal pages. Upgrade notes in it are shown to admins only.
 
 ### Changed
 
@@ -31,6 +35,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 
 ### Fixed
 
+- The help, features, legal and What's new pages share one header: the **Readfine** name at the top leads to the home page, with **Back to reader** beside it when you are signed in. Help and features had nothing to take a signed-out visitor back, and the name on the legal pages led to the sign-in form.
 - The full text of some pages lost lines written as plain text blocks beside ordinary paragraphs. On Bon Appétit recipes only the quantities of the ingredients were left (`3`, `¼`, `5`), and ingredients without a quantity, such as salt, were missing altogether; now each ingredient reads as one line with its amount, and a list item made of short paragraphs, like the recipe's time and yield, is spaced as one item. Full text also comes out right on more sites: on some pages, Barron's among them, extraction used to return a print notice instead of the article, and on others a related-story promo ended up in the text. Articles fetched before the fix keep the text they have.
 - Article titles from some feeds, The Verge and other WordPress sites among them, showed HTML codes instead of characters, for example `Can an &#8216;eSUV&#8217; e-bike`. Such titles are now stored as plain text, and titles already stored are fixed when you upgrade.
 - Search results sorted by relevance or score no longer skip articles further down while you read some of them with the status filter on Unread.
@@ -38,7 +43,7 @@ migrations, config changes); `1.0.0` will mark the first API/stability commitmen
 - When you subscribe to a feed someone else on the instance already reads, its unread articles from the last week now get a relevance score right away. They used to stay unscored until the next night.
 - Articles that came in before a word of your relevance terms was counted (for example, from a feed added the same day) are scored again after the nightly recount. They used to keep a score of 0 until you saved your terms.
 - A search with a score condition (for example, relevance at least 60) is much faster. It used to go through every article on the instance, not just yours, and on a large instance it took over a tenth of a second each time.
-- The sidebar and the article list load faster on a large instance. Opening a label, feed or folder with nothing unread left went through every article on the instance to find that out, and the counts next to Labels, Starred, Archived and Saved did much the same. Both now look only at your own articles.
+- The sidebar and the article list load faster on a large instance. Opening a label, feed or folder with nothing unread left went through every article on the instance to find that out, and the counts next to Labels, Starred, Archived and Saved did much the same. Both now look only at your own articles. Switching to another view also no longer reloads the whole sidebar each time, only when it is more than a minute old.
 - On the registration page, Firefox and password managers no longer offer to fill your login into **Display name**. The email field is now marked as the account name.
 - **Last active** in **Admin → Users** stays current for someone who reads in an installed app or a tab they leave open. It used to change only when the app was loaded or on login, so such a reader looked inactive, and after a month without a reload their automatic reading profile stopped being updated. Opening an article, reading by scrolling and changing an article over the API now count too.
 
@@ -593,13 +598,9 @@ First public release. Self-hosted RSS reader with:
 - `backup.sh`: off-site PostgreSQL backups via `pg_dump` + restic (encrypted,
   deduplicated, retention), with a Cloudflare R2 example config. See README → Backups.
 
-Notes for self-hosters:
+### Upgrade notes
 
 - **Registration is closed by default** on a fresh install. Only the admin account
   exists; enable sign-ups in the admin panel to open the instance.
 - Shell scripts are pinned to LF line endings (`.gitattributes`) so `setup.sh` runs
   correctly when the repo is cloned/unzipped on Windows.
-
-### Release process
-
-See [`RELEASING.md`](RELEASING.md) for versioning rules and the full pre-release checklist.

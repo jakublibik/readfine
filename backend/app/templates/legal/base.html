@@ -1,22 +1,12 @@
 {% extends "base.html" %}
-{% from "partials/back_to_reader.html" import back_to_reader %}
+{% from "partials/public_header.html" import public_header %}
 {% from "partials/public_footer.html" import public_footer %}
 
 {% block content %}
-<div class="min-h-screen pt-6 pb-12 px-4 dark:bg-gray-950">
+<div class="min-h-screen pt-3 pb-12 px-4 dark:bg-gray-950">
   <div class="max-w-3xl mx-auto">
 
-    {# The wordmark stays centered for everyone; the back link sits on the same
-       line so a signed-in reader doesn't get an extra row of header. A three
-       column grid keeps the wordmark on the page's centre line whether or not
-       the link is there, and items-baseline puts the two on a shared baseline:
-       centring their boxes instead leaves the smaller text visibly high.
-       Below sm the two would overlap, so there the link goes back to its own
-       row above. #}
-    <div class="text-center mb-8 sm:grid sm:grid-cols-3 sm:items-baseline">
-      {{ back_to_reader(request, "mb-4 text-left sm:mb-0") }}
-      <a href="/login" class="text-2xl font-semibold text-gray-900 hover:text-gray-700 dark:text-gray-100 dark:hover:text-gray-300 sm:col-start-2">Readfine</a>
-    </div>
+    {{ public_header(request) }}
 
     <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
 

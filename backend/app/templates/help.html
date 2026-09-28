@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% from "partials/back_to_reader.html" import back_to_reader %}
+{% from "partials/public_header.html" import public_header %}
 {% from "partials/public_footer.html" import public_footer %}
 {% block title %}Help – Readfine{% endblock %}
 
 {% block content %}
-<div class="min-h-screen pt-6 pb-12 px-4 dark:bg-gray-950">
+<div class="min-h-screen pt-3 pb-12 px-4 dark:bg-gray-950">
   <div class="max-w-3xl mx-auto">
 
-    {{ back_to_reader(request) }}
+    {{ public_header(request) }}
 
     <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
 
