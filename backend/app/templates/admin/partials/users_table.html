@@ -26,6 +26,15 @@
           {% if u.role == "admin" %}
             <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-100 text-purple-700 align-middle">admin</span>
           {% endif %}
+          {% set dormant_note = "Feeds that no active user follows are not fetched." if item.dormant_stops_feeds
+                                else "All its feeds are followed by active users too, so nothing is paused." %}
+          {% if item.dormant %}
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500 align-middle"
+                  title="No activity for {{ item.inactive_days|num if item.inactive_days is not none else 'many' }} days. {{ dormant_note }}">dormant</span>
+          {% elif item.dormant_on %}
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-yellow-100 text-yellow-700 align-middle whitespace-nowrap"
+                  title="Warned by email, falls dormant on {{ item.dormant_on | localtime('long') }} unless they come back. {{ dormant_note }}">dormant {{ item.dormant_on | localtime('numdate') }}</span>
+          {% endif %}
         </div>
         <div class="text-xs text-gray-400">{{ u.email }}</div>
       </td>

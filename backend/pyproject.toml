@@ -72,6 +72,7 @@ packages = ["app"]
 asyncio_mode = "auto"
 markers = [
     "integration: tests that require a real (PostgreSQL) database",
+    "real_dormancy: use the stored dormancy settings instead of the conftest default (off)",
 ]
 
 [dependency-groups]

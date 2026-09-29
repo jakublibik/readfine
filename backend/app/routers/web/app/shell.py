@@ -26,7 +26,7 @@ from app.services.saved_search_service import (
 )
 from app.services.search_params import modal_values, normalize_search_params
 from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
-from app.services.user import touch_last_active
+from app.services.user import FEEDS_RESUMED_SESSION_KEY, touch_last_active
 from app.templating import templates
 
 from .common import _ai_availability, _badge_html, _badge_total_html
@@ -43,7 +43,8 @@ async def main_app(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await touch_last_active(user, db)
+    await touch_last_active(user, db, request.session)
+    feeds_resumed = bool(request.session.pop(FEEDS_RESUMED_SESSION_KEY, False))
     settings_result = await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))
     settings = settings_result.scalar_one_or_none()
     if settings and settings.onboarded_at is None:
@@ -73,6 +74,7 @@ async def main_app(
         "catchup_available": catchup_avail,
         "open_article_id": open_article_id,
         "has_labeled": has_labeled,
+        "feeds_resumed": feeds_resumed,
     })
 
 

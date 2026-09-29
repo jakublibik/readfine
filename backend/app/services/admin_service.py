@@ -141,6 +141,18 @@ async def list_users(db: AsyncSession) -> list[dict]:
         for uid, text, source, updated_at, enabled in term_rows
     }
 
+    # Dormant accounts and those counting down to it (dormancy_service), and which of
+    # them stop at least one feed by sleeping (the rest only share feeds).
+    from app.services.dormancy_service import (
+        dormant_user_ids, policy_from_settings, unshared_feed_user_ids, warned_users,
+    )
+    policy = policy_from_settings(
+        await db.scalar(select(AppSettings).where(AppSettings.id == 1))
+    )
+    dormant = await dormant_user_ids(db, policy, now)
+    warned = await warned_users(db, policy, now)
+    stops_feeds = await unshared_feed_user_ids(db, policy, now, dormant | set(warned))
+
     users = (
         await db.execute(select(User).order_by(User.created_at.desc()))
     ).scalars().all()
@@ -168,6 +180,9 @@ async def list_users(db: AsyncSession) -> list[dict]:
             "ai_scoring_recent": ops.get("scoring", 0),
             "terms": terms.get(user.id),
             "inactive_days": inactive_days,
+            "dormant": user.id in dormant,
+            "dormant_on": warned.get(user.id),
+            "dormant_stops_feeds": user.id in stops_feeds,
         })
     return result
 

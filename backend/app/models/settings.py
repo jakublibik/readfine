@@ -17,6 +17,11 @@ class AppSettings(Base):
     # is polled; does not apply to explicit manual per-feed overrides.
     max_fetch_interval_min: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=360)
     max_feeds_per_user: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=200)
+    # Days without activity after which an account stops keeping its feeds fetched
+    # (services/dormancy_service.py). None = off.
+    dormant_after_days: Mapped[int | None] = mapped_column(SmallInteger)
+    # Email a warning a week before; only takes effect with SMTP configured.
+    dormant_warning_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     default_purge_after_days: Mapped[int | None] = mapped_column(SmallInteger, default=60)
     default_purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger, default=None)
     smtp_host: Mapped[str | None] = mapped_column(String(255))

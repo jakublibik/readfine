@@ -121,6 +121,25 @@ def make_scalar_result(value):
     return result
 
 
+# ── Dormancy ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _dormancy_off(request):
+    """Dormancy off unless a test asks for the real policy (``real_dormancy`` marker).
+
+    Recording activity and queueing AI work both read the dormancy settings first. A
+    mock DB cannot answer that query, and the tests built on one are about something
+    else. test_dormancy.py covers the rule itself against Postgres.
+    """
+    if request.node.get_closest_marker("real_dormancy"):
+        yield
+        return
+    from app.services.dormancy_service import DormancyPolicy
+    with patch("app.services.dormancy_service.load_policy",
+               new=AsyncMock(return_value=DormancyPolicy())):
+        yield
+
+
 # ── Client fixtures ───────────────────────────────────────────────────────────
 
 @pytest.fixture

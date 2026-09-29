@@ -20,6 +20,7 @@ from app.fetcher.interval import (
 from app.fetcher.rss import FETCH_ERROR_DISABLE_THRESHOLD, dedup_cross_feed_global, fetch_feed
 from app.models.feed import Feed, UserFeed
 from app.models.settings import AppSettings
+from app.services.dormancy_service import DormancyPolicy, feed_has_awake_subscriber_sql
 
 logger = logging.getLogger(__name__)
 
@@ -296,14 +297,19 @@ def _feed_due_for_selection(
 
 
 async def _select_due_feeds(
-    session, now: datetime, *, default_interval: int, min_interval: int, max_interval: int
+    session, now: datetime, *, default_interval: int, min_interval: int, max_interval: int,
+    dormancy: DormancyPolicy | None = None,
 ) -> list[Feed]:
     """Select the feeds due for a fetch at *now* (the scheduler's selection query).
 
     Factored out of :func:`_fetch_due_feeds` and parameterised on *now* (rather than
     the DB clock) so the due rule can be tested deterministically. See
     :func:`_feed_due_for_selection` for the rule in prose.
+
+    Only feeds with an awake subscriber are fetched: an active account that is not
+    dormant (dormancy_service). With *dormancy* off that is just an active one.
     """
+    dormancy = dormancy or DormancyPolicy()
     regular_backoff_min = error_backoff_minutes(2, default_interval)
     first_retry_min = error_backoff_minutes(1, default_interval)
     one_minute = literal_column("interval '1 minute'")
@@ -327,6 +333,7 @@ async def _select_due_feeds(
     result = await session.execute(
         select(Feed).where(
             Feed.subscriber_count > 0,
+            feed_has_awake_subscriber_sql(dormancy, now),
             # Honor a server Retry-After (HTTP 429): skip until it passes.
             or_(
                 Feed.retry_after_until.is_(None),
@@ -363,9 +370,16 @@ async def _fetch_due_feeds() -> None:
                 AppSettings.min_fetch_interval_min,
                 AppSettings.max_fetch_interval_min,
                 AppSettings.default_purge_after_days,
+                AppSettings.dormant_after_days,
+                AppSettings.dormant_warning_enabled,
+                AppSettings.smtp_host,
             ).where(AppSettings.id == 1)
         )
         row = result.one_or_none()
+        dormancy = DormancyPolicy(
+            after_days=(row.dormant_after_days if row else None) or None,
+            warning_on=bool(row and row.dormant_warning_enabled and row.smtp_host),
+        )
         default_interval = (row[0] if row else None) or 60
         min_interval = (row[1] if row else None) or 15
         max_interval = (row[2] if row else None) or 360
@@ -376,7 +390,7 @@ async def _fetch_due_feeds() -> None:
         # A due feed is picked at any 15-min tick — see _select_due_feeds().
         feeds = await _select_due_feeds(
             session, now, default_interval=default_interval,
-            min_interval=min_interval, max_interval=max_interval,
+            min_interval=min_interval, max_interval=max_interval, dormancy=dormancy,
         )
 
         # Per-feed published_cutoff: MAX(COALESCE(user_feed.purge_after_days, global))
@@ -832,6 +846,16 @@ async def _send_due_briefings() -> None:
                         pass
 
 
+async def _send_dormancy_warnings() -> None:
+    """Job: email the accounts whose feeds pause in a week (dormancy_service)."""
+    if db.async_session_factory is None:
+        return
+    from app.services.dormancy_service import send_dormancy_warnings
+
+    async with db.async_session_factory() as session:
+        await send_dormancy_warnings(session, public_url=settings.public_url)
+
+
 def create_scheduler() -> AsyncIOScheduler:
     """Configure and return the scheduler (not yet started)."""
     fetch_minutes = ",".join(str(_SLOT_OFFSET_MIN + 15 * k) for k in range(4))
@@ -995,6 +1019,16 @@ def create_scheduler() -> AsyncIOScheduler:
         hour=4,
         minute=30,
         id="purge_traffic_stats",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _send_dormancy_warnings,
+        trigger="cron",
+        hour=9,
+        minute=10,
+        id="send_dormancy_warnings",
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=3600,

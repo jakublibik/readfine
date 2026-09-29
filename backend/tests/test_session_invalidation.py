@@ -1,4 +1,5 @@
 """Tests for session_token_version invalidation across session cookies and JWTs."""
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +12,9 @@ from app.auth.security import create_access_token
 
 
 def _user(tv=0):
-    return SimpleNamespace(id=1, role="user", is_active=True, session_token_version=tv)
+    # Active just now, so a JWT request has no activity to record.
+    return SimpleNamespace(id=1, role="user", is_active=True, session_token_version=tv,
+                           last_active_at=datetime.now(timezone.utc))
 
 
 def _creds(token):

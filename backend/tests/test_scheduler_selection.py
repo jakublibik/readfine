@@ -22,7 +22,8 @@ from app.fetcher.scheduler import (
     recompute_derived_intervals,
 )
 from app.models.article import Article
-from app.models.feed import Feed
+from app.models.feed import Feed, UserFeed
+from app.models.user import User
 
 # Fixed reference time; _select_due_feeds is parameterised on `now`, so seeding
 # last_fetched_at relative to this is fully deterministic (independent of DB clock).
@@ -67,6 +68,14 @@ async def _feed(session, *, interval=None, derived=None, status="active", last_o
         feed.created_at = datetime.now(timezone.utc) + created_offset
     session.add(feed)
     await session.flush()
+    if subscribers:
+        # The scheduler only fetches a feed an active account follows, and reads that
+        # from user_feeds rather than the counter.
+        user = User(email=f"{u}@ex.invalid", password_hash="x", display_name="t")
+        session.add(user)
+        await session.flush()
+        session.add(UserFeed(user_id=user.id, feed_id=feed.id))
+        await session.flush()
     return feed
 
 

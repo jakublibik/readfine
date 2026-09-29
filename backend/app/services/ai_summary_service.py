@@ -57,6 +57,12 @@ async def enqueue_summary_job(
     if len(full_text) < threshold:
         return False
 
+    # A dormant reader still gets articles from a feed someone awake keeps fetched,
+    # but nobody reads them, so no tokens are spent on them (dormancy_service).
+    from app.services.dormancy_service import is_user_dormant
+    if await is_user_dormant(user_id, db):
+        return False
+
     result = await db.execute(
         pg_insert(ArticleAiJob).values(
             article_id=article.id,

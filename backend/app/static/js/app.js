@@ -563,6 +563,13 @@ function _revertNavSnapshot() {
   if (snap.url) htmx.ajax('GET', snap.url, { target: '#article-list', swap: 'innerHTML' });
 }
 
+// The one-off "welcome back, feeds were paused" bar (app/main.html).
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('[data-feeds-resumed-close]')) return;
+  var bar = document.querySelector('[data-feeds-resumed]');
+  if (bar) bar.remove();
+});
+
 function showToast(msg, type) {
   var bg = type === 'error' ? '#b91c1c' : type === 'ok' ? '#15803d' : type === 'warning' ? '#b45309' : '#374151';
   var id = 'app-toast-' + Date.now();

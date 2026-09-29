@@ -15,6 +15,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Upgrade notes
 
 - If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
+- New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`).
 
 ### Added
 
@@ -24,6 +25,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - With public page counting on, a new account keeps where it came from: the domain of the site that linked to the landing or registration page, a `utm_source` tag, `invite`, `internal` (another page of this site) or `direct` (no referrer). **Admin → Traffic** breaks down the accounts created by source under the registration funnel. Nothing else is stored, and switching counting off clears it from every account. The privacy page says so while counting is on.
 - **What's new** at the bottom of the user menu shows which version of Readfine the server runs and opens the release notes of that version, at `/changelog`. The page is public and linked in the footer of the landing, help and legal pages. Upgrade notes in it are shown to admins only.
 - The OPML export in **Settings → OPML** now takes along more of your setup: preferences beyond the timezone, relevance terms and your AI texts (interest profile, summary and context prompts), saved searches, catch-ups with their briefing schedules, and each feed's own settings such as full text and retention. Tick what goes in; with only **Feeds & folders** ticked you get plain OPML. On import, briefings arrive switched off, and a label that a filter, saved search or catch-up uses is created if you do not have it. AI keys and feed passwords are never exported.
+- Admins can pause fetching for accounts nobody uses: **Pause feeds after N days without activity** in **Admin → Settings → Users** (off by default, at least 30 days). A feed is fetched as long as one of its readers is active, so a shared feed keeps going. Activity includes the API. With mail set up, **Email a warning 7 days before pausing** makes sure nobody is paused without notice. A reader who comes back gets the feeds going again within about 15 minutes and a one-time note that articles may be missing. Admins, accounts with a briefing and accounts without feeds are never paused, and AI scoring and summaries are not run for paused readers. **Admin → Users** and **Admin → Feeds** mark such accounts and feeds as `dormant`.
 
 ### Changed
 
@@ -34,6 +36,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - The user table in **Admin → Users** shows more of how each account uses relevance. **Terms** counts a user's relevance terms, grayed out while they are still the list from signup or basic scoring is off. **Scored 7d** counts articles scored by AI in the last week, and **Filters** adds in brackets how many filters use a score. Hovering **AI 7d** breaks the number down by operation, and catch-up runs now count towards it. The Role column is gone; the admin gets a small badge next to their name instead.
 - **Active** on the admin dashboard's Users card now means accounts that read at least one article in the last 7 days (hover for the last 30). It used to count accounts that were not disabled. **Admin → Users** shows the same number next to the heading. It counts reading, not logins, and leaves out articles marked read by a filter or by duplicate detection.
 - The **Mark all as read** button in the sidebar only shows up on hover or long press where there is something unread. On a feed with nothing unread, the refresh button moves into its place.
+- A feed whose readers have all been deactivated by an admin is no longer fetched. It used to keep going as long as it had any subscriber.
 
 ### Fixed
 

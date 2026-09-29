@@ -1,4 +1,5 @@
 {# Heading counts on the users page. "Active" is the dashboard's: read something
    themselves in the last 7 days (admin_service.count_active_readers). #}
+{% set dormant_n = users | selectattr("dormant") | list | length %}
 <span id="users-count"{% if oob %} hx-swap-oob="true"{% endif %} class="text-sm font-normal text-gray-400"
-      title="Active: accounts that read at least one article themselves in the last 7 days.">({{ (users | length)|num }} · {{ active_7d|num }} active 7d)</span>
+      title="Active: accounts that read at least one article themselves in the last 7 days.{% if dormant_n %} Dormant: inactive accounts whose feeds no longer keep fetching going (deactivated accounts not included).{% endif %}">({{ (users | length)|num }} · {{ active_7d|num }} active 7d{% if dormant_n %} · {{ dormant_n|num }} dormant{% endif %})</span>

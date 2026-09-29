@@ -288,6 +288,21 @@
 </div>
 {% endif %}
 
+{% if feeds_resumed %}
+{# Shown once, on the first full load after a dormant account comes back
+   (services/dormancy_service.py). Closed by the delegated handler in app.js. #}
+<div data-feeds-resumed role="status"
+     class="fixed bottom-4 inset-x-3 mx-auto max-w-lg z-50 flex items-start gap-3 px-4 py-3 rounded-lg shadow-lg text-sm bg-blue-50 border border-blue-200 text-gray-700 dark:bg-blue-950 dark:border-blue-900 dark:text-gray-200">
+  <p class="flex-1">Welcome back. Some of your feeds were paused while you were away, so articles from that time may be missing. New ones will show up within about 15 minutes.</p>
+  <button type="button" data-feeds-resumed-close aria-label="Close"
+          class="flex-shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+    </svg>
+  </button>
+</div>
+{% endif %}
+
 <div class="app-shell flex overflow-hidden bg-gray-50">
 
   <!-- Left panel: sidebar -->

@@ -10,6 +10,7 @@ from app.auth.security import decode_access_token, hash_token
 from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
+from app.services.user import touch_last_active
 from app.utils.datetime_format import current_viewer_tz
 from app.utils.formats import current_viewer_format
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
@@ -56,6 +57,9 @@ async def _auth_by_bearer(
     if payload:
         user = await _get_user_by_id(int(payload["sub"]), db)
         if user and payload.get("tv", 0) == user.session_token_version:
+            # A client signed in with a password has no API token whose last use
+            # would count as activity, so it would fall dormant while syncing.
+            await touch_last_active(user, db)
             return user
 
     # Then API token (hashed lookup)
