@@ -201,6 +201,9 @@ class StoryMember(_EffectiveScore, BaseModel):
     is_starred: bool = False
     ai_score: float | None = None
     lexical_score: float | None = None
+    # Same normalised URL as the open article: the same piece reached through another
+    # feed, not another source. The list leaves these out of its story count.
+    same_link: bool = False
     # Admin diagnostic only (list_members with title_norm): trigram similarity to the
     # open article and whether one headline reads as a follow-up of the other.
     similarity: float | None = None

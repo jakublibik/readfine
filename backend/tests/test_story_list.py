@@ -204,11 +204,11 @@ async def _feed(session, *subscribers) -> Feed:
 
 
 async def _article(session, feed, *, story_id=None, title="T", minutes_ago=0,
-                   trimmed=False) -> Article:
+                   trimmed=False, url_normalized=None) -> Article:
     u = uuid.uuid4().hex
     article = Article(
         feed_id=feed.id if feed else None, guid=u, guid_hash=u, title=title,
-        story_id=story_id,
+        story_id=story_id, url_normalized=url_normalized,
         published_at=NOW - timedelta(minutes=minutes_ago),
         fetched_at=NOW - timedelta(minutes=minutes_ago),
         trimmed_at=NOW if trimmed else None,
@@ -364,6 +364,41 @@ class TestAnnotate:
         await annotate(rows, user.id, pg)
 
         assert [r.story_others for r in rows] == [1, 2]
+
+    async def test_the_same_link_from_another_feed_is_not_another_source(self, pg):
+        """Two feeds carrying one article under one URL: the URL dedup has already
+        marked the copy read, and the row must not advertise it as other coverage."""
+        user = await _user(pg)
+        a = await _feed(pg, user)
+        b = await _feed(pg, user)
+        head = await _article(pg, a, title="Head", url_normalized="ex.invalid/x")
+        head.story_id = head.id
+        await pg.flush()
+        copy = await _article(pg, b, story_id=head.id, title="Head",
+                              url_normalized="ex.invalid/x")
+        pg.add(UserArticleState(user_id=user.id, article_id=copy.id, is_read=True,
+                                suppressed_at=NOW, suppressed_by="url"))
+        await pg.flush()
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg)
+
+        assert row.story_total == row.story_others == row.story_read == 0
+
+    async def test_a_real_source_beside_the_copy_still_counts(self, pg):
+        user = await _user(pg)
+        a = await _feed(pg, user)
+        b = await _feed(pg, user)
+        head = await _article(pg, a, title="Head", url_normalized="ex.invalid/x")
+        head.story_id = head.id
+        await pg.flush()
+        await _article(pg, b, story_id=head.id, url_normalized="ex.invalid/x")
+        await _article(pg, b, story_id=head.id, url_normalized="other.invalid/y")
+
+        row = _item(head.id, story_id=head.story_id)
+        await annotate([row], user.id, pg)
+
+        assert row.story_total == row.story_others == 1
 
 
 class TestScopedCounts:
