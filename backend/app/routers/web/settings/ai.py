@@ -39,6 +39,7 @@ from app.services.ai_service import (
 )
 from app.services.ai_profile_service import (
     AUTO_INTERVALS,
+    PROFILE_MAX_CHARS,
     preference_auto_status,
     quality_slot_blocker,
 )
@@ -56,7 +57,6 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 # Matches the column width of user_settings.ai_custom_base_url.
 _MAX_BASE_URL_LEN = 500
 
-PROFILE_MAX_CHARS = 5000
 # Empty is a valid answer: it means "do not score". Anything else has to be long
 # enough to rate an article against, and two characters is not. The bar is low
 # on purpose, since "AI safety" is a real profile someone might stop at, and its

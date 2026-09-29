@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import css_inline
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.settings import AppSettings
@@ -80,6 +81,21 @@ def compute_next_send_at(
     if candidate <= now:
         candidate += timedelta(days=7)
     return candidate.astimezone(timezone.utc)
+
+
+async def reschedule_briefings(user_id: int, tz_str: str, db: AsyncSession) -> None:
+    """Recompute next-send time for the user's active briefings after a tz change."""
+    configs = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user_id,
+            UserCatchupConfig.briefing_enabled == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for cfg in configs:
+        if cfg.briefing_interval and cfg.briefing_time:
+            cfg.briefing_next_send_at = compute_next_send_at(
+                cfg.briefing_interval, cfg.briefing_day, cfg.briefing_time, tz_str
+            )
 
 
 def apply_briefing_failure(

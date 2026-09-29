@@ -38,6 +38,8 @@ MIN_NEW_SIGNALS = 20
 # Values accepted by the settings form; 0 = automatic generation off.
 AUTO_INTERVALS = (0, 14, 28)
 MAX_CONSECUTIVE_FAILS = 3
+# Longest interest profile the settings form (and the OPML import) will store.
+PROFILE_MAX_CHARS = 5000
 
 # Windows used by the generator's own signal groups (ai_service.generate_preference_text).
 _STRONG_WINDOW_DAYS = 180

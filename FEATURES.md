@@ -17,7 +17,7 @@ _Get content in, from anywhere._
 - **Feed health:** A feed that stops working says so instead of just going quiet: a red marker in the sidebar, the reason on hover, and a retry button. Sites that rate-limit get backed off automatically, and readable extraction switches itself off for a site that blocks it rather than filling the reader with empty articles.
 - **Change a feed's address:** A feed that moves, or whose address needs a fix, can be pointed somewhere else without re-subscribing, so every article and every read state stays where it is. The new address is fetched once before it is saved. On a feed somebody else also follows, the address is the administrator's to change.
 - **Shared & private feeds:** On an instance with several accounts, everyone following the same feed shares one fetch, so a site is polled once however many subscribers it has. Mark a feed private and it is kept to your account, with its own fetch and its own copy of the articles.
-- **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS.
+- **OPML import & export:** Move your subscriptions in and out, including files compatible with Tiny Tiny RSS. A Readfine export can also take your labels, filters, preferences, relevance terms, saved searches and catch-ups along, so moving to another instance keeps your setup.
 
 ## Reading experience
 

@@ -74,7 +74,9 @@ categories:
       - title: OPML import & export
         desc: >-
           Move your subscriptions in and out, including files compatible with
-          Tiny Tiny RSS.
+          Tiny Tiny RSS. A Readfine export can also take your labels, filters,
+          preferences, relevance terms, saved searches and catch-ups along, so
+          moving to another instance keeps your setup.
 
   - name: Reading experience
     summary: A clean reader that adapts to your screen.

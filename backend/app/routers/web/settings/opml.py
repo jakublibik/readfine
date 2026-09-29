@@ -1,7 +1,7 @@
 """Web routes for OPML import/export in settings."""
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -24,10 +24,14 @@ async def settings_opml(
 
 @router.get("/opml/export")
 async def settings_opml_export(
+    include: list[str] | None = Query(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    xml = await export_opml(user, db)
+    # No selection at all (an old bookmark, a script) exports everything. The form
+    # always sends at least its "head" marker, so unticking every box there gives
+    # an empty file rather than a full one.
+    xml = await export_opml(user, db, sections=include)
     filename = f"readfine-{datetime.now(timezone.utc).strftime('%Y%m%d')}.opml"
     return Response(
         content=xml.encode("utf-8"),
@@ -44,6 +48,9 @@ async def settings_opml_import(
     import_labels: bool = Form(False),
     import_prefs: bool = Form(False),
     import_filters: bool = Form(False),
+    import_profile: bool = Form(False),
+    import_searches: bool = Form(False),
+    import_catchup: bool = Form(False),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -61,6 +68,9 @@ async def settings_opml_import(
             import_labels=import_labels,
             import_prefs=import_prefs,
             import_filters=import_filters,
+            import_profile=import_profile,
+            import_searches=import_searches,
+            import_catchup=import_catchup,
             db=db,
         )
     except ValueError as exc:
