@@ -15,7 +15,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Upgrade notes
 
 - If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
-- New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`).
+- New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`). Briefing emails use it too.
 
 ### Added
 
@@ -26,6 +26,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - **What's new** at the bottom of the user menu shows which version of Readfine the server runs and opens the release notes of that version, at `/changelog`. The page is public and linked in the footer of the landing, help and legal pages. Upgrade notes in it are shown to admins only.
 - The OPML export in **Settings → OPML** now takes along more of your setup: preferences beyond the timezone, relevance terms and your AI texts (interest profile, summary and context prompts), saved searches, catch-ups with their briefing schedules, and each feed's own settings such as full text and retention. Tick what goes in; with only **Feeds & folders** ticked you get plain OPML. On import, briefings arrive switched off, and a label that a filter, saved search or catch-up uses is created if you do not have it. AI keys and feed passwords are never exported.
 - Admins can pause fetching for accounts nobody uses: **Pause feeds after N days without activity** in **Admin → Settings → Users** (off by default, at least 30 days). A feed is fetched as long as one of its readers is active, so a shared feed keeps going. Activity includes the API. With mail set up, **Email a warning 7 days before pausing** makes sure nobody is paused without notice. A reader who comes back gets the feeds going again within about 15 minutes and a one-time note that articles may be missing. Admins, accounts with a briefing and accounts without feeds are never paused, and AI scoring and summaries are not run for paused readers. **Admin → Users** and **Admin → Feeds** mark such accounts and feeds as `dormant`.
+- With `PUBLIC_URL` set, the footer of a briefing email links to your instance and to **Catch me up & Briefings**, where the briefing is managed. The email sent when a briefing fails links there as well. Without it both stay as they were.
 
 ### Changed
 
