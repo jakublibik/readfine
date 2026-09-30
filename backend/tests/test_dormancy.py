@@ -25,6 +25,7 @@ from app.models.user import User, UserCatchupConfig
 from app.services import dormancy_service
 from app.services.dormancy_service import (
     DormancyPolicy,
+    dormant_feeds_sql,
     dormant_user_ids,
     policy_from_settings,
     send_dormancy_warnings,
@@ -220,6 +221,18 @@ class TestSchedulerGate:
         await _subscribe(pg, user, feed)
         assert feed.id not in await _due(pg, OFF)
 
+    async def test_admin_marks_only_feeds_that_would_be_fetched(self, pg):
+        user = await _user(pg, feeds=0)
+        live, paused = await _feed(pg), await _feed(pg)
+        paused.status = "paused"
+        await _subscribe(pg, user, live)
+        await _subscribe(pg, user, paused)
+        marked = set((await pg.scalars(
+            select(Feed.id).where(dormant_feeds_sql(SILENT, _now()))
+        )).all())
+        assert live.id in marked
+        assert paused.id not in marked
+
 
 # ── Coming back ──────────────────────────────────────────────────────────────
 
@@ -240,6 +253,15 @@ class TestWakeUp:
         await _subscribe(pg, sleeper, feed)
         await _subscribe(pg, reader, feed)
         assert await record_activity(sleeper, pg) is False
+
+    async def test_feed_that_stood_still_anyway_means_no_banner(self, pg):
+        # Its only feed of its own was disabled: the sleep stopped nothing.
+        await _set_app_settings(pg, dormant_after_days=60, dormant_warning_enabled=False)
+        user = await _user(pg, feeds=0)
+        feed = await _feed(pg)
+        feed.status = "disabled"
+        await _subscribe(pg, user, feed)
+        assert await record_activity(user, pg) is False
 
     async def test_awake_account_gets_no_banner(self, pg):
         await _set_app_settings(pg, dormant_after_days=60, dormant_warning_enabled=False)
@@ -336,6 +358,22 @@ class TestWarningJob:
         with patch("app.utils.smtp.send_email", side_effect=refused):
             await send_dormancy_warnings(pg)
         assert user.pause_warning_sent_at is not None
+
+    async def test_temporary_refusal_is_retried_not_stamped(self, pg):
+        # Greylisting answers 4xx with the same exception; the rest of the run goes on.
+        await _set_app_settings(pg, **_smtp())
+        first = await _user(pg, active=None, created=timedelta(days=-9000))
+        second = await _user(pg, active=None, created=timedelta(days=-8999))
+        deferred = smtplib.SMTPRecipientsRefused({first.email: (450, b"try again later")})
+
+        def send(_s, to, *_a):
+            if to == first.email:
+                raise deferred
+
+        with patch("app.utils.smtp.send_email", side_effect=send):
+            await send_dormancy_warnings(pg)
+        assert first.pause_warning_sent_at is None
+        assert second.pause_warning_sent_at is not None
 
     async def test_connection_failure_stamps_nothing(self, pg):
         await _set_app_settings(pg, **_smtp())

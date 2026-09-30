@@ -51,6 +51,9 @@ DORMANT_MAX_DAYS = 3650
 # Warnings per run of the daily job, so the first run on a large instance does not
 # run into the mail provider's sending limit. The rest follow on the next days.
 WARNING_BATCH_LIMIT = 50
+# Feed statuses the scheduler fetches (_select_due_feeds). Only such a feed can be
+# stopped by its readers falling dormant.
+FETCHED_STATUSES = ("active", "error")
 
 
 @dataclass(frozen=True)
@@ -176,8 +179,10 @@ def feed_has_awake_subscriber_sql(policy: DormancyPolicy, now: datetime, feed_id
 def has_unshared_feed_sql(policy: DormancyPolicy, now: datetime, u=User):
     """The account *u* follows at least one feed no other awake account follows,
     i.e. one its sleep actually stopped. Without it the welcome-back banner would tell
-    a reader of shared feeds only that something was paused when nothing was."""
+    a reader of shared feeds only that something was paused when nothing was. A feed
+    that is not fetched anyway (disabled, paused by the admin) does not count."""
     own = aliased(UserFeed)
+    own_feed = aliased(Feed)
     other = aliased(UserFeed)
     other_user = aliased(User)
     someone_else_awake = (
@@ -192,7 +197,12 @@ def has_unshared_feed_sql(policy: DormancyPolicy, now: datetime, u=User):
     )
     return (
         select(own.id)
-        .where(own.user_id == u.id, not_(someone_else_awake))
+        .join(own_feed, own_feed.id == own.feed_id)
+        .where(
+            own.user_id == u.id,
+            own_feed.status.in_(FETCHED_STATUSES),
+            not_(someone_else_awake),
+        )
         .correlate(u)
         .exists()
     )
@@ -250,9 +260,12 @@ async def unshared_feed_user_ids(db: AsyncSession, policy: DormancyPolicy, now: 
 
 
 def dormant_feeds_sql(policy: DormancyPolicy, now: datetime):
-    """Feeds with subscribers, none of them awake: not fetched until one comes back."""
+    """Feeds with subscribers, none of them awake: not fetched until one comes back.
+    Only feeds the scheduler would otherwise fetch; a disabled or paused one has its
+    own status."""
     return and_(
         Feed.subscriber_count > 0,
+        Feed.status.in_(FETCHED_STATUSES),
         not_(feed_has_awake_subscriber_sql(policy, now)),
     )
 
@@ -308,9 +321,9 @@ async def send_dormancy_warnings(db: AsyncSession, now: datetime | None = None,
                                  public_url: str | None = None) -> int:
     """Email the accounts that fall dormant in a week. Returns how many were stamped.
 
-    A recipient the server refuses for good is stamped anyway, or an abandoned
+    A recipient the server refuses for good (5xx) is stamped anyway, or an abandoned
     account with a dead address would never fall asleep and would be retried daily.
-    A connection or login failure stamps nothing and ends the run; tomorrow tries again.
+    A temporary refusal (4xx) is skipped and retried on the next run. A connection or login failure stamps nothing and ends the run; tomorrow tries again.
     """
     from app.utils.smtp import send_email
 
@@ -337,6 +350,11 @@ async def send_dormancy_warnings(db: AsyncSession, now: datetime | None = None,
         try:
             await asyncio.to_thread(send_email, s, user.email, subject, body)
         except smtplib.SMTPRecipientsRefused as exc:
+            # Raised for a 4xx too (greylisting, a full mailbox). That one may get
+            # through tomorrow, so it is left unstamped and the account stays awake.
+            if any(code < 500 for code, _ in exc.recipients.values()):
+                logger.warning("Dormancy warning deferred for user %d: %s", user.id, exc)
+                continue
             logger.warning("Dormancy warning refused for user %d: %s", user.id, exc)
         except (smtplib.SMTPException, OSError, ValueError) as exc:
             logger.error("Dormancy warnings stopped after %d: %s", stamped, exc)
