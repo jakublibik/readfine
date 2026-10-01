@@ -38,6 +38,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - **Active** on the admin dashboard's Users card now means accounts that read at least one article in the last 7 days (hover for the last 30). It used to count accounts that were not disabled. **Admin → Users** shows the same number next to the heading. It counts reading, not logins, and leaves out articles marked read by a filter or by duplicate detection.
 - The **Mark all as read** button in the sidebar only shows up on hover or long press where there is something unread. On a feed with nothing unread, the refresh button moves into its place.
 - A feed whose readers have all been deactivated by an admin is no longer fetched. It used to keep going as long as it had any subscriber.
+- The user picker in **Admin → Scoring eval** lists only accounts with scored articles in the selected window, most first. Next to each name it shows how many were scored and how many of those engaged.
 
 ### Fixed
 

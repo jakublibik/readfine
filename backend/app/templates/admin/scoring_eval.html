@@ -61,8 +61,8 @@
     <label class="text-gray-500" for="eval-user">User:</label>
     <select name="user_id" id="eval-user" class="border border-gray-300 rounded px-2 py-1 text-sm">
       <option value="">All users (aggregate)</option>
-      {% for u in users %}
-      <option value="{{ u.user.id }}" {{ 'selected' if eval.user_id == u.user.id }}>{{ u.user.display_name or u.user.email }}</option>
+      {% for u in eval.users %}
+      <option value="{{ u.id }}" {{ 'selected' if eval.user_id == u.id }}>{{ u.name }} ({{ u.n|num }} scored, {{ u.engaged|num }} engaged)</option>
       {% endfor %}
     </select>
     <button type="submit" class="px-2 py-1 rounded border border-gray-300 text-gray-600 hover:border-gray-400">Show</button>

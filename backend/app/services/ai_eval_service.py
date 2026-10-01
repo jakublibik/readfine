@@ -218,6 +218,35 @@ def _series(pairs: list[tuple[float, bool]]) -> dict:
     }
 
 
+async def _scored_users(db: AsyncSession, cutoff: datetime, selected: int | None) -> list[dict]:
+    """Users with at least one scored article in the window, for the user picker.
+
+    Anyone else would get an empty page. The selected user stays in the list even
+    without data (a shorter window can empty it), so the picker keeps showing who
+    the page is about.
+    """
+    rows = (await db.execute(text("""
+        SELECT u.id, COALESCE(NULLIF(u.display_name, ''), u.email) AS name,
+               COUNT(*) AS n,
+               COUNT(*) FILTER (WHERE s.ever_starred OR s.dwell_seconds >= :dwell
+                                OR s.link_opened) AS engaged
+        FROM user_article_states s
+        JOIN users u ON u.id = s.user_id
+        WHERE (s.ai_score IS NOT NULL OR s.lexical_score IS NOT NULL)
+          AND s.created_at >= :cutoff
+        GROUP BY u.id, u.display_name, u.email
+        ORDER BY n DESC, name
+    """), {"cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS})).all()
+    users = [{"id": r.id, "name": r.name, "n": r.n, "engaged": r.engaged} for r in rows]
+    if selected is not None and all(u["id"] != selected for u in users):
+        row = (await db.execute(text(
+            "SELECT id, COALESCE(NULLIF(display_name, ''), email) AS name FROM users WHERE id = :uid"),
+            {"uid": selected})).first()
+        if row:
+            users.append({"id": row.id, "name": row.name, "n": 0, "engaged": 0})
+    return users
+
+
 async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None = None) -> dict:
     """Scoring-quality metrics for the last `days`, all users or a single one.
 
@@ -294,6 +323,7 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
             exposure = {"aggregate_only": True, "users_affected": affected}
 
     return {
+        "users": await _scored_users(db, cutoff, user_id),
         "lexical": lexical,
         "head_to_head": head_to_head,
         "days": days,

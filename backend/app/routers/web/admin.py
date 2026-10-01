@@ -143,11 +143,9 @@ async def admin_scoring_eval(
 ):
     from app.services.ai_eval_service import get_scoring_eval
     window = clamp(days, 7, 365, 90)
-    users = await list_users(db)
     eval_data = await get_scoring_eval(db, days=window, user_id=safe_int(user_id))
     return templates.TemplateResponse(request, "admin/scoring_eval.html", {
         "eval": eval_data,
-        "users": users,
     })
 
 
