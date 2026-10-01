@@ -41,6 +41,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- On a phone, an article opened full screen (and one opened from **Same story**) has its ··· menu back, so you can generate a summary or context, mark it unread or fetch the full text there too. Star, archive and share are left out of it, since the bar at the top already has them.
 - Filters imported from an OPML export keep their order, which matters when one stops the rest. They all used to land at the same position and ran alphabetically. A filter that adds a label named with digits only, like `2024`, no longer gets skipped on import, and a filter limited to feeds or folders you do not have comes in switched off instead of applying to every feed.
 - When two of your feeds carry the same article under the same link, the article list no longer counts the copy as another source covering the story. The copy was already marked read as a duplicate, but the row still said "1 other source". It is still listed under **Same story** at the foot of the article, marked **same link**.
 - The help, features, legal and What's new pages share one header: the **Readfine** name at the top leads to the home page, with **Back to reader** beside it when you are signed in. Help and features had nothing to take a signed-out visitor back, and the name on the legal pages led to the sign-in form.
