@@ -145,6 +145,22 @@
               closes it.</dd>
           </div>
 
+          <div id="shortcuts">
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Keyboard shortcuts</dt>
+            <dd>
+              <p>The keys are the ones Inoreader and Miniflux use, and the TT-RSS ones work too.
+                Press <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">?</kbd>
+                in the reader to see this list.</p>
+              <details class="mt-2">
+                <summary class="cursor-pointer select-none text-sm font-medium text-gray-700 marker:text-gray-400 dark:text-gray-300">All shortcuts</summary>
+                <div class="mt-3">
+                  {% from "app/partials/shortcuts.html" import shortcut_list %}
+                  {{ shortcut_list() }}
+                </div>
+              </details>
+            </dd>
+          </div>
+
           <div>
             <dt class="font-medium text-gray-900 dark:text-gray-100">Keeping an article that isn't in your feeds</dt>
             <dd>Open <strong>Saved</strong> in the sidebar and paste a link into the bar at the top of the list. See

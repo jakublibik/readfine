@@ -238,6 +238,27 @@
 </div>
 {% endif %}
 
+<!-- Keyboard shortcuts (?) -->
+<div id="shortcuts-modal-overlay"
+     class="hidden fixed inset-0 z-50 flex items-center justify-center p-4"
+     aria-modal="true" role="dialog" aria-labelledby="shortcuts-modal-title">
+  <div class="absolute inset-0 bg-black/40" data-action="close-shortcuts"></div>
+  <div class="relative w-full max-w-md max-h-[85vh] flex flex-col bg-white dark:bg-gray-800 rounded-xl shadow-2xl overflow-hidden">
+    <div class="flex-shrink-0 flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+      <h2 id="shortcuts-modal-title" class="text-base font-semibold text-gray-800 dark:text-gray-100">Keyboard shortcuts</h2>
+      <button data-action="close-shortcuts" aria-label="Close" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto px-5 py-5">
+      {% from "app/partials/shortcuts.html" import shortcut_list %}
+      {{ shortcut_list() }}
+    </div>
+  </div>
+</div>
+
 <!-- Global label picker popover -->
 <div id="label-picker"
      class="hidden fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[160px] max-w-[220px] max-h-64 overflow-y-auto"></div>

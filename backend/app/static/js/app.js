@@ -2088,34 +2088,338 @@ function closeFeedbackModal() {
   if (overlay) overlay.classList.add('hidden');
 }
 
-// Is either modal up? Asked before Escape is handed to anything underneath them.
+function _shortcutsOpen() {
+  var overlay = document.getElementById('shortcuts-modal-overlay');
+  return !!(overlay && !overlay.classList.contains('hidden'));
+}
+
+function openShortcutsModal() {
+  var overlay = document.getElementById('shortcuts-modal-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+}
+
+function closeShortcutsModal() {
+  var overlay = document.getElementById('shortcuts-modal-overlay');
+  if (overlay) overlay.classList.add('hidden');
+}
+
+// Is any modal up? Asked before Escape is handed to anything underneath them.
 function _anyModalOpen() {
   if (document.documentElement.classList.contains('search-modal-open')) return true;
+  if (_shortcutsOpen()) return true;
   var feedback = document.getElementById('feedback-modal-overlay');
   return !!(feedback && !feedback.classList.contains('hidden'));
 }
 
 // ── Keyboard shortcuts ─────────────────────────────────────────────────────
+// The set follows Google Reader as Inoreader and Miniflux kept it (j/k, o, m, v,
+// Shift+A, ?), with the TT-RSS keys as aliases (n/p, u, s), so readers coming from
+// either keep their habits. The list a reader sees is app/partials/shortcuts.html;
+// a key added here goes there too.
+//
+// Every action goes through the control a click would use (the row, the ··· menu of
+// the open article, the sidebar), so the optimistic star, the read counts, dwell and
+// the 2-panel inline shell all behave exactly as they do with the mouse.
+
+// The article the last j/k or row click landed on. In the 2-panel layout the reader
+// can close the article again, and j should then carry on from it, not from the top.
+var _kbCursorId = null;
+
+document.addEventListener('click', function (e) {
+  var row = e.target.closest('#article-list .article-row');
+  if (row && !e.target.closest('[data-stop-propagation]')) _kbCursorId = row.dataset.articleId;
+  // A picker opened with the mouse is used with the mouse: no focus moved into it.
+  if (e.isTrusted && e.target.closest('[data-label-trigger]')) _kbPickerFocus = null;
+}, true);
+
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'article-list') _kbCursorId = null;
+});
+
+// The open article: the one in the story overlay when that is up, the inline one in
+// the 2-panel layout (and on a phone set to read inline), the panel otherwise. On a
+// phone reading full-screen the panel keeps its last article after Back, so it only
+// counts while it is on screen.
+function _kbOpenArticle() {
+  var html = document.documentElement;
+  var box;
+  if (html.classList.contains('story-detail-open') || html.classList.contains('deeplink-detail-open')) {
+    box = document.getElementById('article-detail');
+  } else if (_shouldUseInline()) {
+    box = document.getElementById('inline-article-detail-content');
+  } else {
+    if (html.dataset.bucket === 'small' && !html.classList.contains('mobile-detail-open')) return null;
+    box = document.getElementById('article-detail');
+  }
+  return box ? box.querySelector('[data-article-id]') : null;
+}
+
+function _kbRows() {
+  var list = document.getElementById('article-list');
+  return list ? Array.prototype.slice.call(list.querySelectorAll('.article-row')) : [];
+}
+
+// Keep the row j/k moved to in sight. The inline shell scrolls its row to the top by
+// itself; the 3-panel list only needs the row not to be cut off.
+function _kbRevealRow(row) {
+  var list = document.getElementById('article-list');
+  if (!list) return;
+  var box = list.getBoundingClientRect();
+  var r = row.getBoundingClientRect();
+  if (r.top < box.top + listStickyOffset()) scrollListRowToTop(row);
+  else if (r.bottom > box.bottom) list.scrollTop += r.bottom - box.bottom;
+}
+
+function _kbOpenRow(row) {
+  if (!row) return;
+  _kbCursorId = row.dataset.articleId;
+  row.click();
+  if (!_shouldUseInline()) _kbRevealRow(row);
+}
+
+function _kbMove(step) {
+  var rows = _kbRows();
+  if (!rows.length) return;
+  var open = _kbOpenArticle();
+  var id = open ? open.dataset.articleId : _kbCursorId;
+  var at = -1;
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i].dataset.articleId === id) { at = i; break; }
+  }
+  // Nothing open yet: either key starts at the top, the way a list is read.
+  _kbOpenRow(at === -1 ? rows[0] : rows[at + step]);
+}
+
+function _kbToggleOpen() {
+  var open = _kbOpenArticle();
+  if (open) {
+    // Only the inline shell closes; the 3-panel detail stays as it is.
+    if (!_shouldUseInline()) return;
+    var expanded = document.querySelector('#article-list .article-row.inline-expanded');
+    if (expanded) expanded.click();
+    return;
+  }
+  var row = _kbCursorId && document.getElementById('article-row-' + _kbCursorId);
+  _kbOpenRow(row || _kbRows()[0]);
+}
+
+// A control in the ··· menu of the open article. The menu is usually closed, which
+// does not matter to click().
+function _kbArticleControl(selector) {
+  var open = _kbOpenArticle();
+  var control = open && open.querySelector(selector);
+  if (control) control.click();
+}
+
+function _kbReload() {
+  if (document.querySelector('#article-list [data-save-search-area]')) { _runLastSearch(); return; }
+  htmx.ajax('GET', _activeNavGet || '/htmx/articles', { target: '#article-list', swap: 'innerHTML' });
+  htmx.trigger(document.body, 'sidebarRefresh');
+}
+
+// The ✓ on the sidebar row of the view that is open. Asked first: by hand that is a
+// small target to hit, by keyboard a single slip.
+function _kbMarkAllRead() {
+  if (document.querySelector('#article-list [data-save-search-area]')) {
+    showToast('Search results can’t be marked read all at once', 'info');
+    return;
+  }
+  var active = document.querySelectorAll('.nav-item.active');
+  for (var i = 0; i < active.length; i++) {
+    var row = active[i].closest('.mark-read-row');
+    var btn = row && row.querySelector('[data-action="mark-read"]');
+    if (!btn) continue;
+    if (confirm('Mark everything in this view as read?')) btn.click();
+    return;
+  }
+}
+
+function _kbGoTo(url) {
+  var item = document.querySelector('#sidebar-full .nav-item[hx-get="' + url + '"]') ||
+             document.querySelector('.nav-item[hx-get="' + url + '"]');
+  if (item) item.click();
+}
+
+// Shift+J / Shift+K: the next or previous entry of the sidebar, top to bottom as it is
+// drawn (views, saved searches, labels, folders, feeds), skipping what a collapsed
+// section hides. The way TT-RSS and Inoreader walk their trees, and like them it
+// does not skip a feed with nothing unread. It stops at either end rather than wrap.
+function _kbSidebarStep(step) {
+  var full = document.getElementById('sidebar-full');
+  if (!full) return;
+  var items = Array.prototype.filter.call(full.querySelectorAll('.nav-item[hx-get]'), function (a) {
+    return !a.closest('.collapsible.collapsed');
+  });
+  if (!items.length) return;
+  var at = -1;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].classList.contains('active')) { at = i; break; }
+  }
+  var next = at === -1 ? items[step > 0 ? 0 : items.length - 1] : items[at + step];
+  if (!next) return;
+  next.click();
+  next.scrollIntoView({ block: 'nearest' });
+}
+
+// t: the label picker of the open article. Focus goes into it, so the arrows, Enter
+// and Esc do the rest without the mouse.
+function _kbLabels() {
+  var open = _kbOpenArticle();
+  var trigger = open && open.querySelector('[data-label-trigger]');
+  if (!trigger) return;
+  _kbPickerFocus = 0;
+  trigger.click();
+}
+
+var _kbPickerFocus = null;
+
+document.body.addEventListener('htmx:afterSettle', function (e) {
+  if (_kbPickerFocus === null || !e.detail.target || e.detail.target.id !== 'label-picker') return;
+  // Toggling a label redraws the picker, so the focus goes back to the same line.
+  var buttons = e.detail.target.querySelectorAll('button[hx-post]');
+  var btn = buttons[Math.min(_kbPickerFocus, buttons.length - 1)];
+  if (btn) btn.focus();
+});
+
+document.addEventListener('keydown', function (e) {
+  var picker = document.getElementById('label-picker');
+  if (!picker || picker.classList.contains('hidden') || !picker.contains(e.target)) return;
+  if (e.key === 'Escape') { _kbPickerFocus = null; e.target.blur(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  e.preventDefault();
+  var buttons = Array.prototype.slice.call(picker.querySelectorAll('button[hx-post]'));
+  var at = buttons.indexOf(e.target) + (e.key === 'ArrowDown' ? 1 : -1);
+  if (at >= 0 && at < buttons.length) buttons[at].focus();
+});
+
+document.addEventListener('focusin', function (e) {
+  var picker = document.getElementById('label-picker');
+  if (_kbPickerFocus === null || !picker || !picker.contains(e.target)) return;
+  var buttons = Array.prototype.slice.call(picker.querySelectorAll('button[hx-post]'));
+  var at = buttons.indexOf(e.target);
+  if (at !== -1) _kbPickerFocus = at;
+});
+
+// Space: a screen further down the article, and the next article once the end of this
+// one is in sight, as in Google Reader and Inoreader. Shift+Space goes back up.
+function _kbSpace(back) {
+  var inline = _shouldUseInline() && !document.documentElement.classList.contains('story-detail-open');
+  var surface = document.getElementById(inline ? 'article-list' : 'article-detail');
+  if (!surface) return;
+  var page = surface.clientHeight * 0.85;
+  if (back) { surface.scrollBy({ top: -page, behavior: 'smooth' }); return; }
+  var open = _kbOpenArticle();
+  var atEnd;
+  if (inline) {
+    var shell = document.getElementById('inline-article-detail');
+    atEnd = !open || !shell || shell.getBoundingClientRect().bottom <= surface.getBoundingClientRect().bottom + 2;
+  } else {
+    atEnd = !open || surface.scrollTop + surface.clientHeight >= surface.scrollHeight - 2;
+  }
+  if (atEnd) {
+    // The story overlay is one article, there is no next one to go to.
+    if (!document.documentElement.classList.contains('story-detail-open')) _kbMove(1);
+    return;
+  }
+  surface.scrollBy({ top: page, behavior: 'smooth' });
+}
+
+// Another window over the reader: keys belong to it, not to the list underneath.
+function _kbCovered() {
+  if (_anyModalOpen()) return true;
+  var html = document.documentElement;
+  if (html.classList.contains('mobile-sidebar-open')) return true;
+  var ids = ['general-chat-modal', 'briefing-modal-overlay', 'label-picker'];
+  for (var i = 0; i < ids.length; i++) {
+    var el = document.getElementById(ids[i]);
+    if (el && !el.classList.contains('hidden')) return true;
+  }
+  return !!document.querySelector('[id^="chat-modal-"]:not(.hidden)');
+}
+
+var _kbPendingG = 0;
+
 document.addEventListener('keydown', function (e) {
   if (e.key === 'Escape') {
-    // Whatever is on top answers for it. The story overlay is over the list, but the two
+    // Whatever is on top answers for it. The story overlay is over the list, but the
     // modals are drawn over the overlay (one z-index higher) and '/' opens the search one
     // from there, so taking the overlay first left the modal hanging over a window that
     // had gone. The overlay is next in line, and it has a history entry to go back
     // through rather than just a class to drop.
-    if (_anyModalOpen()) { closeSearchModal(); closeFeedbackModal(); return; }
+    if (_anyModalOpen()) { closeSearchModal(); closeFeedbackModal(); closeShortcutsModal(); return; }
     if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
-    closeSearchModal(); closeFeedbackModal(); return;
+    closeSearchModal(); closeFeedbackModal(); closeShortcutsModal(); return;
   }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
   // Enter in a name field saves: the edited search in the window, a new one under
   // the results header.
   if (e.key === 'Enter' && e.target.id === 'saved-search-name') { saveSearchFromModal(false); return; }
   if (e.key === 'Enter' && e.target.id === 'header-save-name') { saveSearchFromHeader(); return; }
-  if (e.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) {
+
+  var t = e.target;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName) || t.isContentEditable) return;
+  // Ctrl, Alt and Cmd combinations belong to the browser. AltGr is Ctrl+Alt on Windows
+  // and is how some layouts type '/' or '?', so it does not count.
+  var altGr = e.getModifierState && e.getModifierState('AltGraph');
+  if (e.metaKey || ((e.ctrlKey || e.altKey) && !altGr)) return;
+  if (e.isComposing) return;
+
+  if (e.key === '?') {
+    if (!document.getElementById('shortcuts-modal-overlay')) return;
+    e.preventDefault();
+    if (_shortcutsOpen()) closeShortcutsModal();
+    else if (!_kbCovered()) openShortcutsModal();
+    return;
+  }
+  if (e.key === '/') {
+    if (_shortcutsOpen()) closeShortcutsModal();
     e.preventDefault();
     openSearchModal();
+    return;
   }
+  // The rest act on the reader, which has to be on this page and in front.
+  if (!document.getElementById('article-list') || _kbCovered()) return;
+
+  if (_kbPendingG) {
+    var fresh = Date.now() - _kbPendingG < 1500;
+    _kbPendingG = 0;
+    if (fresh && (e.key === 'a' || e.key === 's')) {
+      e.preventDefault();
+      _kbGoTo(e.key === 'a' ? '/htmx/articles' : '/htmx/articles?starred_only=true');
+      return;
+    }
+  }
+
+  // The story overlay is one article over the list: the keys for it work, moving
+  // through the list under it does not.
+  var overStory = document.documentElement.classList.contains('story-detail-open');
+  var handled = true;
+  switch (e.key) {
+    case 'j': case 'n': if (!overStory) _kbMove(1); break;
+    case 'k': case 'p': if (!overStory) _kbMove(-1); break;
+    case 'o': if (!overStory) _kbToggleOpen(); break;
+    case 'Enter':
+      // A focused link or button keeps its own Enter.
+      if (t !== document.body || overStory) { handled = false; break; }
+      _kbToggleOpen();
+      break;
+    case 'm': case 'u': _kbArticleControl('[data-header-read]'); break;
+    case 's': case 'f': _kbArticleControl('[data-header-star]'); break;
+    case 'e': _kbArticleControl('[data-header-archive]'); break;
+    case 'v': _kbArticleControl('.article-detail-title-row [data-external-link]'); break;
+    case ' ':
+      if (t !== document.body) { handled = false; break; }
+      _kbSpace(e.shiftKey);
+      break;
+    case 't': case 'T': case 'l': _kbLabels(); break;
+    case 'J': if (!overStory) _kbSidebarStep(1); break;
+    case 'K': if (!overStory) _kbSidebarStep(-1); break;
+    case 'r': if (!overStory) _kbReload(); break;
+    case 'A': if (!overStory) _kbMarkAllRead(); break;
+    case 'g': if (!overStory) _kbPendingG = Date.now(); break;
+    default: handled = false;
+  }
+  if (handled) e.preventDefault();
 });
 
 // ── Briefing modal close via HX-Trigger ───────────────────────────────────
@@ -2224,6 +2528,7 @@ document.addEventListener('click', function (e) {
   if (action === 'close-search') { closeSearchModal(); return; }
   if (action === 'open-feedback-modal') { openFeedbackModal(); return; }
   if (action === 'close-feedback-modal') { closeFeedbackModal(); return; }
+  if (action === 'close-shortcuts') { closeShortcutsModal(); return; }
   if (action === 'submit-search') { submitSearch(); return; }
   if (action === 'run-saved-search') { runSavedSearch(el.dataset.savedId); return; }
   if (action === 'edit-saved-search') { openSearchModal(false, el.dataset.savedId); return; }
@@ -2540,6 +2845,13 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
   document.body.addEventListener('htmx:beforeRequest', function (e) {
     if (!e.target.hasAttribute('data-label-trigger')) return;
     _pickerTriggerRect = e.target.getBoundingClientRect();
+    // Opened from the keyboard (t), the trigger in the article's bottom bar can be far
+    // off screen. The picker then opens in the upper middle of the window instead.
+    var r = _pickerTriggerRect;
+    if (!r.width || r.bottom < 0 || r.top > _vh()) {
+      var y = Math.round(_vh() / 4);
+      _pickerTriggerRect = { left: Math.max(4, (window.innerWidth - 220) / 2), top: y, bottom: y };
+    }
     var p = document.getElementById('label-picker');
     if (!p) return;
     var left = _pickerTriggerRect.left;
