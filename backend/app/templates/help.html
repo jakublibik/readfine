@@ -352,7 +352,9 @@
             <ul class="list-disc ml-5 mt-2 space-y-1">
               <li><code class="font-mono">(apple|pear|fig)</code> matches any of several terms (OR).</li>
               <li><code class="font-mono">\bAI\b</code> matches the whole word “AI” only (not “rain” or “maintain”);
-                <code class="font-mono">\b</code> is a word boundary.</li>
+                <code class="font-mono">\b</code> is a word boundary. Chinese and Japanese write without
+                spaces, so there <code class="font-mono">\b</code> sees a whole sentence as one word; leave it out and
+                the word is found anywhere in the text.</li>
               <li><code class="font-mono">^Breaking</code> means the field <em>starts</em> with “Breaking”
                 (<code class="font-mono">^</code> = start, <code class="font-mono">$</code> = end).</li>
               <li><code class="font-mono">colou?r</code> matches “color” and “colour”
