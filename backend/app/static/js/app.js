@@ -1991,13 +1991,22 @@ function _foldForSearch(s) {
   return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 }
 
+// Chinese, Japanese and Korean, the class CJK_CHARS in relevance_service.py. These
+// have no spaces between words, so a CJK term is marked wherever it stands, one
+// character included (the search finds those in titles).
+var _CJK_RUN = /[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿가-힯ᄀ-ᇿ㄰-㆏]+/g;
+
 function _searchHitTerms(query) {
   var terms = [];
   // A quoted phrase counts as its words; "-word" is excluded, so it's no hit; "or"
   // is an operator.
   query.replace(/"/g, ' ').split(/\s+/).forEach(function (w) {
     if (!w || w.charAt(0) === '-' || w.toLowerCase() === 'or') return;
-    w = _foldForSearch(w.replace(/\*+$/, '')).replace(/[^\p{L}\p{N}]+/gu, '');
+    // Marks stay: folding keeps a kana's voicing mark (が is か + ゙) in the text too.
+    w = _foldForSearch(w.replace(/\*+$/, '')).replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
+    // "OpenAI发布" is two terms, a Latin word and a CJK one.
+    (w.match(_CJK_RUN) || []).forEach(function (run) { terms.push(run); });
+    w = w.replace(_CJK_RUN, '');
     var stem = w.replace(/(ing|ed|es|s|e)$/, '');
     if (stem.length >= 3) w = stem;
     if (w.length >= 2) terms.push(w);
@@ -2016,7 +2025,8 @@ function _highlightIn(el, terms) {
   }
   var hits = [];
   terms.forEach(function (t) {
-    var re = new RegExp('(^|[^\\p{L}\\p{N}])(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gu');
+    var lead = t.match(_CJK_RUN) ? '()' : '(^|[^\\p{L}\\p{N}])';
+    var re = new RegExp(lead + '(' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gu');
     var m;
     while ((m = re.exec(folded))) {
       var start = m.index + m[1].length;

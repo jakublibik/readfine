@@ -16,6 +16,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 - If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
 - New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`). Briefing emails use it too.
+- The upgrade rebuilds the search index so that Chinese, Japanese and Korean text can be searched. Measured at under two minutes for 170 000 articles. The index grows by about a fifth on an instance with many such articles and stays the same size without them.
 
 ### Added
 
@@ -42,6 +43,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- Search finds Chinese, Japanese and Korean words inside running text. Search split text only at spaces and punctuation, so in these languages it took a whole sentence for one word, and a word inside it was never found. A word now matches wherever its characters stand together, in the title, summary or full text. A search for a single character looks at titles only.
 - On a phone, an article opened full screen (and one opened from **Same story**) has its ··· menu back, so you can generate a summary or context, mark it unread or fetch the full text there too. Star, archive and share are left out of it, since the bar at the top already has them.
 - Filters imported from an OPML export keep their order, which matters when one stops the rest. They all used to land at the same position and ran alphabetically. A filter that adds a label named with digits only, like `2024`, no longer gets skipped on import, and a filter limited to feeds or folders you do not have comes in switched off instead of applying to every feed.
 - When two of your feeds carry the same article under the same link, the article list no longer counts the copy as another source covering the story. The copy was already marked read as a duplicate, but the row still said "1 other source". It is still listed under **Same story** at the foot of the article, marked **same link**.

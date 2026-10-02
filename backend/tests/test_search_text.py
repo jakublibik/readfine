@@ -1,7 +1,8 @@
 """Full-text matching and ranking.
 
 Search folds accents on both sides (so "zpravy" finds "zprávy" and back), and ranks
-a match in the title above one in the body.
+a match in the title above one in the body. Chinese, Japanese and Korean are indexed
+as character pairs, so a word inside an unspaced sentence is found.
 
 Runs against the real (dev) database inside a transaction that is always rolled
 back. Skips automatically if the DB is unreachable.
@@ -16,7 +17,7 @@ from app.config import settings as app_settings
 from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.models.user import User
-from app.services.article import list_articles
+from app.services.article import list_articles, split_cjk_query
 
 NOW = datetime.now(timezone.utc)
 
@@ -149,3 +150,70 @@ async def test_phrase_keeps_its_order_with_stemmed_words(pg):
     ])
     found = {a.id for a in await list_articles(user=user, db=pg, q=f'"votes open" {tok}')}
     assert found == {in_order}
+
+
+# ── CJK ────────────────────────────────────────────────────────────────────────
+
+def test_split_cjk_query():
+    # A run becomes the phrase of its pairs; Latin, "-" and "or" stay as they were.
+    assert split_cjk_query("人工智能")[0].split() == ['"人工', "工智", '智能"']
+    fts, singles = split_cjk_query("OpenAI发布 -芯片 or apple")
+    assert fts.split() == ["OpenAI", '"发布"', '-"芯片"', "or", "apple"]
+    assert singles == []
+    # Inside quotes the pairs join the phrase that is already there.
+    assert split_cjk_query('"OpenAI 发布会"')[0].split() == ['"OpenAI', "发布", "布会", '"']
+    # A star after CJK means nothing for pairs and goes.
+    assert split_cjk_query("芯片*")[0].split() == ['"芯片"']
+    # One character comes back on its own, negated by a leading "-" only.
+    fts, singles = split_cjk_query("猫 -狗 apple")
+    assert fts.split() == ["apple"]
+    assert singles == [("猫", False), ("狗", True)]
+    assert split_cjk_query("no-猫")[1] == [("猫", False)]
+
+
+async def test_cjk_word_inside_a_sentence(pg):
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (zh, apart, ja, ko) = await _setup(pg, [
+        (f"新闻 {tok}", "<p>我们讨论了人工智能的发展。</p>"),
+        (f"新闻 {tok}", "<p>人工制品和智能手机</p>"),
+        (f"ニュース {tok}", "<p>東京都の天気は晴れ</p>"),
+        (f"뉴스 {tok}", "<p>서울 날씨가 좋다</p>"),
+    ])
+
+    async def found(q):
+        return {a.id for a in await list_articles(user=user, db=pg, q=q)}
+
+    # The characters have to stand together: "人工" and "智能" apart is no match.
+    assert await found(f"人工智能 {tok}") == {zh}
+    assert await found(f"智能 {tok}") == {zh, apart}
+    assert await found(f"東京 {tok}") == {ja}
+    assert await found(f"天気 {tok}") == {ja}
+    # A Korean word with a particle attached.
+    assert await found(f"날씨 {tok}") == {ko}
+    assert await found(f"{tok} -智能") == {ja, ko}
+    assert await found(f'"人工智能的" {tok}') == {zh}
+
+
+async def test_cjk_next_to_latin(pg):
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (glued, other) = await _setup(pg, [
+        (f"OpenAI发布新模型 {tok}", "<p>x</p>"), (f"OpenAI 公司 {tok}", "<p>x</p>"),
+    ])
+    found = {a.id for a in await list_articles(user=user, db=pg, q=f"OpenAI发布 {tok}")}
+    assert found == {glued}
+
+
+async def test_single_cjk_character_searches_titles(pg):
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (cat, in_body, dog, older_cat) = await _setup(pg, [
+        (f"我的猫 {tok}", "<p>x</p>"), (f"新闻 {tok}", "<p>猫</p>"),
+        (f"狗 {tok}", "<p>x</p>"), (f"猫和狗 {tok}", "<p>x</p>"),
+    ])
+
+    async def found(q, **kw):
+        return [a.id for a in await list_articles(user=user, db=pg, q=q, **kw)]
+
+    assert set(await found(f"猫 {tok}")) == {cat, older_cat}
+    assert set(await found(f"{tok} -猫")) == {in_body, dog}
+    # With nothing else in the query there is no rank to sort by: newest first.
+    assert await found("猫", sort_order="relevance") == [cat, older_cat]

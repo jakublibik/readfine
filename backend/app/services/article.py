@@ -12,7 +12,7 @@ from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
-from app.services.relevance_service import effective_score_sql, score_cut
+from app.services.relevance_service import CJK_CHARS, effective_score_sql, score_cut
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.utils.datetime_format import current_viewer_tz, format_local
 from app.utils.text import strip_html
@@ -153,7 +153,11 @@ def _format_date(dt: datetime | None) -> str:
 # Accent-folded and weighted: title A, summary B, body D. Each part goes in twice, as
 # written ('simple') and stemmed ('english'), so "votes" finds "voting" while a query
 # the English parser drops as stop words ("The Who") still finds its exact words.
-# Must match the expression of idx_articles_search_fts (migration 0109) exactly, or
+# The 'simple' half also cuts Chinese, Japanese and Korean into overlapping character
+# pairs (cjk_bigrams, migration 0117): the parser splits only on spaces and
+# punctuation, so a whole CJK sentence was one word and nothing inside it could be
+# found. The 'english' half is left alone, or every pair would be in twice.
+# Must match the expression of idx_articles_search_fts (migration 0117) exactly, or
 # searches stop using the index.
 _FTS_TITLE = "immutable_unaccent(coalesce(articles.title, ''))"
 _FTS_SUMMARY = "immutable_unaccent(coalesce(articles.summary, ''))"
@@ -161,17 +165,58 @@ _FTS_BODY = (
     "immutable_unaccent(coalesce(articles.content, '') || ' ' || "
     "coalesce(articles.readable_content, ''))"
 )
-_FTS_CONFIGS = ("simple", "english")
+_FTS_PARSE = {"simple": "cjk_bigrams({})", "english": "{}"}
 _FTS_VECTOR = "(" + " || ".join(
-    f"setweight(to_tsvector('{config}', {part}), '{weight}')"
+    f"setweight(to_tsvector('{config}', {wrap.format(part)}), '{weight}')"
     for part, weight in ((_FTS_TITLE, "A"), (_FTS_SUMMARY, "B"), (_FTS_BODY, "D"))
-    for config in _FTS_CONFIGS
+    for config, wrap in _FTS_PARSE.items()
 ) + ")"
 
 # A word ending in "*" matches every word it begins ("zpráv*" finds "zprávami"). Two
 # letters at least: a one-letter prefix matches nearly everything and is slow.
 _PREFIX_WORD = re.compile(r"(\w{2,})\*")
 _SINGLE_LEXEME = re.compile(r"^'([^']+)'$")
+
+# A CJK run in the query, with a "-" that negates it (at the start or after a space,
+# not a hyphen inside a word) and a trailing star, which means nothing for pairs.
+_CJK_QUERY_RUN = re.compile(rf"((?<!\S)-)?([{CJK_CHARS}]+)\*?")
+
+
+def split_cjk_query(q: str) -> tuple[str, list[tuple[str, bool]]]:
+    """Rewrite the CJK in a search box input to match the bigrammed index.
+
+    A CJK run becomes the phrase of its pairs ("人工智能" is "人工 工智 智能" in
+    quotes), so it matches only where the characters stand together, as written.
+    Inside quotes the pairs just join the phrase. Everything else is left as it was,
+    so Latin words, "-word" and "or" keep working, also next to CJK ("OpenAI发布").
+
+    A single character has no pair, and indexing single characters would grow the
+    index again, so outside quotes it comes back separately as (char, negated), to be
+    looked for in the title. Returns the rewritten query and those characters.
+    """
+    singles: list[tuple[str, bool]] = []
+
+    def outside(m: re.Match) -> str:
+        neg, run = m.group(1) or "", m.group(2)
+        if len(run) == 1:
+            singles.append((run, bool(neg)))
+            return " "
+        return f' {neg}"{_bigrams(run)}" '
+
+    def inside(m: re.Match) -> str:
+        return f" {m.group(1) or ''}{_bigrams(m.group(2))} "
+
+    # websearch syntax: every other piece between double quotes is a phrase.
+    parts = q.split('"')
+    for i, part in enumerate(parts):
+        parts[i] = _CJK_QUERY_RUN.sub(inside if i % 2 else outside, part)
+    return '"'.join(parts), singles
+
+
+def _bigrams(run: str) -> str:
+    if len(run) == 1:
+        return run
+    return " ".join(run[i:i + 2] for i in range(len(run) - 1))
 
 
 async def _search_tsquery(db: AsyncSession, q: str):
@@ -463,11 +508,20 @@ async def list_articles(
         since = datetime.now(timezone.utc) - timedelta(days=since_days)
         stmt = stmt.where(func.coalesce(Article.published_at, Article.fetched_at) >= since)
 
+    tsquery = None
     if q:
         fts_vec = literal_column(_FTS_VECTOR)
-        # The query is accent-folded like the vector, so "zpravy" finds "zprávy".
-        tsquery = await _search_tsquery(db, q)
-        stmt = stmt.where(fts_vec.op('@@')(tsquery))
+        fts_q, cjk_singles = split_cjk_query(q)
+        # A lone CJK character ("猫") is not in the index, so it's looked for in the
+        # titles of the articles the rest of the query leaves. Bodies would be too
+        # slow (289 ms against 7 ms on dev), and a search of nothing else has no
+        # rank, so it sorts by date.
+        for char, negated in cjk_singles:
+            stmt = stmt.where(~Article.title.contains(char) if negated else Article.title.contains(char))
+        if fts_q.strip() or not cjk_singles:
+            # The query is accent-folded like the vector, so "zpravy" finds "zprávy".
+            tsquery = await _search_tsquery(db, fts_q)
+            stmt = stmt.where(fts_vec.op('@@')(tsquery))
 
     if _count is not None:
         return (await db.execute(stmt.with_only_columns(_count))).scalar() or 0
@@ -482,7 +536,7 @@ async def list_articles(
     sort_key = None
     if sort_order == "score":
         sort_key = score
-    elif q and sort_order not in ("newest", "oldest"):
+    elif tsquery is not None and sort_order not in ("newest", "oldest"):
         sort_key = func.ts_rank(fts_vec, tsquery, 1)
 
     # Every sort pages by keyset: the next page starts after the last row's sort
