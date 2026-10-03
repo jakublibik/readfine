@@ -3,3 +3,6 @@
 # would otherwise check them out with CRLF (breaks `bash setup.sh` with errors
 # like ": invalid option name: pipefail").
 *.sh text eol=lf
+
+# Git hooks run under sh, same reason.
+hooks/* text eol=lf

@@ -10,7 +10,7 @@ from app.auth.security import decode_access_token, hash_token
 from app.database import get_db
 from app.models.user import User
 from app.models.auth import ApiToken
-from app.services.user import touch_last_active
+from app.services.user import LAST_ACTIVE_RESOLUTION, touch_last_active
 from app.utils.datetime_format import current_viewer_tz
 from app.utils.formats import current_viewer_format
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
@@ -74,8 +74,13 @@ async def _auth_by_bearer(
     if api_token:
         user = await _get_user_by_id(api_token.user_id, db)
         if user:
-            api_token.last_used_at = datetime.now(timezone.utc)
-            await db.commit()
+            # Hourly, like touch_last_active: a polling sync client would otherwise
+            # write and commit on every request. The settings page shows the date and
+            # dormancy counts days, and the first use after a gap is still written.
+            now = datetime.now(timezone.utc)
+            if not api_token.last_used_at or api_token.last_used_at < now - LAST_ACTIVE_RESOLUTION:
+                api_token.last_used_at = now
+                await db.commit()
             return user
     return None
 

@@ -17,6 +17,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
 - New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`). Briefing emails use it too.
 - The upgrade rebuilds the search index so that Chinese, Japanese and Korean text can be searched. Measured at under two minutes for 170 000 articles. The index grows by about a fifth on an instance with many such articles and stays the same size without them.
+- Email addresses are now stored in lowercase. The upgrade converts existing ones, except where two accounts differ only in letter case (`Alice@example.com` and `alice@example.com`): those are left as they are and named in the upgrade log, and the one in mixed case can no longer log in until you merge or delete one of the pair.
 
 ### Added
 
@@ -45,6 +46,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- Email addresses no longer depend on letter case. Someone who signed up as `Alice@Example.com` can log in as `alice@example.com`, and the same address can no longer register a second account by changing the capitals. Spaces around the address are ignored too.
 - Search finds Chinese, Japanese and Korean words inside running text. Search split text only at spaces and punctuation, so in these languages it took a whole sentence for one word, and a word inside it was never found. A word now matches wherever its characters stand together, in the title, summary or full text. A search for a single character looks at titles only.
 - The full text of some pages lost lines written as plain text blocks beside ordinary paragraphs. Bon Appétit recipes, for one, kept only the quantities of the ingredients (`3`, `¼`, `5`); now each ingredient reads as one line with its amount. Full text also comes out right on more sites: on some, Barron's among them, extraction used to return a print notice instead of the article, and on others a related-story promo ended up in the text. Articles fetched before the fix keep the text they have.
 - Article titles from some feeds, The Verge and other WordPress sites among them, showed HTML codes instead of characters, for example `Can an &#8216;eSUV&#8217; e-bike`. Such titles are now stored as plain text, and titles already stored are fixed when you upgrade.
@@ -58,9 +60,15 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Filters imported from an OPML export keep their order, which matters when one stops the rest. They all used to land at the same position and ran alphabetically. A filter that adds a label named with digits only, like `2024`, no longer gets skipped on import, and a filter limited to feeds or folders you do not have comes in switched off instead of applying to every feed.
 - **Last active** in **Admin → Users** stays current for someone who reads in an installed app or a tab they leave open. It used to change only when the app was loaded or on login, so such a reader looked inactive, and after a month without a reload their automatic reading profile stopped being updated. Opening an article, reading by scrolling and changing an article over the API now count too.
 - The help, features and legal pages share one header: the **Readfine** name at the top leads to the home page, with **Back to reader** beside it when you are signed in. Help and features had nothing to take a signed-out visitor back, and the name on the legal pages led to the sign-in form.
-- When the verification email cannot be sent at sign-up (the mail provider is down or over its daily limit), the next page now says so and asks to try again in a few minutes. It used to say the email was sent, so a new account waited for a message that never came.
-- A burst of sign-ups or logins no longer holds up everyone else on the instance. Checking a password is slow on purpose and used to block all other requests while it ran; thirty sign-ups at once froze the app for several seconds.
+- When the verification email cannot be sent (the mail provider is down or over its daily limit), at sign-up or with **Resend verification email**, the page now says so and asks to try again in a few minutes. It used to say the email was sent, so a new account waited for a message that never came.
+- Checking a password no longer holds up everyone else on the instance. It is slow on purpose and used to block all other requests while it ran: thirty sign-ups at once froze the app for several seconds, and so, for a moment, did every password change, email change or account deletion.
 - On the registration page, Firefox and password managers no longer offer to fill your login into **Display name**. The email field is now marked as the account name.
+
+### Security
+
+- Signing in through the API (`POST /api/v1/auth/token`) now follows the same rules as the sign-in page. An account whose email is not verified gets no token, and failed attempts count toward the 15-minute lockout after repeated wrong passwords. The API used to skip both, so someone who signed up with another person's address could use the API before it was verified, and passwords could be guessed there past the lockout.
+- A password reset link stops working once an admin disables the account. A link mailed before that still let someone set a new password on the disabled account.
+- An invitation can only be used once even when two people sign up with it at the same moment. Both sign-ups used to go through.
 
 ## [0.19.0] - 2026-09-26
 

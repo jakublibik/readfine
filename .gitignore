@@ -1,5 +1,10 @@
-# Claude Code
-.claude/
+# Claude Code: settings.json, hooks and skills are shared. Local settings,
+# worktrees and private skills (linked in from a synced folder) stay out.
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/skills/
+.claude/skills/deploy
 REVIEW_NOTES.md
 
 # Environment

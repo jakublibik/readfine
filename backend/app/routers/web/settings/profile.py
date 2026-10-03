@@ -11,17 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.auth.security import (
     generate_token,
-    hash_password,
+    hash_password_async,
     hash_token,
     password_within_limit,
-    verify_password,
+    verify_password_async,
 )
 from app.database import get_db
 from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.feed import cleanup_user_feeds
 from app.templating import templates
-from app.utils.email_validate import is_valid_email
+from app.utils.email_validate import is_valid_email, normalize_email
 from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def settings_profile_email(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    email = email.strip().lower()
+    email = normalize_email(email)
     if not email:
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
@@ -77,7 +77,7 @@ async def settings_profile_email(
             "user": user,
             "email_error": "Please enter a valid email address.",
         })
-    if not verify_password(current_password, user.password_hash):
+    if not await verify_password_async(current_password, user.password_hash):
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
             "email_error": "Current password is incorrect.",
@@ -121,7 +121,7 @@ async def settings_profile_email(
     try:
         await asyncio.to_thread(
             send_email, app_s, email,
-            "Readfine – Confirm your new email address",
+            "Confirm your new Readfine email address",
             f"Please confirm your new email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not request this change, you can safely ignore this email.",
         )
     except Exception as e:
@@ -130,7 +130,7 @@ async def settings_profile_email(
     try:
         await asyncio.to_thread(
             send_email, app_s, old_email,
-            "Readfine – Email change requested",
+            "Readfine email change requested",
             f"A request was made to change your Readfine email address to {email}.\n\nIf this was not you, please change your password immediately.",
         )
     except Exception as e:
@@ -153,7 +153,7 @@ async def settings_profile_password(
     new_pw = form.get("new_password", "")
     confirm = form.get("confirm_password", "")
 
-    if not verify_password(current, user.password_hash):
+    if not await verify_password_async(current, user.password_hash):
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
             "pw_error": "Current password is incorrect.",
@@ -174,7 +174,7 @@ async def settings_profile_password(
             "pw_error": "Passwords do not match.",
         })
 
-    user.password_hash = hash_password(new_pw)
+    user.password_hash = await hash_password_async(new_pw)
     user.password_reset_token_hash = None
     user.password_reset_expires_at = None
     # Invalidate all existing sessions/JWTs, then keep the current session alive.
@@ -202,7 +202,7 @@ async def settings_profile_delete_account(
             "user": user,
             "delete_error": "Please type 'delete my account' exactly to confirm.",
         })
-    if not verify_password(current_password, user.password_hash):
+    if not await verify_password_async(current_password, user.password_hash):
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,
             "delete_error": "Password is incorrect.",

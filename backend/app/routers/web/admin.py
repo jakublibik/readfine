@@ -346,7 +346,7 @@ async def admin_test_smtp(
     try:
         await asyncio.to_thread(
             send_email, s, user.email,
-            "Readfine – SMTP test",
+            "Readfine SMTP test",
             f"This is a test email sent from Readfine admin panel to {user.email}.",
         )
         from html import escape

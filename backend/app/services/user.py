@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.security import hash_password
 from app.models.user import User, UserSettings
 from app.models.settings import AppSettings
+from app.utils.email_validate import normalize_email
 
 
 async def seed_first_admin(db: AsyncSession, email: str, password: str) -> None:
@@ -15,7 +16,7 @@ async def seed_first_admin(db: AsyncSession, email: str, password: str) -> None:
         return
 
     admin = User(
-        email=email,
+        email=normalize_email(email),
         password_hash=hash_password(password),
         display_name="Admin",
         role="admin",

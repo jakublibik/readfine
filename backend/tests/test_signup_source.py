@@ -7,7 +7,7 @@ so what comes back is checked again before it is stored.
 import time
 import uuid
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -162,8 +162,9 @@ class TestRegistration:
         assert _added_user(mock_db).signup_source is None
 
     def test_invitation_is_invite(self, web_client, mock_db):
-        inv = SimpleNamespace(email=None, used_at=None, used_by=None)
-        mock_db.execute = AsyncMock(side_effect=[_scalar(_app_settings()), _scalar(None)])
+        inv = SimpleNamespace(id=7, email=None, used_at=None, used_by=None)
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_app_settings()), _scalar(None),
+                                                    MagicMock(rowcount=1)])  # invitation claim
         with patch("app.routers.web.auth._get_valid_invitation", new=AsyncMock(return_value=inv)):
             _post(web_client, invite_token="tok", signup_source="lobste.rs")
         assert _added_user(mock_db).signup_source == "invite"

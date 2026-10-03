@@ -21,6 +21,7 @@ from app.models.filter import Filter, FilterCondition
 from app.models.fetch_log import FetchLog
 from app.models.settings import AppSettings, AuditLog
 from app.models.user import CatchupLog, User, UserCatchupConfig, UserSettings
+from app.utils.email_validate import normalize_email
 from app.auth.security import generate_token
 from app.services.filter_service import SCORE_FIELD_NAMES
 from app.services.relevance_service import parse_terms
@@ -230,7 +231,7 @@ async def create_invitation(
     inv = Invitation(
         created_by=admin_id,
         token=generate_token(),
-        email=email or None,
+        email=normalize_email(email) if email else None,
         expires_at=expires_at,
     )
     db.add(inv)

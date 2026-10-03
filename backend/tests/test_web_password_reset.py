@@ -313,6 +313,21 @@ class TestResetPasswordConfirm:
         assert resp.status_code == 200
         assert "invalid" in resp.text.lower()
 
+    def test_link_stops_working_once_the_account_is_disabled(self, web_client, mock_db):
+        # Mailed while active, used after an admin disabled the account.
+        token = "goodtoken"
+        user = self._valid_user(token)
+        user.is_active = False
+        mock_db.execute.return_value = _scalar(user)
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
+            resp = web_client.post(f"/reset-password/{token}", data={
+                "new_password": "newpassword1",
+                "confirm_password": "newpassword1",
+            })
+        assert "invalid" in resp.text.lower()
+        assert user.password_hash == "old_hash"
+        mock_db.commit.assert_not_called()
+
     def test_token_is_hashed_before_db_lookup(self, web_client, mock_db):
         """Verify the raw token is never stored — only the sha256 hash."""
         token = "plaintexttoken"

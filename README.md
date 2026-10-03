@@ -513,11 +513,10 @@ curl -o backend/app/static/js/htmx.min.js https://unpkg.com/htmx.org@<version>/d
 
 ### Git hook (optional but recommended)
 
-Automatically rebuilds CSS before every commit:
+Before every commit, rebuilds the CSS and, when `features.yml` changed, regenerates `FEATURES.md`. Enable it once per clone:
 
 ```bash
-cp hooks/pre-commit .git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
+git config core.hooksPath hooks
 ```
 
 ---
