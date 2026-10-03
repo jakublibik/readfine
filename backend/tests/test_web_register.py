@@ -404,6 +404,57 @@ class TestWebResendVerification:
         mock_send.assert_not_called()
 
 
+# ── Email letter case ─────────────────────────────────────────────────────────
+
+def _looked_up_emails(mock_db) -> list[str]:
+    """The literal SQL of every query the route ran, to see which address it matched."""
+    return [
+        str(call.args[0].compile(compile_kwargs={"literal_binds": True}))
+        for call in mock_db.execute.call_args_list
+    ]
+
+
+class TestEmailLetterCase:
+    """An address is stored and matched trimmed and lowercased, however it was typed,
+    so it neither locks its owner out nor lets the same inbox sign up twice."""
+
+    def test_normalize_email(self):
+        from app.utils.email_validate import normalize_email
+        assert normalize_email("  Alice@Example.COM ") == "alice@example.com"
+
+    def test_sign_up_stores_the_normalized_address(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[_scalar(_make_app_settings()), _scalar(None)])
+        with patch("app.auth.security.hash_password", return_value="hashed"):
+            web_client.post("/register", data={**VALID_FORM, "email": " New@Test.COM "})
+        users = [c.args[0] for c in mock_db.add.call_args_list
+                 if type(c.args[0]).__name__ == "User"]
+        assert users[0].email == "new@test.com"
+        assert "'new@test.com'" in _looked_up_emails(mock_db)[1]
+
+    def test_login_matches_whatever_the_case(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(return_value=_scalar(_make_user()))
+        with patch("app.auth.security.verify_password", return_value=True):
+            r = web_client.post("/login", data={"email": "NEW@test.com ", "password": "password123"})
+        assert r.status_code == 302
+        assert any("'new@test.com'" in sql for sql in _looked_up_emails(mock_db))
+
+    def test_api_token_matches_whatever_the_case(self, web_client, mock_db):
+        user = _make_user()
+        user.role = "user"
+        mock_db.execute = AsyncMock(return_value=_scalar(user))
+        with patch("app.auth.security.verify_password", return_value=True):
+            r = web_client.post("/api/v1/auth/token",
+                                json={"email": "New@Test.com", "password": "password123"})
+        assert r.status_code == 200
+        assert any("'new@test.com'" in sql for sql in _looked_up_emails(mock_db))
+
+    def test_reset_request_matches_whatever_the_case(self, web_client, mock_db):
+        mock_db.execute = AsyncMock(side_effect=[
+            _scalar(_make_app_settings(smtp_host="smtp.test.com")), _scalar(None)])
+        web_client.post("/reset-password", data={"email": "NEW@TEST.COM"})
+        assert "'new@test.com'" in _looked_up_emails(mock_db)[1]
+
+
 # ── Invitations ───────────────────────────────────────────────────────────────
 
 class TestWebRegisterInvitation:

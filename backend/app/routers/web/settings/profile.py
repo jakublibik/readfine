@@ -21,7 +21,7 @@ from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.feed import cleanup_user_feeds
 from app.templating import templates
-from app.utils.email_validate import is_valid_email
+from app.utils.email_validate import is_valid_email, normalize_email
 from app.utils.smtp import send_email
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ async def settings_profile_email(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    email = email.strip().lower()
+    email = normalize_email(email)
     if not email:
         return templates.TemplateResponse(request, "settings/profile.html", {
             "user": user,

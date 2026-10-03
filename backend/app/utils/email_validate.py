@@ -14,3 +14,13 @@ def is_valid_email(raw: str) -> bool:
         return True
     except EmailNotValidError:
         return False
+
+
+def normalize_email(raw: str) -> str:
+    """The form every address is stored and looked up in: trimmed, lowercased.
+
+    Providers treat the local part case-insensitively in practice, and a match
+    that depends on how someone typed their address locks them out of their own
+    account. Migration 0118 brought the stored addresses in line.
+    """
+    return raw.strip().lower()

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, timezone
 
 from app.auth.security import generate_token, hash_password_async, hash_token, password_within_limit, verify_password_async
-from app.utils.email_validate import is_valid_email
+from app.utils.email_validate import is_valid_email, normalize_email
 from app.utils.next_path import safe_next_path
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
@@ -123,6 +123,7 @@ async def login(
     db: AsyncSession = Depends(get_db),
 ):
     next_path = safe_next_path(next)
+    email = normalize_email(email)
     app_settings = await _get_app_settings(db)
     smtp_configured = bool(app_settings and app_settings.smtp_host)
     registration_open = bool(app_settings) and app_settings.registration_enabled
@@ -211,7 +212,7 @@ async def register(
     app_settings = await _get_app_settings(db)
     registration_open = bool(app_settings) and app_settings.registration_enabled
 
-    email = email.strip()
+    email = normalize_email(email)
 
     def _err(msg: str, http_status: int = status.HTTP_422_UNPROCESSABLE_CONTENT, **extra):
         ctx = {"error": msg, "invite_token": invite_token,
@@ -404,6 +405,7 @@ async def resend_verification(
     email: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    email = normalize_email(email)
     app_settings = await _get_app_settings(db)
     if app_settings and app_settings.smtp_host:
         result = await db.execute(select(User).where(User.email == email))
@@ -490,6 +492,7 @@ async def reset_password_request(
     email: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    email = normalize_email(email)
     # Always show success to avoid email enumeration
     app_settings = await _get_app_settings(db)
     if not app_settings or not app_settings.smtp_host:

@@ -17,6 +17,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - If you serve your own `landing.html`, point its sign-up links at `{{ register_url }}` instead of `/register`, as `landing.example.html` now does. Otherwise accounts that sign up from the landing are all recorded as coming from `internal`.
 - New option in **Admin → Settings → Users**: **Pause feeds after N days without activity**. It is off after the upgrade, so nothing changes until you set it. If you want the warning email to link back to your instance, set the new `PUBLIC_URL` in `.env` (for example `https://readfine.example`). Briefing emails use it too.
 - The upgrade rebuilds the search index so that Chinese, Japanese and Korean text can be searched. Measured at under two minutes for 170 000 articles. The index grows by about a fifth on an instance with many such articles and stays the same size without them.
+- Email addresses are now stored in lowercase. The upgrade converts existing ones, except where two accounts differ only in letter case (`Alice@example.com` and `alice@example.com`): those are left as they are and named in the upgrade log, and the one in mixed case can no longer log in until you merge or delete one of the pair.
 
 ### Added
 
@@ -45,6 +46,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- Email addresses no longer depend on letter case. Someone who signed up as `Alice@Example.com` can log in as `alice@example.com`, and the same address can no longer register a second account by changing the capitals. Spaces around the address are ignored too.
 - Search finds Chinese, Japanese and Korean words inside running text. Search split text only at spaces and punctuation, so in these languages it took a whole sentence for one word, and a word inside it was never found. A word now matches wherever its characters stand together, in the title, summary or full text. A search for a single character looks at titles only.
 - The full text of some pages lost lines written as plain text blocks beside ordinary paragraphs. Bon Appétit recipes, for one, kept only the quantities of the ingredients (`3`, `¼`, `5`); now each ingredient reads as one line with its amount. Full text also comes out right on more sites: on some, Barron's among them, extraction used to return a print notice instead of the article, and on others a related-story promo ended up in the text. Articles fetched before the fix keep the text they have.
 - Article titles from some feeds, The Verge and other WordPress sites among them, showed HTML codes instead of characters, for example `Can an &#8216;eSUV&#8217; e-bike`. Such titles are now stored as plain text, and titles already stored are fixed when you upgrade.
