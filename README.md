@@ -39,7 +39,7 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 ## Features
 
 - **Feeds:** RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
-- **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, dark mode (HTMX + Tailwind); YouTube and Vimeo videos play in the reader
+- **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, saved searches, keyboard shortcuts (Inoreader/Miniflux style), dark mode (HTMX + Tailwind); YouTube and Vimeo videos play in the reader
 - **Saved:** paste any link, from a feed or not, and keep it as a readable article that retention never removes (also via the API, so a share sheet or bookmarklet can do it)
 - **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
 - **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
@@ -309,7 +309,7 @@ docker compose up -d --build
 > stays as shipped.
 
 ```yaml
-# docker-compose.override.yml — serve on 8080 instead of 80
+# docker-compose.override.yml: serve on 8080 instead of 80
 services:
   nginx:
     ports:
