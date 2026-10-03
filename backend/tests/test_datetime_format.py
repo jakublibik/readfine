@@ -122,7 +122,7 @@ class TestTimezoneHelpers:
 class TestRescheduleBriefings:
     @pytest.mark.asyncio
     async def test_recomputes_active_briefings(self):
-        from app.routers.web.settings.preferences import _reschedule_briefings
+        from app.services.briefing_service import reschedule_briefings
         from tests.conftest import make_mock_db, make_scalar_result
 
         active = SimpleNamespace(
@@ -137,7 +137,7 @@ class TestRescheduleBriefings:
         db = make_mock_db()
         db.execute.return_value = make_scalar_result([active, incomplete])
 
-        await _reschedule_briefings(user_id=1, tz_str="Europe/Prague", db=db)
+        await reschedule_briefings(user_id=1, tz_str="Europe/Prague", db=db)
 
         assert active.briefing_next_send_at is not None
         assert active.briefing_next_send_at > datetime.now(timezone.utc)

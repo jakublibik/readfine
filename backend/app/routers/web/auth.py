@@ -19,6 +19,7 @@ from app.utils.formats import is_valid_format
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.services.app_settings_cache import get_registration_enabled
+from app.services.user import FEEDS_RESUMED_SESSION_KEY, record_activity
 from app.utils.form_guard import HONEYPOT_FIELD, carry_form_ts, check_form
 from app.rate_limit import limiter, check_login_lockout, record_failed_login, clear_failed_logins, get_client_ip
 from app.models.auth import Invitation
@@ -149,11 +150,12 @@ async def login(
         return _login_err("Email not verified.", status.HTTP_403_FORBIDDEN, show_resend=True)
 
     clear_failed_logins(ip, email)
-    user.last_active_at = datetime.now(timezone.utc)
-    await db.commit()
+    woke = await record_activity(user, db)
 
     request.session["user_id"] = user.id
     request.session["tv"] = user.session_token_version
+    if woke:
+        request.session[FEEDS_RESUMED_SESSION_KEY] = True
     return RedirectResponse("/app", status_code=302)
 
 

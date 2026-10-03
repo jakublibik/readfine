@@ -1,0 +1,60 @@
+{#- The keyboard shortcuts, listed once for the ? window in the reader and the help page.
+    The keys themselves live in app.js (the keydown handler under "Keyboard shortcuts");
+    a change there belongs here too.
+
+    Each entry is a list of alternatives, each alternative a list of keys pressed one
+    after the other ("g" then "a"). The set follows Google Reader as Inoreader and
+    Miniflux kept it, with the TT-RSS keys (n/p, u, s) as aliases, so a reader coming
+    from either finds their habits working. -#}
+{% set shortcut_groups = [
+  ("Moving around", [
+    ([["j"], ["n"]], "Next article"),
+    ([["k"], ["p"]], "Previous article"),
+    ([["o"], ["Enter"]], "Open the article, or close it in the 2-panel layout"),
+    ([["Space"]], "Read on: a screen down, then the next article"),
+    ([["Shift+J"]], "Next entry in the sidebar"),
+    ([["Shift+K"]], "Previous entry in the sidebar"),
+    ([["g", "a"]], "Go to All articles"),
+    ([["g", "s"]], "Go to Starred"),
+    ([["r"]], "Reload the list"),
+    ([["/"]], "Search"),
+  ]),
+  ("The open article", [
+    ([["m"], ["u"]], "Mark read or unread"),
+    ([["s"], ["f"]], "Star or unstar"),
+    ([["e"]], "Archive or unarchive"),
+    ([["t"], ["l"]], "Labels"),
+    ([["v"]], "Open the original in a new tab"),
+  ]),
+  ("The list", [
+    ([["Shift+A"]], "Mark everything in this view as read"),
+    ([["?"]], "Show this list"),
+    ([["Esc"]], "Close a window"),
+  ]),
+] %}
+
+{% macro shortcut_list() %}
+<div class="space-y-5">
+  {% for title, items in shortcut_groups %}
+  <div>
+    <h3 class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">{{ title }}</h3>
+    <dl class="space-y-1.5 text-sm">
+      {% for alternatives, what in items %}
+      <div class="flex items-baseline gap-3">
+        <dt class="w-24 flex-shrink-0 flex flex-wrap items-baseline gap-1 text-gray-400">
+          {%- for keys in alternatives -%}
+            {%- if not loop.first %}<span class="text-xs">or</span>{% endif -%}
+            {%- for key in keys -%}
+              {%- if not loop.first %}<span class="text-xs">then</span>{% endif -%}
+              <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-200">{{ key }}</kbd>
+            {%- endfor -%}
+          {%- endfor -%}
+        </dt>
+        <dd class="text-gray-700 dark:text-gray-300">{{ what }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}

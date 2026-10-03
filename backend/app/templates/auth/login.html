@@ -61,8 +61,11 @@
         {% endif %}
 
         {# Not gated on registration_open: the terms and the privacy policy have
-           to be reachable on an instance that has registration closed too. #}
+           to be reachable on an instance that has registration closed too.
+           Wider than the form column from sm up, so the row fits on one line. #}
+        <div class="sm:-mx-12">
         {{ public_footer(request, "login", new_tab=true) }}
+        </div>
     </div>
 </div>
 {% endblock %}

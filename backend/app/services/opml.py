@@ -3,31 +3,96 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 import defusedxml.ElementTree as _safe_ET
-from xml.etree.ElementTree import Element, SubElement, indent, tostring
+from xml.etree.ElementTree import Element, SubElement, indent, register_namespace, tostring
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.feed import Feed, Folder, UserFeed
-from app.models.filter import Filter, FilterAction, FilterCondition
+from app.models.filter import Filter
 from app.models.label import Label
-from app.models.user import User, UserSettings
+from app.models.user import User, UserCatchupConfig, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
+from app.services.ai_profile_service import PROFILE_MAX_CHARS
+from app.services.briefing_service import reschedule_briefings
 from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.services.folder_service import (
-    FOLDER_ORDER_DEFAULT, folder_order_clause, next_folder_position,
+    FOLDER_ORDER_DEFAULT, FOLDER_ORDER_MODES, folder_order_clause, next_folder_position,
 )
+from app.services.preference_values import (
+    DENSITY_VALUES, FONT_FAMILY_VALUES, FONT_SIZE_VALUES, LABEL_DISPLAY_VALUES,
+    SORT_VALUES, UNREAD_FILTER_VALUES, clamp_articles_per_page, clamp_buckets,
+)
+from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
+from app.services.saved_search_service import (
+    SavedSearchError, create_saved_search, list_saved_searches,
+)
+from app.services.story_service import DEDUP_VALUES
 from app.utils.datetime_format import is_valid_timezone
+from app.utils.email_validate import is_valid_email
+from app.utils.formats import is_valid_format
 
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_BYTES = 1 * 1024 * 1024  # 1 MB
+
+# What a file can carry, in the order the export and import forms list them.
+# "feeds" alone is plain OPML. Labels, filters and the timezone use TT-RSS's
+# tt-rss-* outlines in <body>, which TT-RSS reads and skips as folders.
+SECTIONS = ("feeds", "labels", "filters", "prefs", "profile", "searches", "catchup")
+
+# Everything only Readfine reads lives in <head>, in its own namespace, which is
+# how OPML 2.0 allows extensions. Kept out of <body> because a reader that does not
+# know a section outline takes it for a folder and creates an empty one.
+READFINE_NS = "https://readfine.app/opml"
+register_namespace("readfine", READFINE_NS)
+_NS_FORMAT = f"{{{READFINE_NS}}}format"
+_NS_SECTION = f"{{{READFINE_NS}}}section"
+
+# Written to <head> whenever the file has more than feeds. A file without it is
+# plain OPML, TT-RSS, or a Readfine export from before these sections existed.
+FORMAT_VERSION = "2"
+
+DEFAULT_LABEL_COLOR = "#6366f1"
+_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+_SMALLINT_MAX = 32767
+
+# Reading and display preferences with a fixed set of values.
+_PREF_CHOICES: dict[str, Collection[str]] = {
+    "list_density_web": DENSITY_VALUES,
+    "list_density_mobile": DENSITY_VALUES,
+    "default_sort_order": SORT_VALUES,
+    "unread_filter": UNREAD_FILTER_VALUES,
+    "story_dedup": DEDUP_VALUES,
+    "label_display": LABEL_DISPLAY_VALUES,
+    "reading_font_size": FONT_SIZE_VALUES,
+    "reading_font_family": FONT_FAMILY_VALUES,
+    "folder_order": FOLDER_ORDER_MODES,
+}
+_PREF_BOOLS = ("mark_read_on_scroll", "mark_read_auto_advance", "open_original_when_empty")
+
+# File key → settings column for the relevance and AI texts ("profile" section).
+# Model and provider choices stay out: they depend on keys, which never leave.
+_PROFILE_TEXTS = {
+    "relevance_terms": "relevance_terms",
+    "ai_profile": "ai_preference_text",
+    "ai_summary_prompt": "ai_summary_prompt",
+    "ai_context_prompt": "ai_context_prompt",
+}
+
+# Feed outline attribute → UserFeed column, for per-feed retention.
+_FEED_PURGE_ATTRS = {"purge-after-days": "purge_after_days", "purge-keep-count": "purge_keep_count"}
+
+_CATCHUP_PERIODS = ("today", "yesterday", "7days")
+_CATCHUP_STATUSES = ("all", "not_opened")
 
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
@@ -73,8 +138,13 @@ def _truthy(value: Any) -> bool:
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
-async def export_opml(user: User, db: AsyncSession) -> str:
-    """Build and return an OPML 2.0 XML string for the user's subscriptions."""
+async def export_opml(user: User, db: AsyncSession, sections: Collection[str] | None = None) -> str:
+    """Build and return an OPML 2.0 XML string for the user's subscriptions.
+
+    ``sections`` picks what goes in (see SECTIONS); None means everything. With
+    only "feeds" the file is plain OPML that any reader takes as is.
+    """
+    include = set(SECTIONS) if sections is None else set(sections) & set(SECTIONS)
 
     # Load data
     settings_result = await db.execute(
@@ -111,24 +181,14 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     )
     labels = labels_result.scalars().all()
 
-    filters_result = await db.execute(
-        select(Filter)
-        .where(Filter.user_id == user.id)
-        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
-        .order_by(*FILTER_ORDER)
+    # Filters, saved searches and catch-ups refer to feeds, folders and labels by
+    # id; the file names them by URL and name instead, which is what survives a
+    # move to another account or instance.
+    refs = _ExportRefs(
+        feed_urls={feed.id: feed.feed_url for _, feed in user_feeds},
+        folder_names={f.id: f.name for f in folders.values()},
+        label_names={label.id: label.name for label in labels},
     )
-    filters = filters_result.scalars().all()
-
-    # Lookup maps for scope export and label resolution
-    feed_id_to_url: dict[int, str] = {}
-    folder_id_to_name: dict[int, str] = {}
-    label_id_to_name: dict[int, str] = {}
-    for uf, feed in user_feeds:
-        feed_id_to_url[feed.id] = feed.feed_url
-    for folder in folders.values():
-        folder_id_to_name[folder.id] = folder.name
-    for label in labels:
-        label_id_to_name[label.id] = label.name
 
     # Build XML
     root = Element("opml", version="2.0")
@@ -137,28 +197,32 @@ async def export_opml(user: User, db: AsyncSession) -> str:
     SubElement(head, "dateCreated").text = datetime.now(timezone.utc).strftime(
         "%a, %d %b %Y %H:%M:%S +0000"
     )
+    if include - {"feeds"}:
+        SubElement(head, _NS_FORMAT).text = FORMAT_VERSION
 
     body = SubElement(root, "body")
 
-    # Group feeds by folder
-    by_folder: dict[int | None, list[tuple[UserFeed, Feed]]] = {}
-    for uf, feed in user_feeds:
-        by_folder.setdefault(uf.folder_id, []).append((uf, feed))
+    if "feeds" in include:
+        # Group feeds by folder
+        by_folder: dict[int | None, list[tuple[UserFeed, Feed]]] = {}
+        for uf, feed in user_feeds:
+            by_folder.setdefault(uf.folder_id, []).append((uf, feed))
 
-    # Feeds without a folder first
-    for uf, feed in by_folder.get(None, []):
-        _feed_outline(body, uf, feed)
+        # Feeds without a folder first
+        for uf, feed in by_folder.get(None, []):
+            _feed_outline(body, uf, feed)
 
-    # Feeds inside folders
-    for folder_id, folder in folders.items():
-        if folder_id not in by_folder:
-            continue
-        folder_el = SubElement(body, "outline", text=folder.name, title=folder.name)
-        for uf, feed in by_folder[folder_id]:
-            _feed_outline(folder_el, uf, feed)
+        # Feeds inside folders
+        for folder_id, folder in folders.items():
+            if folder_id not in by_folder:
+                continue
+            folder_el = SubElement(body, "outline", text=folder.name, title=folder.name)
+            for uf, feed in by_folder[folder_id]:
+                _feed_outline(folder_el, uf, feed)
 
-    # Labels section
-    if labels:
+    # Labels section. Listed in the order the user keeps them; the import appends
+    # them in file order, which is what carries that order over.
+    if "labels" in include and labels:
         labels_el = SubElement(body, "outline", text="tt-rss-labels")
         for label in labels:
             SubElement(
@@ -168,56 +232,61 @@ async def export_opml(user: User, db: AsyncSession) -> str:
                 **{"label-name": label.name, "label-bg-color": label.color},
             )
 
-    # Prefs section
-    prefs_data: list[tuple[str, str]] = []
-    if user_settings:
+    if "prefs" in include and user_settings:
+        # The timezone stays where TT-RSS keeps it, so a TT-RSS import still finds it.
         if user_settings.timezone:
-            prefs_data.append(("USER_TIMEZONE", user_settings.timezone))
-    if prefs_data:
-        prefs_el = SubElement(body, "outline", text="tt-rss-prefs")
-        for key, value in prefs_data:
-            SubElement(prefs_el, "outline", text=key, value=value)
+            prefs_el = SubElement(body, "outline", text="tt-rss-prefs")
+            SubElement(prefs_el, "outline", text="USER_TIMEZONE", value=user_settings.timezone)
+        _head_section(head, "prefs", _export_prefs(user_settings))
 
-    # Filters section
-    if filters:
-        filters_payload = []
-        for f in filters:
-            scope_include_urls = _scope_to_urls(f.scope_include, feed_id_to_url, folder_id_to_name)
-            scope_except_urls = _scope_to_urls(f.scope_except, feed_id_to_url, folder_id_to_name)
-            filters_payload.append({
-                "name": f.name,
-                "enabled": f.is_active,
-                "match_operator": f.match_operator,
-                "stop_on_match": f.stop_on_match,
-                "scope_include": scope_include_urls,
-                "scope_except": scope_except_urls,
-                "conditions": [
-                    {
-                        "field": c.field,
-                        "operator": c.operator,
-                        "value": c.value,
-                        "position": c.position,
-                    }
-                    for c in sorted(f.conditions, key=lambda x: x.position)
-                ],
-                "actions": [
-                    {
-                        "action_type": a.action_type,
-                        "action_value": (
-                            label_id_to_name.get(int(a.action_value), a.action_value)
-                            if a.action_type == "label" and a.action_value and a.action_value.isdigit()
-                            else a.action_value
-                        ),
-                    }
-                    for a in f.actions
-                ],
-            })
+    if "profile" in include and user_settings:
+        profile = _export_profile(user_settings)
+        if profile:
+            _head_section(head, "profile", profile)
 
-        filters_el = SubElement(body, "outline", text="tt-rss-filters")
-        filters_el.text = json.dumps(filters_payload, ensure_ascii=False)
+    if "filters" in include:
+        filters_result = await db.execute(
+            select(Filter)
+            .where(Filter.user_id == user.id)
+            .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+            .order_by(*FILTER_ORDER)
+        )
+        filters_payload = [_export_filter(f, refs) for f in filters_result.scalars().all()]
+        if filters_payload:
+            SubElement(body, "outline", text="tt-rss-filters").text = json.dumps(
+                filters_payload, ensure_ascii=False
+            )
+
+    if "searches" in include:
+        searches = await list_saved_searches(db, user.id)
+        if searches:
+            _head_section(head, "saved-searches", [
+                {"name": s.name, "params": _export_search_params(s.params, refs)}
+                for s in searches
+            ])
+
+    if "catchup" in include:
+        configs = (await db.execute(
+            select(UserCatchupConfig)
+            .where(UserCatchupConfig.user_id == user.id)
+            .order_by(UserCatchupConfig.name, UserCatchupConfig.id)
+        )).scalars().all()
+        if configs:
+            _head_section(head, "catchup", [_export_catchup(c, refs) for c in configs])
 
     indent(root, space="  ")
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode")
+
+
+@dataclass
+class _ExportRefs:
+    feed_urls: dict[int, str]
+    folder_names: dict[int, str]
+    label_names: dict[int, str]
+
+
+def _head_section(head: Element, name: str, payload: Any) -> None:
+    SubElement(head, _NS_SECTION, name=name).text = json.dumps(payload, ensure_ascii=False)
 
 
 def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
@@ -239,25 +308,147 @@ def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
         if selector:
             attrs["feed-type"] = "scrape"
             attrs["article-links-selector"] = selector
+    # The subscription's own settings, in attributes other readers ignore.
+    extract = getattr(uf, "extract_readable", None)
+    if extract is not None:
+        attrs["extract-readable"] = "1" if extract else "0"
+    ai_summary = getattr(uf, "ai_summary_enabled", None)
+    if ai_summary is not None:
+        attrs["ai-summary"] = "1" if ai_summary else "0"
+    for attr, column in _FEED_PURGE_ATTRS.items():
+        value = getattr(uf, column, None)
+        if value is not None:
+            attrs[attr] = str(value)
     SubElement(parent, "outline", **attrs)
 
 
+def _export_filter(f: Filter, refs: _ExportRefs) -> dict:
+    actions = []
+    for a in f.actions:
+        value = a.action_value
+        if a.action_type == "label":
+            # By name: an id means nothing in another account. A label that no
+            # longer exists leaves nothing to name, so the action is left out.
+            value = refs.label_names.get(_int_or_none(value))
+            if value is None:
+                continue
+        actions.append({"action_type": a.action_type, "action_value": value})
+    return {
+        "name": f.name,
+        "enabled": f.is_active,
+        "position": f.position,
+        "match_operator": f.match_operator,
+        "stop_on_match": f.stop_on_match,
+        "scope_include": _scope_to_urls(f.scope_include, refs.feed_urls, refs.folder_names),
+        "scope_except": _scope_to_urls(f.scope_except, refs.feed_urls, refs.folder_names),
+        "conditions": [
+            {
+                "field": c.field,
+                "operator": c.operator,
+                "value": c.value,
+                "position": c.position,
+            }
+            for c in sorted(f.conditions, key=lambda x: x.position)
+        ],
+        "actions": actions,
+    }
+
+
+def _export_prefs(s: UserSettings) -> dict:
+    prefs: dict[str, Any] = {key: getattr(s, key) for key in _PREF_CHOICES}
+    prefs.update({key: getattr(s, key) for key in _PREF_BOOLS})
+    for key in ("articles_per_page", "bucket_small_max", "bucket_medium_max", "format_profile"):
+        prefs[key] = getattr(s, key)
+    return {k: v for k, v in prefs.items() if v is not None}
+
+
+def _export_profile(s: UserSettings) -> dict:
+    profile: dict[str, Any] = {"basic_scoring_enabled": s.basic_scoring_enabled}
+    for key, column in _PROFILE_TEXTS.items():
+        value = getattr(s, column)
+        if value:
+            profile[key] = value
+    return profile
+
+
+def _export_search_params(params: dict, refs: _ExportRefs) -> dict:
+    out = dict(params)
+    if out.get("scope_include"):
+        out["scope_include"] = _scope_to_urls(out["scope_include"], refs.feed_urls, refs.folder_names)
+    if out.get("label_filter"):
+        out["label_filter"] = _labels_to_names(out["label_filter"], refs.label_names)
+    return out
+
+
+def _export_catchup(c: UserCatchupConfig, refs: _ExportRefs) -> dict:
+    item: dict[str, Any] = {
+        "name": c.name,
+        "period": c.period,
+        "filter_status": c.filter_status,
+        "scope_include": _scope_to_urls(c.scope_include, refs.feed_urls, refs.folder_names),
+        "label_filter": _labels_to_names(c.label_filter, refs.label_names),
+        # Stored as a fraction, shown and written as a score out of 100.
+        "score_min": round(c.filter_score_min * 100) if c.filter_score_min is not None else None,
+        "article_limit": c.article_limit,
+        "custom_prompt": c.custom_prompt,
+        "include_snippet": c.include_snippet,
+    }
+    if c.briefing_interval and c.briefing_time:
+        item["briefing"] = {
+            "enabled": c.briefing_enabled,
+            "interval": c.briefing_interval,
+            "day": c.briefing_day,
+            "time": c.briefing_time,
+            "recipients": _json_list(c.briefing_recipients),
+        }
+    return item
+
+
+def _json_list(value: str | list | None) -> list:
+    """A column holding a JSON array (or already a list) as a list; junk is empty."""
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        items = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):  # JSON allows Infinity
+        return None
+
+
+def _labels_to_names(tokens: str | list | None, label_names: dict[int, str]) -> list[str]:
+    """``["any"]`` stays; ``label:<id>`` becomes ``label:<name>``, dropping deleted labels."""
+    items = _json_list(tokens)
+    if "any" in items:
+        return ["any"]
+    out = []
+    for item in items:
+        if isinstance(item, str) and item.startswith("label:"):
+            name = label_names.get(_int_or_none(item[6:]))
+            if name is not None:
+                out.append(f"label:{name}")
+    return out
+
+
 def _scope_to_urls(
-    scope_json: str | None,
+    scope: str | list | None,
     feed_id_to_url: dict[int, str],
     folder_id_to_name: dict[int, str],
 ) -> list[str]:
-    if not scope_json:
-        return []
-    try:
-        items = json.loads(scope_json)
-    except (json.JSONDecodeError, TypeError):
-        return []
     result = []
-    for item in items:
+    for item in _json_list(scope):
+        if not isinstance(item, str):
+            continue
         if item.startswith("feed:"):
-            feed_id = int(item[5:])
-            url = feed_id_to_url.get(feed_id)
+            url = feed_id_to_url.get(_int_or_none(item[5:]))
             if url:
                 result.append(f"feed:{url}")
         elif item.startswith("folder:"):
@@ -265,8 +456,7 @@ def _scope_to_urls(
             if folder_id_str == "0":
                 result.append("folder:__no_folder__")
             else:
-                folder_id = int(folder_id_str)
-                name = folder_id_to_name.get(folder_id)
+                name = folder_id_to_name.get(_int_or_none(folder_id_str))
                 if name:
                     result.append(f"folder:{name}")
     return result
@@ -282,8 +472,13 @@ class ImportResult:
     labels_added: int = 0
     labels_skipped: int = 0
     prefs_updated: int = 0
+    profile_updated: int = 0
     filters_added: int = 0
     filters_skipped: int = 0
+    searches_added: int = 0
+    searches_skipped: int = 0
+    catchups_added: int = 0
+    catchups_skipped: int = 0
     warnings: list[str] = field(default_factory=list)
     # Set when the subscription cap stopped the import part way. feeds_over_limit is
     # how many outlines were never even attempted, so it counts duplicates the import
@@ -294,6 +489,73 @@ class ImportResult:
     feed_limit: int | None = None
 
 
+class _LabelBook:
+    """The user's labels by name, creating the ones the file refers to but the account lacks.
+
+    A filter, saved search or catch-up that labels or selects by a missing label
+    gets that label rather than losing the reference. Its colour comes from the
+    file's label section when the file has one. New labels go after the existing
+    ones, in the order they are met, so a file's label order carries over.
+    """
+
+    def __init__(self, user_id: int, result: ImportResult):
+        self.user_id = user_id
+        self.result = result
+        self.ids: dict[str, int] = {}
+        self.colors: dict[str, str] = {}
+        self.file_order: list[str] = []
+        self._next_position = 0
+
+    async def load(self, db: AsyncSession, section: Element | None) -> None:
+        for label in (await db.execute(select(Label).where(Label.user_id == self.user_id))).scalars():
+            self.ids[label.name] = label.id
+            self._next_position = max(self._next_position, label.position + 1)
+        for outline in section if section is not None else []:
+            name = (outline.get("label-name") or outline.get("text", "").lstrip("-")).strip()[:100]
+            if not name or name in self.colors:
+                continue
+            color = (outline.get("label-bg-color") or outline.get("label-fg-color") or "").strip()
+            self.colors[name] = color if _COLOR_RE.match(color) else DEFAULT_LABEL_COLOR
+            self.file_order.append(name)
+
+    async def ensure(self, name: str, db: AsyncSession) -> int | None:
+        name = name.strip()[:100]
+        if not name:
+            return None
+        if name in self.ids:
+            return self.ids[name]
+        label = Label(
+            user_id=self.user_id, name=name,
+            color=self.colors.get(name, DEFAULT_LABEL_COLOR), position=self._next_position,
+        )
+        self._next_position += 1
+        db.add(label)
+        await db.flush()
+        self.ids[name] = label.id
+        self.result.labels_added += 1
+        return label.id
+
+    async def import_section(self, db: AsyncSession) -> None:
+        for name in self.file_order:
+            if name in self.ids:
+                self.result.labels_skipped += 1
+            else:
+                await self.ensure(name, db)
+
+    async def tokens(self, items: Any, db: AsyncSession) -> list[str]:
+        """File label tokens (``any`` / ``label:<name>``) back to ``label:<id>``."""
+        items = _json_list(items)
+        if "any" in items:
+            return ["any"]
+        out = []
+        for item in items:
+            if isinstance(item, str) and item.startswith("label:"):
+                label_id = await self.ensure(item[6:], db)
+                if label_id is not None:
+                    out.append(f"label:{label_id}")
+        return out
+
+
 async def import_opml(
     user: User,
     xml_bytes: bytes,
@@ -302,13 +564,17 @@ async def import_opml(
     import_prefs: bool,
     import_filters: bool,
     db: AsyncSession,
+    import_profile: bool = False,
+    import_searches: bool = False,
+    import_catchup: bool = False,
 ) -> ImportResult:
-    """Import subscriptions/labels/prefs/filters from an OPML file.
+    """Import subscriptions, labels, settings, filters, saved searches and catch-ups.
 
-    Not atomic: each pass (labels, feeds, prefs, filters) commits independently, so a
-    late failure can leave earlier passes persisted. This is intentional — the import
-    is idempotent: existing labels/feeds/folders/filters are detected and skipped, so
-    re-running after a failure converges without creating duplicates.
+    Not atomic: each pass commits independently, so a late failure can leave earlier
+    passes persisted. This is intentional — the import is idempotent: existing
+    labels/feeds/folders/filters/searches/catch-ups are detected and skipped, so
+    re-running after a failure converges without creating duplicates. Settings are
+    only ever set, never cleared: a value the file lacks leaves the account's alone.
     """
     result = ImportResult()
 
@@ -320,51 +586,29 @@ async def import_opml(
     body = root.find("body")
     if body is None:
         raise ValueError("OPML file has no <body> element")
+    versioned = root.find(f"head/{_NS_FORMAT}") is not None
 
-    # Pass 1: import labels first (needed for filter action_value resolution)
-    label_name_to_id: dict[str, int] = {}
-
-    if import_labels or import_filters:
-        labels_el = _find_section(body, "tt-rss-labels")
-        if labels_el is not None:
-            for outline in labels_el:
-                label_name = outline.get("label-name") or outline.get("text", "").lstrip("-")
-                color = outline.get("label-bg-color") or outline.get("label-fg-color") or "#6366f1"
-                if not label_name:
-                    continue
-                label_name = label_name[:100]
-                existing = await db.execute(
-                    select(Label).where(Label.user_id == user.id, Label.name == label_name)
-                )
-                label = existing.scalar_one_or_none()
-                if label:
-                    label_name_to_id[label_name] = label.id
-                    if import_labels:
-                        result.labels_skipped += 1
-                else:
-                    if import_labels:
-                        new_label = Label(user_id=user.id, name=label_name, color=color[:7])
-                        db.add(new_label)
-                        await db.flush()
-                        label_name_to_id[label_name] = new_label.id
-                        result.labels_added += 1
+    # Pass 1: labels first, the later passes refer to them by name.
+    labels = _LabelBook(user.id, result)
+    if import_labels or import_filters or import_searches or import_catchup:
+        await labels.load(db, _find_section(body, "tt-rss-labels"))
+        if import_labels:
+            await labels.import_section(db)
         await db.commit()
 
     # Pass 2: import feeds + folders
-    feed_url_to_id: dict[str, int] = {}
-    feed_title_to_id: dict[str, int] = {}  # TTRSS filters scope feeds by title, not URL
-    folder_name_to_id: dict[str, int] = {}
     new_feed_ids: list[int] = []  # collected for deferred initial fetch
-
+    feed_url_to_id: dict[str, int] = {}
     if import_feeds:
         # Collect all top-level feed outlines, unwrapping TTRSS "All articles" wrapper
         feed_outlines = _collect_feed_outlines(body)
+        folder_cache: dict[str, int] = {}
         next_folder_pos = await next_folder_position(db, user.id)
         for index, (outline, folder_name) in enumerate(feed_outlines):
             folder_id = None
             if folder_name:
                 folder_id, next_folder_pos = await _get_or_create_folder(
-                    user, folder_name, folder_name_to_id, db, next_folder_pos
+                    user, folder_name, folder_cache, db, next_folder_pos
                 )
             xml_url = outline.get("xmlUrl", "")
             try:
@@ -381,38 +625,22 @@ async def import_opml(
                 if (outline.get("feed-type") or "").strip().lower() != "scrape":
                     new_feed_ids.append(added_id)
 
-        # Refresh existing subscriptions into lookup map
+    # Lookup maps for scope resolution, from the subscriptions as they are now.
+    # The URL a feed was just added under wins over the one it is stored as, since
+    # the file's scopes use the former.
+    feed_title_to_id: dict[str, int] = {}  # TTRSS filters scope feeds by title, not URL
+    folder_name_to_id: dict[str, int] = {}
+    if import_filters or import_searches or import_catchup:
         existing_uf_result = await db.execute(
             select(UserFeed, Feed)
             .join(Feed, Feed.id == UserFeed.feed_id)
             .where(UserFeed.user_id == user.id)
         )
         for uf, feed in existing_uf_result.all():
-            if feed.feed_url not in feed_url_to_id:
-                feed_url_to_id[feed.feed_url] = uf.feed_id
+            feed_url_to_id.setdefault(feed.feed_url, uf.feed_id)
             title = (uf.custom_title or feed.title or "").strip()
-            if title and title not in feed_title_to_id:
-                feed_title_to_id[title] = uf.feed_id
-
-        # Refresh folder map
-        existing_folders = await db.execute(
-            select(Folder).where(Folder.user_id == user.id)
-        )
-        for folder in existing_folders.scalars():
-            folder_name_to_id[folder.name] = folder.id
-
-    else:
-        # Build lookup maps even when not importing feeds (needed for filter scope)
-        existing_uf_result = await db.execute(
-            select(UserFeed, Feed)
-            .join(Feed, Feed.id == UserFeed.feed_id)
-            .where(UserFeed.user_id == user.id)
-        )
-        for uf, feed in existing_uf_result.all():
-            feed_url_to_id[feed.feed_url] = uf.feed_id
-            title = (uf.custom_title or feed.title or "").strip()
-            if title and title not in feed_title_to_id:
-                feed_title_to_id[title] = uf.feed_id
+            if title:
+                feed_title_to_id.setdefault(title, uf.feed_id)
 
         existing_folders = await db.execute(
             select(Folder).where(Folder.user_id == user.id)
@@ -420,42 +648,41 @@ async def import_opml(
         for folder in existing_folders.scalars():
             folder_name_to_id[folder.name] = folder.id
 
-    # Pass 3: prefs
-    if import_prefs:
-        prefs_el = _find_section(body, "tt-rss-prefs")
-        if prefs_el is not None:
-            settings_result = await db.execute(
-                select(UserSettings).where(UserSettings.user_id == user.id)
-            )
-            us = settings_result.scalar_one_or_none()
-            if us is None:
-                us = UserSettings(user_id=user.id)
-                db.add(us)
-
-            for outline in prefs_el:
-                # TTRSS uses pref-name, our export uses text
-                key = outline.get("pref-name") or outline.get("text", "")
-                value = outline.get("value", "")
-                if key == "USER_TIMEZONE" and value:
-                    # TTRSS allows "Automatic" and other non-IANA values; only accept
-                    # names zoneinfo can resolve, otherwise downstream tz math breaks.
-                    if is_valid_timezone(value):
-                        us.timezone = value[:50]
-                        result.prefs_updated += 1
-                    else:
-                        result.warnings.append(f"Ignored unsupported timezone '{value}'")
-                elif key == "PURGE_OLD_DAYS" and value.isdigit():
-                    # No global purge setting in our model — skip
-                    pass
-            await db.commit()
+    # Pass 3: settings
+    if import_prefs or import_profile:
+        us = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+        if us is None:
+            us = UserSettings(user_id=user.id)
+            db.add(us)
+        if import_prefs:
+            await _import_prefs(user, root, us, result, db)
+        if import_profile:
+            data = _readfine_section(root, "profile", dict, result)
+            if data:
+                _apply_profile(us, data, result)
+        await db.commit()
 
     # Pass 4: filters
     if import_filters:
         filters_el = _find_section(body, "tt-rss-filters")
         if filters_el is not None:
             await _import_filters_element(
-                user, filters_el, label_name_to_id, feed_url_to_id, feed_title_to_id,
-                folder_name_to_id, result, db
+                user, filters_el, labels, feed_url_to_id, feed_title_to_id,
+                folder_name_to_id, result, db, versioned=versioned,
+            )
+
+    # Pass 5: saved searches and catch-ups
+    if import_searches:
+        data = _readfine_section(root, "saved-searches", list, result)
+        if data:
+            await _import_saved_searches(
+                user, data, labels, feed_url_to_id, folder_name_to_id, result, db
+            )
+    if import_catchup:
+        data = _readfine_section(root, "catchup", list, result)
+        if data:
+            await _import_catchups(
+                user, data, labels, feed_url_to_id, folder_name_to_id, result, db
             )
 
     # Kick off initial fetches after all filters are in DB. Mark in-progress
@@ -472,11 +699,40 @@ async def import_opml(
     return result
 
 
+def _is_section(text: str) -> bool:
+    """The outlines that carry settings rather than feeds."""
+    return text.startswith("tt-rss-")
+
+
+def _readfine_section(root: Element, name: str, kind: type, result: ImportResult) -> Any:
+    """The JSON payload of one of our <head> sections, or None."""
+    for el in root.findall(f"head/{_NS_SECTION}"):
+        if el.get("name") == name:
+            return _section_json(el, kind, name.replace("-", " "), result)
+    return None
+
+
 def _find_section(body: Element, text: str) -> Element | None:
     for outline in body:
         if outline.get("text") == text:
             return outline
     return None
+
+
+def _section_json(section: Element, kind: type, what: str, result: ImportResult) -> Any:
+    """A section's JSON payload if it is the expected kind, else None with a warning."""
+    raw = (section.text or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        result.warnings.append(f"Could not parse {what}: {exc}")
+        return None
+    if not isinstance(data, kind):
+        result.warnings.append(f"Could not parse {what}: unexpected format, skipped")
+        return None
+    return data
 
 
 def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
@@ -491,7 +747,7 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
 
     for top in body:
         section_text = top.get("text", "")
-        if section_text.startswith("tt-rss-"):
+        if _is_section(section_text):
             continue
 
         if top.get("xmlUrl"):
@@ -503,7 +759,7 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
         # Peek: if children are themselves folder-like (no xmlUrl, have grandchildren with xmlUrl),
         # treat this as a wrapper and unwrap one level
         children = list(top)
-        non_section_children = [c for c in children if not c.get("text", "").startswith("tt-rss-")]
+        non_section_children = [c for c in children if not _is_section(c.get("text", ""))]
         is_wrapper = bool(non_section_children) and all(
             not child.get("xmlUrl") and len(child) > 0
             for child in non_section_children
@@ -513,7 +769,7 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
             # Unwrap: treat children as folders
             for folder_outline in children:
                 folder_name = (folder_outline.get("text") or folder_outline.get("title") or "")[:100]
-                if not folder_name or folder_name.startswith("tt-rss-"):
+                if not folder_name or _is_section(folder_name):
                     continue
                 for feed_outline in folder_outline:
                     if feed_outline.get("xmlUrl"):
@@ -557,6 +813,20 @@ async def _get_or_create_folder(
     return folder.id, next_position
 
 
+def _feed_options(outline: Element) -> dict[str, Any]:
+    """The subscription settings a Readfine export writes on a feed outline."""
+    options: dict[str, Any] = {}
+    for attr, column in (("extract-readable", "extract_readable"), ("ai-summary", "ai_summary_enabled")):
+        value = outline.get(attr)
+        if value is not None:
+            options[column] = _truthy(value)
+    for attr, column in _FEED_PURGE_ATTRS.items():
+        value = _int_or_none(outline.get(attr))
+        if value is not None and 1 <= value <= _SMALLINT_MAX:
+            options[column] = value
+    return options
+
+
 async def _import_feed(
     user: User,
     outline: Element,
@@ -564,7 +834,11 @@ async def _import_feed(
     result: ImportResult,
     db: AsyncSession,
 ) -> int | None:
-    """Subscribe user to a single feed outline. Returns new feed_id or None."""
+    """Subscribe user to a single feed outline. Returns new feed_id or None.
+
+    The outline's subscription settings apply only to a feed the import adds: one
+    the account already has keeps whatever it was set to here.
+    """
     xml_url = outline.get("xmlUrl", "").strip()
     if not xml_url:
         return None
@@ -593,21 +867,17 @@ async def _import_feed(
                 db=db,
                 validate_selector=False,
             )
-            result.feeds_added += 1
-            return uf.feed_id
-
-        uf = await subscribe(
-            user=user,
-            url=xml_url,
-            folder_id=folder_id,
-            custom_title=title,
-            fetch_auth_user=None,
-            fetch_auth_pass=None,
-            db=db,
-            trigger_initial_fetch=False,
-        )
-        result.feeds_added += 1
-        return uf.feed_id
+        else:
+            uf = await subscribe(
+                user=user,
+                url=xml_url,
+                folder_id=folder_id,
+                custom_title=title,
+                fetch_auth_user=None,
+                fetch_auth_pass=None,
+                db=db,
+                trigger_initial_fetch=False,
+            )
     except AlreadySubscribed:
         result.feeds_skipped += 1
         return None
@@ -618,16 +888,25 @@ async def _import_feed(
         result.warnings.append(f"Failed to import {xml_url}: {exc}")
         return None
 
+    result.feeds_added += 1
+    options = _feed_options(outline)
+    if options:
+        for column, value in options.items():
+            setattr(uf, column, value)
+        await db.commit()
+    return uf.feed_id
+
 
 async def _import_filters_element(
     user: User,
     filters_el: Element,
-    label_name_to_id: dict[str, int],
+    labels: _LabelBook,
     feed_url_to_id: dict[str, int],
     feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
     db: AsyncSession,
+    versioned: bool = False,
 ) -> None:
     """Import filters from a tt-rss-filters outline element.
 
@@ -640,15 +919,10 @@ async def _import_filters_element(
 
     if raw_text and not children:
         # Our format: JSON array in element text
-        try:
-            filters_data: list[dict[str, Any]] = json.loads(raw_text)
-        except json.JSONDecodeError as exc:
-            result.warnings.append(f"Could not parse filters JSON: {exc}")
+        filters_data = _section_json(filters_el, list, "filters", result)
+        if filters_data is None:
             return
-        if not isinstance(filters_data, list):
-            result.warnings.append("Filters data is not a list, skipping")
-            return
-        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db)
+        await _import_filters(user, filters_data, labels, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db, versioned)
     else:
         # TTRSS format: each child outline has CDATA text = single filter JSON object
         filters_data = []
@@ -665,7 +939,7 @@ async def _import_filters_element(
                     filters_data.append(fd)
             except json.JSONDecodeError as exc:
                 result.warnings.append(f"Could not parse filter JSON: {exc}")
-        await _import_filters(user, filters_data, label_name_to_id, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db)
+        await _import_filters(user, filters_data, labels, feed_url_to_id, feed_title_to_id, folder_name_to_id, result, db)
 
 
 def _dedupe_conditions(
@@ -692,12 +966,13 @@ def _filter_fingerprint(name: str, conditions: list[FilterConditionCreate]) -> t
 async def _import_filters(
     user: User,
     filters_data: list[dict[str, Any]],
-    label_name_to_id: dict[str, int],
+    labels: _LabelBook,
     feed_url_to_id: dict[str, int],
     feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
     db: AsyncSession,
+    versioned: bool = False,
 ) -> None:
     # Build set of existing filter fingerprints for duplicate detection
     existing_result = await db.execute(
@@ -711,15 +986,30 @@ async def _import_filters(
         existing_fingerprints.add((f.name, cond_key))
 
     for i, fd in enumerate(filters_data):
+        if not isinstance(fd, dict):
+            continue
         try:
             name = str(fd.get("name") or f"Imported filter {i + 1}")[:100]
 
             # Detect format: our own export (has "match_operator") vs TTRSS (has "match_any_rule" / "rules")
-            if "match_operator" in fd:
-                payload = _parse_readfine_filter(fd, label_name_to_id, feed_url_to_id, folder_name_to_id, result)
+            is_readfine = "match_operator" in fd
+
+            # A label the filter applies but the account lacks is created, so the
+            # action survives the move instead of being dropped. Except for digits
+            # in a Readfine file from before the format marker: those exports wrote
+            # the id of a label deleted since (deleting one leaves its filter
+            # actions in place) and creating a label called "17" helps nobody.
+            for label_name in _filter_label_names(fd, is_readfine):
+                if is_readfine and not versioned and label_name.isdigit()                         and label_name not in labels.ids:
+                    continue
+                await labels.ensure(label_name, db)
+            await db.commit()
+
+            if is_readfine:
+                payload = _parse_readfine_filter(fd, labels.ids, feed_url_to_id, folder_name_to_id, result)
             else:
                 payload = _parse_ttrss_filter(
-                    fd, label_name_to_id, feed_title_to_id, folder_name_to_id, result
+                    fd, labels.ids, feed_title_to_id, folder_name_to_id, result
                 )
 
             if payload is None:
@@ -747,6 +1037,20 @@ async def _import_filters(
             result.warnings.append(f"Filter '{fd.get('name', i)}' skipped: {exc}")
 
 
+def _filter_label_names(fd: dict, is_readfine: bool) -> list[str]:
+    """Names of the labels a filter's actions apply, in either format."""
+    names = []
+    for action in fd.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        if is_readfine:
+            if action.get("action_type") == "label":
+                names.append(str(action.get("action_value") or ""))
+        elif _TTRSS_ACTION_MAP.get(str(action.get("action_id"))) == "label":
+            names.append(str(action.get("action_param") or ""))
+    return [n.strip() for n in names if n.strip()]
+
+
 def _parse_readfine_filter(
     fd: dict,
     label_name_to_id: dict[str, int],
@@ -768,25 +1072,41 @@ def _parse_readfine_filter(
     for a in fd.get("actions", []):
         action_type = a["action_type"]
         action_value = a.get("action_value")
-        if action_type == "label" and action_value:
-            # action_value may be a label name (from export) or ID string
-            if not action_value.isdigit():
-                label_id = label_name_to_id.get(action_value)
-                if label_id is None:
-                    result.warnings.append(f"Label '{action_value}' not found, action skipped")
-                    continue
-                action_value = str(label_id)
+        if action_type == "label":
+            # Always a label name. Files written before names were used could hold
+            # an id, but an id from another account never points anywhere useful,
+            # and treating digits as one broke labels named like "2024".
+            name = str(action_value or "").strip()
+            label_id = label_name_to_id.get(name)
+            if label_id is None:
+                result.warnings.append(f"Label '{name}' not found, action skipped")
+                continue
+            action_value = str(label_id)
         actions.append(FilterActionCreate(action_type=action_type, action_value=action_value))
 
     # Resolve scope
-    scope_include = _resolve_scope(fd.get("scope_include", []), feed_url_to_id, folder_name_to_id, result)
-    scope_except = _resolve_scope(fd.get("scope_except", []), feed_url_to_id, folder_name_to_id, result)
+    wanted_include = fd.get("scope_include") or []
+    scope_include = _resolve_scope(wanted_include, feed_url_to_id, folder_name_to_id, result)
+    scope_except = _resolve_scope(fd.get("scope_except") or [], feed_url_to_id, folder_name_to_id, result)
 
+    is_active = _truthy(fd.get("enabled", True))
+    if wanted_include and not scope_include and is_active:
+        # None of the feeds or folders it was limited to are here, and an empty
+        # scope means every feed: a "mark read" meant for one feed would hit all
+        # of them. Imported switched off, for the user to rescope.
+        is_active = False
+        result.warnings.append(
+            f"Filter '{fd.get('name')}': none of its feeds or folders were found, "
+            f"imported switched off (set its scope and switch it on)"
+        )
+
+    position = _int_or_none(fd.get("position"))
     return FilterCreate(
         name="",
-        is_active=bool(fd.get("enabled", True)),
+        is_active=is_active,
         match_operator=fd.get("match_operator", "AND"),
-        stop_on_match=bool(fd.get("stop_on_match", False)),
+        position=position if position is not None and 0 <= position <= _SMALLINT_MAX else 0,
+        stop_on_match=_truthy(fd.get("stop_on_match", False)),
         scope_include=scope_include,
         scope_except=scope_except,
         conditions=conditions,
@@ -987,6 +1307,8 @@ def _resolve_scope(
 ) -> list[str]:
     resolved = []
     for item in scope_list:
+        if not isinstance(item, str):
+            continue
         if item.startswith("feed:"):
             url = item[5:]
             feed_id = feed_url_to_id.get(url)
@@ -1005,3 +1327,257 @@ def _resolve_scope(
                 else:
                     result.warnings.append(f"Scope folder not found: {name}")
     return resolved
+
+
+# ── Settings, saved searches, catch-ups ───────────────────────────────────────
+
+async def _import_prefs(
+    user: User, root: Element, us: UserSettings, result: ImportResult, db: AsyncSession,
+) -> None:
+    prefs_el = _find_section(root.find("body"), "tt-rss-prefs")
+    for outline in prefs_el if prefs_el is not None else []:
+        # TTRSS uses pref-name, our export uses text
+        key = outline.get("pref-name") or outline.get("text", "")
+        value = outline.get("value", "")
+        if key == "USER_TIMEZONE" and value:
+            # TTRSS allows "Automatic" and other non-IANA values; only accept
+            # names zoneinfo can resolve, otherwise downstream tz math breaks.
+            if not is_valid_timezone(value):
+                result.warnings.append(f"Ignored unsupported timezone '{value}'")
+            elif value != us.timezone:
+                us.timezone = value[:50]
+                result.prefs_updated += 1
+                # Briefings are sent at a local time, so they move with the zone.
+                await reschedule_briefings(user.id, us.timezone, db)
+        # PURGE_OLD_DAYS and the rest of TT-RSS's prefs have no per-user
+        # equivalent here and are skipped.
+
+    data = _readfine_section(root, "prefs", dict, result)
+    if data:
+        _apply_prefs(us, data, result)
+
+
+def _apply_prefs(us: UserSettings, data: dict, result: ImportResult) -> None:
+    """Set the reading and display preferences the file holds, each only if valid."""
+    changed: dict[str, Any] = {}
+    for key, allowed in _PREF_CHOICES.items():
+        if key in data:
+            # A list or object from a damaged file is not hashable: check the type
+            # before asking a set whether it holds the value.
+            if isinstance(data[key], str) and data[key] in allowed:
+                changed[key] = data[key]
+            else:
+                result.warnings.append(f"Ignored preference {key} = {data[key]!r}")
+    for key in _PREF_BOOLS:
+        if isinstance(data.get(key), bool):
+            changed[key] = data[key]
+    if isinstance(data.get("format_profile"), str) and is_valid_format(data["format_profile"]):
+        changed["format_profile"] = data["format_profile"]
+    per_page = _int_or_none(data.get("articles_per_page"))
+    if per_page is not None:
+        changed["articles_per_page"] = clamp_articles_per_page(per_page)
+    small, medium = _int_or_none(data.get("bucket_small_max")), _int_or_none(data.get("bucket_medium_max"))
+    if small is not None and medium is not None:
+        changed["bucket_small_max"], changed["bucket_medium_max"] = clamp_buckets(small, medium)
+
+    for key, value in changed.items():
+        if getattr(us, key) != value:
+            setattr(us, key, value)
+            result.prefs_updated += 1
+    # A custom folder order is the positions the folders were created in, which
+    # follow the file; mark it arranged so turning the view on keeps them.
+    if changed.get("folder_order") == "custom":
+        us.folders_arranged = True
+
+
+def _apply_profile(us: UserSettings, data: dict, result: ImportResult) -> None:
+    """Basic relevance terms and the AI texts. Only set, never cleared."""
+    if isinstance(data.get("basic_scoring_enabled"), bool) \
+            and data["basic_scoring_enabled"] != us.basic_scoring_enabled:
+        us.basic_scoring_enabled = data["basic_scoring_enabled"]
+        result.profile_updated += 1
+
+    terms = data.get("relevance_terms")
+    new_terms = us.relevance_terms
+    if isinstance(terms, str) and terms.strip():
+        if len(terms) > TERMS_MAX_CHARS:
+            result.warnings.append(f"Relevance terms longer than {TERMS_MAX_CHARS} characters, skipped")
+        elif terms.strip() != (us.relevance_terms or ""):
+            new_terms = terms
+            result.profile_updated += 1
+    # Through save_terms, like the settings form, so the backfill is due as well.
+    save_terms(us, new_terms)
+
+    profile = data.get("ai_profile")
+    if isinstance(profile, str) and profile.strip() and profile.strip() != us.ai_preference_text:
+        if len(profile.strip()) > PROFILE_MAX_CHARS:
+            result.warnings.append(f"AI interest profile longer than {PROFILE_MAX_CHARS} characters, skipped")
+        else:
+            us.ai_preference_text = profile.strip()
+            us.ai_preference_updated_at = datetime.now(timezone.utc)
+            us.ai_preference_source = "manual"
+            result.profile_updated += 1
+
+    for key in ("ai_summary_prompt", "ai_context_prompt"):
+        text = data.get(key)
+        if isinstance(text, str) and text.strip() and text.strip() != getattr(us, key):
+            setattr(us, key, text.strip())
+            result.profile_updated += 1
+
+
+def _resolve_file_scope(
+    raw: Any,
+    what: str,
+    feed_url_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
+    result: ImportResult,
+) -> list[str] | None:
+    """A file scope back to ids. None when it named feeds or folders and none of
+    them are here: an empty scope means every feed, so the item would silently
+    turn into something much wider than it was."""
+    wanted = [item for item in _json_list(raw) if isinstance(item, str)]
+    resolved = _resolve_scope(wanted, feed_url_to_id, folder_name_to_id, result)
+    if wanted and not resolved:
+        result.warnings.append(f"{what}: none of its feeds or folders were found, skipped")
+        return None
+    return resolved
+
+
+async def _import_saved_searches(
+    user: User,
+    data: list,
+    labels: _LabelBook,
+    feed_url_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
+    result: ImportResult,
+    db: AsyncSession,
+) -> None:
+    taken = {s.name.lower() for s in await list_saved_searches(db, user.id)}
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("params"), dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split())
+        if name.lower() in taken:
+            result.searches_skipped += 1
+            continue
+        params = dict(item["params"])
+        if params.get("scope_include"):
+            scope = _resolve_file_scope(
+                params["scope_include"], f"Saved search '{name}'",
+                feed_url_to_id, folder_name_to_id, result,
+            )
+            if scope is None:
+                result.searches_skipped += 1
+                continue
+            params["scope_include"] = scope
+        if params.get("label_filter"):
+            params["label_filter"] = await labels.tokens(params["label_filter"], db)
+        await db.commit()  # the labels, before a rejected search rolls back
+        try:
+            await create_saved_search(db, user.id, name=name, params=params)
+            await db.commit()
+        except SavedSearchError as exc:
+            await db.rollback()
+            result.searches_skipped += 1
+            result.warnings.append(f"Saved search '{name}' skipped: {exc}")
+            continue
+        taken.add(name.lower())
+        result.searches_added += 1
+
+
+async def _import_catchups(
+    user: User,
+    data: list,
+    labels: _LabelBook,
+    feed_url_to_id: dict[str, int],
+    folder_name_to_id: dict[str, int],
+    result: ImportResult,
+    db: AsyncSession,
+) -> None:
+    """Catch-up configurations, with their briefing schedules switched off.
+
+    A briefing emails its recipients on its own, so a restored one waits for the
+    user to switch it on again rather than starting to send from a new instance.
+    """
+    existing = (await db.execute(
+        select(UserCatchupConfig.name, UserCatchupConfig.period)
+        .where(UserCatchupConfig.user_id == user.id)
+    )).all()
+    taken = {(name, period) for name, period in existing}
+    briefings_off = 0
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()[:100]
+        if not name:
+            continue
+        period = item.get("period") if item.get("period") in _CATCHUP_PERIODS else "7days"
+        if (name, period) in taken:
+            result.catchups_skipped += 1
+            continue
+        scope = _resolve_file_scope(
+            item.get("scope_include"), f"Catch-up '{name}'", feed_url_to_id, folder_name_to_id, result,
+        )
+        if scope is None:
+            result.catchups_skipped += 1
+            continue
+        label_tokens = await labels.tokens(item.get("label_filter"), db)
+        score_min = item.get("score_min")
+        score_ok = isinstance(score_min, (int, float)) and not isinstance(score_min, bool) \
+            and 0 <= score_min <= 100
+        limit = _int_or_none(item.get("article_limit"))
+        prompt = item.get("custom_prompt")
+        status = item.get("filter_status")
+
+        config = UserCatchupConfig(
+            user_id=user.id,
+            name=name,
+            period=period,
+            filter_status=status if status in _CATCHUP_STATUSES else "all",
+            scope_include=json.dumps(scope) if scope else None,
+            label_filter=json.dumps(label_tokens) if label_tokens else None,
+            filter_score_min=score_min / 100 if score_ok else None,
+            article_limit=max(1, min(500, limit)) if limit is not None else 500,
+            custom_prompt=prompt.strip() if isinstance(prompt, str) and prompt.strip() else None,
+            include_snippet=_truthy(item.get("include_snippet", True)),
+            briefing_enabled=False,
+        )
+        briefing = item.get("briefing")
+        if isinstance(briefing, dict):
+            if _apply_briefing_schedule(config, briefing):
+                if _truthy(briefing.get("enabled")):
+                    briefings_off += 1
+            else:
+                result.warnings.append(f"Catch-up '{name}': briefing schedule not valid, left out")
+        db.add(config)
+        await db.commit()
+        taken.add((name, period))
+        result.catchups_added += 1
+
+    if briefings_off:
+        result.warnings.append(
+            f"{briefings_off} briefing(s) were imported switched off. "
+            f"Switch them on in Catch me up when you want the emails to start."
+        )
+
+
+def _apply_briefing_schedule(config: UserCatchupConfig, briefing: dict) -> bool:
+    """Copy a valid schedule onto the config (still switched off). False if not valid."""
+    interval = briefing.get("interval")
+    if interval not in ("daily", "weekly"):
+        return False
+    day = _int_or_none(briefing.get("day"))
+    if interval == "weekly" and (day is None or not 0 <= day <= 6):
+        return False
+    time_str = str(briefing.get("time") or "")
+    if not _TIME_RE.match(time_str):
+        return False
+    recipients = [r.strip() for r in _json_list(briefing.get("recipients")) if isinstance(r, str)]
+    if len(recipients) > 5 or not all(is_valid_email(r) for r in recipients):
+        return False
+    config.briefing_interval = interval
+    config.briefing_day = day if interval == "weekly" else None
+    config.briefing_time = time_str
+    config.briefing_recipients = json.dumps(recipients) if recipients else None
+    return True

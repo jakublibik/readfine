@@ -2,11 +2,13 @@
 import asyncio
 import json
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
@@ -16,6 +18,7 @@ from app.fetcher import host_throttle
 from app.fetcher.failure import has_failure_trail
 from app.fetcher.interval import auto_interval_min
 from app.fetcher.scheduler import compute_next_fetch_at
+from app.models.feed import Feed
 from app.models.user import User
 from app.services.host_rate_limit_service import flush as flush_host_rate_limits
 from app.services.admin_service import (
@@ -45,6 +48,9 @@ from app.services.feed import change_feed_url
 from app.utils.crypto import encrypt
 from app.utils.datetime_format import format_until
 from app.utils.parsing import clamp, safe_int
+from app.services.dormancy_service import (
+    DORMANT_MAX_DAYS, DORMANT_MIN_DAYS, dormant_feeds_sql, policy_from_settings,
+)
 from app.utils.smtp import send_email
 from app.utils.url_validator import redact_url
 
@@ -74,7 +80,6 @@ async def admin_dashboard(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    from app import __version__
     stats = await get_dashboard_stats(db)
     traffic_views_7d = (
         await traffic_service.get_recent_views(db, days=7)
@@ -83,7 +88,6 @@ async def admin_dashboard(
     )
     return templates.TemplateResponse(request, "admin/dashboard.html", {
         "stats": stats,
-        "app_version": __version__,
         "traffic_views_7d": traffic_views_7d,
     })
 
@@ -139,11 +143,9 @@ async def admin_scoring_eval(
 ):
     from app.services.ai_eval_service import get_scoring_eval
     window = clamp(days, 7, 365, 90)
-    users = await list_users(db)
     eval_data = await get_scoring_eval(db, days=window, user_id=safe_int(user_id))
     return templates.TemplateResponse(request, "admin/scoring_eval.html", {
         "eval": eval_data,
-        "users": users,
     })
 
 
@@ -199,6 +201,17 @@ async def admin_delete_user(
 
 # ── App Settings ──────────────────────────────────────────────────────────────
 
+def _dormant_days(raw: str | None, current: int | None) -> int | None:
+    """Empty = off. Below the minimum is raised to it (the field says so); anything
+    unparseable keeps what was there."""
+    if raw is None or not raw.strip():
+        return None
+    days = safe_int(raw)
+    if days is None:
+        return current
+    return max(DORMANT_MIN_DAYS, min(days, DORMANT_MAX_DAYS))
+
+
 @router.get("/settings", response_class=HTMLResponse)
 async def admin_settings(
     request: Request,
@@ -212,6 +225,7 @@ async def admin_settings(
         "saved": False,
         "error": None,
         "legal_configured": legal_configured,
+        "public_url_set": bool(app_config.public_url),
     })
 
 
@@ -242,6 +256,13 @@ async def admin_settings_save(
             _quantize15(safe_int(form.get("min_fetch_interval_min")), 15),
         ),
         "max_feeds_per_user": clamp(safe_int(form.get("max_feeds_per_user")), 1, 9999, 200),
+        "dormant_after_days": _dormant_days(form.get("dormant_after_days"), s.dormant_after_days),
+        # The checkbox is only on the page with SMTP set up; without it keep the
+        # stored value rather than read the missing box as "off".
+        "dormant_warning_enabled": (
+            form.get("dormant_warning_enabled") == "true" if s.smtp_host
+            else s.dormant_warning_enabled
+        ),
         "default_purge_after_days": _purge_days,
         "smtp_host": form.get("smtp_host", "").strip() or None,
         "smtp_port": clamp(safe_int(form.get("smtp_port")), 1, 65535, 587),
@@ -280,6 +301,7 @@ async def admin_settings_save(
             "saved": True,
             "error": None,
             "legal_configured": legal_configured,
+            "public_url_set": bool(app_config.public_url),
         })
     except Exception as e:
         logger.error("Failed to save app settings: %s", e)
@@ -290,6 +312,7 @@ async def admin_settings_save(
             "saved": False,
             "error": "Failed to save settings.",
             "legal_configured": legal_configured,
+            "public_url_set": bool(app_config.public_url),
         }, status_code=500)
 
 
@@ -420,11 +443,16 @@ async def _feeds_context(db, group: str = "az") -> dict:
     min_interval = (s.min_fetch_interval_min or 15)
     max_interval = (s.max_fetch_interval_min or 360)
     now = datetime.now(timezone.utc)
+    # Feeds with subscribers, none of them awake: the scheduler skips them.
+    dormant_ids = set((await db.scalars(
+        select(Feed.id).where(dormant_feeds_sql(policy_from_settings(s), now))
+    )).all())
     for item in feeds:
         f = item["feed"]
+        f.dormant = f.id in dormant_ids
         # Predicted next fetch for every scheduled feed (None for paused/disabled/no-subs),
         # shown under "Last fetch" as a relative hint.
-        f.next_fetch_at = compute_next_fetch_at(
+        f.next_fetch_at = None if f.dormant else compute_next_fetch_at(
             f, default_interval_min=default_interval,
             min_interval_min=min_interval, max_interval_min=max_interval, now=now,
         )
@@ -439,8 +467,17 @@ async def _feeds_context(db, group: str = "az") -> dict:
             min_interval_min=min_interval, max_interval_min=max_interval,
         )
     group = _norm_group(group)
+    by_status = Counter(item["feed"].status for item in feeds)
     return {
         "feeds": feeds,
+        "feed_counts": [
+            (n, label) for n, label in (
+                (by_status["error"], "error"),
+                (by_status["disabled"], "disabled"),
+                (by_status["paused"], "paused"),
+                (len(dormant_ids), "dormant"),
+            ) if n
+        ],
         "feed_groups": group_feeds_by_host(feeds) if group == "host" else None,
         "group_mode": group,
         "default_interval_min": max(default_interval, min_interval),

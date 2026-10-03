@@ -46,6 +46,31 @@
                value="{{ s.max_feeds_per_user }}"
                class="w-24 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
       </div>
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <label for="dormant_after_days" class="text-sm font-medium text-gray-700">Pause feeds after N days without activity</label>
+          <p class="text-xs text-gray-400">A feed stops being fetched once none of its readers has used Readfine for this long, and starts again when one comes back. Admins and accounts with a briefing never pause. Without the warning email, nobody is told beforehand. Empty = off, at least 30.</p>
+        </div>
+        <input type="number" id="dormant_after_days" name="dormant_after_days" min="30" max="3650"
+               value="{{ s.dormant_after_days or '' }}" placeholder="off"
+               class="w-24 flex-shrink-0 border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+      </div>
+      {% if s.smtp_host %}
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <label for="dormant_warning_enabled" class="text-sm font-medium text-gray-700">Email a warning 7 days before pausing</label>
+          <p class="text-xs text-gray-400">With this on, nobody's feeds pause without an email first.</p>
+        </div>
+        <input type="checkbox" id="dormant_warning_enabled" name="dormant_warning_enabled" value="true"
+               {% if s.dormant_warning_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+      </div>
+      {% if not public_url_set %}
+      <p id="dormant-url-note" class="-mt-2 text-xs text-yellow-700 {% if not s.dormant_warning_enabled %}hidden{% endif %}">
+        <code>PUBLIC_URL</code> is not set, so the email goes out without a link to sign in. Set it in <code>.env</code> and restart.
+      </p>
+      {% endif %}
+      {% endif %}
     </div>
   </section>
 
@@ -305,5 +330,12 @@ document.querySelector('[name="registration_enabled"]').addEventListener('change
     if (w) w.classList.toggle('hidden', !enabled);
     document.getElementById('traffic-closed-note').classList.toggle('hidden', enabled);
 });
+var dormantWarning = document.querySelector('[name="dormant_warning_enabled"]');
+var dormantUrlNote = document.getElementById('dormant-url-note');
+if (dormantWarning && dormantUrlNote) {
+    dormantWarning.addEventListener('change', function() {
+        dormantUrlNote.classList.toggle('hidden', !this.checked);
+    });
+}
 </script>
 {% endblock %}

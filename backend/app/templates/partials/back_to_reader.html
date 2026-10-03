@@ -1,12 +1,12 @@
-{# Return link for the public pages (help, features, legal). Only signed-in
+{# Return link for the public pages (help, features, changelog, legal), shown
+   in their shared header (public_header.html). Only signed-in
    visitors get it: /app answers a logged-out request with a redirect to the
    login page, so the link would lead nowhere useful for them. The session is
    read straight from the cookie, no DB lookup; a stale session just means the
    link redirects to /login. All HTML is served no-store + Vary: Cookie, so
    the two variants can't be cached across viewers.
 
-   wrapper_class positions the link: block above the card on help/features, in
-   the wordmark row on the legal pages. The chevron is an inline element rather
+   wrapper_class positions the link within the header row. The chevron is an inline element rather
    than a flex item on purpose. An inline-flex link takes its baseline from its
    first flex item, so an icon-first link reports the icon's bottom edge as its
    baseline and lands a couple of pixels high wherever it is baseline-aligned

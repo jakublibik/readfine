@@ -95,6 +95,9 @@ async def list_members(
     if story_id is None:
         return []
     diag = title_norm is not None
+    own_url = select(Article.url_normalized).where(
+        Article.id == article_id
+    ).scalar_subquery()
     rows = (await db.execute(
         _members_query(
             [
@@ -110,6 +113,7 @@ async def list_members(
                 UserArticleState.is_starred,
                 UserArticleState.ai_score,
                 UserArticleState.lexical_score,
+                func.coalesce(Article.url_normalized == own_url, False).label("same_link"),
                 *([func.similarity(Article.title_norm, title_norm).label("similarity"),
                    Article.title_norm] if diag else []),
             ],
@@ -139,6 +143,7 @@ async def list_members(
             is_starred=bool(r.is_starred),
             ai_score=r.ai_score,
             lexical_score=r.lexical_score,
+            same_link=bool(r.same_link),
             similarity=r.similarity if diag else None,
             follow_up=(diag and r.title_norm is not None
                        and reads_as_follow_up(title_norm, r.title_norm)),
@@ -421,7 +426,7 @@ async def annotate(
 
     rows = (await db.execute(
         add_article_access_joins(
-            select(Article.id, Article.story_id,
+            select(Article.id, Article.story_id, Article.url_normalized,
                    UserArticleState.is_read, UserArticleState.suppressed_at),
             user_id,
         )
@@ -432,31 +437,27 @@ async def annotate(
         )
     )).all()
 
-    totals: dict[int, int] = {}
-    scoped: dict[int, int] = {}
-    reads: dict[int, int] = {}
-    read_by_reader: set[int] = set()
+    by_story: dict[int, list] = {}
+    url_of: dict[int, str | None] = {}
     for r in rows:
-        totals[r.story_id] = totals.get(r.story_id, 0) + 1
-        if in_scope is None or r.id in in_scope:
-            scoped[r.story_id] = scoped.get(r.story_id, 0) + 1
-        if r.is_read and r.suppressed_at is None:
-            reads[r.story_id] = reads.get(r.story_id, 0) + 1
-            read_by_reader.add(r.id)
+        by_story.setdefault(r.story_id, []).append(r)
+        url_of[r.id] = r.url_normalized
 
     for item in items:
         if item.story_id is None:
             continue
-        # The row itself is one of the members it just counted, hence the subtraction
-        # on every number. It is always in there: it came out of a list query behind
-        # the same access gate, and it is in scope by definition, since the view drew
-        # it. The exception is a row the caller passed no scope for, where the two
-        # counts are the same number by construction.
-        item.story_total = max(totals.get(item.story_id, 0) - 1, 0)
-        item.story_others = max(scoped.get(item.story_id, 0) - 1, 0)
-        item.story_read = max(
-            reads.get(item.story_id, 0) - (1 if item.id in read_by_reader else 0), 0
-        )
+        # A member under the row's own link is not another source. It is the same
+        # article reached through a second feed, which the URL dedup has already marked
+        # read, and counting it put "1 other source" on rows that have none. The footer
+        # still lists it (list_members), marked as the same link.
+        own_url = url_of.get(item.id)
+        others = [
+            r for r in by_story.get(item.story_id, ())
+            if r.id != item.id and not (own_url and r.url_normalized == own_url)
+        ]
+        item.story_total = len(others)
+        item.story_others = sum(1 for r in others if in_scope is None or r.id in in_scope)
+        item.story_read = sum(1 for r in others if r.is_read and r.suppressed_at is None)
 
 
 async def mark_group_read(

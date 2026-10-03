@@ -153,7 +153,7 @@ async def htmx_set_read_batch(
     # like any other row and do not close the rest of their group; the browser is the
     # only place that knows which those are.
     unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
-    await touch_last_active(user, db)
+    await touch_last_active(user, db, request.session)
     await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
@@ -1049,7 +1049,7 @@ async def htmx_article_detail(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await touch_last_active(user, db)
+    await touch_last_active(user, db, request.session)
     # Auto-trigger readable extraction if feed has it enabled and article wasn't extracted yet
     trigger_row = (await db.execute(
         select(
@@ -1246,12 +1246,13 @@ async def htmx_article_story_rows(
     articles that were never in it and then mark them read as the reader scrolled past.
     The whole group is still one click away, in the footer of the article.
     """
-    story_id = (await db.execute(
-        add_article_access_joins(select(Article.story_id), user.id)
+    found = (await db.execute(
+        add_article_access_joins(select(Article.story_id, Article.url_normalized), user.id)
         .where(Article.id == article_id, article_access_predicate())
-    )).scalar_one_or_none()
-    if story_id is None:
+    )).one_or_none()
+    if found is None or found.story_id is None:
         return HTMLResponse("")
+    story_id, own_url = found
 
     settings = await db.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
     if settings is not None and settings.story_dedup == DEDUP_OFF:
@@ -1268,6 +1269,16 @@ async def htmx_article_story_rows(
         ),
     )
     rows = [m for m in members if m.id != article_id]
+    if rows and own_url:
+        # The same link through another feed is not another source, and the count on
+        # the row (story_service.annotate) leaves it out, so unfolding does too.
+        same_link = set((await db.execute(
+            select(Article.id).where(
+                Article.id.in_([m.id for m in rows]),
+                Article.url_normalized == own_url,
+            )
+        )).scalars())
+        rows = [m for m in rows if m.id not in same_link]
     if not rows:
         return HTMLResponse("")
     # Only a score condition reaches here (story_scope leaves a bare score sort out),

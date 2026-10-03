@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import css_inline
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings as app_config
 from app.models.settings import AppSettings
 from app.models.user import CatchupLog, UserCatchupConfig, User
 from app.services.catchup_service import (
@@ -82,6 +84,21 @@ def compute_next_send_at(
     return candidate.astimezone(timezone.utc)
 
 
+async def reschedule_briefings(user_id: int, tz_str: str, db: AsyncSession) -> None:
+    """Recompute next-send time for the user's active briefings after a tz change."""
+    configs = (await db.execute(
+        select(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user_id,
+            UserCatchupConfig.briefing_enabled == True,  # noqa: E712
+        )
+    )).scalars().all()
+    for cfg in configs:
+        if cfg.briefing_interval and cfg.briefing_time:
+            cfg.briefing_next_send_at = compute_next_send_at(
+                cfg.briefing_interval, cfg.briefing_day, cfg.briefing_time, tz_str
+            )
+
+
 def apply_briefing_failure(
     config: UserCatchupConfig, exc: Exception, *, is_smtp: bool, tz_str: str
 ) -> bool:
@@ -130,7 +147,11 @@ def _build_email_html(
     period_label: str,
     date_label: str,
     article_count: int,
+    public_url: str | None = None,
 ) -> str:
+    """*public_url* (the PUBLIC_URL setting) turns the footer's "Readfine" into a link
+    and adds one to the briefing's settings. A scheduled send has no request to take
+    the host from, so without it the footer stays plain text."""
     content_html = md_render(markdown_text)
     # Outlook renders <blockquote> with its own grey border regardless of CSS — replace with <div>
     content_html = content_html.replace("<blockquote>", _BQ_OPEN).replace("</blockquote>", _BQ_CLOSE)
@@ -141,6 +162,7 @@ def _build_email_html(
         date_label=date_label,
         content=content_html,
         article_count=article_count,
+        public_url=public_url.rstrip("/") if public_url else None,
     )
     return _inliner.inline(raw)
 
@@ -269,7 +291,10 @@ async def send_briefing(
         subject = f"[TEST] {subject}"
 
     period_label = _PERIOD_LABELS.get(config.period, config.period)
-    html_body = _build_email_html(text, subject, config.name, period_label, date_label, len(sampled))
+    html_body = _build_email_html(
+        text, subject, config.name, period_label, date_label, len(sampled),
+        public_url=app_config.public_url,
+    )
 
     extra_recipients: list[str] = []
     if config.briefing_recipients:

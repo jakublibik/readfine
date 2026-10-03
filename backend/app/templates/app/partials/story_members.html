@@ -46,6 +46,12 @@
         on a narrow panel. -#}
     <div class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-gray-500 mt-0.5 pl-[18px]">
       <span class="truncate min-w-0">{{ member.feed_title or (member.url | hostname) }}</span>
+      {#- The same article through another feed. Said here because the row in the list
+          does not count it as another source, and this is the only place it shows. -#}
+      {% if member.same_link %}
+      <span class="flex-shrink-0" aria-hidden="true">·</span>
+      <span class="flex-shrink-0" title="Same link as this article, from another feed">same link</span>
+      {% endif %}
       {#- The score helps pick which of several sources to open, the same choice the
           list asks it for, so it follows the list's
           setting, and stands before the date as it does in the list. -#}

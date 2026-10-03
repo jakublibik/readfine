@@ -4,6 +4,7 @@ from markupsafe import Markup
 from jinja2 import Undefined
 from fastapi.templating import Jinja2Templates
 
+from app import __version__
 from app.utils.markdown import md_render, md_render_inline
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
 from app.utils.static import static_url
@@ -202,6 +203,8 @@ def _traffic_stats_enabled() -> bool:
 
 
 templates.env.globals["static_url"] = static_url
+# The running version, for the user menu and /changelog.
+templates.env.globals["app_version"] = __version__
 templates.env.globals["app_ai_enabled"] = get_ai_enabled
 # Whether the admin nav shows the Traffic page. The mirror itself lives in the
 # service that reads it on every request, so there is one copy of the flag.

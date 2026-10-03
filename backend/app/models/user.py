@@ -15,6 +15,9 @@ class User(Base):
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the "feeds will be paused" email went out. Valid only while newer than the
+    # last activity, so it is never reset (services/dormancy_service.py).
+    pause_warning_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Where the account came from when it signed up, see traffic_service.signup_source_for.
     signup_source: Mapped[str | None] = mapped_column(String(80))
     password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True)

@@ -424,4 +424,17 @@
     .feed-nav-row:hover [data-action="feed-refresh"],
     .feed-nav-row:focus-within [data-action="feed-refresh"] { transition-delay: 600ms; }
   }
+  /* Nothing unread (no pill badge): no mark-read button and the badge stays put;
+     on a feed the refresh button takes the button's place. */
+  .mark-read-row:not(:has(.mark-read-badge.rounded-full)) [data-action="mark-read"] { display: none; }
+  .mark-read-row:not(:has(.mark-read-badge.rounded-full)) .mark-read-badge { transform: none; }
+  .feed-nav-row:not(:has(.mark-read-badge.rounded-full)) [data-action="feed-refresh"] { right: 0.5rem; }
+  .feed-nav-row.touch-active:not(:has(.mark-read-badge.rounded-full)) .mark-read-badge { transform: translateX(-1.5rem); }
+  @media (min-width: 768px) {
+    .feed-nav-row:not(:has(.mark-read-badge.rounded-full)) [data-action="feed-refresh"] { right: 0.25rem; }
+  }
+  @media (any-hover: hover) {
+    .feed-nav-row:not(:has(.mark-read-badge.rounded-full)):hover .mark-read-badge,
+    .feed-nav-row:not(:has(.mark-read-badge.rounded-full)):focus-within .mark-read-badge { transform: translateX(-1.5rem); }
+  }
 </style>

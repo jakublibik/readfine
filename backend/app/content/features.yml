@@ -74,7 +74,9 @@ categories:
       - title: OPML import & export
         desc: >-
           Move your subscriptions in and out, including files compatible with
-          Tiny Tiny RSS.
+          Tiny Tiny RSS. A Readfine export can also take your labels, filters,
+          preferences, relevance terms, saved searches and catch-ups along, so
+          moving to another instance keeps your setup.
 
   - name: Reading experience
     summary: A clean reader that adapts to your screen.
@@ -131,9 +133,15 @@ categories:
       - title: Search
         desc: >-
           Full-text search across your articles that ignores accents and matches English
-          word forms, with `word*` for word beginnings. Filter by feed, folder, status,
+          word forms, with `word*` for word beginnings. Finds Chinese, Japanese and
+          Korean words inside running text too. Filter by feed, folder, status,
           label, score, publish date, or your starred, saved and archived articles.
           Open it from anywhere with the `/` shortcut.
+      - title: Keyboard shortcuts
+        desc: >-
+          `j`/`k` through the list, `m` read, `s` star, `v` the original, `Shift+A`
+          everything read, `?` for the rest. The keys are the ones Inoreader and
+          Miniflux use, and the TT-RSS ones work too.
       - title: Saved searches
         desc: >-
           Keep a search in the sidebar with its own count. It runs again each time you

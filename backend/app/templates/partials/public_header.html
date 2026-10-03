@@ -1,0 +1,18 @@
+{% from "partials/back_to_reader.html" import back_to_reader %}
+{# Shared header for the public pages (help, features, changelog, legal): the
+   wordmark, linking to / (the landing, the login form or, for a signed-in
+   reader, the app), with the back link on the same line for a signed-in reader.
+
+   The wordmark stays centered for everyone; the back link sits on the same
+   line so a signed-in reader doesn't get an extra row of header. A three
+   column grid keeps the wordmark on the page's centre line whether or not
+   the link is there, and items-baseline puts the two on a shared baseline:
+   centring their boxes instead leaves the smaller text visibly high.
+   Below sm the two would overlap, so there the link goes back to its own
+   row above. #}
+{% macro public_header(request) %}
+<div class="text-center mb-4 sm:grid sm:grid-cols-3 sm:items-baseline">
+  {{ back_to_reader(request, "mb-2 text-left sm:mb-0") }}
+  <a href="/" class="text-2xl font-semibold text-gray-900 hover:text-gray-700 dark:text-gray-100 dark:hover:text-gray-300 sm:col-start-2">Readfine</a>
+</div>
+{% endmacro %}

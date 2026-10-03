@@ -24,6 +24,12 @@ from app.models.feed import Feed, UserFeed
 from app.models.user import User
 
 NOW = datetime.now(timezone.utc)
+# When the fixture articles were published. Grouping measures its window on the
+# publication date, so putting them decades back keeps real articles in the dev
+# database out of reach: the nonce only adds trigrams to the test titles and cannot
+# stop a real headline sharing a stock phrase ("what you need to know about") from
+# matching one. fetched_at stays at NOW, which is what the post-gather pass selects on.
+PUBLISHED = datetime(1995, 3, 15, 12, tzinfo=timezone.utc)
 
 TRAM = "city council approves the new tram line"
 TRAM_REWORDED = "new tram line approved by the city council"
@@ -102,7 +108,7 @@ async def _article(session, feed, title, *, hours_ago=0, url=None) -> Article:
     article = Article(
         feed_id=feed.id, guid=u, guid_hash=u, title=title,
         url=url, url_normalized=url,
-        published_at=NOW - timedelta(hours=hours_ago),
+        published_at=PUBLISHED - timedelta(hours=hours_ago),
         fetched_at=NOW - timedelta(hours=hours_ago),
     )
     session.add(article)

@@ -92,6 +92,12 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
     if not scoring_eligible(s, uf):
         return False
 
+    # A dormant reader still gets articles from a feed someone awake keeps fetched,
+    # but nobody reads them, so no tokens are spent on them (dormancy_service).
+    from app.services.dormancy_service import is_user_dormant
+    if await is_user_dormant(user_id, db):
+        return False
+
     # Idempotent: skip if any job already exists for this article/user/operation
     existing = await db.scalar(
         select(ArticleAiJob.id).where(

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% from "partials/public_header.html" import public_header %}
+{% from "partials/public_footer.html" import public_footer %}
+{% block title %}What's new – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen pt-3 pb-12 px-4 dark:bg-gray-950">
+  <div class="max-w-3xl mx-auto">
+
+    {{ public_header(request) }}
+
+    <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
+
+      <div class="mb-8">
+        <h1 class="text-xl font-semibold text-gray-900 mb-1 dark:text-gray-100">What's new</h1>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          What changed in each version of Readfine, newest first. This server runs version {{ app_version }}.
+        </p>
+      </div>
+
+      {% if releases is none %}
+      <p class="text-sm text-gray-600 dark:text-gray-400">
+        The release notes aren't included in this installation. You can read them
+        <a href="https://github.com/jakublibik/readfine/blob/master/CHANGELOG.md" class="text-blue-600 hover:underline dark:text-blue-400" rel="noopener noreferrer">on GitHub</a>.
+      </p>
+      {% else %}
+      {% for release in releases %}
+      {% set sections = release.sections if is_admin else release.sections | rejectattr("admin_only") | list %}
+      {% if sections %}
+      <section id="{{ release.anchor }}" class="mb-10 last:mb-0 scroll-mt-6">
+        <h2 class="text-base font-semibold text-gray-900 dark:text-gray-100 border-b border-gray-100 dark:border-gray-800 pb-2 mb-4">
+          {% if release.unreleased %}
+          Latest changes <span class="font-normal text-gray-500 dark:text-gray-400">(not yet in a release)</span>
+          {% else %}
+          <a href="#{{ release.anchor }}" class="hover:underline">Version {{ release.version }}</a>
+          {% if release.date %}<span class="font-normal text-gray-500 dark:text-gray-400">· {{ release.date }}</span>{% endif %}
+          {% endif %}
+        </h2>
+        {% for section in sections %}
+        <div class="prose prose-sm max-w-none dark:prose-invert mb-6 last:mb-0">
+          {% if section.title %}
+          <h3>{{ section.title }}{% if section.admin_only %} <span class="font-normal text-gray-500 dark:text-gray-400">(admins only)</span>{% endif %}</h3>
+          {% endif %}
+          {{ section.html | safe }}
+        </div>
+        {% endfor %}
+      </section>
+      {% endif %}
+      {% endfor %}
+      {% endif %}
+
+    </div>
+
+    {{ public_footer(request, "changelog") }}
+
+  </div>
+</div>
+{% endblock %}

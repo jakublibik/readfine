@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     # App
     debug: bool = False
     app_name: str = "Readfine"
+    # Where the instance is reachable from outside, e.g. https://readfine.app. Only
+    # used for links in emails a background job sends (no request to take the
+    # host from); unset, those emails go out without a link.
+    public_url: str | None = None
 
     # Root log level (DEBUG/INFO/WARNING/ERROR). WARNING keeps the log to things
     # that need attention; INFO adds the running commentary from the scheduler and

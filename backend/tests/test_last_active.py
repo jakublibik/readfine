@@ -64,3 +64,23 @@ class TestWhichRoutesTouch:
              patch("app.routers.api.v1.articles.list_articles", new=AsyncMock(return_value=[])):
             client.get("/api/v1/articles")
         touch.assert_not_awaited()
+
+
+class TestJwtTouches:
+    """A client signed in with a password (JWT) has no API token whose last use would
+    count as activity, so each authenticated call records it (hourly, like the web)."""
+
+    async def test_jwt_request_records_activity(self):
+        from fastapi.security import HTTPAuthorizationCredentials
+
+        from app.auth.dependencies import get_api_user
+        from app.auth.security import create_access_token
+
+        stale = datetime.now(timezone.utc) - timedelta(days=3)
+        user = SimpleNamespace(id=1, role="user", is_active=True, session_token_version=0,
+                               last_active_at=stale)
+        creds = HTTPAuthorizationCredentials(
+            scheme="Bearer", credentials=create_access_token(1, "user", token_version=0))
+        with patch("app.auth.dependencies._get_user_by_id", new=AsyncMock(return_value=user)):
+            assert await get_api_user(credentials=creds, db=AsyncMock()) is user
+        assert user.last_active_at > stale

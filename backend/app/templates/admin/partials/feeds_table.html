@@ -35,7 +35,15 @@
   <td class="px-2 py-2">
     <span class="px-1.5 py-0.5 text-xs rounded bg-gray-100 text-gray-500 font-mono">{{ f.feed_type }}</span>
   </td>
-  <td class="px-2 py-2">{{ status_badge(f) }}</td>
+  <td class="px-2 py-2">
+    <div class="flex flex-wrap items-center gap-1">
+      {{ status_badge(f) }}
+      {% if f.dormant %}
+        <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500"
+              title="All subscribers inactive, not fetched">dormant</span>
+      {% endif %}
+    </div>
+  </td>
   <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ f.subscriber_count|num }}</td>
   <td class="px-2 py-2 text-right text-gray-600 tabular-nums">{{ item.article_count|num }}</td>
   <td class="px-2 py-2 text-right text-gray-500">

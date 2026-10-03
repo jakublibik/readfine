@@ -294,7 +294,10 @@
       html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail article header { margin-bottom: 0.75rem; }
       html[data-bucket="small"] #inline-article-detail-content article header { margin-bottom: 0.75rem; }
       html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail [id^="star-btn-"] { display: none; }
-      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .article-detail-menu { display: none; }
+      /* The ··· menu stays in the header, where it is everywhere else: it is the only
+         way to summary, context, mark unread and extraction. Only the items the top
+         bar already carries are dropped from it. */
+      html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .article-detail-menu :is([data-header-star], [data-header-archive], [data-bottom-share]) { display: none; }
       html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .article-detail-meta { padding-left: 0; }
       html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-feed,
       html[data-bucket="small"]:is(.mobile-detail-open, .story-detail-open) #article-detail .detail-meta-author-sep,

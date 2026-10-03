@@ -84,11 +84,12 @@ SUMMARY_MAX_CHARS = 300
 # ── tokenization ──────────────────────────────────────────────────────────────
 
 # Kana, CJK ideographs (extension A, unified, compatibility), Hangul syllables,
-# jamo and compatibility jamo.
-_CJK = ("぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
-        "가-힯ᄀ-ᇿ㄰-㆏")
-_CJK_SPLIT_RE = re.compile(rf"([{_CJK}]+)")
-_CJK_RUN_RE = re.compile(rf"^[{_CJK}]+$")
+# jamo and compatibility jamo. The cjk_bigrams() SQL function (migration 0117)
+# spells the same class out; change both together.
+CJK_CHARS = ("぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
+             "가-힯ᄀ-ᇿ㄰-㆏")
+_CJK_SPLIT_RE = re.compile(rf"([{CJK_CHARS}]+)")
+_CJK_RUN_RE = re.compile(rf"^[{CJK_CHARS}]+$")
 # Matches scikit-learn's default `(?u)\b\w\w+\b`: two or more word characters,
 # so single letters and punctuation drop out.
 _WORD_RE = re.compile(r"\b\w\w+\b", re.UNICODE)

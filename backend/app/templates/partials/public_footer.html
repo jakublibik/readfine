@@ -5,12 +5,13 @@
    who has "Back to reader" at the top of the page instead, and on the sign-in
    form itself, where the form below it is the thing it would point at.
 
-   current: key of the page being rendered ("help", "features", "terms",
-   "privacy", "login"). new_tab: open the links in a new tab, which the login
+   current: key of the page being rendered ("help", "features", "changelog",
+   "terms", "privacy", "login"). new_tab: open the links in a new tab, which the login
    form wants so reading the terms doesn't discard a half-typed sign-in. #}
 {% macro public_footer(request, current="", new_tab=false) %}
 {% set items = [("features", "/features", "Features"),
                 ("help", "/help", "Help"),
+                ("changelog", "/changelog", "What's new"),
                 ("terms", "/terms", "Terms of Service"),
                 ("privacy", "/privacy", "Privacy Policy")] %}
 {% if not request.session.get('user_id') and current != "login" %}

@@ -5,6 +5,7 @@ one folder per chosen topic. subscribe() itself is replaced here: what it does w
 a URL is covered by the feed tests, this is about the flow around it.
 """
 import uuid
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -203,11 +204,11 @@ async def test_app_resumes_the_welcome_where_it_was_left(pg):
     user = await _user(pg)
     pg.add(UserSettings(user_id=user.id))
     await pg.flush()
-    resp = await main_app(request=None, user=user, db=pg)
+    resp = await main_app(request=SimpleNamespace(session={}), user=user, db=pg)
     assert resp.status_code == 303 and resp.headers["location"] == "/welcome"
 
     await welcome_save(request=None, relevance_terms="rust", skip="", user=user, db=pg)
-    resp = await main_app(request=None, user=user, db=pg)
+    resp = await main_app(request=SimpleNamespace(session={}), user=user, db=pg)
     assert resp.status_code == 303 and resp.headers["location"] == "/welcome/feeds"
 
 

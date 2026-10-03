@@ -1,13 +1,13 @@
 {% extends "base.html" %}
-{% from "partials/back_to_reader.html" import back_to_reader %}
+{% from "partials/public_header.html" import public_header %}
 {% from "partials/public_footer.html" import public_footer %}
 {% block title %}Help – Readfine{% endblock %}
 
 {% block content %}
-<div class="min-h-screen pt-6 pb-12 px-4 dark:bg-gray-950">
+<div class="min-h-screen pt-3 pb-12 px-4 dark:bg-gray-950">
   <div class="max-w-3xl mx-auto">
 
-    {{ back_to_reader(request) }}
+    {{ public_header(request) }}
 
     <div class="bg-white shadow rounded-lg px-4 py-6 sm:px-8 sm:py-10 dark:bg-gray-900 dark:shadow-none">
 
@@ -133,6 +133,8 @@
               to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
               a search by feed, folder, label, read status, your starred, saved or archived articles, score and how recently it was published (the last day, week, month and so on), and sort the results, best score first if you like.
               A search with no words and just a score condition gives you a list of your best articles.
+              Chinese, Japanese and Korean words are found inside running text too, though a search for a single
+              character only looks at titles.
               <strong>Save</strong> in the results header keeps a search in the sidebar; see
               <a href="#saved-searches" class="text-blue-600 hover:underline dark:text-blue-400">How do saved searches work?</a>.
               Besides Unread and Read, which follow the read mark (scrolling past sets it too), the status can be
@@ -141,6 +143,22 @@
               Accents don't matter, English words match in their other forms (votes finds voting), and a word ending in * finds every word it begins: cycl* finds cycling and cyclist.
               <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">Esc</kbd>
               closes it.</dd>
+          </div>
+
+          <div id="shortcuts">
+            <dt class="font-medium text-gray-900 dark:text-gray-100">Keyboard shortcuts</dt>
+            <dd>
+              <p>The keys are the ones Inoreader and Miniflux use, and the TT-RSS ones work too.
+                Press <kbd class="px-1.5 py-0.5 text-xs font-mono border border-gray-300 rounded bg-gray-50 dark:bg-gray-800 dark:border-gray-700">?</kbd>
+                in the reader to see this list.</p>
+              <details class="mt-2">
+                <summary class="cursor-pointer select-none text-sm font-medium text-gray-700 marker:text-gray-400 dark:text-gray-300">All shortcuts</summary>
+                <div class="mt-3">
+                  {% from "app/partials/shortcuts.html" import shortcut_list %}
+                  {{ shortcut_list() }}
+                </div>
+              </details>
+            </dd>
           </div>
 
           <div>
@@ -350,7 +368,9 @@
             <ul class="list-disc ml-5 mt-2 space-y-1">
               <li><code class="font-mono">(apple|pear|fig)</code> matches any of several terms (OR).</li>
               <li><code class="font-mono">\bAI\b</code> matches the whole word “AI” only (not “rain” or “maintain”);
-                <code class="font-mono">\b</code> is a word boundary.</li>
+                <code class="font-mono">\b</code> is a word boundary. Chinese and Japanese write without
+                spaces, so there <code class="font-mono">\b</code> sees a whole sentence as one word; leave it out and
+                the word is found anywhere in the text.</li>
               <li><code class="font-mono">^Breaking</code> means the field <em>starts</em> with “Breaking”
                 (<code class="font-mono">^</code> = start, <code class="font-mono">$</code> = end).</li>
               <li><code class="font-mono">colou?r</code> matches “color” and “colour”
@@ -619,6 +639,14 @@
               else follows the same feed, the address is the administrator's to change. The same page is where you set a
               custom title, move the feed into a folder, adjust how often it's checked, and store credentials for a feed
               that sits behind a login.</p>
+          </div>
+
+          <div id="paused-feeds" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Articles from while I was away are missing</h4>
+            <p>An instance can stop fetching feeds whose readers have all been away for a long time. The administrator
+              sets how long, and if mail is set up you get an email a week before it happens. Your feeds, folders, labels
+              and filters stay as they are. Once you are back, fetching starts again within about 15 minutes, but
+              articles a site published and then dropped from its feed during the pause are not recovered.</p>
           </div>
 
         </div>
