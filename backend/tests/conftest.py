@@ -73,12 +73,62 @@ def allowed_private_ai_hosts(entries: str):
 # ── Mock objects ──────────────────────────────────────────────────────────────
 
 def db_unreachable(exc: Exception) -> None:
-    """Called by integration fixtures when the test DB can't be reached. Fails in CI
-    (where Postgres is provisioned, so unreachable means a real misconfig we must not
-    hide) and skips locally for developer convenience."""
-    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
-        pytest.fail(f"Integration DB unreachable in CI: {exc}")
-    pytest.skip("database not reachable")
+    """Called by integration fixtures when the test DB can't be reached. Fails rather
+    than skips: a green run with the integration tests quietly left out looks like a
+    pass. Running only the unit tests means picking their files."""
+    pytest.fail(f"Integration DB unreachable: {exc}", pytrace=False)
+
+
+# ── Integration DB reachability ───────────────────────────────────────────────
+#
+# Each integration fixture connects on its own. With Postgres down, a refused
+# connection still takes about two seconds on Windows, which over ~500 tests is a
+# quarter of an hour before the failures show. So probe once per session and fail
+# those tests at setup instead. They are recognised by a fixture that calls
+# db_unreachable; tests that don't touch the DB run as usual.
+
+_db_reachable: bool | None = None
+_db_fixture_cache: dict[object, bool] = {}
+
+
+def _probe_db() -> bool:
+    import socket
+    from sqlalchemy.engine import make_url
+    from app.config import settings
+
+    url = make_url(settings.database_url)
+    try:
+        socket.create_connection((url.host or "localhost", url.port or 5432), timeout=5).close()
+    except OSError:
+        return False
+    return True
+
+
+def _uses_db(fixturedef) -> bool:
+    import inspect
+
+    func = fixturedef.func
+    if func not in _db_fixture_cache:
+        try:
+            source = inspect.getsource(inspect.unwrap(func))
+        except (OSError, TypeError):
+            source = ""
+        _db_fixture_cache[func] = "db_unreachable(" in source
+    return _db_fixture_cache[func]
+
+
+def pytest_runtest_setup(item):
+    global _db_reachable
+    defs = getattr(item, "_fixtureinfo", None)
+    if defs is None:
+        return
+    if not any(_uses_db(d) for ds in defs.name2fixturedefs.values() for d in ds):
+        return
+    if _db_reachable is None:
+        _db_reachable = _probe_db()
+    if not _db_reachable:
+        pytest.fail("Integration DB unreachable (probed once this session). Is Postgres running?",
+                    pytrace=False)
 
 
 def make_mock_user(id: int = 1, role: str = "user") -> SimpleNamespace:
