@@ -6,7 +6,13 @@ from app.auth.dependencies import get_api_user
 from app.auth.security import create_access_token, verify_password_async
 from app.config import settings as app_settings_config
 from app.database import get_db
-from app.rate_limit import limiter
+from app.rate_limit import (
+    check_login_lockout,
+    clear_failed_logins,
+    get_client_ip,
+    limiter,
+    record_failed_login,
+)
 from app.models.user import User
 from app.schemas.user import LoginRequest, UserResponse
 
@@ -25,16 +31,29 @@ async def get_token(
     For long-lived, individually revocable programmatic access, create an API token
     in Settings → API Tokens and send it as a Bearer header instead.
     """
+    # Same checks as web login, so the API is no way around the lockout or verification.
+    ip = get_client_ip(request)
+    if check_login_lockout(ip, payload.email):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again in 15 minutes.",
+        )
+
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
     # No user still costs a (dummy) verify: don't leak existence via timing.
     if not await verify_password_async(payload.password, user.password_hash if user else None):
+        record_failed_login(ip, payload.email)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled")
 
+    if not user.email_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
+
+    clear_failed_logins(ip, payload.email)
     token = create_access_token(user.id, user.role, user.session_token_version)
     return {"access_token": token, "token_type": "bearer"}
 

@@ -62,6 +62,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A burst of sign-ups or logins no longer holds up everyone else on the instance. Checking a password is slow on purpose and used to block all other requests while it ran; thirty sign-ups at once froze the app for several seconds.
 - On the registration page, Firefox and password managers no longer offer to fill your login into **Display name**. The email field is now marked as the account name.
 
+### Security
+
+- Signing in through the API (`POST /api/v1/auth/token`) now follows the same rules as the sign-in page. An account whose email is not verified gets no token, and failed attempts count toward the 15-minute lockout after repeated wrong passwords. The API used to skip both, so someone who signed up with another person's address could use the API before it was verified, and passwords could be guessed there past the lockout.
+
 ## [0.19.0] - 2026-09-26
 
 ### Upgrade notes
