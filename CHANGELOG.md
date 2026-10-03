@@ -58,13 +58,15 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Filters imported from an OPML export keep their order, which matters when one stops the rest. They all used to land at the same position and ran alphabetically. A filter that adds a label named with digits only, like `2024`, no longer gets skipped on import, and a filter limited to feeds or folders you do not have comes in switched off instead of applying to every feed.
 - **Last active** in **Admin → Users** stays current for someone who reads in an installed app or a tab they leave open. It used to change only when the app was loaded or on login, so such a reader looked inactive, and after a month without a reload their automatic reading profile stopped being updated. Opening an article, reading by scrolling and changing an article over the API now count too.
 - The help, features and legal pages share one header: the **Readfine** name at the top leads to the home page, with **Back to reader** beside it when you are signed in. Help and features had nothing to take a signed-out visitor back, and the name on the legal pages led to the sign-in form.
-- When the verification email cannot be sent at sign-up (the mail provider is down or over its daily limit), the next page now says so and asks to try again in a few minutes. It used to say the email was sent, so a new account waited for a message that never came.
-- A burst of sign-ups or logins no longer holds up everyone else on the instance. Checking a password is slow on purpose and used to block all other requests while it ran; thirty sign-ups at once froze the app for several seconds.
+- When the verification email cannot be sent (the mail provider is down or over its daily limit), at sign-up or with **Resend verification email**, the page now says so and asks to try again in a few minutes. It used to say the email was sent, so a new account waited for a message that never came.
+- Checking a password no longer holds up everyone else on the instance. It is slow on purpose and used to block all other requests while it ran: thirty sign-ups at once froze the app for several seconds, and so, for a moment, did every password change, email change or account deletion.
 - On the registration page, Firefox and password managers no longer offer to fill your login into **Display name**. The email field is now marked as the account name.
 
 ### Security
 
 - Signing in through the API (`POST /api/v1/auth/token`) now follows the same rules as the sign-in page. An account whose email is not verified gets no token, and failed attempts count toward the 15-minute lockout after repeated wrong passwords. The API used to skip both, so someone who signed up with another person's address could use the API before it was verified, and passwords could be guessed there past the lockout.
+- A password reset link stops working once an admin disables the account. A link mailed before that still let someone set a new password on the disabled account.
+- An invitation can only be used once even when two people sign up with it at the same moment. Both sign-ups used to go through.
 
 ## [0.19.0] - 2026-09-26
 

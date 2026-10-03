@@ -5,7 +5,7 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from jinja2 import TemplateNotFound
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -316,8 +316,17 @@ async def register(
     db.add(UserSettings(user_id=user.id, timezone=user_tz, format_profile=user_fmt))
 
     if inv:
-        inv.used_at = datetime.now(timezone.utc)
-        inv.used_by = user.id
+        # Claimed with a conditional UPDATE: two sign-ups racing on one invitation
+        # both pass _get_valid_invitation above, and only one may redeem it.
+        claimed = await db.execute(
+            update(Invitation)
+            .where(Invitation.id == inv.id, Invitation.used_at.is_(None))
+            .values(used_at=datetime.now(timezone.utc), used_by=user.id)
+        )
+        if claimed.rowcount != 1:
+            await db.rollback()
+            return _err("This invitation link is invalid or has already been used.",
+                        http_status=status.HTTP_400_BAD_REQUEST)
 
     try:
         await db.commit()
@@ -334,7 +343,7 @@ async def register(
                 send_email,
                 app_settings,
                 email,
-                "Readfine – Verify your email address",
+                "Verify your Readfine email address",
                 f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not create a Readfine account, you can safely ignore this email.",
             )
         except Exception as e:
@@ -399,7 +408,7 @@ async def resend_verification(
     if app_settings and app_settings.smtp_host:
         result = await db.execute(select(User).where(User.email == email))
         user = result.scalar_one_or_none()
-        if user and not user.email_verified:
+        if user and user.is_active and not user.email_verified:
             token = generate_token()
             user.email_verification_token_hash = hash_token(token)
             user.email_verification_expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
@@ -410,11 +419,15 @@ async def resend_verification(
                     send_email,
                     app_settings,
                     user.email,  # stored (validated) address, never the raw form input
-                    "Readfine – Verify your email address",
+                    "Verify your Readfine email address",
                     f"Please verify your email address by clicking the link below:\n\n{verify_url}\n\nThis link expires in 24 hours.\n\nIf you did not create a Readfine account, you can safely ignore this email.",
                 )
             except Exception as e:
                 logger.error("Failed to resend verification email to %s: %s", user.email, e)
+                # Same as at sign-up: "sent" would leave them waiting for a mail that
+                # never comes.
+                return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&failed=1",
+                                        status_code=302)
     return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&resent=1", status_code=302)
 
 
@@ -498,7 +511,7 @@ async def reset_password_request(
                 send_email,
                 app_settings,
                 user.email,
-                "Readfine – Password reset",
+                "Reset your Readfine password",
                 f"Click the link below to reset your password (valid for 1 hour):\n\n{reset_url}\n\nIf you did not request this, ignore this email.",
             )
         except Exception as e:
@@ -557,7 +570,9 @@ async def _get_user_by_reset_token(db: AsyncSession, token: str) -> User | None:
     token_hash = hash_token(token)
     result = await db.execute(select(User).where(User.password_reset_token_hash == token_hash))
     user = result.scalar_one_or_none()
-    if not user or not user.password_reset_expires_at:
+    # Inactive too: a link mailed before an admin disabled the account must not
+    # still change its password.
+    if not user or not user.password_reset_expires_at or not user.is_active:
         return None
     if user.password_reset_expires_at < datetime.now(timezone.utc):
         return None
