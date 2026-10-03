@@ -1,7 +1,16 @@
 #!/bin/sh
+# Regenerates the committed build outputs, so CI's staleness checks pass.
+# Install once per clone: git config core.hooksPath hooks
+set -e
+
 if [ ! -d "node_modules" ]; then
   echo "ERROR: node_modules not found. Run 'npm install' first." >&2
   exit 1
 fi
 npm run build
 git add backend/app/static/css/tailwind.css
+
+if git diff --cached --name-only | grep -q '^backend/app/content/features.yml$'; then
+  uv run --project backend python scripts/gen_features.py
+  git add FEATURES.md
+fi

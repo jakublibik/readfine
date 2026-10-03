@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push*)",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/after-push.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "PowerShell(git push*)",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/after-push.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
