@@ -1,6 +1,7 @@
 import asyncio
 import re
 import secrets
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
@@ -249,6 +250,14 @@ def create_app() -> FastAPI:
         if exc.status_code == 401 and not is_api:
             if request.headers.get("HX-Request"):
                 return Response(status_code=200, headers={"HX-Redirect": "/login"})
+            # A page someone opened from a link (an email, a bookmark) is where
+            # they come back to after signing in. An HTMX partial or a form post
+            # is not a page to land on, and /app is where login goes anyway.
+            target = request.url.path
+            if request.method == "GET" and target != "/app":
+                if request.url.query:
+                    target += "?" + request.url.query
+                return RedirectResponse(f"/login?next={quote(target, safe='/')}", status_code=302)
             return RedirectResponse("/login", status_code=302)
         if exc.status_code == 404 and not is_api:
             return _templates.TemplateResponse(request, "errors/404.html", {}, status_code=404)
