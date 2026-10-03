@@ -4,7 +4,7 @@
 #   "scikit-learn>=1.5",
 #   "numpy>=1.26",
 #   "nh3>=0.2",
-#   "sqlalchemy>=2.0",
+#   "sqlalchemy[asyncio]>=2.0",
 # ]
 # ///
 """Step 2 of the relevance plan: the shipped scorer against the eval prototype.

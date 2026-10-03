@@ -6,7 +6,7 @@
 #   "numpy>=1.26",
 #   # not used here: importing run_eval pulls in the app's compute_auc, which
 #   # imports sqlalchemy at module level
-#   "sqlalchemy>=2.0",
+#   "sqlalchemy[asyncio]>=2.0",
 # ]
 # ///
 """Scenario C: is a semantic score worth anything on the articles nobody scored?

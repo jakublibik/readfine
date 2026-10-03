@@ -4,7 +4,7 @@
 #   "scikit-learn>=1.5",
 #   "numpy>=1.26",
 #   "nh3>=0.2",
-#   "sqlalchemy>=2.0",
+#   "sqlalchemy[asyncio]>=2.0",
 # ]
 # ///
 """Step 2b of the relevance plan: a term-list profile, phrases, truncation.

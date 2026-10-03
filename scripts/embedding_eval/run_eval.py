@@ -5,7 +5,7 @@
 #   "scikit-learn>=1.5",
 #   "numpy>=1.26",
 #   "py3langid>=0.3",
-#   "sqlalchemy>=2.0",
+#   "sqlalchemy[asyncio]>=2.0",
 # ]
 # ///
 """Phase 1 of the offline embedding-vs-LLM scoring test.
