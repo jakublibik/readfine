@@ -28,7 +28,7 @@ class TestGetToken:
         db_user = _make_db_user()
         _mock_db_execute(mock_db, db_user)
 
-        with patch("app.routers.api.v1.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             response = client.post(
                 "/api/v1/auth/token",
                 json={"email": "test@test.com", "password": "password123"},
@@ -43,7 +43,7 @@ class TestGetToken:
         db_user = _make_db_user()
         _mock_db_execute(mock_db, db_user)
 
-        with patch("app.routers.api.v1.auth.verify_password", return_value=False):
+        with patch("app.auth.security.verify_password", return_value=False):
             response = client.post(
                 "/api/v1/auth/token",
                 json={"email": "test@test.com", "password": "wrongpass"},
@@ -65,7 +65,7 @@ class TestGetToken:
         db_user = _make_db_user(active=False)
         _mock_db_execute(mock_db, db_user)
 
-        with patch("app.routers.api.v1.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             response = client.post(
                 "/api/v1/auth/token",
                 json={"email": "test@test.com", "password": "password123"},

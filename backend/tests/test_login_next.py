@@ -57,7 +57,7 @@ def _login(client, mock_db, **extra):
         _scalar(_make_app_settings()),
         _scalar(_make_user()),
     ])
-    with patch("app.routers.web.auth.verify_password", return_value=True):
+    with patch("app.auth.security.verify_password", return_value=True):
         return client.post("/login", data={"email": "user@test.com", "password": "pw", **extra})
 
 

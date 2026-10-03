@@ -193,7 +193,7 @@ class TestResetBumpsTokenVersion:
             session_token_version=3,
         )
         mock_db.execute.return_value = _scalar(user)
-        with patch("app.routers.web.auth.hash_password", return_value="new_hash"):
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
             web_client.post(f"/reset-password/{token}", data={
                 "new_password": "newpassword1",
                 "confirm_password": "newpassword1",

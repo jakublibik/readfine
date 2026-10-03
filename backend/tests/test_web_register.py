@@ -251,7 +251,9 @@ class TestWebRegisterSuccess:
         assert r.status_code == 302
         assert "session" not in r.cookies
 
-    def test_smtp_failure_still_redirects_to_check_email(self, web_client, mock_db):
+    def test_smtp_failure_redirects_to_check_email_saying_so(self, web_client, mock_db):
+        # The account exists but cannot be activated until a mail gets through
+        # (e.g. the provider's daily cap), so the page must not claim it was sent.
         mock_db.execute = AsyncMock(side_effect=[
             _scalar(_make_app_settings(smtp_host="smtp.test.com")),
             _scalar(None),
@@ -262,6 +264,14 @@ class TestWebRegisterSuccess:
                 r = web_client.post("/register", data=VALID_FORM)
         assert r.status_code == 302
         assert "/register/check-email" in r.headers["location"]
+        assert "failed=1" in r.headers["location"]
+        assert "sent=1" not in r.headers["location"]
+
+    def test_check_email_page_explains_a_failed_send(self, web_client, mock_db):
+        r = web_client.get("/register/check-email?email=a%40b.com&failed=1")
+        assert "could not be sent" in r.text
+        assert "Verification email sent" not in r.text
+        assert "We sent a verification email" not in r.text
 
 
 # ── Email verification ────────────────────────────────────────────────────────
@@ -374,7 +384,7 @@ class TestWebLoginEmailVerified:
     def test_unverified_email_shows_error_with_resend_link(self, web_client, mock_db):
         user = _make_user(email_verified=False)
         mock_db.execute = AsyncMock(return_value=_scalar(user))
-        with patch("app.routers.web.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             r = web_client.post("/login", data={"email": "new@test.com", "password": "password123"})
         assert r.status_code == 403
         assert "not verified" in r.text.lower()
@@ -383,7 +393,7 @@ class TestWebLoginEmailVerified:
     def test_verified_user_can_login(self, web_client, mock_db):
         user = _make_user(email_verified=True)
         mock_db.execute = AsyncMock(return_value=_scalar(user))
-        with patch("app.routers.web.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             r = web_client.post("/login", data={"email": "new@test.com", "password": "password123"})
         assert r.status_code == 302
         assert r.headers["location"] == "/app"

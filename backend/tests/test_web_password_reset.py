@@ -206,7 +206,7 @@ class TestResetPasswordConfirm:
         token = "goodtoken"
         user = self._valid_user(token)
         mock_db.execute.return_value = _scalar(user)
-        with patch("app.routers.web.auth.hash_password", return_value="new_hash"):
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
             web_client.post(f"/reset-password/{token}", data={
                 "new_password": "newpassword1",
                 "confirm_password": "newpassword1",
@@ -217,7 +217,7 @@ class TestResetPasswordConfirm:
         token = "goodtoken"
         user = self._valid_user(token)
         mock_db.execute.return_value = _scalar(user)
-        with patch("app.routers.web.auth.hash_password", return_value="new_hash"):
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
             web_client.post(f"/reset-password/{token}", data={
                 "new_password": "newpassword1",
                 "confirm_password": "newpassword1",
@@ -229,7 +229,7 @@ class TestResetPasswordConfirm:
         token = "goodtoken"
         user = self._valid_user(token)
         mock_db.execute.return_value = _scalar(user)
-        with patch("app.routers.web.auth.hash_password", return_value="new_hash"):
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
             web_client.post(f"/reset-password/{token}", data={
                 "new_password": "newpassword1",
                 "confirm_password": "newpassword1",
@@ -240,7 +240,7 @@ class TestResetPasswordConfirm:
         token = "goodtoken"
         user = self._valid_user(token)
         mock_db.execute.return_value = _scalar(user)
-        with patch("app.routers.web.auth.hash_password", return_value="new_hash"):
+        with patch("app.auth.security.hash_password", return_value="new_hash"):
             resp = web_client.post(f"/reset-password/{token}", data={
                 "new_password": "newpassword1",
                 "confirm_password": "newpassword1",

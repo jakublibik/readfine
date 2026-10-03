@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -44,6 +45,25 @@ _DUMMY_PASSWORD_HASH = bcrypt.hashpw(b"timing-equalizer", bcrypt.gensalt()).deco
 def dummy_verify_password() -> None:
     """Throwaway bcrypt verify to keep unknown-user logins constant-time."""
     bcrypt.checkpw(b"invalid", _DUMMY_PASSWORD_HASH.encode())
+
+
+# bcrypt is slow on purpose (~0.2 s), and the app runs a single worker: on the event
+# loop, every sign-up or login would stall all other requests for that long, so a
+# burst of sign-ups froze the whole instance for seconds. bcrypt releases the GIL,
+# so in a thread it runs alongside the loop. Used on the public endpoints, where a
+# burst can come from outside.
+async def hash_password_async(password: str) -> str:
+    return await asyncio.get_running_loop().run_in_executor(None, hash_password, password)
+
+
+async def verify_password_async(password: str, password_hash: str | None) -> bool:
+    """`verify_password` off the event loop. With no hash (unknown user) it runs the
+    dummy verify, so the answer takes as long either way, and returns False."""
+    loop = asyncio.get_running_loop()
+    if password_hash is None:
+        await loop.run_in_executor(None, dummy_verify_password)
+        return False
+    return await loop.run_in_executor(None, verify_password, password, password_hash)
 
 
 def create_access_token(user_id: int, role: str, token_version: int) -> str:

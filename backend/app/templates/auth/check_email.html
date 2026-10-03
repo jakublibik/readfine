@@ -12,7 +12,12 @@
         </div>
         {% endif %}
 
-        {% if request.query_params.get("resent") or request.query_params.get("sent") %}
+        {% if request.query_params.get("failed") %}
+        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 text-amber-700 rounded text-sm">
+            Your account is created, but the verification email could not be sent right now.
+            Please try again in a few minutes with the button below.
+        </div>
+        {% elif request.query_params.get("resent") or request.query_params.get("sent") %}
         <div id="sent-notice" class="mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded text-sm transition-opacity duration-500">
             Verification email sent. Please check your inbox.
         </div>
