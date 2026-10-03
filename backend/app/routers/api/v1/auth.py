@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_api_user
-from app.auth.security import create_access_token, dummy_verify_password, verify_password
+from app.auth.security import create_access_token, verify_password_async
 from app.config import settings as app_settings_config
 from app.database import get_db
 from app.rate_limit import limiter
@@ -28,9 +28,8 @@ async def get_token(
     result = await db.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
 
-    if not user:
-        dummy_verify_password()  # constant-time: don't leak existence via timing
-    if not user or not verify_password(payload.password, user.password_hash):
+    # No user still costs a (dummy) verify: don't leak existence via timing.
+    if not await verify_password_async(payload.password, user.password_hash if user else None):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if not user.is_active:

@@ -51,7 +51,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.story_service import ENGAGED_DWELL_SECONDS
+# ENGAGED_DWELL_SECONDS is imported inside the functions that query: the offline
+# eval scripts (scripts/embedding_eval/) import this module standalone, and
+# story_service pulls in the app's schemas and their dependencies.
 
 # Keep the window clear of the purge horizon rather than ending exactly on it:
 # purge runs daily and articles land in the sample by arrival, not by score.
@@ -225,6 +227,7 @@ async def _scored_users(db: AsyncSession, cutoff: datetime, selected: int | None
     without data (a shorter window can empty it), so the picker keeps showing who
     the page is about.
     """
+    from app.services.story_service import ENGAGED_DWELL_SECONDS
     rows = (await db.execute(text("""
         SELECT u.id, COALESCE(NULLIF(u.display_name, ''), u.email) AS name,
                COUNT(*) AS n,
@@ -264,6 +267,7 @@ async def get_scoring_eval(db: AsyncSession, days: int = 90, user_id: int | None
         "SELECT default_purge_after_days FROM app_settings WHERE id = 1"))
     days, retention = effective_window(days, purge_after_days)
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    from app.services.story_service import ENGAGED_DWELL_SECONDS
     params = {"cutoff": cutoff, "dwell": ENGAGED_DWELL_SECONDS}
     user_clause = ""
     if user_id is not None:

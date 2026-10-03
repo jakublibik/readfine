@@ -232,7 +232,7 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(None),  # user not found
         ])
-        with patch("app.routers.web.auth.verify_password", return_value=False):
+        with patch("app.auth.security.verify_password", return_value=False):
             return client.post("/login", data={"email": email, "password": "wrong"})
 
     def _good_login(self, client, mock_db, email="victim@test.com"):
@@ -241,7 +241,7 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(user),
         ])
-        with patch("app.routers.web.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             return client.post("/login", data={"email": email, "password": "correct"})
 
     def test_failed_login_returns_401(self, login_client, mock_db):
@@ -255,7 +255,7 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(None),  # user not found
         ])
-        with patch("app.routers.web.auth.dummy_verify_password") as dummy:
+        with patch("app.auth.security.dummy_verify_password") as dummy:
             login_client.post("/login", data={"email": "ghost@test.com", "password": "x"})
         dummy.assert_called_once()
 
@@ -265,8 +265,8 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(_make_user()),
         ])
-        with patch("app.routers.web.auth.dummy_verify_password") as dummy, \
-             patch("app.routers.web.auth.verify_password", return_value=False):
+        with patch("app.auth.security.dummy_verify_password") as dummy, \
+             patch("app.auth.security.verify_password", return_value=False):
             login_client.post("/login", data={"email": "victim@test.com", "password": "x"})
         dummy.assert_not_called()
 
@@ -321,7 +321,7 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(user),
         ])
-        with patch("app.routers.web.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             login_client.post("/login", data={"email": "victim@test.com", "password": "x"})
         assert ("testclient", "victim@test.com") not in _failed_attempts
 
@@ -332,7 +332,7 @@ class TestLoginLockout:
             _scalar(_make_app_settings()),
             _scalar(user),
         ])
-        with patch("app.routers.web.auth.verify_password", return_value=True):
+        with patch("app.auth.security.verify_password", return_value=True):
             login_client.post("/login", data={"email": "victim@test.com", "password": "x"})
         assert ("testclient", "victim@test.com") not in _failed_attempts
 
@@ -349,7 +349,7 @@ class TestSlowapi429Html:
                 _scalar(_make_app_settings()),
                 _scalar(None),
             ])
-            with patch("app.routers.web.auth.verify_password", return_value=False):
+            with patch("app.auth.security.verify_password", return_value=False):
                 login_client.post("/login", data={"email": "x@x.com", "password": "x"})
         # Next request should hit slowapi limit
         mock_db.execute = AsyncMock(return_value=_scalar(_make_app_settings()))

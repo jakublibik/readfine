@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from datetime import datetime, timedelta, timezone
 
-from app.auth.security import dummy_verify_password, generate_token, hash_password, hash_token, password_within_limit, verify_password
+from app.auth.security import generate_token, hash_password_async, hash_token, password_within_limit, verify_password_async
 from app.utils.email_validate import is_valid_email
 from app.utils.next_path import safe_next_path
 from app.utils.smtp import send_email
@@ -143,9 +143,8 @@ async def login(
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
 
-    if not user:
-        dummy_verify_password()  # constant-time: don't leak existence via timing
-    if not user or not verify_password(password, user.password_hash):
+    # No user still costs a (dummy) verify: don't leak existence via timing.
+    if not await verify_password_async(password, user.password_hash if user else None):
         record_failed_login(ip, email)
         return _login_err("Invalid email or password", status.HTTP_401_UNAUTHORIZED,
                           show_reset=smtp_configured)
@@ -301,7 +300,7 @@ async def register(
 
     user = User(
         email=email,
-        password_hash=hash_password(password),
+        password_hash=await hash_password_async(password),
         display_name=display_name,
         role="user",
         signup_source=source,
@@ -340,6 +339,11 @@ async def register(
             )
         except Exception as e:
             logger.error("Failed to send verification email to %s: %s", email, e)
+            # Say so, rather than "we sent it": the account exists but cannot be
+            # activated until a mail gets through, so the reader needs to know to
+            # try again (the provider's daily cap is the likely cause).
+            return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&failed=1",
+                                    status_code=302)
         return RedirectResponse(f"/register/check-email?email={quote(email, safe='')}&sent=1", status_code=302)
 
     request.session["user_id"] = user.id
@@ -540,7 +544,7 @@ async def reset_password_confirm(
         return templates.TemplateResponse(request, "auth/reset_password_confirm.html",
                                           {"token": token, "error": "Passwords do not match."})
 
-    user.password_hash = hash_password(new_password)
+    user.password_hash = await hash_password_async(new_password)
     user.password_reset_token_hash = None
     user.password_reset_expires_at = None
     # Invalidate all existing sessions/JWTs; user logs in again with new password.
