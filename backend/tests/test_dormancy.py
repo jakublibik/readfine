@@ -388,6 +388,8 @@ class TestWarningJob:
         _, with_url = dormancy_service.warning_email("Ann", 60, "October 6, 2026", "https://rf.test/")
         _, without = dormancy_service.warning_email("Ann", 60, "October 6, 2026", None)
         assert "https://rf.test/login" in with_url
+        assert "https://rf.test/login?next=/settings/profile" in with_url
+        assert "Settings > Profile." in without
         assert "http" not in without
 
 

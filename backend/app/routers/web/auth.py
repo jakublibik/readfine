@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.auth.security import dummy_verify_password, generate_token, hash_password, hash_token, password_within_limit, verify_password
 from app.utils.email_validate import is_valid_email
+from app.utils.next_path import safe_next_path
 from app.utils.smtp import send_email
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.formats import is_valid_format
@@ -97,16 +98,19 @@ async def robots_txt():
 
 
 @router.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, email: str = "", db: AsyncSession = Depends(get_db)):
+async def login_page(request: Request, email: str = "", next: str = "",
+                     db: AsyncSession = Depends(get_db)):
+    next_path = safe_next_path(next)
     if request.session.get("user_id"):
-        return RedirectResponse("/app", status_code=302)
+        return RedirectResponse(next_path or "/app", status_code=302)
     registration_open = await get_registration_enabled(db)
     # ?email= comes from the "you already have an account" hint on the register
     # form. Only a well-formed address is echoed back, so the field cannot be
     # used to park arbitrary text in front of someone.
     prefill = email.strip() if is_valid_email(email.strip()) else ""
     return templates.TemplateResponse(request, "auth/login.html",
-                                      {"registration_open": registration_open, "email": prefill})
+                                      {"registration_open": registration_open, "email": prefill,
+                                       "next": next_path})
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -115,8 +119,10 @@ async def login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    next: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
+    next_path = safe_next_path(next)
     app_settings = await _get_app_settings(db)
     smtp_configured = bool(app_settings and app_settings.smtp_host)
     registration_open = bool(app_settings) and app_settings.registration_enabled
@@ -126,7 +132,8 @@ async def login(
     def _login_err(msg: str, http_status: int, **extra):
         return templates.TemplateResponse(
             request, "auth/login.html",
-            {"error": msg, "email": email, "registration_open": registration_open, **extra},
+            {"error": msg, "email": email, "registration_open": registration_open,
+             "next": next_path, **extra},
             status_code=http_status,
         )
 
@@ -156,7 +163,7 @@ async def login(
     request.session["tv"] = user.session_token_version
     if woke:
         request.session[FEEDS_RESUMED_SESSION_KEY] = True
-    return RedirectResponse("/app", status_code=302)
+    return RedirectResponse(next_path or "/app", status_code=302)
 
 
 @router.get("/register", response_class=HTMLResponse)

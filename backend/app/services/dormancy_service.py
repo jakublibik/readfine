@@ -299,10 +299,14 @@ def warning_email(display_name: str, after_days: int, pause_on: str,
     awake for good, and a shared feed would then never pause when its last other
     reader leaves."""
     subject = f"Readfine will stop updating some of your feeds on {pause_on}"
+    delete = "If you don't plan to come back, you can delete your account in Settings > Profile"
     if public_url:
-        sign_in = f"Sign in here: {public_url.rstrip('/')}/login"
+        base = public_url.rstrip('/')
+        sign_in = f"Sign in here: {base}/login"
+        delete += f": {base}/login?next=/settings/profile"
     else:
         sign_in = "Sign in to Readfine any time to keep them updated."
+        delete += "."
     body = (
         f"Hi {display_name},\n\n"
         "You haven't opened Readfine in a while. To save resources, Readfine stops "
@@ -312,7 +316,7 @@ def warning_email(display_name: str, after_days: int, pause_on: str,
         "Your feeds, folders, labels and filters stay as they are. Sign in any time, "
         "before or after that date, and fetching starts again.\n\n"
         f"{sign_in}\n\n"
-        "If you don't plan to come back, you can delete your account in Settings.\n"
+        f"{delete}\n"
     )
     return subject, body
 
