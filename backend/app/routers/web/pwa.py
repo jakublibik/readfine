@@ -174,9 +174,8 @@ async def share_target_form(
     Nothing is saved here: a GET should not change state, and going through the form
     below keeps the rate limit and CSRF checks on the one request that does.
 
-    Logged out, get_current_user redirects to /login and the shared address is lost
-    (there is no `next` on that redirect). Known and accepted: an installed app stays
-    signed in, and the recovery is to share again.
+    Logged out, get_current_user redirects to /login with this address as `next`, so
+    the share comes back here after signing in.
 
     Nothing is navigated to afterwards, deliberately. This window holds one history
     entry, so Back returns to whatever was being read when the share started; sending

@@ -187,6 +187,9 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
 
+    # No includeSubDomains: other hosts under the same domain may not have HTTPS.
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
     location / {
         proxy_pass         http://app:8000;
         proxy_set_header   Host              \$host;

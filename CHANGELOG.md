@@ -34,6 +34,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
 - After you unsubscribed from a feed, or unstarred or unsaved an article that no longer had a feed, its labels stayed. The article then sat in the label's list, could not be opened or marked read, and kept the label's unread count up. Labels now go with your access to the article, and the upgrade removes the ones left over. An AI score still queued when you unsubscribed could also bring a label or a star back through your filters. Unsubscribing now cancels those scores.
 - A feed that failed partway through an OPML import made every feed after it fail too, and the import then ended in an error. Two people adding the same new feed at the same moment no longer fails either.
+- The API answered with a server error, instead of a validation error, to a folder name over 100 characters or a position or retention value above 32767.
 
 ### Security
 
@@ -42,9 +43,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Saving a link in **Saved** could give you the full text of an article that another account had fetched from a private feed (one with a password or a private address). Such a link is now fetched again as you.
 - Opening the article list with the id of a feed you don't follow showed that feed's last error, which includes its address. It now shows nothing.
 - An OPML import fetches every new feed in the file, and feeds that failed did not count toward the feed limit, so a file full of dead addresses could keep one import running for hours. An import now stops after trying about twice as many feeds as the account still has room for (a fixed 2,000 for admins) and says how many it left out. Feeds you already follow are skipped without a fetch. Imports are limited to 10 an hour.
-- After a login lockout ran out, a single wrong password locked the account again for another 15 minutes. The count of failed attempts now starts over.
+- After a login lockout ran out, a single wrong password locked the account again for another 15 minutes. The count of failed attempts now starts over, and it is also forgotten after 15 minutes without another attempt.
 - `setup.sh` generated an `ENCRYPTION_KEY` with only half the strength it should have. New installs get a full-strength key. An existing key keeps working, and changing it would make stored passwords and API keys unreadable, so leave it as it is.
 - Feed and article addresses can no longer reach the 100.64.0.0/10 range (carrier-grade NAT, also used by Tailscale networks). Readfine now refuses every address that is not on the public internet.
+- The nginx config written by `setup.sh` for a domain now sends `Strict-Transport-Security`, so browsers stop trying plain HTTP. To get it on an existing install, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of your `nginx.conf`.
 
 ## [0.20.0] - 2026-10-04
 

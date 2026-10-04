@@ -1,34 +1,41 @@
 from datetime import datetime
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
+# Ceilings of the columns these land in (SmallInteger, String(n)). Without them a
+# value past the column fails in the database as a 500 instead of a 422.
+_SMALLINT_MAX = 32767
+_FOLDER_NAME_MAX = 100
+
+
+def _folder_name(v: str) -> str:
+    v = v.strip()
+    if not v:
+        raise ValueError("Folder name cannot be empty")
+    if len(v) > _FOLDER_NAME_MAX:
+        raise ValueError(f"Folder name cannot be longer than {_FOLDER_NAME_MAX} characters")
+    return v
+
 
 class FolderCreate(BaseModel):
     name: str
     # Left out, the folder goes to the end of the user's order rather than to the
     # front, which a 0 default would have meant once positions started counting.
-    position: int | None = None
+    position: int | None = Field(None, ge=0, le=_SMALLINT_MAX)
 
     @field_validator("name")
     @classmethod
     def name_not_empty(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("Folder name cannot be empty")
-        return v
+        return _folder_name(v)
 
 
 class FolderUpdate(BaseModel):
     name: str | None = None
-    position: int | None = None
+    position: int | None = Field(None, ge=0, le=_SMALLINT_MAX)
 
     @field_validator("name")
     @classmethod
     def name_not_empty(cls, v: str | None) -> str | None:
-        if v is not None:
-            v = v.strip()
-            if not v:
-                raise ValueError("Folder name cannot be empty")
-        return v
+        return _folder_name(v) if v is not None else None
 
 
 class FolderResponse(BaseModel):
@@ -92,8 +99,9 @@ class UserFeedUpdate(BaseModel):
     custom_title: str | None = None
     folder_id: int | None = None
     extract_readable: bool | None = None
-    purge_after_days: int | None = Field(None, ge=1)
-    purge_keep_count: int | None = Field(None, ge=1)
-    position: int | None = None
-    fetch_auth_user: str | None = None
+    purge_after_days: int | None = Field(None, ge=1, le=_SMALLINT_MAX)
+    purge_keep_count: int | None = Field(None, ge=1, le=_SMALLINT_MAX)
+    position: int | None = Field(None, ge=0, le=_SMALLINT_MAX)
+    # Subscribing checks this length in the service; an update had nothing in the way.
+    fetch_auth_user: str | None = Field(None, max_length=255)
     fetch_auth_pass: SecretStr | None = None

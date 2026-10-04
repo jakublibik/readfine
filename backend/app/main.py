@@ -130,6 +130,7 @@ def create_app() -> FastAPI:
             re.compile(r"^/resend-verification$"),
         ],
         sensitive_cookies={"session"},
+        cookie_secure=settings.session_cookie_is_secure,
     )
 
     # Rate limiting

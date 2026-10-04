@@ -49,10 +49,11 @@ def _make_request(headers: dict) -> MagicMock:
 @pytest.fixture(autouse=True)
 def _reset_failed_attempts():
     """Clear in-memory brute-force state before each test."""
-    from app.rate_limit import _failed_attempts
-    _failed_attempts.clear()
+    import app.rate_limit as rl
+    rl._failed_attempts.clear()
+    rl._last_prune = 0.0
     yield
-    _failed_attempts.clear()
+    rl._failed_attempts.clear()
 
 
 @pytest.fixture
@@ -233,6 +234,22 @@ class TestBruteForceTracker:
             "last_attempt": time.monotonic(),
         }
         assert check_login_lockout("1.2.3.4", "a@b.com") is False
+
+    def test_stale_entries_are_pruned_live_ones_kept(self):
+        from app.rate_limit import record_failed_login, _failed_attempts, _LOCKOUT_SECONDS
+        now = time.monotonic()
+        old = now - _LOCKOUT_SECONDS - 1
+        _failed_attempts[("9.9.9.9", "old@b.com")] = {"count": 3, "locked_until": None, "last_attempt": old}
+        # Old attempt but the lockout still runs: must survive the sweep.
+        _failed_attempts[("9.9.9.9", "locked@b.com")] = {
+            "count": 10, "locked_until": now + 60, "last_attempt": old,
+        }
+        _failed_attempts[("9.9.9.9", "recent@b.com")] = {"count": 2, "locked_until": None, "last_attempt": now}
+        record_failed_login("1.2.3.4", "a@b.com")
+        assert ("9.9.9.9", "old@b.com") not in _failed_attempts
+        assert ("9.9.9.9", "locked@b.com") in _failed_attempts
+        assert ("9.9.9.9", "recent@b.com") in _failed_attempts
+        assert _failed_attempts[("1.2.3.4", "a@b.com")]["count"] == 1
 
 
 # ── Integration: login endpoint ───────────────────────────────────────────────
