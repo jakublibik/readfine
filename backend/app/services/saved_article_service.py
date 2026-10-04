@@ -21,6 +21,7 @@ from app.services.readable_service import (
     extract_readable_with_title,
     title_from_url,
 )
+from app.utils.http_client import run_outbound
 from app.utils.parsing import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -292,10 +293,9 @@ async def _import_saved_bg(
     """
     from app.database import async_session_factory
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None, extract_readable_with_title, url, auth_user, auth_pass, True
+        result = await run_outbound(
+            extract_readable_with_title, url, auth_user, auth_pass, True
         )
     except Exception as exc:
         result = ReadableResult(error=str(exc)[:200])

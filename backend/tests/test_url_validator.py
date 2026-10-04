@@ -178,6 +178,14 @@ class TestSSRFProtection:
             with pytest.raises(ValueError, match="disallowed"):
                 validate_feed_url("http://link-local.example/feed")
 
+    @pytest.mark.parametrize("ip", ["100.64.0.1", "100.100.100.100", "100.127.255.254"])
+    def test_shared_address_space_rejected(self, ip):
+        # 100.64.0.0/10 is neither private nor reserved to the ipaddress module, and
+        # it is where a Tailscale network lives.
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", (ip, 0))]):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_feed_url("http://tailnet-host.example/feed")
+
     def test_public_ip_allowed(self):
         with patch("socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("93.184.216.34", 0))
@@ -859,6 +867,52 @@ class TestProtocolErrorRetry:
         # Same validated IP both times, and DNS was consulted only once.
         assert hosts == [("93.184.216.34", "example.com")] * 2
         assert resolve.call_count == 1
+
+
+class TestOverallDeadline:
+    """httpx's timeout bounds each read; the overall deadline bounds the fetch.
+
+    A host trickling its body never trips the per-read timeout, so without this a
+    single slow feed kept a worker thread (and with it the scheduler round) busy until
+    the size cap, which is days at a few bytes a read.
+    """
+
+    def _clock(self, step: float):
+        """A monotonic clock that moves *step* seconds every time it is read."""
+        import itertools
+        ticks = itertools.count(start=0, step=step)
+        return patch("app.utils.url_validator.time.monotonic", side_effect=lambda: next(ticks))
+
+    def test_trickling_body_is_abandoned_at_the_deadline(self):
+        chunks_sent = []
+
+        def body():
+            for i in range(1000):
+                chunks_sent.append(i)
+                yield b"x"
+
+        def handler(request):
+            return httpx.Response(200, content=body())
+
+        # timeout=30 gives a 60 s overall budget; the clock moves 5 s per reading.
+        with _mock_httpx_client(handler), self._clock(5):
+            with pytest.raises(httpx.ReadTimeout):
+                fetch_url_with_ssrf_check("https://example.com/slow", timeout=30)
+        assert len(chunks_sent) < 20  # gave up long before draining the source
+
+    def test_deadline_counts_as_a_source_error(self):
+        # The fetcher has to treat it like any other timeout: the feed's fault, with
+        # the usual backoff, not "Internal error".
+        from app.fetcher.failure import is_source_error
+        assert is_source_error(httpx.ReadTimeout("slow"))
+
+    def test_fast_body_is_unaffected(self):
+        def handler(request):
+            return httpx.Response(200, content=iter([b"a" * 10, b"b" * 10]))
+
+        with _mock_httpx_client(handler), self._clock(1):
+            body = fetch_url_with_ssrf_check("https://example.com/ok", timeout=30)
+        assert body == "a" * 10 + "b" * 10
 
 
 class TestResponseSizeCap:

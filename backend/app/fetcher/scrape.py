@@ -1,5 +1,4 @@
 """Web scrape fetcher: CSS selector → article URLs → readable extraction pipeline."""
-import asyncio
 import hashlib
 import html
 import logging
@@ -8,16 +7,14 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed
-from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.parsing import normalize_url, soften_nbsp_runs
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
@@ -30,9 +27,7 @@ from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
-    arm_host_cooldown,
-    failure_values,
-    log_failure_message,
+    record_fetch_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,10 +47,7 @@ async def fetch_page_html(url: str, timeout: int = 30, auth=None) -> str:
     That includes *auth*: a page behind HTTP credentials has to be reachable while the
     selector is being written, not only once the feed exists.
     """
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, fetch_url_with_ssrf_check, url, auth, timeout, _HEADERS
-    )
+    return await run_outbound(fetch_url_with_ssrf_check, url, auth, timeout, _HEADERS)
 
 
 def _extract_title(elem, a_tag, fallback_url: str) -> str:
@@ -219,10 +211,7 @@ async def fetch_scrape_feed(
         # a hostname that resolved publicly at feed creation could later point
         # at an internal/metadata address.
         await async_validate_feed_url(feed_url)
-        loop = asyncio.get_running_loop()
-        page = await loop.run_in_executor(
-            None, fetch_url_page, feed_url, auth, _TIMEOUT, _HEADERS
-        )
+        page = await run_outbound(fetch_url_page, feed_url, auth, _TIMEOUT, _HEADERS)
         links = extract_article_links(page.text, selector, feed_url)
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
@@ -263,21 +252,9 @@ async def fetch_scrape_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error scraping feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
-        now = datetime.now(timezone.utc)
-        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        db.add(FetchLog(
-            feed_id=feed_id,
-            failed_at=now,
-            http_status=http_status,
-            error_message=log_failure_message(exc, feed_url),
-        ))
-        arm_host_cooldown(feed_url, exc, http_status, now)
-        await db.execute(
-            update(Feed).where(Feed.id == feed_id).values(
-                **failure_values(exc, feed_url=feed_url, feed_block_count=block_count, now=now)
-            )
+        await record_fetch_failure(
+            db, exc, feed_id=feed_id, feed_url=feed_url, feed_block_count=block_count
         )
-        await db.commit()
         return 0
 
 

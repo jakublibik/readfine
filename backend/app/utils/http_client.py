@@ -1,7 +1,31 @@
 """Shared HTTP client constants and helpers."""
+import asyncio
+import concurrent.futures
+import functools
+from collections.abc import Callable
+from typing import TypeVar
+
 import httpx
 
 READFINE_UA = "Readfine/1.0 (self-hosted RSS reader)"
+
+_T = TypeVar("_T")
+
+# The threads blocking outbound fetches run on: feeds, scrape pages, readable
+# extraction, feed discovery. Kept apart from the default executor because that one
+# also hashes passwords and resolves hostnames, and a fetch is the one job here whose
+# duration a stranger decides. A slow host can at worst fill this pool, which delays
+# other fetches; on the shared one it would stall logins. Sized above the scheduler's
+# ten concurrent feed fetches, so a round leaves room for a reader's manual refresh.
+_OUTBOUND_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=16, thread_name_prefix="outbound"
+)
+
+
+async def run_outbound(fn: Callable[..., _T], *args, **kwargs) -> _T:
+    """Run a blocking outbound fetch (*fn*) on the dedicated outbound pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_OUTBOUND_POOL, functools.partial(fn, *args, **kwargs))
 
 # Reason phrases httpx has no entry for, because these codes are vendor extensions
 # rather than IANA-registered. Without them a failure message is the bare number and

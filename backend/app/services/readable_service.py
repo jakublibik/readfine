@@ -18,7 +18,7 @@ from app.models.article import Article
 from app.models.feed import Feed, UserFeed
 from app.services.ai_jobs import BACKOFF_MINUTES, MAX_RETRIES
 from app.utils.crypto import auth_pair, feed_auth
-from app.utils.http_client import READFINE_UA, http_reason
+from app.utils.http_client import READFINE_UA, http_reason, run_outbound
 from app.utils.parsing import count_text_words, count_words, rewrite_relative_urls, soften_nbsp_runs
 from app.utils.video import collect_video_figures, video_page_content, video_target
 
@@ -1351,7 +1351,15 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
 # ── scheduler job ─────────────────────────────────────────────────────────────
 
-async def _extract_for_batch(article: Article, auth, loop) -> ReadableResult:
+# The longest the batch worker waits for one article. Each fetch inside an extraction
+# already has an overall deadline (url_validator._TOTAL_TIMEOUT_FACTOR), and there are
+# at most two of them (a meta-refresh hop), so this only fires on a fetch stuck where
+# that deadline cannot see it, such as a host trickling its headers. The job runs with
+# max_instances=1, so without this one such page would stop extraction for everyone.
+_EXTRACT_BUDGET_S = 120
+
+
+async def _extract_for_batch(article: Article, auth) -> ReadableResult:
     """One extraction for the batch worker, off the event loop, never raising.
 
     Both kinds of article come back as a ReadableResult so the loop has one shape to
@@ -1361,20 +1369,29 @@ async def _extract_for_batch(article: Article, auth, loop) -> ReadableResult:
     article deliberately does not get (see extract_readable_with_title).
 
     A crash becomes a failed result rather than an exception, because one unlucky
-    page must not take the rest of the batch with it.
+    page must not take the rest of the batch with it. So does running past
+    ``_EXTRACT_BUDGET_S``; the worker thread is left to finish on its own.
     """
+    import asyncio
+
     auth_user, auth_pass = auth or (None, None)
     try:
         if article.feed_id is None:
-            return await loop.run_in_executor(
-                None, extract_readable_with_title, article.url, auth_user, auth_pass, True
+            return await asyncio.wait_for(
+                run_outbound(extract_readable_with_title, article.url, auth_user, auth_pass, True),
+                _EXTRACT_BUDGET_S,
             )
-        content, error, http_status, published_at = await loop.run_in_executor(
-            None, extract_readable, article.url, auth_user, auth_pass
+        content, error, http_status, published_at = await asyncio.wait_for(
+            run_outbound(extract_readable, article.url, auth_user, auth_pass),
+            _EXTRACT_BUDGET_S,
         )
         return ReadableResult(
             content=content, error=error, http_status=http_status, published_at=published_at
         )
+    except TimeoutError:
+        logger.warning("readable extraction for article %d ran past %ds, abandoned",
+                       article.id, _EXTRACT_BUDGET_S)
+        return ReadableResult(error=f"Timeout after {_EXTRACT_BUDGET_S}s")
     except Exception as exc:
         logger.warning("readable extraction error for article %d: %s", article.id, exc)
         return ReadableResult(error=str(exc)[:200])
@@ -1476,9 +1493,6 @@ async def process_pending_readable(db: AsyncSession) -> int:
         for feed_id, auth_user, auth_pass_enc in feeds_result
     }
 
-    import asyncio
-    loop = asyncio.get_running_loop()
-
     processed = 0
     feed_403_streak: dict[int, int] = {}     # consecutive 403s per feed in this batch
     feeds_to_disable: set[int] = set()       # feeds that hit the 403 threshold
@@ -1496,9 +1510,7 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        result = await _extract_for_batch(
-            article, auth_by_feed.get(article.feed_id), loop
-        )
+        result = await _extract_for_batch(article, auth_by_feed.get(article.feed_id))
 
         # Re-check status — on-demand extraction may have already processed this article
         await db.refresh(article)
@@ -1631,6 +1643,12 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
 
     Unlike the same measurement at subscribe time, this one insists on a full sample:
     turning extraction off for everyone is not a decision to make on three articles.
+
+    Called from inside the fetch transaction (``rss._save_articles``) and does not
+    commit; the fetch does. Articles still waiting for an extraction are cancelled,
+    and the ones a filter labelled were waiting for it to be scored (see
+    ``filter_service``), so they get their scoring jobs queued here instead. Queued,
+    not run: this is the fetch path, and the scoring batch picks them up within minutes.
     """
     user_feeds_result = await db.execute(
         select(UserFeed).where(
@@ -1652,7 +1670,6 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
         uf.extract_readable = False
         uf.readable_auto_disabled = True
         uf.readable_auto_disabled_reason = "full_content"
-    await db.commit()
 
     # Mark pending articles for this feed as skipped (no need to extract)
     pending_result = await db.execute(
@@ -1664,14 +1681,36 @@ async def maybe_disable_readable_for_feed(feed_id: int, db: AsyncSession) -> boo
     pending = pending_result.scalars().all()
     for article in pending:
         article.readable_status = "skipped"
-    if pending:
-        await db.commit()
+    await _queue_scoring_for_labelled(pending, db)
 
     logger.info(
         "readable: auto-disabled extraction for feed %d (%d/%d articles have full content)",
         feed_id, sample.full, sample.total,
     )
     return True
+
+
+async def _queue_scoring_for_labelled(articles, db: AsyncSession) -> None:
+    """Queue scoring for every labelled article whose extraction was just cancelled.
+
+    A filter that labels an article on a feed with extraction on leaves the scoring to
+    the end of the extraction (``filter_service``). Cancel the extraction and that end
+    never comes, so the job the filter would have queued directly, had extraction been
+    off, is queued now. ``enqueue_scoring_job`` keeps its own eligibility rules.
+    """
+    if not articles:
+        return
+    from app.models.label import ArticleLabel
+    from app.services.ai_scoring_service import enqueue_scoring_job
+
+    by_id = {a.id: a for a in articles}
+    rows = await db.execute(
+        select(ArticleLabel.article_id, ArticleLabel.user_id)
+        .where(ArticleLabel.article_id.in_(list(by_id)))
+        .distinct()
+    )
+    for article_id, user_id in rows:
+        await enqueue_scoring_job(by_id[article_id], user_id, db)
 
 
 _CONSECUTIVE_403_THRESHOLD = 3
@@ -1943,7 +1982,6 @@ async def retry_blocked_feeds(db: AsyncSession) -> int:
         return 0
 
     import asyncio
-    loop = asyncio.get_running_loop()
     revived = 0
 
     for feed in feeds:
@@ -1985,8 +2023,9 @@ async def retry_blocked_feeds(db: AsyncSession) -> int:
         ) or (None, None)
 
         try:
-            content, error, http_status, _ = await loop.run_in_executor(
-                None, extract_readable, article_url, auth_user, auth_pass
+            content, error, http_status, _ = await asyncio.wait_for(
+                run_outbound(extract_readable, article_url, auth_user, auth_pass),
+                _EXTRACT_BUDGET_S,
             )
         except Exception as exc:
             content, error, http_status = None, str(exc)[:200], None

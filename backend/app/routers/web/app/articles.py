@@ -52,6 +52,7 @@ from app.services.story_service import (
 )
 from app.services.user import touch_last_active
 from app.templating import templates
+from app.utils.http_client import run_outbound
 
 from .common import _ai_availability, _badge_html
 
@@ -75,10 +76,9 @@ async def _extract_readable_bg(
         auth_user, auth_pass_enc, context=f"article {article_id}"
     ) or (None, None)
 
-    loop = asyncio.get_running_loop()
     try:
-        content, error, http_status, published_at = await loop.run_in_executor(
-            None, extract_readable, url, auth_user, auth_pass
+        content, error, http_status, published_at = await run_outbound(
+            extract_readable, url, auth_user, auth_pass
         )
     except Exception as exc:
         content, error, http_status, published_at = None, str(exc)[:200], None, None
@@ -1813,12 +1813,11 @@ async def htmx_extract_readable(
         auth_user, auth_pass_enc, context=f"article {article.id}"
     ) or (None, None)
 
-    loop = asyncio.get_running_loop()
     # Ask for the title too: on a feedless saved article the page is the only source
     # of one, so a retry should refresh it. apply_readable_result ignores it for feed
     # articles, which keep their feed-supplied title.
-    result = await loop.run_in_executor(
-        None, extract_readable_with_title, article.url, auth_user, auth_pass,
+    result = await run_outbound(
+        extract_readable_with_title, article.url, auth_user, auth_pass,
         article.feed_id is None,  # consent/paywall check: saved articles only
     )
 

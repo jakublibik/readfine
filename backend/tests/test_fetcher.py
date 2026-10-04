@@ -263,6 +263,61 @@ class TestRunThrottled:
         assert overlap["seen"] is True
 
 
+class TestFetchBudget:
+    """One stuck feed must not hold the scheduler round (and every later one) hostage."""
+
+    async def test_fetch_past_budget_is_abandoned_and_recorded(self):
+        from app.fetcher import scheduler
+
+        async def stuck(_feed_id):
+            await asyncio.sleep(10)
+
+        recorded = AsyncMock()
+        with (
+            patch.object(scheduler, "_FEED_FETCH_BUDGET", timedelta(milliseconds=20)),
+            patch.object(scheduler, "_record_budget_timeout", recorded),
+        ):
+            await asyncio.wait_for(scheduler._fetch_within_budget(7, stuck), 2)
+        recorded.assert_awaited_once_with(7)
+
+    async def test_fetch_within_budget_records_nothing(self):
+        from app.fetcher import scheduler
+
+        done = []
+
+        async def quick(feed_id):
+            done.append(feed_id)
+
+        recorded = AsyncMock()
+        with patch.object(scheduler, "_record_budget_timeout", recorded):
+            await scheduler._fetch_within_budget(7, quick)
+        assert done == [7]
+        recorded.assert_not_awaited()
+
+    async def test_budget_timeout_is_recorded_as_a_source_failure(self):
+        # A timeout is the feed's problem, so it lands in the error tier with the
+        # normal backoff rather than as "Internal error" with the counters untouched.
+        from app.fetcher import scheduler
+
+        feed = SimpleNamespace(feed_url="https://slow.example/feed", block_count=0)
+        session = MagicMock()
+        session.get = AsyncMock(return_value=feed)
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("app.database.async_session_factory", factory),
+            patch("app.fetcher.failure.record_fetch_failure", new=AsyncMock()) as record,
+        ):
+            await scheduler._record_budget_timeout(7)
+
+        record.assert_awaited_once()
+        exc = record.await_args.args[1]
+        assert isinstance(exc, httpx.TimeoutException)
+        assert record.await_args.kwargs["feed_id"] == 7
+
+
 # ── _quantize15 ───────────────────────────────────────────────────────────────
 
 class TestQuantize15:

@@ -61,6 +61,12 @@ _DUE_GRACE = timedelta(minutes=2)
 # failure on, the feed is back on the regular backoff.
 _FIRST_ERROR_RETRY_MIN = 30
 
+# The longest one feed may take inside a round. Well above an honest fetch, which is
+# bounded by url_validator's overall deadline (twice the 30 s timeout) plus parsing and
+# saving, and well below _ROUND_BUDGET, so a single stuck feed cannot make the round
+# miss its next slot. See _fetch_due_feeds._fetch_one.
+_FEED_FETCH_BUDGET = timedelta(minutes=3)
+
 # Phase offset (0–14 min) for the four 15-min fetch ticks. 0 keeps the historical
 # :00/:15/:30/:45; a non-zero value (e.g. staging) shifts them so co-hosted instances
 # don't fetch at the same wall-clock moment. Config already folds it into 0–14.
@@ -357,6 +363,52 @@ async def _select_due_feeds(
     return list(result.scalars().all())
 
 
+async def _record_budget_timeout(feed_id: int) -> None:
+    """Record a feed that ran past ``_FEED_FETCH_BUDGET`` as a failed fetch.
+
+    Written in a fresh session: the fetch's own one was cancelled mid-flight and has
+    rolled back. A timeout is a source error, so the feed takes the regular error
+    backoff and, if it keeps happening, the regular route to disabled.
+    """
+    import httpx
+
+    from app.fetcher.failure import record_fetch_failure
+
+    logger.warning(
+        "Scheduler: feed %d ran past its %ds budget, abandoned",
+        feed_id, _FEED_FETCH_BUDGET.total_seconds(),
+    )
+    async with db.async_session_factory() as session:
+        feed = await session.get(Feed, feed_id)
+        if feed is None:
+            return
+        exc = httpx.ReadTimeout(
+            f"The feed took longer than {int(_FEED_FETCH_BUDGET.total_seconds())}s to fetch"
+        )
+        await record_fetch_failure(
+            session, exc, feed_id=feed_id, feed_url=feed.feed_url,
+            feed_block_count=feed.block_count or 0,
+        )
+
+
+async def _fetch_within_budget(
+    feed_id: int, fetch: Callable[[int], Awaitable[None]]
+) -> None:
+    """Run ``fetch(feed_id)``, held to ``_FEED_FETCH_BUDGET``.
+
+    The round waits for every feed and the job runs with ``max_instances=1``, so a
+    fetch that never returns would stop the next round and every one after it, for
+    every feed on the instance. Running past the budget is recorded as a timeout on
+    the feed, so it backs off like any other failure instead of being picked (and
+    waited for) again at the next tick. The worker thread is not killed; it ends on
+    its own, at the latest at the fetch's own overall deadline.
+    """
+    try:
+        await asyncio.wait_for(fetch(feed_id), _FEED_FETCH_BUDGET.total_seconds())
+    except TimeoutError:
+        await _record_budget_timeout(feed_id)
+
+
 async def _fetch_due_feeds() -> None:
     """Job: fetch all active feeds that are due for an update."""
     if db.async_session_factory is None:
@@ -442,6 +494,9 @@ async def _fetch_due_feeds() -> None:
         return True
 
     async def _fetch_one(feed_id: int) -> None:
+        await _fetch_within_budget(feed_id, _fetch_one_unbounded)
+
+    async def _fetch_one_unbounded(feed_id: int) -> None:
         if feed_id in _initial_fetch_in_progress:
             logger.debug("Scheduler: skipping feed %d — initial fetch in progress", feed_id)
             return

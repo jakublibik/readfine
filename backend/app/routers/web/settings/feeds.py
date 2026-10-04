@@ -32,7 +32,7 @@ from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_claus
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
-from app.utils.http_client import READFINE_UA, http_reason
+from app.utils.http_client import READFINE_UA, http_reason, run_outbound
 from app.utils.parsing import safe_int
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -114,9 +114,8 @@ async def settings_feeds_test(
         """Returns (page, error_string). Uses SSRF-safe redirect loop."""
         fetch_auth = auth if with_auth else None
         try:
-            page = await loop.run_in_executor(
-                None,
-                lambda: fetch_url_page(url, auth=fetch_auth, timeout=15, headers=_headers),
+            page = await run_outbound(
+                fetch_url_page, url, auth=fetch_auth, timeout=15, headers=_headers
             )
             return page, None
         except httpx.HTTPStatusError as e:

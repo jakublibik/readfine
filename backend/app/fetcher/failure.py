@@ -31,14 +31,16 @@ Also home to :func:`arm_host_cooldown`, the other half of "what a failed fetch
 does" — it writes no columns, it paces sibling feeds on the same host.
 """
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from sqlalchemy import case, literal
+from sqlalchemy import case, literal, update
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.fetcher import host_throttle
 from app.models.feed import Feed
+from app.models.fetch_log import FetchLog
 from app.utils.http_client import http_reason
 from app.utils.url_validator import (
     RETRYABLE_HTTP_STATUSES,
@@ -274,6 +276,33 @@ def clear_failure_state(feed: Feed) -> None:
     feed.block_count = 0
     feed.last_error = None
     feed.retry_after_until = None
+
+
+async def record_fetch_failure(
+    db: AsyncSession, exc: Exception, *, feed_id: int, feed_url: str, feed_block_count: int
+) -> None:
+    """Write everything a failed fetch leaves behind, and commit.
+
+    The fetch log row for the admin, the per-host cooldown for sibling feeds, and the
+    feed row update from :func:`failure_values`. Shared by the RSS and scrape fetchers
+    and by the scheduler's budget timeout, so the three cannot record a failure three
+    different ways. The caller rolls back its own failed transaction first.
+    """
+    now = datetime.now(timezone.utc)
+    http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+    db.add(FetchLog(
+        feed_id=feed_id,
+        failed_at=now,
+        http_status=http_status,
+        error_message=log_failure_message(exc, feed_url),
+    ))
+    arm_host_cooldown(feed_url, exc, http_status, now)
+    await db.execute(
+        update(Feed).where(Feed.id == feed_id).values(
+            **failure_values(exc, feed_url=feed_url, feed_block_count=feed_block_count, now=now)
+        )
+    )
+    await db.commit()
 
 
 def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now: datetime) -> dict:

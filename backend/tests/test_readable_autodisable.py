@@ -145,20 +145,48 @@ class TestMaybeDisableReadableForFullContent:
         assert await maybe_disable_readable_for_feed(5, db) is False
         assert uf.extract_readable is True
 
-    async def test_pending_articles_are_skipped_when_disabling(self):
-        uf = MagicMock(extract_readable=True)
-        art = MagicMock(readable_status="pending")
+    def _db_with_pending(self, pending, labels):
         db = AsyncMock()
         rows = [(self._body(600),)] * _FULL_CONTENT_SAMPLE
         uf_result = MagicMock()
-        uf_result.scalars.return_value.all.return_value = [uf]
+        uf_result.scalars.return_value.all.return_value = [MagicMock(extract_readable=True)]
         pending_result = MagicMock()
-        pending_result.scalars.return_value.all.return_value = [art]
-        db.execute = AsyncMock(side_effect=[uf_result, rows, pending_result])
+        pending_result.scalars.return_value.all.return_value = pending
+        db.execute = AsyncMock(side_effect=[uf_result, rows, pending_result, labels])
         db.commit = AsyncMock()
+        return db
 
-        assert await maybe_disable_readable_for_feed(5, db) is True
+    async def test_pending_articles_are_skipped_when_disabling(self):
+        art = MagicMock(id=11, readable_status="pending")
+        db = self._db_with_pending([art], labels=[])
+
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job",
+                   new=AsyncMock()) as enqueue:
+            assert await maybe_disable_readable_for_feed(5, db) is True
         assert art.readable_status == "skipped"
+        enqueue.assert_not_awaited()
+
+    async def test_labelled_pending_article_gets_its_scoring_queued(self):
+        # A filter labelled it and left the scoring for after the extraction. The
+        # extraction is now cancelled, so without this the article is never scored.
+        art = MagicMock(id=11, readable_status="pending")
+        db = self._db_with_pending([art], labels=[(11, 3), (11, 4)])
+
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job",
+                   new=AsyncMock()) as enqueue:
+            assert await maybe_disable_readable_for_feed(5, db) is True
+        assert art.readable_status == "skipped"
+        assert {c.args[1] for c in enqueue.await_args_list} == {3, 4}
+        assert all(c.args[0] is art for c in enqueue.await_args_list)
+
+    async def test_runs_inside_the_fetch_transaction(self):
+        # The fetcher commits after this returns; committing here would split the
+        # fetch's own transaction in two.
+        art = MagicMock(id=11, readable_status="pending")
+        db = self._db_with_pending([art], labels=[])
+        with patch("app.services.ai_scoring_service.enqueue_scoring_job", new=AsyncMock()):
+            await maybe_disable_readable_for_feed(5, db)
+        db.commit.assert_not_awaited()
 
 
 class TestDisableReadableForFeed:

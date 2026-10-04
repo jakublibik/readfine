@@ -10,9 +10,8 @@ from typing import NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 import feedparser
-import httpx
 import nh3
-from sqlalchemy import literal, select, update
+from sqlalchemy import literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,9 +19,8 @@ from sqlalchemy.orm import aliased
 
 from app.models.article import SUPPRESSED_BY_URL, Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.parsing import (
     count_words,
     normalize_url,
@@ -43,9 +41,7 @@ from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
-    arm_host_cooldown,
-    failure_values,
-    log_failure_message,
+    record_fetch_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,9 +106,7 @@ async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
     """
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
-    page = await loop.run_in_executor(
-        None, fetch_url_page, url, auth, _TIMEOUT, _HEADERS
-    )
+    page = await run_outbound(fetch_url_page, url, auth, _TIMEOUT, _HEADERS)
     parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
     if parsed.bozo:
@@ -190,8 +184,8 @@ async def fetch_feed(
                 context=f"feed {feed_id}",
             )
             loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
-                None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
+            resp = await run_outbound(
+                fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
                 feed.etag, feed.last_modified,
             )
             if resp.status_code == 304:
@@ -275,21 +269,9 @@ async def fetch_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
-        now = datetime.now(timezone.utc)
-        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        db.add(FetchLog(
-            feed_id=feed_id,
-            failed_at=now,
-            http_status=http_status,
-            error_message=log_failure_message(exc, feed_url),
-        ))
-        arm_host_cooldown(feed_url, exc, http_status, now)
-        await db.execute(
-            update(Feed).where(Feed.id == feed_id).values(
-                **failure_values(exc, feed_url=feed_url, feed_block_count=block_count, now=now)
-            )
+        await record_fetch_failure(
+            db, exc, feed_id=feed_id, feed_url=feed_url, feed_block_count=block_count
         )
-        await db.commit()
         return 0
 
 

@@ -5,7 +5,7 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import html
 
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
 
 _FEED_MIME_TYPES = {
@@ -39,10 +39,8 @@ async def _validate_feed_url(url: str) -> tuple[bool, str | None]:
     import feedparser
     try:
         await async_validate_feed_url(url)
-        loop = asyncio.get_running_loop()
-        body = await loop.run_in_executor(
-            None,
-            lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=10),
+        body = await run_outbound(
+            fetch_url_with_ssrf_check, url, headers=_FETCH_HEADERS, timeout=10
         )
         parsed = feedparser.parse(body)
         if not parsed.entries:
@@ -64,10 +62,8 @@ async def detect_feeds(url: str) -> list[dict]:
     # Fetch HTML
     try:
         await async_validate_feed_url(url)
-        loop = asyncio.get_running_loop()
-        content = await loop.run_in_executor(
-            None,
-            lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=15),
+        content = await run_outbound(
+            fetch_url_with_ssrf_check, url, headers=_FETCH_HEADERS, timeout=15
         )
     except Exception:
         return []
