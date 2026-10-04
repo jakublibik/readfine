@@ -281,7 +281,7 @@
 
 {% if chat_available %}
 <!-- General AI Chat Modal -->
-<div id="general-chat-modal"
+<div id="general-chat-modal" data-chat-owner="{{ user.id }}"
      class="hidden fixed inset-0 z-50 flex items-end sm:items-center justify-center pt-12 sm:p-8">
   <div id="general-chat-backdrop" class="absolute inset-0 bg-black/50 dark:bg-black/70"></div>
   <div class="relative z-10 w-full max-w-3xl max-h-full sm:max-h-[80vh]

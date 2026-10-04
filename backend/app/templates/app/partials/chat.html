@@ -15,7 +15,7 @@
 {%- if msg.role == "user" -%}
 <div class="flex justify-end"><div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200">{{ msg.content }}</div></div>
 {%- else -%}
-<div class="flex justify-start"><div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | markdown }}</div></div>
+<div class="flex justify-start"><div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | ai_markdown }}</div></div>
 {%- endif -%}
 {%- endfor -%}
 {#- -#}</div>

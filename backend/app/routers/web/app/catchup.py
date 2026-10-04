@@ -18,7 +18,7 @@ from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally
 from app.services.label_service import list_labels
 from app.templating import templates
-from app.utils.markdown import md_render as _md_render
+from app.utils.markdown import md_render_ai
 from app.utils.url_validator import find_blocked_address
 
 from .common import _catchup_available
@@ -301,7 +301,7 @@ async def htmx_catchup_generate(
     db.add(log)
     await db.commit()
 
-    rendered = _md_render(text)
+    rendered = md_render_ai(text)
     return HTMLResponse(
         f'<div class="prose prose-sm dark:prose-invert max-w-none">{rendered}</div>'
     )

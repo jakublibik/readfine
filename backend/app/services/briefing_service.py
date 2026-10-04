@@ -27,7 +27,7 @@ from app.services.catchup_service import (
 )
 from app.templating import templates
 from app.utils.datetime_format import format_local
-from app.utils.markdown import md_render
+from app.utils.markdown import md_render_ai
 
 logger = logging.getLogger(__name__)
 from app.utils.smtp import send_html_email
@@ -184,7 +184,7 @@ def _build_email_html(
     """*public_url* (the PUBLIC_URL setting) turns the footer's "Readfine" into a link
     and adds one to the briefing's settings. A scheduled send has no request to take
     the host from, so without it the footer stays plain text."""
-    content_html = md_render(markdown_text)
+    content_html = md_render_ai(markdown_text)
     # Outlook renders <blockquote> with its own grey border regardless of CSS — replace with <div>
     content_html = content_html.replace("<blockquote>", _BQ_OPEN).replace("</blockquote>", _BQ_CLOSE)
     raw = templates.env.get_template("email/briefing.html").render(

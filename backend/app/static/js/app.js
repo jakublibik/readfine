@@ -1093,6 +1093,9 @@ function _flushMarkRead() {
     headers: { 'Content-Type': 'application/json', 'x-csrftoken': csrfToken },
     body: JSON.stringify({ ids: ids, unfolded: ids.filter(_storyUnfolded) }),
     credentials: 'same-origin',
+    // Flushed on the way out too (visibilitychange, beforeunload), where a plain
+    // request is cancelled with the page.
+    keepalive: true,
   }).then(function (r) {
     if (r.ok) htmx.trigger(document.body, 'sidebarRefresh');
   }).catch(function (e) { console.warn('mark-read-batch failed:', e); });
@@ -1521,34 +1524,6 @@ document.addEventListener('click', function (e) {
   document.body.addEventListener('htmx:afterSettle', syncActiveRow);
   document.addEventListener('DOMContentLoaded', syncActiveRow);
 })();
-
-// OPML import form: intercept submit to send CSRF header with multipart upload
-document.addEventListener('DOMContentLoaded', function () {
-  var form = document.getElementById('opml-import-form');
-  if (!form) return;
-  form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    var btn = document.getElementById('opml-submit-btn');
-    var busy = document.getElementById('opml-busy');
-    btn.disabled = true;
-    btn.classList.add('opacity-50', 'cursor-not-allowed');
-    busy.classList.remove('hidden');
-    busy.classList.add('inline-flex');
-    var token = getCsrfToken();
-    fetch(form.action, {
-      method: 'POST',
-      headers: { 'x-csrftoken': token },
-      body: new FormData(form),
-    }).then(function (r) { return r.text(); }).then(function (html) {
-      document.open(); document.write(html); document.close();
-    }).catch(function () {
-      btn.disabled = false;
-      btn.classList.remove('opacity-50', 'cursor-not-allowed');
-      busy.classList.add('hidden');
-      busy.classList.remove('inline-flex');
-    });
-  });
-});
 
 // Feed subscribe form: auto-check "Private feed" when auth fields are filled
 (function () {
@@ -2504,16 +2479,29 @@ function saveConfigRename(configId) {
   var form = new FormData();
   form.append('name', newName);
 
-  fetch('/htmx/catchup-configs/' + configId + '/rename', {
+  _replaceConfigList(fetch('/htmx/catchup-configs/' + configId + '/rename', {
     method: 'PUT',
     credentials: 'include',
     headers: { 'x-csrftoken': csrf, 'HX-Request': 'true' },
     body: form,
-  }).then(function (resp) {
-    return resp.text();
-  }).then(function (html) {
-    var wrapper = document.getElementById('catchup-configs-list-wrapper');
-    if (wrapper) { wrapper.innerHTML = html; htmx.process(wrapper); }
+  }), 'Rename');
+}
+
+// Rename and delete both answer with the re-rendered list. Anything else ("Not found",
+// a CSRF refusal, a validation error) is not a list, and swapping it in would replace
+// every saved configuration with one line of error text.
+function _replaceConfigList(request, what) {
+  request.then(function (resp) {
+    if (!resp.ok) {
+      showToast(what + ' failed (HTTP ' + resp.status + '). Please try again.', 'error');
+      return;
+    }
+    return resp.text().then(function (html) {
+      var wrapper = document.getElementById('catchup-configs-list-wrapper');
+      if (wrapper) { wrapper.innerHTML = html; htmx.process(wrapper); }
+    });
+  }).catch(function () {
+    showToast('No connection. Check your network, then try again.', 'error');
   });
 }
 
@@ -2566,14 +2554,11 @@ document.addEventListener('click', function (e) {
   if (action === 'delete-config') {
     var id = el.dataset.configId;
     var csrf = getCsrfToken();
-    fetch('/htmx/catchup-configs/' + id, {
+    _replaceConfigList(fetch('/htmx/catchup-configs/' + id, {
       method: 'DELETE',
       credentials: 'include',
       headers: { 'x-csrftoken': csrf, 'HX-Request': 'true' },
-    }).then(function (resp) { return resp.text(); }).then(function (html) {
-      var wrapper = document.getElementById('catchup-configs-list-wrapper');
-      if (wrapper) { wrapper.innerHTML = html; htmx.process(wrapper); }
-    });
+    }), 'Delete');
     return;
   }
 });
@@ -4470,14 +4455,32 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
     var hist = document.getElementById('general-chat-history');
     var msgsEl = document.getElementById('general-chat-messages');
     if (hist && hist.value === '[]') {
-      try { sessionStorage.removeItem('_gchat_history'); sessionStorage.removeItem('_gchat_html'); } catch (e) {}
+      _forgetGeneralChat();
     } else if (hist && msgsEl) {
       try {
+        sessionStorage.setItem('_gchat_owner', _generalChatOwner());
         sessionStorage.setItem('_gchat_history', hist.value);
         sessionStorage.setItem('_gchat_html', msgsEl.innerHTML);
       } catch (e) {}
     }
   });
+
+  // The conversation is kept per tab so a reload doesn't lose it, and a tab outlives
+  // a logout: the next account to sign in there must not get it back, nor send it to
+  // the model as its own history. So it is stored with the id of the account it
+  // belongs to and only restored for that account.
+  function _generalChatOwner() {
+    var modal = document.getElementById('general-chat-modal');
+    return (modal && modal.dataset.chatOwner) || '';
+  }
+
+  function _forgetGeneralChat() {
+    try {
+      sessionStorage.removeItem('_gchat_owner');
+      sessionStorage.removeItem('_gchat_history');
+      sessionStorage.removeItem('_gchat_html');
+    } catch (e) {}
+  }
 
   // Optimistic UI: show user message + typing indicator before server responds
   document.body.addEventListener('htmx:beforeRequest', function (e) {
@@ -4561,6 +4564,10 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
 
   (function restoreGeneralChatSession() {
     try {
+      // No modal, no owner to compare with: a page without the chat leaves it be.
+      var owner = _generalChatOwner();
+      if (!owner) return;
+      if (sessionStorage.getItem('_gchat_owner') !== owner) { _forgetGeneralChat(); return; }
       var html = sessionStorage.getItem('_gchat_html');
       var history = sessionStorage.getItem('_gchat_history');
       if (!html || !history || history === '[]') return;

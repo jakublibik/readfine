@@ -5,7 +5,7 @@ from jinja2 import Undefined
 from fastapi.templating import Jinja2Templates
 
 from app import __version__
-from app.utils.markdown import md_render, md_render_inline
+from app.utils.markdown import md_render_ai, md_render_inline
 from app.utils.request_context import current_viewer_is_admin, current_viewer_ai_error
 from app.utils.static import static_url
 from app.utils.datetime_format import (
@@ -20,7 +20,8 @@ from app.fetcher.failure import BLOCK_BADGE_THRESHOLD, BLOCK_DISABLE_THRESHOLD
 
 templates = Jinja2Templates(directory="app/templates")
 
-templates.env.filters["markdown"] = lambda text: Markup(md_render(text or ""))
+# AI output only (summaries, context, chat): images come out as their alt text.
+templates.env.filters["ai_markdown"] = lambda text: Markup(md_render_ai(text or ""))
 templates.env.filters["markdown_inline"] = lambda text: Markup(md_render_inline(text or ""))
 
 
