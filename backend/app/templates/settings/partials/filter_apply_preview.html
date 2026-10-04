@@ -1,5 +1,8 @@
 <div class="apply-preview text-xs bg-gray-50 border border-gray-200 rounded p-2 mt-1 space-y-2">
-  {% if is_ai_filter %}
+  {% if error %}
+    <p class="text-red-700">{{ error }}</p>
+    <button type="button" class="apply-cancel text-gray-400 hover:text-gray-600">Close</button>
+  {% elif is_ai_filter %}
     <p class="text-gray-700">
       <strong>{{ matched }}</strong> article{% if matched != 1 %}s{% endif %} currently match.
     </p>

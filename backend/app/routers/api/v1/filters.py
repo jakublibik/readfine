@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_api_user
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.user import User
+from app.rate_limit import limiter
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterUpdate
 from app.services.filter_service import (
     apply_filter_retroactively,
@@ -77,7 +79,10 @@ async def del_filter(
 
 
 @router.post("/{filter_id}/test", response_model=FilterTestResult)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def post_filter_test(
+    request: Request,
+    response: Response,
     filter_id: int,
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
@@ -89,7 +94,10 @@ async def post_filter_test(
 
 
 @router.post("/{filter_id}/apply", response_model=dict)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def post_filter_apply(
+    request: Request,
+    response: Response,
     filter_id: int,
     enqueue_scoring: bool = True,
     user: User = Depends(get_api_user),

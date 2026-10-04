@@ -87,6 +87,7 @@ class FilterResponse(BaseModel):
     stop_on_match: bool
     scope_include: list[str]
     scope_except: list[str]
+    disabled_reason: str | None = None
     created_at: datetime
     updated_at: datetime
     conditions: list[FilterConditionResponse]
@@ -108,3 +109,6 @@ class FilterTestSample(BaseModel):
 class FilterTestResult(BaseModel):
     matched_count: int
     samples: list[FilterTestSample]
+    # Set when the run stopped because the filter's regex hit the match timeout;
+    # the filter has been switched off and the count is not meaningful.
+    error: str | None = None

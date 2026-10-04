@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.redirects import url_conflict
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
-from app.models.article import SUPPRESSED_BY_BACKLOG, Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BACKLOG, Article, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
@@ -811,7 +811,8 @@ async def _initial_fetch_scrape(feed_id: int) -> None:
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeCleanupResult:
     """Remove a user's subscription with full lifecycle cleanup.
 
-    1. Deletes UserArticleState rows for articles the user does not keep for good.
+    1. Deletes UserArticleState rows for articles the user does not keep for good,
+       and the user's pending AI jobs on those articles.
     2. Deletes the UserFeed row.
     3. Decrements subscriber_count on the Feed.
     4. If subscriber_count reaches 0: deletes orphan articles (kept for good by
@@ -842,6 +843,21 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
             UserArticleState.user_id == user.id,
             UserArticleState.article_id.in_(article_ids_subq),
             ~permanently_kept_predicate(),
+        )
+    )
+    # A job still queued would score the article afterwards, write a fresh state
+    # row and run the AI filters on it, which can label or star an article the
+    # user just let go of. What they keep still has its state row; that is the
+    # one case the job stays for.
+    await db.execute(
+        delete(ArticleAiJob).where(
+            ArticleAiJob.user_id == user.id,
+            ArticleAiJob.status == "pending",
+            ArticleAiJob.article_id.in_(article_ids_subq),
+            ~exists().where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id == ArticleAiJob.article_id,
+            ),
         )
     )
 

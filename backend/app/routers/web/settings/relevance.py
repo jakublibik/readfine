@@ -11,8 +11,10 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.user import User
+from app.rate_limit import limiter
 from app.services.relevance_corpus_service import get_stats
 from app.services import relevance_suggest_service as suggest
 from app.services.relevance_service import parse_terms, skipped_terms
@@ -96,6 +98,7 @@ async def settings_relevance_save(
 # the list and saves it, the way hiding one saves the dismissal.
 
 @router.get("/relevance/suggestions", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_relevance_suggestions)
 async def settings_relevance_suggestions(
     request: Request,
     part: str | None = None,

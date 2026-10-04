@@ -18,6 +18,9 @@ class Filter(Base):
     stop_on_match: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     scope_include: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     scope_except: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Why the app switched this filter off by itself (filter_service.REGEX_TIMEOUT);
+    # None when it is on, or off because the user turned it off. Saving clears it.
+    disabled_reason: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

@@ -543,7 +543,7 @@ class TestSavedFiltersNeverScore:
             id=1, conditions=[SimpleNamespace(field="title", operator="contains",
                                               value="story", position=0)],
             actions=[action], match_operator="AND", is_active=True, stop_on_match=False,
-            scope_include=None, scope_except=None, user_id=1,
+            scope_include=None, scope_except=None, user_id=1, disabled_reason=None,
         )
         result = MagicMock()
         result.scalars.return_value.all.return_value = [flt]

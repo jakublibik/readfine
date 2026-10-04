@@ -179,6 +179,11 @@ class Settings(BaseSettings):
     # can start. The profile is meant to change every few weeks, hence an hourly cap.
     rate_limit_ai_preference: str = "5/hour"
     rate_limit_feedback: str = "3/hour"
+    # Testing, previewing or applying a filter evaluates it over every article the
+    # user has, and the relevance suggestions tokenize up to a month of them. Cheap
+    # one at a time, not when repeated in parallel.
+    rate_limit_filter_run: str = "10/minute"
+    rate_limit_relevance_suggestions: str = "20/minute"
     # Video-thumbnail proxy. Public (a shared article page renders video figures for
     # signed-out readers), so it is rate-limited by IP. A single article view fires
     # one request per video figure and the browser then caches it, so this is

@@ -847,7 +847,7 @@ class TestApplyAiFiltersForState:
             conditions=[SimpleNamespace(field="ai_score", operator="gt", value="50")],
             actions=[SimpleNamespace(action_type="mark_read")],
             match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed_actions = []
@@ -873,12 +873,12 @@ class TestApplyAiFiltersForState:
         f1 = SimpleNamespace(
             id=1, stop_on_match=True,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
         f2 = SimpleNamespace(
             id=2, stop_on_match=False,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed = []
@@ -902,7 +902,7 @@ class TestApplyAiFiltersForState:
         f = SimpleNamespace(
             id=1, stop_on_match=False,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed = []

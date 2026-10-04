@@ -5,10 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.feed import Folder
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
+from app.rate_limit import limiter
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.services.feed import list_user_feeds
 from app.services.filter_service import (
@@ -182,6 +184,7 @@ async def settings_filter_delete(
 
 
 @router.post("/filters/{filter_id}/test", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_test(
     filter_id: int,
     request: Request,
@@ -197,6 +200,7 @@ async def settings_filter_test(
 
 
 @router.post("/filters/{filter_id}/apply/preview", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_apply_preview(
     filter_id: int,
     request: Request,
@@ -213,6 +217,7 @@ async def settings_filter_apply_preview(
 
 
 @router.post("/filters/{filter_id}/apply", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_apply(
     filter_id: int,
     request: Request,

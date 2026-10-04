@@ -12,6 +12,8 @@
 
 {% if error %}
 <div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
+{% elif filter and filter.disabled_reason == 'regex_timeout' %}
+<div class="mb-4 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">Its regex took too long on an article, so the filter was switched off. Simplify the pattern (nested repeats like (a+)+ are the usual cause), then tick Active and save.</div>
 {% endif %}
 
 <form method="POST"
