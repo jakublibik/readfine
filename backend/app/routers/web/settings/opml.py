@@ -6,8 +6,10 @@ from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.user import User
+from app.rate_limit import limiter
 from app.services.opml import MAX_UPLOAD_BYTES, export_opml, import_opml
 from app.templating import templates
 
@@ -41,6 +43,7 @@ async def settings_opml_export(
 
 
 @router.post("/opml/import", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_opml_import)
 async def settings_opml_import(
     request: Request,
     file: UploadFile = File(...),

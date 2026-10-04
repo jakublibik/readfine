@@ -184,6 +184,9 @@ class Settings(BaseSettings):
     # one at a time, not when repeated in parallel.
     rate_limit_filter_run: str = "10/minute"
     rate_limit_relevance_suggestions: str = "20/minute"
+    # An OPML import fetches every new feed in the file inside the request. One import
+    # is capped by the feed limit (see services.opml), this caps how often it repeats.
+    rate_limit_opml_import: str = "10/hour"
     # Video-thumbnail proxy. Public (a shared article page renders video figures for
     # signed-out readers), so it is rate-limited by IP. A single article view fires
     # one request per video figure and the browser then caches it, so this is

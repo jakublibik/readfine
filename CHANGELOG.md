@@ -29,12 +29,15 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A labelled article could miss its AI score when Readfine switched off full-text extraction for a feed that already delivers whole articles. Such articles are now queued for scoring.
 - Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
 - After you unsubscribed from a feed, or unstarred or unsaved an article that no longer had a feed, its labels stayed. The article then sat in the label's list, could not be opened or marked read, and kept the label's unread count up. Labels now go with your access to the article, and the upgrade removes the ones left over. An AI score still queued when you unsubscribed could also bring a label or a star back through your filters. Unsubscribing now cancels those scores.
+- A feed that failed partway through an OPML import made every feed after it fail too, and the import then ended in an error. Two people adding the same new feed at the same moment no longer fails either.
 
 ### Security
 
+- **Show AI prompt** in the scrape feed setup could run a script sent by the site being scraped, if that site answered with an error. The error is now shown as plain text.
 - A filter with a badly written regex could freeze the whole instance for minutes, for every account, when it was tested, applied or run on new articles. A regex that runs too long now switches its filter off at once, and **Settings → Filters** marks it "regex too slow". Fix the pattern and turn the filter back on. Testing and applying filters, and loading the term suggestions in **Settings → Relevance**, are now rate limited too.
 - Saving a link in **Saved** could give you the full text of an article that another account had fetched from a private feed (one with a password or a private address). Such a link is now fetched again as you.
 - Opening the article list with the id of a feed you don't follow showed that feed's last error, which includes its address. It now shows nothing.
+- An OPML import fetches every new feed in the file, and feeds that failed did not count toward the feed limit, so a file full of dead addresses could keep one import running for hours. An import now stops after trying about twice as many feeds as the account still has room for (a fixed 2,000 for admins) and says how many it left out. Feeds you already follow are skipped without a fetch. Imports are limited to 10 an hour.
 - Feed and article addresses can no longer reach the 100.64.0.0/10 range (carrier-grade NAT, also used by Tailscale networks). Readfine now refuses every address that is not on the public internet.
 
 ## [0.20.0] - 2026-10-04

@@ -571,8 +571,18 @@ async def subscribe(
             subscriber_count=0,
             fetch_interval_min=fetch_interval_min,
         )
-        db.add(feed)
-        await db.flush()  # get feed.id
+        try:
+            # In a savepoint: another request can create the same public feed while
+            # this one is fetching it, and the unique index then fails this insert.
+            # Only the insert is undone, so the caller's session stays usable.
+            async with db.begin_nested():
+                db.add(feed)
+                await db.flush()  # get feed.id
+        except IntegrityError:
+            feed = await _existing_public_feed(url)
+            if feed is None:
+                raise
+            is_new_feed = False
 
     # Determine whether readable extraction makes sense for this feed
     if parsed is not None:

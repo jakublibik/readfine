@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.filter import Filter
 from app.models.label import Label
+from app.models.settings import AppSettings
 from app.models.user import User, UserCatchupConfig, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.ai_profile_service import PROFILE_MAX_CHARS
@@ -90,6 +91,11 @@ _PROFILE_TEXTS = {
 
 # Feed outline attribute → UserFeed column, for per-feed retention.
 _FEED_PURGE_ATTRS = {"purge-after-days": "purge_after_days", "purge-keep-count": "purge_keep_count"}
+
+# Feed outlines one import may try beyond the free slots (see _feed_attempt_budget),
+# and the ceiling for admins, who have no feed limit.
+_MIN_FAILED_TRIES = 20
+_ADMIN_FEED_TRIES = 2000
 
 _CATCHUP_PERIODS = ("today", "yesterday", "7days")
 _CATCHUP_STATUSES = ("all", "not_opened")
@@ -487,6 +493,9 @@ class ImportResult:
     # migration cut from 180 feeds to 50 has to say so where it cannot be missed.
     feeds_over_limit: int = 0
     feed_limit: int | None = None
+    # Set when the import used up the feed attempts it may make (see
+    # _feed_attempt_budget): how many outlines were left untried.
+    feeds_not_tried: int = 0
 
 
 class _LabelBook:
@@ -604,13 +613,30 @@ async def import_opml(
         feed_outlines = _collect_feed_outlines(body)
         folder_cache: dict[str, int] = {}
         next_folder_pos = await next_folder_position(db, user.id)
+        subscribed_urls = set((await db.execute(
+            select(Feed.feed_url)
+            .join(UserFeed, UserFeed.feed_id == Feed.id)
+            .where(UserFeed.user_id == user.id)
+        )).scalars())
+        attempts_left = await _feed_attempt_budget(user, len(subscribed_urls), db)
         for index, (outline, folder_name) in enumerate(feed_outlines):
+            xml_url = outline.get("xmlUrl", "")
+            is_scrape = (outline.get("feed-type") or "").strip().lower() == "scrape"
+            # A feed the account already has costs nothing to skip here, where
+            # subscribe() would only find out after fetching it. Scrape feeds are
+            # keyed by page and selector, so the address alone does not decide.
+            if not is_scrape and xml_url.strip() in subscribed_urls:
+                result.feeds_skipped += 1
+                continue
+            if attempts_left <= 0:
+                result.feeds_not_tried = len(feed_outlines) - index
+                break
+            attempts_left -= 1
             folder_id = None
             if folder_name:
                 folder_id, next_folder_pos = await _get_or_create_folder(
                     user, folder_name, folder_cache, db, next_folder_pos
                 )
-            xml_url = outline.get("xmlUrl", "")
             try:
                 added_id = await _import_feed(user, outline, folder_id, result, db)
             except FeedLimitReached as exc:
@@ -619,10 +645,11 @@ async def import_opml(
                 result.feed_limit = exc.max_feeds
                 break
             if added_id and xml_url:
+                subscribed_urls.add(xml_url.strip())
                 feed_url_to_id[xml_url] = added_id
                 # Scrape feeds already trigger their own background fetch in
                 # subscribe_scrape; don't queue them for the RSS _initial_fetch.
-                if (outline.get("feed-type") or "").strip().lower() != "scrape":
+                if not is_scrape:
                     new_feed_ids.append(added_id)
 
     # Lookup maps for scope resolution, from the subscriptions as they are now.
@@ -785,6 +812,25 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
     return results
 
 
+async def _feed_attempt_budget(user: User, subscribed: int, db: AsyncSession) -> int:
+    """How many feed outlines one import may try to subscribe.
+
+    Each try fetches the feed inside the request, and only the ones that succeed
+    count toward the account's feed limit. Without a cap a file of dead addresses
+    would hold the request (and its database connection) for hours while the server
+    sends a request to every host in it. So the budget follows the limit: the free
+    slots, plus as many again (at least _MIN_FAILED_TRIES) for feeds that fail.
+    Admins have no feed limit and get a fixed ceiling instead.
+    """
+    if user.role == "admin":
+        return _ADMIN_FEED_TRIES
+    max_feeds = await db.scalar(
+        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+    ) or 200
+    free = max(0, max_feeds - subscribed)
+    return free + max(_MIN_FAILED_TRIES, free)
+
+
 async def _get_or_create_folder(
     user: User,
     name: str,
@@ -808,7 +854,9 @@ async def _get_or_create_folder(
         folder = Folder(user_id=user.id, name=name, position=next_position)
         next_position += 1
         db.add(folder)
-        await db.flush()
+        # Committed on its own, so a feed that fails after it (and is rolled back)
+        # cannot take the folder the cache still points at with it.
+        await db.commit()
     cache[name] = folder.id
     return folder.id, next_position
 
@@ -884,6 +932,10 @@ async def _import_feed(
     except FeedLimitReached:
         raise  # propagate to the import loop, which stops and warns
     except Exception as exc:
+        # A failure past a write leaves the session unusable for every outline after
+        # this one. The rollback expires the user, and a lazy load is not allowed here.
+        await db.rollback()
+        await db.refresh(user)
         result.feeds_failed += 1
         result.warnings.append(f"Failed to import {xml_url}: {exc}")
         return None

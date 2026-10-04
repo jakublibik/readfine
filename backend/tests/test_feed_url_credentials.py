@@ -229,6 +229,8 @@ def _subscribe_db(existing_feed=None, private_dupe=False):
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
     db.flush = AsyncMock()
+    # The new feed row goes in under a savepoint.
+    db.begin_nested = MagicMock(return_value=AsyncMock())
     db.added = added
     return db
 

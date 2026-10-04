@@ -945,3 +945,29 @@ class TestScrapePreviewEndpoint:
 
         assert resp.status_code == 200
         assert fetch.await_args.args[0] == "https://example.com/news?api_key=s3cret"
+
+
+class TestScrapeShowPromptEndpoint:
+    URL = "/settings/feeds/scrape-show-prompt"
+
+    def test_fetch_error_from_the_server_is_escaped(self, client):
+        # An HTTP error's message carries the reason phrase the fetched server sent,
+        # and HTMX runs any <script> it swaps in (with the page's nonce), so the
+        # error must reach the page as text.
+        import httpx
+
+        response = httpx.Response(
+            500, extensions={"reason_phrase": b"<script>alert(1)</script>"},
+            request=httpx.Request("GET", "https://evil.example/"),
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            error = exc
+        with patch("app.routers.web.settings.scrape.fetch_page_html",
+                   new=AsyncMock(side_effect=error)):
+            resp = client.post(self.URL, data={"url": "https://evil.example/"})
+
+        assert resp.status_code == 200
+        assert "<script>" not in resp.text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in resp.text

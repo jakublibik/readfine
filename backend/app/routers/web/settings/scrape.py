@@ -1,5 +1,7 @@
 """Web routes for the scrape-feed setup flow (preview, AI selector, subscribe)."""
 
+from html import escape
+
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -229,7 +231,9 @@ async def settings_scrape_show_prompt(
         html = await fetch_page_html(url, auth=auth)
         prompt = generate_selector_prompt(url, html)
     except Exception as e:
-        return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {e}</div>")
+        # Escaped: the error text can carry what the fetched server sent (the reason
+        # phrase of an HTTP error), and HTMX swaps this fragment into the page.
+        return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {escape(str(e))}</div>")
 
     return templates.TemplateResponse(request, "settings/partials/scrape_prompt.html", {
         "prompt": prompt,
