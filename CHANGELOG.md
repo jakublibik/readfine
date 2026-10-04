@@ -16,6 +16,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 - A feed whose server sent its response very slowly could stop all feed fetching on the instance until a restart, and a few such addresses could make logins hang. Every fetch now has an overall time limit, a feed that runs past it is recorded as a timeout and retried later like any other failure, and fetching runs separately from the rest of the app.
 - A labelled article could miss its AI score when Readfine switched off full-text extraction for a feed that already delivers whole articles. Such articles are now queued for scoring.
+- Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
 
 ### Security
 

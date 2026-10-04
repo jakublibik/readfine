@@ -62,16 +62,22 @@ def permanently_kept_predicate():
     )
 
 
-def permanently_kept_exists():
+def permanently_kept_exists(exclude_user_id: int | None = None):
     """Correlated EXISTS: *some* user keeps the current Article for good.
 
     Any-user semantics, so one reader starring or saving an article pins the row
     for the whole instance. Correlates on ``Article.id``, so the enclosing query
     must select from (or update/delete) ``articles``.
+
+    ``exclude_user_id`` leaves one user out: an account being deleted still has its
+    state rows until the cascade, and must not keep anything alive by them.
     """
+    conds = [UserArticleState.article_id == Article.id, permanently_kept_predicate()]
+    if exclude_user_id is not None:
+        conds.append(UserArticleState.user_id != exclude_user_id)
     return (
         select(UserArticleState.article_id)
-        .where(UserArticleState.article_id == Article.id, permanently_kept_predicate())
+        .where(*conds)
         .correlate(Article)
         .exists()
     )

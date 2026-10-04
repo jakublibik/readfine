@@ -887,8 +887,11 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     """Clean up all feed subscriptions for a user being deleted (no commit).
 
     For each subscription: removes UserArticleState rows, decrements subscriber_count,
-    and deletes the feed + its articles if no subscribers remain.
-    Called by admin delete_user before the user row is deleted.
+    and deletes the feed + its articles if no subscribers remain. Finally deletes the
+    feedless articles (saved by URL, or left behind by an earlier unsubscribe) that
+    only this account kept.
+    Called by admin delete_user and self-service account deletion before the user
+    row is deleted.
     """
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
@@ -896,8 +899,10 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     user_feeds = user_feeds_result.scalars().all()
 
     # Same rule as unsubscribe: an article another user keeps for good must outlive
-    # this account's feeds, and saving counts as keeping.
-    kept_by_someone = permanently_kept_exists()
+    # this account's feeds, and saving counts as keeping. Unlike unsubscribe, this
+    # account's own stars and saves do not count: its state rows are about to go with
+    # it, and an article kept only by them would be left behind with no owner.
+    kept_by_someone = permanently_kept_exists(exclude_user_id=user_id)
 
     for uf in user_feeds:
         feed_id = uf.feed_id
@@ -927,6 +932,17 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
                 delete(Article).where(Article.feed_id == feed_id, ~kept_by_someone)
             )
             await db.delete(feed)
+
+    # Feedless articles this account kept and nobody else does.
+    own_state = (
+        select(UserArticleState.article_id)
+        .where(UserArticleState.article_id == Article.id, UserArticleState.user_id == user_id)
+        .correlate(Article)
+        .exists()
+    )
+    await db.execute(
+        delete(Article).where(Article.feed_id.is_(None), own_state, ~kept_by_someone)
+    )
 
 
 async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> None:
