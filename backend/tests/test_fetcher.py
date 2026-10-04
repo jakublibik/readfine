@@ -738,6 +738,9 @@ class TestSafeUrl:
     def test_whitespace_stripped(self):
         assert _safe_url("  https://example.com/  ") == "https://example.com/"
 
+    def test_quote_and_brackets_percent_encoded(self):
+        assert _safe_url('https://e.com/a"><b c') == "https://e.com/a%22%3E%3Cb%20c"
+
 
 # ── feedparser entry mock ─────────────────────────────────────────────────────
 

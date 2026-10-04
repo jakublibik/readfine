@@ -1,3 +1,4 @@
+import html as html_lib
 import io
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
@@ -65,11 +66,29 @@ def normalize_url(url: str | None) -> str | None:
 
 
 def rewrite_relative_urls(html: str, base_url: str) -> str:
-    """Rewrite relative src/href attributes in sanitized HTML to absolute URLs."""
+    """Rewrite relative src/href attributes in sanitized HTML to absolute URLs.
+
+    Runs after the sanitizer, so whatever it writes goes out as it is: the joined
+    URL is escaped again here. The base is the article's address, which comes from
+    the feed, and a quote in it would otherwise close the attribute and put the rest
+    of the address into the page as markup.
+    """
     def _abs(m: re.Match) -> str:
         attr, url = m.group(1), m.group(2)
-        return f'{attr}="{urljoin(base_url, url)}"'
+        joined = urljoin(base_url, html_lib.unescape(url))
+        return f'{attr}="{html_lib.escape(joined, quote=True)}"'
     return re.sub(r'(src|href)="([^"]*)"', _abs, html)
+
+
+# Characters that are never valid in a URL as written (RFC 3986), which feeds and
+# scraped pages still hand over. Percent-encoding them keeps the address working
+# and keeps it from being anything but an address wherever it ends up.
+_URL_UNSAFE_RE = re.compile(r'[\x00-\x20"<>`\x7f]')
+
+
+def encode_unsafe_url_chars(url: str) -> str:
+    """Percent-encode quotes, angle brackets, whitespace and control characters."""
+    return _URL_UNSAFE_RE.sub(lambda m: f"%{ord(m.group()):02X}", url)
 
 
 # ── non-breaking space runs ───────────────────────────────────────────────────

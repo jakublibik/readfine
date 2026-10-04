@@ -43,6 +43,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Security
 
+- A feed could hide page code in an article's address (a quote ended the link and the rest became part of the article). Opening the article, or its shared link, ran that code in the reader's session with full access to their account. Addresses are now encoded, the article body can no longer trigger requests, and the upgrade cleans articles stored before.
 - A feed whose server answered with a bare address instead of a feed made Readfine fetch that address itself, past every check that keeps fetches off private networks and local files, and with no time limit. Anyone with an account could reach services inside your network this way and read what they returned as articles. A feed's response is now only ever read as content.
 - A feed with a username and password sent them to every site its articles linked to whenever full-text extraction fetched an article, over plain HTTP for `http://` links. Credentials now go only to the feed's own host.
 - A custom AI endpoint could answer with a response large enough to run the instance out of memory. Responses are now limited to the same size as feed downloads (`MAX_FETCH_BYTES`), and an endpoint that sends more fails with a message saying so.

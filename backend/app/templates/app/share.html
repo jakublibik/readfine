@@ -58,7 +58,7 @@
         </header>
 
         <!-- Content -->
-        <div class="prose max-w-none text-gray-800">
+        <div class="prose max-w-none text-gray-800" hx-disable>
           {% if article.readable_status == 'success' and article.readable_content %}
             {{ article.readable_content | video_thumbs }}
           {% elif article.content %}

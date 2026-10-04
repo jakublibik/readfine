@@ -15,7 +15,7 @@ from app.models.article import Article
 from app.models.feed import Feed
 from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA, run_outbound
-from app.utils.parsing import normalize_url, soften_nbsp_runs
+from app.utils.parsing import encode_unsafe_url_chars, normalize_url, soften_nbsp_runs
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -168,7 +168,7 @@ def extract_article_links(
         href = str(a.get("href", "")).strip()
         if not href or href.startswith(("javascript:", "mailto:", "#")):
             continue
-        url = urljoin(feed_url, href)
+        url = encode_unsafe_url_chars(urljoin(feed_url, href))
         if not url.startswith(("http://", "https://")):
             continue
         if url in seen_urls:

@@ -23,6 +23,7 @@ from app.utils.crypto import feed_auth
 from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.parsing import (
     count_words,
+    encode_unsafe_url_chars,
     normalize_url,
     parse_feed_body,
     rewrite_relative_urls,
@@ -688,4 +689,4 @@ def _safe_url(value: str | None, max_len: int = 2048) -> str | None:
     stripped = value.strip()
     if not stripped.lower().startswith(("http://", "https://")):
         return None
-    return stripped[:max_len]
+    return encode_unsafe_url_chars(stripped)[:max_len]
