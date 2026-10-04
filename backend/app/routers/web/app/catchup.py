@@ -515,10 +515,12 @@ async def htmx_briefing_modal_get(
     if not config:
         return HTMLResponse("Not found", status_code=404)
 
-    smtp_cfg = (await db.execute(
-        select(_AS.smtp_host, _AS.smtp_from_email).where(_AS.id == 1)
-    )).one_or_none()
-    smtp_available = bool(smtp_cfg and smtp_cfg[0] and smtp_cfg[1])
+    from app.services.briefing_service import extra_recipients_allowed
+
+    app_settings = await db.scalar(select(_AS).where(_AS.id == 1))
+    smtp_available = bool(
+        app_settings and app_settings.smtp_host and app_settings.smtp_from_email
+    )
 
     settings = (await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
@@ -530,6 +532,9 @@ async def htmx_briefing_modal_get(
         "smtp_available": smtp_available,
         "tz_str": tz_str,
         "is_admin": user.role == "admin",
+        "recipients_allowed": bool(
+            app_settings and extra_recipients_allowed(app_settings, user)
+        ),
     })
 
 
@@ -545,8 +550,12 @@ async def htmx_briefing_modal_save(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.models.settings import AppSettings as _AS
     from app.models.user import UserCatchupConfig
-    from app.services.briefing_service import compute_next_send_at
+    from app.services.briefing_service import (
+        MAX_BRIEFINGS_WITH_RECIPIENTS, compute_next_send_at, extra_recipients_allowed,
+        other_briefings_with_recipients,
+    )
 
     config = (await db.execute(
         select(UserCatchupConfig).where(
@@ -582,6 +591,14 @@ async def htmx_briefing_modal_save(
     except (ValueError, IndexError):
         return _validation_error("Invalid time format (use HH:MM).")
 
+    # Extra recipients only where the instance allows them. Where it does not,
+    # the field is not on the form, and what is stored stays as it is: sending
+    # ignores it, and it comes back if the admin allows recipients again.
+    app_settings = await db.scalar(select(_AS).where(_AS.id == 1))
+    recipients_allowed = bool(app_settings and extra_recipients_allowed(app_settings, user))
+    if not recipients_allowed and briefing_recipients and briefing_recipients.strip():
+        return _validation_error("Additional recipients are not enabled on this instance.")
+
     # Validate extra recipients
     extra_emails: list[str] = []
     if briefing_recipients:
@@ -594,6 +611,17 @@ async def htmx_briefing_modal_save(
                 return _validation_error(f"Invalid email address: {html_module.escape(addr)}")
         extra_emails = raw_emails
 
+    # The cap is on mail to other people, which is what could be abused; a
+    # briefing to one's own address only spams oneself. Admins are not held to it.
+    if (
+        briefing_enabled and extra_emails and user.role != "admin"
+        and await other_briefings_with_recipients(user.id, config.id, db) >= MAX_BRIEFINGS_WITH_RECIPIENTS
+    ):
+        return _validation_error(
+            f"You already have {MAX_BRIEFINGS_WITH_RECIPIENTS} briefings with additional "
+            f"recipients switched on. Turn one of them off or remove its recipients first."
+        )
+
     settings = (await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
     )).scalar_one_or_none()
@@ -603,7 +631,8 @@ async def htmx_briefing_modal_save(
     config.briefing_interval = briefing_interval
     config.briefing_day = briefing_day
     config.briefing_time = briefing_time
-    config.briefing_recipients = json.dumps(extra_emails) if extra_emails else None
+    if recipients_allowed:
+        config.briefing_recipients = json.dumps(extra_emails) if extra_emails else None
 
     if briefing_enabled:
         config.briefing_next_send_at = compute_next_send_at(

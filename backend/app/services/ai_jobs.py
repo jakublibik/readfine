@@ -67,6 +67,22 @@ async def ai_enabled_globally(db: AsyncSession) -> bool:
     return bool(await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1)))
 
 
+async def ai_work_held_back(user_id: int, db: AsyncSession) -> bool:
+    """Should no tokens be spent for this account right now?
+
+    A deactivated account, or a dormant one (dormancy_service): both still get
+    articles from a feed someone else keeps fetched, and nobody reads them.
+    Deactivation is asked separately because dormancy only ever applies to
+    active accounts.
+    """
+    from app.models.user import User
+    from app.services.dormancy_service import is_user_dormant
+
+    if not await db.scalar(select(User.is_active).where(User.id == user_id)):
+        return True
+    return await is_user_dormant(user_id, db)
+
+
 def extract_http_status(exc: Exception) -> int | None:
     """Best-effort extraction of an HTTP status code from a provider exception."""
     for attr in ("status_code", "http_status", "code"):

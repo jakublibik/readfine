@@ -12,7 +12,18 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Briefings now go to the account's own address only, unless you allow extra recipients with the new **Briefings to other addresses** in **Admin → Settings**. It is off after the upgrade. Recipients already saved are kept and are sent to again once you switch it on. Admins can always add them.
+
+### Changed
+
+- A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on at once. Briefings to your own address only, and those of admins, have no limit.
+
 ### Fixed
+
+- A custom AI endpoint that answered very slowly could hold up AI scores and summaries for every account on the instance. Each model call now has a time limit (2 minutes for a score, 5 for a summary, chat or context, 10 for a digest). A call that runs past it is retried later, and the rest of that run moves on to other accounts.
+- A deactivated account kept sending its scheduled briefings and spending its AI key on new articles. Both now stop until the account is reactivated.
 
 - A feed whose server sent its response very slowly could stop all feed fetching on the instance until a restart, and a few such addresses could make logins hang. Every fetch now has an overall time limit, a feed that runs past it is recorded as a timeout and retried later like any other failure, and fetching runs separately from the rest of the app.
 - A labelled article could miss its AI score when Readfine switched off full-text extraction for a feed that already delivers whole articles. Such articles are now queued for scoring.

@@ -280,6 +280,8 @@ def _ai_chat_error_message(exc: Exception) -> str:
         # The one failure here that "try again" cannot fix: it is a decision about
         # the address, not a hiccup, and the same answer comes back every time.
         return "The AI endpoint is at an address this instance is not allowed to reach."
+    if isinstance(exc, TimeoutError):
+        return "The AI model took too long to answer. Please try again."
     exc_str = str(exc)
     status = getattr(exc, "status_code", None)
     if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():

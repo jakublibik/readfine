@@ -271,6 +271,7 @@ async def admin_settings_save(
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
         "feedback_enabled": form.get("feedback_enabled") == "true",
+        "briefing_extra_recipients_enabled": form.get("briefing_extra_recipients_enabled") == "true",
         "traffic_stats_enabled": form.get("traffic_stats_enabled") == "true",
         "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
         "legal_contact_email": form.get("legal_contact_email", "").strip() or None,

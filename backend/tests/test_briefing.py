@@ -74,6 +74,7 @@ def make_app_settings(**kwargs):
         smtp_use_tls=True,
         smtp_password_encrypted=None,
         ai_enabled=True,
+        briefing_extra_recipients_enabled=False,
     )
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -520,7 +521,7 @@ class TestSendBriefing:
             briefing_recipients=json.dumps(["extra1@test.com", "extra2@test.com"])
         )
         user = make_user()
-        app_settings = make_app_settings()
+        app_settings = make_app_settings(briefing_extra_recipients_enabled=True)
         captured_to = []
         captured_bcc = []
 
@@ -561,7 +562,7 @@ class TestSendBriefing:
         from app.services.briefing_service import send_briefing
         config = make_config(briefing_recipients="not-json")
         user = make_user()
-        app_settings = make_app_settings()
+        app_settings = make_app_settings(briefing_extra_recipients_enabled=True)
         captured_to = []
 
         mock_article = SimpleNamespace(id=1, title="A", feed_title="F",
@@ -589,6 +590,57 @@ class TestSendBriefing:
                                     await send_briefing(config, user, mock_db, app_settings)
 
         assert captured_to == ["user@test.com"]
+
+
+class TestBriefingRecipientRules:
+    """Who a briefing may go to besides its owner (M4-02 in REVIEW_NOTES)."""
+
+    async def _send(self, config, user, app_settings, test_mode=False):
+        from app.services.briefing_service import send_briefing
+        sent = {}
+
+        def capture_send(s, to_list, subject, html_body, plain_body, bcc=None):
+            sent["to"] = list(to_list)
+            sent["bcc"] = list(bcc or [])
+
+        article = SimpleNamespace(id=1, title="A", feed_title="F",
+                                  published_at=None, fetched_at=datetime.now(timezone.utc),
+                                  folder_id=None, score=None, ai_summary=None,
+                                  readable_content=None, content="text")
+        db = AsyncMock()
+        db.add = MagicMock()
+        with (
+            patch("app.services.briefing_service.fetch_catchup_articles",
+                  new_callable=AsyncMock, return_value=[article]),
+            patch("app.services.ai_service.get_ai_client",
+                  new_callable=AsyncMock, return_value=(AsyncMock(), "anthropic", "claude-3")),
+            patch("app.services.briefing_service.apply_catchup_limit", return_value=[article]),
+            patch("app.services.briefing_service.build_articles_meta", return_value=[]),
+            patch("app.services.ai_service.catch_me_up",
+                  new_callable=AsyncMock, return_value=("text", 100, 50)),
+            patch("app.services.briefing_service.send_html_email", side_effect=capture_send),
+            patch("app.services.briefing_service._build_email_html", return_value="<html/>"),
+        ):
+            await send_briefing(config, user, db, app_settings, test_mode=test_mode)
+        return sent
+
+    def _config(self):
+        return make_config(briefing_recipients=json.dumps(["extra@test.com"]))
+
+    async def test_extra_recipients_dropped_when_instance_disallows_them(self):
+        sent = await self._send(self._config(), make_user(), make_app_settings())
+        assert sent == {"to": ["user@test.com"], "bcc": []}
+
+    async def test_admin_keeps_extra_recipients_regardless(self):
+        sent = await self._send(self._config(), make_user(role="admin"), make_app_settings())
+        assert sent["bcc"] == ["extra@test.com"]
+
+    async def test_test_send_goes_to_the_owner_only(self):
+        sent = await self._send(
+            self._config(), make_user(role="admin"),
+            make_app_settings(briefing_extra_recipients_enabled=True), test_mode=True,
+        )
+        assert sent == {"to": ["user@test.com"], "bcc": []}
 
 
 # ── Endpoint validation ───────────────────────────────────────────────────────
@@ -719,6 +771,108 @@ class TestBriefingEndpointValidation:
             )
 
         assert response.headers.get("HX-Trigger") == "closeBriefingModal"
+
+    async def _save(self, config, user, *, others=0, app_settings=None, **form):
+        from fastapi.responses import HTMLResponse
+
+        from app.routers.web.app.catchup import htmx_briefing_modal_save
+        from tests.conftest import make_mock_db, make_scalar_result
+
+        db = make_mock_db()
+        db.execute.side_effect = lambda stmt: (
+            make_scalar_result(config) if db.execute.call_count <= 1
+            else make_scalar_result(SimpleNamespace(timezone="UTC"))
+        )
+        db.scalar = AsyncMock(return_value=app_settings or make_app_settings())
+        args = dict(briefing_enabled=True, briefing_interval="daily", briefing_day=None,
+                    briefing_time="08:00", briefing_recipients=None)
+        args.update(form)
+        with (
+            patch("app.services.briefing_service.other_briefings_with_recipients",
+                  AsyncMock(return_value=others)),
+            patch("app.routers.web.app.catchup._catchup_configs_list_html",
+                  AsyncMock(return_value=HTMLResponse("<ul></ul>"))),
+        ):
+            return await htmx_briefing_modal_save(
+                config_id=1, request=MagicMock(), user=user, db=db, **args,
+            )
+
+    _ALLOWED = dict(briefing_extra_recipients_enabled=True)
+
+    @pytest.mark.asyncio
+    async def test_cap_on_briefings_with_recipients(self):
+        from app.services.briefing_service import MAX_BRIEFINGS_WITH_RECIPIENTS
+        config = make_config(briefing_enabled=False)
+        response = await self._save(
+            config, make_user(), others=MAX_BRIEFINGS_WITH_RECIPIENTS,
+            app_settings=make_app_settings(**self._ALLOWED),
+            briefing_recipients="x@test.com",
+        )
+        assert "HX-Retarget" in response.headers
+        assert "additional recipients" in response.body.decode()
+        assert config.briefing_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_no_cap_on_briefings_to_oneself(self):
+        """Without other recipients a briefing only reaches its owner, which nobody
+        else needs protecting from."""
+        from app.services.briefing_service import MAX_BRIEFINGS_WITH_RECIPIENTS
+        config = make_config(briefing_enabled=False)
+        response = await self._save(
+            config, make_user(), others=MAX_BRIEFINGS_WITH_RECIPIENTS * 10,
+            app_settings=make_app_settings(**self._ALLOWED),
+        )
+        assert response.headers.get("HX-Trigger") == "closeBriefingModal"
+        assert config.briefing_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_no_cap_for_admin(self):
+        from app.services.briefing_service import MAX_BRIEFINGS_WITH_RECIPIENTS
+        config = make_config(briefing_enabled=False)
+        response = await self._save(
+            config, make_user(role="admin"), others=MAX_BRIEFINGS_WITH_RECIPIENTS * 10,
+            briefing_recipients="x@test.com",
+        )
+        assert response.headers.get("HX-Trigger") == "closeBriefingModal"
+        assert config.briefing_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_cap_does_not_stop_switching_one_off(self):
+        from app.services.briefing_service import MAX_BRIEFINGS_WITH_RECIPIENTS
+        config = make_config(briefing_enabled=True)
+        response = await self._save(
+            config, make_user(), others=MAX_BRIEFINGS_WITH_RECIPIENTS,
+            app_settings=make_app_settings(**self._ALLOWED),
+            briefing_enabled=False, briefing_recipients="x@test.com",
+        )
+        assert response.headers.get("HX-Trigger") == "closeBriefingModal"
+        assert config.briefing_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_recipients_refused_where_the_instance_disallows_them(self):
+        config = make_config()
+        response = await self._save(config, make_user(), briefing_recipients="x@test.com")
+        assert "HX-Retarget" in response.headers
+        assert "not enabled" in response.body.decode()
+
+    @pytest.mark.asyncio
+    async def test_stored_recipients_survive_a_save_while_disallowed(self):
+        """The field is not on the form then, so its absence is not a request to clear."""
+        stored = json.dumps(["kept@test.com"])
+        config = make_config(briefing_recipients=stored)
+        response = await self._save(config, make_user())
+        assert response.headers.get("HX-Trigger") == "closeBriefingModal"
+        assert config.briefing_recipients == stored
+
+    @pytest.mark.asyncio
+    async def test_recipients_saved_where_allowed(self):
+        config = make_config()
+        await self._save(
+            config, make_user(),
+            app_settings=make_app_settings(briefing_extra_recipients_enabled=True),
+            briefing_recipients="a@test.com, b@test.com",
+        )
+        assert json.loads(config.briefing_recipients) == ["a@test.com", "b@test.com"]
 
     @pytest.mark.asyncio
     async def test_config_not_found_returns_404(self):

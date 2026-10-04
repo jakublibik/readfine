@@ -317,6 +317,21 @@
                {% if s.feedback_enabled %}checked{% endif %}
                class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
       </div>
+
+      <div class="flex items-start justify-between gap-4 pt-2 border-t border-gray-100">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Briefings to other addresses</label>
+          <p class="text-xs text-gray-400">
+            Let users add extra recipients to their scheduled briefings. Those addresses
+            never confirm anything and the user's own prompt shapes the text, so on an
+            instance open to registration this lets anyone send mail from your domain.
+            Admins can always add them.
+          </p>
+        </div>
+        <input type="checkbox" name="briefing_extra_recipients_enabled" value="true"
+               {% if s.briefing_extra_recipients_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
+      </div>
     </div>
   </section>
 

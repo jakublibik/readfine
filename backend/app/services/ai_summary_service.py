@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.user import UserSettings
 from app.services.ai_jobs import (
-    ON_DEMAND_MIN_CHARS, ai_enabled_globally, apply_job_failure, clear_last_ai_error,
-    normalize_text,
+    ON_DEMAND_MIN_CHARS, ai_enabled_globally, ai_work_held_back, apply_job_failure,
+    clear_last_ai_error, normalize_text,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,10 +57,7 @@ async def enqueue_summary_job(
     if len(full_text) < threshold:
         return False
 
-    # A dormant reader still gets articles from a feed someone awake keeps fetched,
-    # but nobody reads them, so no tokens are spent on them (dormancy_service).
-    from app.services.dormancy_service import is_user_dormant
-    if await is_user_dormant(user_id, db):
+    if await ai_work_held_back(user_id, db):
         return False
 
     result = await db.execute(
@@ -79,16 +76,17 @@ async def enqueue_summary_job(
 async def _execute_summary_job(
     job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime,
     pool=None,
-) -> None:
+) -> bool:
     """Process a single summary job — AI call + result write. Does not commit.
 
     *pool* is the batch's client pool when this runs as part of one; see
-    :func:`ai_scoring_service._execute_scoring_job`.
+    :func:`ai_scoring_service._execute_scoring_job`, which also explains the
+    return value.
     """
     if s is None or not s.ai_quality_provider or not s.ai_quality_model:
         job.status = "skipped"
         job.processed_at = now
-        return
+        return False
 
     # No length check here on purpose. Whether an article is worth summarizing is
     # settled when the job is created, by whoever created it: the pipeline against
@@ -101,12 +99,12 @@ async def _execute_summary_job(
         article.title, article.readable_content or article.content
     )[:s.ai_content_limit]
 
-    from app.services.ai_service import ai_client, summarize_article
+    from app.services.ai_service import AiCallTimeout, ai_client, summarize_article
     async with ai_client(job.user_id, "quality", db, pool) as (client, provider, model):
         if client is None:
             job.status = "skipped"
             job.processed_at = now
-            return
+            return False
 
         # Recorded before the call, so a failed attempt also says which model failed.
         job.provider = provider
@@ -140,6 +138,8 @@ async def _execute_summary_job(
 
         except Exception as exc:
             apply_job_failure(job, exc, now, operation="summary", settings=s)
+            return isinstance(exc, AiCallTimeout)
+    return False
 
 
 async def _stored_summary(user_id: int, article_id: int, db: AsyncSession) -> tuple[str | None, bool]:
@@ -238,8 +238,13 @@ async def process_pending_summaries(db: AsyncSession) -> int:
     from app.services.ai_service import AiClientPool
 
     processed = 0
+    # Same reason as in process_pending_scoring: one slow account must not make
+    # the rest of the batch wait a full budget per job.
+    timed_out: set[int] = set()
     async with AiClientPool() as pool:
         for job in jobs:
+            if job.user_id in timed_out:
+                continue
             article = articles_map.get(job.article_id)
             s = settings_map.get(job.user_id)
 
@@ -249,7 +254,8 @@ async def process_pending_summaries(db: AsyncSession) -> int:
                 processed += 1
                 continue
 
-            await _execute_summary_job(job, article, s, db, now, pool)
+            if await _execute_summary_job(job, article, s, db, now, pool):
+                timed_out.add(job.user_id)
             processed += 1
 
     await db.commit()

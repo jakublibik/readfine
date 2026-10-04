@@ -847,10 +847,17 @@ async def _send_due_briefings() -> None:
             return
 
         now = datetime.now(timezone.utc)
+        # A deactivated account keeps its configs but stops sending: deactivation
+        # is how an admin stops an account, and that includes the mail it has the
+        # instance send. Its due briefings simply wait; reactivated, each sends
+        # once and returns to its schedule.
         due_ids = (await session.execute(
-            select(UserCatchupConfig.id).where(
+            select(UserCatchupConfig.id)
+            .join(User, User.id == UserCatchupConfig.user_id)
+            .where(
                 UserCatchupConfig.briefing_enabled.is_(True),
                 UserCatchupConfig.briefing_next_send_at <= now,
+                User.is_active.is_(True),
             )
         )).scalars().all()
 

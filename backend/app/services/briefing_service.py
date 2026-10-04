@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import css_inline
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_config
@@ -41,6 +41,37 @@ _PERIOD_LABELS = {
 }
 
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+# Briefings with additional recipients one account may have switched on at once.
+# Only those count: mail to other people is what could be abused, and a briefing
+# to one's own address bothers nobody else. Generous for real use (a daily and a
+# weekly for a few people), and it puts a ceiling on how much mail one account
+# can have the instance send to others. Admins are exempt.
+MAX_BRIEFINGS_WITH_RECIPIENTS = 5
+
+
+def extra_recipients_allowed(app_settings: AppSettings, user: User) -> bool:
+    """May this account's briefings go to addresses other than its own?
+
+    Off unless the admin allows it, because the extra addresses never confirm
+    anything and the text follows the user's own prompt: on an open instance
+    that is anyone sending mail of their choosing from the instance's domain.
+    Admins are trusted with it either way.
+    """
+    return bool(app_settings.briefing_extra_recipients_enabled) or user.role == "admin"
+
+
+async def other_briefings_with_recipients(user_id: int, config_id: int, db: AsyncSession) -> int:
+    """How many of the user's other configs have a briefing with additional
+    recipients switched on."""
+    return int(await db.scalar(
+        select(func.count()).select_from(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user_id,
+            UserCatchupConfig.id != config_id,
+            UserCatchupConfig.briefing_enabled.is_(True),
+            UserCatchupConfig.briefing_recipients.isnot(None),
+        )
+    ) or 0)
 
 
 def compute_next_send_at(
@@ -296,8 +327,14 @@ async def send_briefing(
         public_url=app_config.public_url,
     )
 
+    # A test goes to the account itself only: it is the button that can be pressed
+    # every minute, and checking how the digest reads needs no one else.
     extra_recipients: list[str] = []
-    if config.briefing_recipients:
+    if (
+        config.briefing_recipients
+        and not test_mode
+        and extra_recipients_allowed(app_settings, user)
+    ):
         try:
             extra_recipients = json.loads(config.briefing_recipients) or []
         except (json.JSONDecodeError, TypeError):

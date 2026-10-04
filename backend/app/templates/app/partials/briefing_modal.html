@@ -68,7 +68,8 @@
       </p>
     </div>
 
-    {# Additional recipients — collapsible #}
+    {# Additional recipients — collapsible, only where the instance allows them #}
+    {% if recipients_allowed %}
     <details class="text-sm" {% if config.briefing_recipients %}open{% endif %}>
       <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">Additional recipients</summary>
       <div class="mt-2">
@@ -76,9 +77,10 @@
                value="{% if config.briefing_recipients %}{{ config.briefing_recipients | parse_json_list | join(', ') }}{% endif %}"
                placeholder="email1@example.com, email2@example.com"
                class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included. Additional recipients are added as Bcc, so they can't see each other.</p>
+        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included. Additional recipients are added as Bcc, so they can't see each other. A test briefing goes to your own address only.</p>
       </div>
     </details>
+    {% endif %}
 
     {# Status info #}
     {% if config.briefing_last_sent_at or config.briefing_last_error %}

@@ -62,6 +62,45 @@ class ModelCannotSkipThinking(Exception):
         )
 
 
+class AiCallTimeout(TimeoutError):
+    """A model call ran past its wall-clock budget (see ``_within_budget``).
+
+    A TimeoutError, so everything that already knows what a timeout is reads it
+    as one: the job retry policy backs off instead of failing for good, and
+    ``_friendly_ai_error`` says to try again. It carries a message because the
+    bare TimeoutError ``asyncio.wait_for`` raises has none, and this one ends up
+    in a job's error field and the user's banner.
+    """
+
+
+# Wall-clock budgets for one model call, retries included.
+#
+# The SDKs' own timeouts are per read, not per request: a server that keeps the
+# connection alive by sending a byte now and then never trips them, and each
+# SDK retries a timeout twice on top. The custom provider may point anywhere
+# public, so without a cap one account could hold a call open indefinitely, and
+# with it the scoring or summary batch every other account waits behind (the
+# batches run one at a time). The numbers leave room for a local model on CPU,
+# which is the slowest thing that legitimately answers here: a score is ten
+# tokens, a summary or a chat reply is minutes at worst, and a digest asks for
+# up to 8000 tokens.
+_SCORING_BUDGET_SECONDS = 120
+_TEXT_BUDGET_SECONDS = 300
+_DIGEST_BUDGET_SECONDS = 600
+
+
+async def _within_budget(coro, seconds: float):
+    """Await *coro*, cancelling it and raising AiCallTimeout after *seconds*."""
+    try:
+        return await asyncio.wait_for(coro, seconds)
+    except TimeoutError as exc:
+        if isinstance(exc, AiCallTimeout):
+            raise
+        raise AiCallTimeout(
+            f"The model did not finish answering within {int(seconds)} seconds."
+        ) from exc
+
+
 def _extract_text(provider: str, resp) -> str:
     """Safely pull the text out of a provider response, raising
     ProviderEmptyResponse when content is missing/empty."""
@@ -458,6 +497,7 @@ _CUSTOM_CLIENT_TIMEOUT = (5.0, 600.0)
 # attempts buy nothing here: a server still loading its model fails all three, and
 # the user is being told to try again anyway.
 _VERIFY_CLIENT_KWARGS = {"read_timeout": 60.0, "max_retries": 0}
+_VERIFY_BUDGET_SECONDS = 90
 
 
 def _make_custom_client(
@@ -949,29 +989,33 @@ async def verify_ai_slot(
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 
-    try:
+    async def _greet():
         if provider == "anthropic":
-            resp = await _anthropic_create(
+            return await _anthropic_create(
                 client,
                 model=model,
                 max_tokens=_VERIFY_MAX_TOKENS,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-        elif provider in _OPENAI_WIRE:
+        if provider in _OPENAI_WIRE:
             # Thinking off for the check itself: it asks for a greeting, and a
             # local model that reasons first would spend the 200 tokens on that
             # and report the whole slot as broken when nothing is wrong with it.
-            resp = await _openai_wire_create(
+            return await _openai_wire_create(
                 client, provider, True,
                 model=model,
                 messages=[{"role": "user", "content": "Hi"}],
                 **_openai_token_kwargs(provider, model, _VERIFY_MAX_TOKENS),
             )
-        elif provider == "gemini":
-            resp = await client.aio.models.generate_content(
-                model=model,
-                contents="Hi",
-            )
+        return await client.aio.models.generate_content(
+            model=model,
+            contents="Hi",
+        )
+
+    try:
+        # The read timeout above is per read, so it is held to a total as well:
+        # the same reasoning as the job budgets, at Verify's own patience.
+        resp = await _within_budget(_greet(), _VERIFY_BUDGET_SECONDS)
         # Read the answer, don't just touch the envelope: a model that accepts the
         # request and then writes nothing (all of its budget spent reasoning) used
         # to pass this check, so the slot reported OK while every real call failed.
@@ -998,7 +1042,8 @@ async def score_article(
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
     answer = await _complete(
-        prompt, client, provider, model, max_tokens=10, require_thinking_off=True
+        prompt, client, provider, model, max_tokens=10, require_thinking_off=True,
+        budget=_SCORING_BUDGET_SECONDS,
     )
     raw = answer.text
     # Extract the first decimal number — tolerates models that wrap the score in
@@ -1085,6 +1130,19 @@ async def chat_with_article(
     model: str,
 ) -> tuple[str, int, int]:
     """Multi-turn chat. Returns (text, input_tokens, output_tokens)."""
+    return await _within_budget(
+        _chat_unbounded(messages, article_content, client, provider, model),
+        _TEXT_BUDGET_SECONDS,
+    )
+
+
+async def _chat_unbounded(
+    messages: list[dict],
+    article_content: str | None,
+    client,
+    provider: str,
+    model: str,
+) -> tuple[str, int, int]:
     if article_content:
         system_prompt = (
             "You are a helpful assistant discussing the following article. "
@@ -1202,7 +1260,10 @@ async def catch_me_up(
         )
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)
+    answer = await _complete(
+        full_prompt, client, provider, model, max_tokens=8000,
+        budget=_DIGEST_BUDGET_SECONDS,
+    )
     return answer.text, answer.input_tokens, answer.output_tokens
 
 
@@ -1619,6 +1680,21 @@ async def _anthropic_create(
 
 
 async def _complete(
+    prompt: str, client, provider: str, model: str, max_tokens: int = 500,
+    reasoning_headroom: int = 0, require_thinking_off: bool = False,
+    budget: float = _TEXT_BUDGET_SECONDS,
+) -> Completion:
+    """:func:`_complete_unbounded`, held to *budget* seconds of wall clock."""
+    return await _within_budget(
+        _complete_unbounded(
+            prompt, client, provider, model, max_tokens,
+            reasoning_headroom, require_thinking_off,
+        ),
+        budget,
+    )
+
+
+async def _complete_unbounded(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500,
     reasoning_headroom: int = 0, require_thinking_off: bool = False,
 ) -> Completion:

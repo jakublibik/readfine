@@ -8,6 +8,17 @@ import pytest
 from app.services.ai_service import AiClientPool, Completion
 
 
+@pytest.fixture(autouse=True)
+def _account_active():
+    """Every account here is active and awake. The db mocks below answer a fixed
+    sequence of queries about the article, and whether AI work is held back for
+    the account is a question of its own, tested in test_dormancy."""
+    held = AsyncMock(return_value=False)
+    with patch("app.services.ai_scoring_service.ai_work_held_back", held), \
+            patch("app.services.ai_summary_service.ai_work_held_back", held):
+        yield
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def make_article(**kwargs):
