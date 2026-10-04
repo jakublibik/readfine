@@ -9,7 +9,7 @@ import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -143,17 +143,39 @@ async def save_article_by_url(
         # deterministic. Without an ORDER BY you can end up attached to a copy from a
         # feed you don't subscribe to while your own copy sits right there, and Saved
         # then shows a feed name you don't recognise.
-        from app.models.feed import UserFeed
+        #
+        # Matching hands the saver access to the row's body, so the match is limited to
+        # rows anyone may read: your own subscription, a public feed, or a feedless row
+        # somebody saved by URL. A private feed's article was fetched with its one
+        # subscriber's credentials, and knowing its public address must not be enough
+        # to read the copy they paid for. An orphan (feed_id NULL after an unsubscribe)
+        # may come from such a feed and no longer says so, so it only counts when it is
+        # a saved row. Anything else builds a fresh article and extracts it as you.
+        from app.models.feed import Feed, UserFeed
 
+        saved_by_url = (
+            select(UserArticleState.article_id)
+            .where(
+                UserArticleState.article_id == Article.id,
+                UserArticleState.saved_at.is_not(None),
+            )
+            .exists()
+        )
         existing = await db.scalar(
             select(Article)
             .outerjoin(
                 UserFeed,
                 (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id),
             )
+            .outerjoin(Feed, Feed.id == Article.feed_id)
             .where(
                 Article.url_normalized == normalized,
                 Article.trimmed_at.is_(None),
+                or_(
+                    UserFeed.id.is_not(None),
+                    Feed.is_private.is_(False),
+                    and_(Article.feed_id.is_(None), saved_by_url),
+                ),
             )
             .order_by(
                 UserFeed.id.is_(None),                      # a copy you subscribe to wins
@@ -242,7 +264,11 @@ async def unsave_article(article_id: int, user_id: int, db: AsyncSession) -> Non
         )
     )
     if state is not None:
+        from app.services.article import drop_unreachable_labels
+
         state.saved_at = None
+        await db.flush()
+        await drop_unreachable_labels(db, user_id, [article_id])
         await db.commit()
 
 

@@ -18,7 +18,9 @@ from app.models.article import SUPPRESSED_BY_BACKLOG, Article, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
-from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.article import (
+    drop_unreachable_labels, permanently_kept_exists, permanently_kept_predicate,
+)
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
@@ -843,8 +845,12 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
         )
     )
 
-    # 2. Delete the subscription
+    # 2. Delete the subscription, and the user's labels on what it alone gave them
     await db.delete(user_feed)
+    await db.flush()
+    await drop_unreachable_labels(
+        db, user.id, select(Article.id).where(Article.feed_id == feed_id)
+    )
 
     # 3. Atomically decrement subscriber_count (floor 0)
     await db.execute(

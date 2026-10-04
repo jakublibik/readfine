@@ -654,6 +654,43 @@ class TestDedupPicksDeterministically:
         article, _ = await self._save(pg, user, url)
         assert article.id == good.id
 
+    async def test_private_feed_copy_is_not_handed_out(self, pg):
+        """Its body was fetched with someone else's credentials; knowing the public
+        address must not be enough to read it."""
+        user, url = await self._fixtures(pg)
+        private = await self._feed(pg, None)
+        private.is_private = True
+        theirs = await self._copy(pg, private, url)
+
+        article, known = await self._save(pg, user, url)
+        assert known is False
+        assert article.id != theirs.id
+        assert article.feed_id is None
+
+    async def test_private_feed_copy_is_used_by_its_own_subscriber(self, pg):
+        user, url = await self._fixtures(pg)
+        private = await self._feed(pg, user)
+        private.is_private = True
+        mine = await self._copy(pg, private, url)
+
+        article, known = await self._save(pg, user, url)
+        assert known is True
+        assert article.id == mine.id
+
+    async def test_orphan_only_matches_when_someone_saved_it(self, pg):
+        """An orphan may come from a private feed and no longer says so."""
+        user, url = await self._fixtures(pg)
+        orphan = await self._copy(pg, await self._feed(pg, None), url)
+        orphan.feed_id = None
+        await pg.flush()
+
+        article, known = await self._save(pg, user, url)
+        assert known is False and article.id != orphan.id
+
+        other, _ = await self._fixtures(pg)
+        again, known = await self._save(pg, other, url)
+        assert known is True and again.id == article.id, "a saved feedless row is shared"
+
     async def test_trimmed_copy_is_skipped_even_when_subscribed(self, pg):
         """The stub is hidden by list_articles, so attaching to it would save into a
         black hole — it must lose to any usable row."""

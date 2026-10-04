@@ -825,7 +825,13 @@ async def render_list(
 
     extra_headers: dict[str, str] = {}
     if feed_id is not None:
-        feed_obj = await db.get(Feed, feed_id)
+        # Only a feed the reader subscribes to: the message quotes the feed's address,
+        # and any other id would hand out someone else's.
+        feed_obj = await db.scalar(
+            select(Feed)
+            .join(UserFeed, (UserFeed.feed_id == Feed.id) & (UserFeed.user_id == user.id))
+            .where(Feed.id == feed_id)
+        )
         if feed_obj and feed_obj.status in ("error", "disabled") and feed_obj.last_error:
             extra_headers["HX-Trigger"] = json.dumps(
                 {"showToast": {"msg": feed_obj.last_error[:150], "type": "warning"}}

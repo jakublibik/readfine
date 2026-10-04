@@ -28,9 +28,12 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A feed whose server sent its response very slowly could stop all feed fetching on the instance until a restart, and a few such addresses could make logins hang. Every fetch now has an overall time limit, a feed that runs past it is recorded as a timeout and retried later like any other failure, and fetching runs separately from the rest of the app.
 - A labelled article could miss its AI score when Readfine switched off full-text extraction for a feed that already delivers whole articles. Such articles are now queued for scoring.
 - Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
+- After you unsubscribed from a feed, or unstarred or unsaved an article that no longer had a feed, its labels stayed. The article then sat in the label's list, could not be opened or marked read, and kept the label's unread count up. Labels now go with your access to the article, and the upgrade removes the ones left over.
 
 ### Security
 
+- Saving a link in **Saved** could give you the full text of an article that another account had fetched from a private feed (one with a password or a private address). Such a link is now fetched again as you.
+- Opening the article list with the id of a feed you don't follow showed that feed's last error, which includes its address. It now shows nothing.
 - Feed and article addresses can no longer reach the 100.64.0.0/10 range (carrier-grade NAT, also used by Tailscale networks). Readfine now refuses every address that is not on the public internet.
 
 ## [0.20.0] - 2026-10-04

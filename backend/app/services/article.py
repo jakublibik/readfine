@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import Text, and_, cast, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy import Text, and_, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,6 +94,41 @@ def article_access_predicate():
     matched.
     """
     return UserFeed.id.is_not(None) | permanently_kept_predicate()
+
+
+async def drop_unreachable_labels(db: AsyncSession, user_id: int, article_ids) -> None:
+    """Delete this user's labels on those of ``article_ids`` they can no longer reach.
+
+    A label view lists by ``ArticleLabel`` alone, so a label left on an article the
+    reader lost access to keeps it in that list while the detail, the read toggle and
+    mark-all-read all refuse it, and the label's unread badge never clears. Called
+    wherever access is given up: unsubscribing, and taking the star, archive or save
+    off an article that has no subscription behind it. ``article_ids`` is a list or a
+    SELECT of ids. Does not commit; flush first, since the check reads the database.
+    """
+    subscribed = (
+        select(UserFeed.id)
+        .join(Article, Article.feed_id == UserFeed.feed_id)
+        .where(Article.id == ArticleLabel.article_id, UserFeed.user_id == ArticleLabel.user_id)
+        .exists()
+    )
+    kept = (
+        select(UserArticleState.article_id)
+        .where(
+            UserArticleState.article_id == ArticleLabel.article_id,
+            UserArticleState.user_id == ArticleLabel.user_id,
+            permanently_kept_predicate(),
+        )
+        .exists()
+    )
+    await db.execute(
+        delete(ArticleLabel).where(
+            ArticleLabel.user_id == user_id,
+            ArticleLabel.article_id.in_(article_ids),
+            ~subscribed,
+            ~kept,
+        )
+    )
 
 
 _SNIPPET_LEN = 200
@@ -1100,6 +1135,10 @@ async def toggle_article_state(
     if field == "is_starred":
         _apply_star_side_effects(state, article, starred=new_value, extract_readable=bool(extract_readable))
 
+    if field in ("is_starred", "is_archived") and not new_value:
+        await db.flush()
+        await drop_unreachable_labels(db, user.id, [article_id])
+
     await db.commit()
     await db.refresh(state)
     labels = await _fetch_labels(article_id, user.id, db)
@@ -1155,6 +1194,10 @@ async def update_article_state(
         # goes through that path and not this one, since unsaving it took away the
         # access this write needs.
         state.saved_at = datetime.now(timezone.utc) if payload.is_saved else None
+
+    if False in (payload.is_starred, payload.is_archived, payload.is_saved):
+        await db.flush()
+        await drop_unreachable_labels(db, user.id, [article_id])
 
     await db.commit()
     await db.refresh(state)
