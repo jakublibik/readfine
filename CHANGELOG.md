@@ -38,9 +38,11 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Articles you scrolled past just before closing the tab could stay unread.
 - A failed OPML import (too many imports in an hour, a file too large) replaced the whole page with the raw error. It now shows a message and leaves the page as it was. Renaming or deleting a saved **Catch me up** configuration no longer replaces the list with an error text when it fails.
 - A label name containing `<` showed up mangled in the action list of a new filter rule.
+- **Catch me up** could show a server error, after the digest was already generated, when the configuration it ran from had been deleted in another tab.
 
 ### Security
 
+- An API token, or a token from `POST /api/v1/auth/token`, also worked on every page of the web app. Anyone holding an admin's token could open **Admin** and create more tokens that outlived the revoked one. Tokens now work on `/api/v1` only. Scripts that called web pages with a token have to move to the API.
 - **Show AI prompt** in the scrape feed setup could run a script sent by the site being scraped, if that site answered with an error. The error is now shown as plain text.
 - A filter with a badly written regex could freeze the whole instance for minutes, for every account, when it was tested, applied or run on new articles. A regex that runs too long now switches its filter off at once, and **Settings → Filters** marks it "regex too slow". Fix the pattern and turn the filter back on. Testing and applying filters, and loading the term suggestions in **Settings → Relevance**, are now rate limited too.
 - Saving a link in **Saved** could give you the full text of an article that another account had fetched from a private feed (one with a password or a private address). Such a link is now fetched again as you.
@@ -52,6 +54,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - `setup.sh` generated an `ENCRYPTION_KEY` with only half the strength it should have. New installs get a full-strength key. An existing key keeps working, and changing it would make stored passwords and API keys unreadable, so leave it as it is.
 - Feed and article addresses can no longer reach the 100.64.0.0/10 range (carrier-grade NAT, also used by Tailscale networks). Readfine now refuses every address that is not on the public internet.
 - The nginx config written by `setup.sh` for a domain now sends `Strict-Transport-Security`, so browsers stop trying plain HTTP. To get it on an existing install, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of your `nginx.conf`.
+- On a private feed with more than one subscriber, any of them could change the fetch interval or the scrape selector for everybody. These are now the sole subscriber's to change (and an admin's, for the interval), like the address and the password.
+- Shared article links kept working after an admin deactivated the account that shared them. They now stop with the account.
 
 ## [0.20.0] - 2026-10-04
 

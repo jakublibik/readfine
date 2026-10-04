@@ -287,7 +287,16 @@ async def htmx_catchup_generate(
             reason = str(find_blocked_address(exc) or exc)
             return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
 
-    # Log the run
+    # Log the run. The config id comes from the form: one the reader does not own, or
+    # one deleted meanwhile in another tab, is logged as no config rather than failing
+    # the foreign key after the AI call has already been paid for.
+    if config_id is not None:
+        from app.models.user import UserCatchupConfig
+        config_id = await db.scalar(
+            select(UserCatchupConfig.id).where(
+                UserCatchupConfig.id == config_id, UserCatchupConfig.user_id == user.id,
+            )
+        )
     log = CatchupLog(
         user_id=user.id,
         config_id=config_id,

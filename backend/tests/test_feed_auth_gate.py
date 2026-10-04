@@ -15,7 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.feed import SharedPrivateFeed, attach_subscriber, may_edit_feed_auth
+from app.services.feed import (
+    SharedPrivateFeed, attach_subscriber, may_edit_feed_auth, may_edit_feed_settings,
+)
 
 
 def _feed(**kwargs):
@@ -45,6 +47,16 @@ class TestMayEditFeedAuth:
 
     def test_shared_public_feed_may_not(self):
         assert may_edit_feed_auth(_feed(is_private=False, subscriber_count=3)) is False
+
+
+class TestMayEditFeedSettings:
+    def test_sole_subscriber_may(self):
+        assert may_edit_feed_settings(_feed(is_private=True, subscriber_count=1)) is True
+
+    def test_shared_private_feed_may_not(self):
+        # Interval and selector used to be open to any subscriber of a private feed;
+        # on a shared one (migration 0090) a dead selector stops it for everybody.
+        assert may_edit_feed_settings(_feed(is_private=True, subscriber_count=2)) is False
 
 
 @pytest.mark.asyncio

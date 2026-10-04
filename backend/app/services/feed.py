@@ -174,6 +174,19 @@ def may_edit_feed_url(feed: Feed) -> bool:
     return feed.subscriber_count == 1
 
 
+def may_edit_feed_settings(feed: Feed) -> bool:
+    """Whether a subscriber may change the feed-wide fetch settings of *feed*: the
+    fetch interval and a scrape feed's link selector.
+
+    Sole subscriber only, like the address and the credentials. Both used to be open to
+    any subscriber of a private feed, but a private row can still be shared (see
+    :func:`may_edit_feed_auth`), and on one of those a selector that matches nothing
+    stops the feed for everybody. The interval has an admin exception, applied by the
+    caller.
+    """
+    return feed.subscriber_count == 1
+
+
 async def _verify_feed_url(
     url: str, *, feed_type: str, selector: str | None, auth
 ) -> str:

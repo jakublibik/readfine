@@ -24,6 +24,7 @@ from app.services.feed import (
     cache_feed_preview,
     change_feed_url,
     may_edit_feed_auth,
+    may_edit_feed_settings,
     may_edit_feed_url,
     subscribe,
     unsubscribe,
@@ -331,7 +332,7 @@ async def _feed_edit_page(
             max_interval_min=max_interval,
         ),
         "is_sole_subscriber": is_sole_subscriber,
-        "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
+        "can_edit_interval": user.role == "admin" or may_edit_feed_settings(uf.feed),
         # Same function the POST handler gates on, so the form cannot offer a field the
         # save would then ignore.
         "can_edit_auth": may_edit_feed_auth(uf.feed),
@@ -433,17 +434,16 @@ async def settings_feed_update(
     if form.get("ai_summary_enabled_present") == "1":
         uf.ai_summary_enabled = form.get("ai_summary_enabled") == "on"
 
-    # Interval is feed-wide. Only let the user change it when the feed is
-    # effectively theirs (private or sole subscriber) or they're an admin;
-    # on a shared public feed it's read-only (see feed_edit.html).
-    if user.role == "admin" or uf.feed.is_private or uf.feed.subscriber_count == 1:
+    # Interval is feed-wide: the sole subscriber's or an admin's to change, read-only
+    # on a shared feed (see services.feed.may_edit_feed_settings and feed_edit.html).
+    if user.role == "admin" or may_edit_feed_settings(uf.feed):
         interval_raw = safe_int(form.get("fetch_interval_min"))
         if interval_raw is not None:
             uf.feed.fetch_interval_min = _snap_interval(interval_raw)
         else:
             uf.feed.fetch_interval_min = None
 
-    # Unlike the interval above, credentials are a sole subscriber's to change; see
+    # Credentials are a sole subscriber's to change, with no admin exception; see
     # services.feed.may_edit_feed_auth for why, and feed_edit.html, which hides the
     # fields under the same rule and tells a shared feed's subscriber how to get a
     # credentialed copy of their own.
@@ -456,7 +456,7 @@ async def settings_feed_update(
         if (fetch_auth_user or fetch_auth_pass) and not uf.feed.is_private:
             uf.feed.is_private = True
 
-    if uf.feed.feed_type == "scrape" and (uf.feed.is_private or uf.feed.subscriber_count == 1):
+    if uf.feed.feed_type == "scrape" and may_edit_feed_settings(uf.feed):
         new_selector = form.get("article_links_selector", "").strip()
         if new_selector:
             uf.feed.type_config = {**(uf.feed.type_config or {}), "article_links_selector": new_selector}

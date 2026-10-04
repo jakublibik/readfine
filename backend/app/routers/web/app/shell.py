@@ -28,6 +28,7 @@ from app.services.search_params import modal_values, normalize_search_params
 from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
 from app.services.user import FEEDS_RESUMED_SESSION_KEY, touch_last_active
 from app.templating import templates
+from app.utils.parsing import safe_int
 
 from .common import _ai_availability, _badge_html, _badge_total_html
 
@@ -291,15 +292,19 @@ async def htmx_mark_articles_read(
         before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
     except ValueError:
         return HTMLResponse("", status_code=400)
+    lid = safe_int(label_id)
+    if label_id and lid is None:
+        # Not a missing label but a garbled one: falling back to None would widen the
+        # scope to every subscribed article.
+        return HTMLResponse("", status_code=400)
     await mark_scope_read(
         user, db, before=before_dt,
         starred_only=starred_only == "1",
         archived_only=archived_only == "1",
         saved_only=saved_only == "1",
         labeled_only=labeled_only == "1",
-        label_id=int(label_id) if label_id else None,
+        label_id=lid,
     )
-    lid = int(label_id) if label_id else None
     total = await _mark_read_total(
         user, db, starred_only == "1", archived_only == "1", saved_only == "1",
         labeled_only == "1", lid,
