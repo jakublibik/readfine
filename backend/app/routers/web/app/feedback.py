@@ -1,4 +1,5 @@
 """User feedback / bug report modal."""
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -100,7 +101,9 @@ async def htmx_feedback_submit(
     try:
         # One SMTP transaction to all admins: avoids per-admin latency and the
         # partial-send case where some admins get the message and others don't.
-        send_email(s, to=admin_emails, subject=mail_subject, body=body, reply_to=user.email)
+        await asyncio.to_thread(
+            send_email, s, to=admin_emails, subject=mail_subject, body=body, reply_to=user.email,
+        )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to send feedback email: %s", e)
         return _form("Sorry, we couldn't send your message. Please try again later.", status_code=502)

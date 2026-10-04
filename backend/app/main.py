@@ -37,6 +37,13 @@ async def lifespan(app: FastAPI):
             "NOT marked Secure, /docs is exposed, and the insecure-config guard "
             "is bypassed. Never run with DEBUG=true in production."
         )
+    elif not settings.session_cookie_is_secure:
+        import logging
+        logging.getLogger(__name__).warning(
+            "SESSION_COOKIE_SECURE=false: the session cookie also travels over plain "
+            "HTTP, where anyone on the network can read it. Fine for a home LAN, "
+            "not for an instance reachable from the internet."
+        )
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=20))
     db.engine = db.create_engine(settings.database_url)
     db.async_session_factory = db.create_session_factory(db.engine)
@@ -105,7 +112,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.secret_key,
-        https_only=not settings.debug,
+        https_only=settings.session_cookie_is_secure,
         same_site="lax",
         # Sliding expiry, re-stamped on each response; see session_max_age_days.
         max_age=settings.session_max_age_days * 24 * 3600,

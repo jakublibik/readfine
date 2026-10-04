@@ -1,6 +1,7 @@
 """Briefing service: scheduled email digest per UserCatchupConfig."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import smtplib
@@ -343,7 +344,10 @@ async def send_briefing(
     # The account owner set up the briefing, so they go in the visible To:;
     # extra recipients go to Bcc so subscribers don't see each other.
     # May raise smtplib.SMTPException — caller handles
-    send_html_email(app_settings, [user.email], subject, html_body, text, bcc=extra_recipients)
+    # Off the event loop: a slow SMTP server would otherwise hold up the whole app.
+    await asyncio.to_thread(
+        send_html_email, app_settings, [user.email], subject, html_body, text, bcc=extra_recipients,
+    )
 
     db.add(CatchupLog(
         user_id=user.id,

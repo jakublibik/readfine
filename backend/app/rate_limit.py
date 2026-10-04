@@ -74,8 +74,14 @@ def record_failed_login(ip: str, email: str) -> bool:
     key = (ip, email.lower())
     with _lock:
         entry = _failed_attempts[key]
+        now = time.monotonic()
+        # A lockout that has run out starts the count again. Left at the threshold,
+        # every single miss afterwards would lock the account for another 15 minutes.
+        if entry["locked_until"] and now >= entry["locked_until"]:
+            entry["count"] = 0
+            entry["locked_until"] = None
         entry["count"] += 1
-        entry["last_attempt"] = time.monotonic()
+        entry["last_attempt"] = now
         if entry["count"] >= _LOCKOUT_THRESHOLD:
             entry["locked_until"] = time.monotonic() + _LOCKOUT_SECONDS
             return True

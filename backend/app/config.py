@@ -160,6 +160,18 @@ class Settings(BaseSettings):
     # (see session_token_version).
     session_max_age_days: int = 30
 
+    # Whether the session cookie is marked Secure (sent over HTTPS only). Unset, it
+    # follows DEBUG: on in production, off in dev. A browser refuses a Secure cookie
+    # from a plain-HTTP page other than localhost, so an install reached over HTTP by
+    # its IP address (a home server on the LAN) needs it off to be able to log in.
+    session_cookie_secure: bool | None = None
+
+    @property
+    def session_cookie_is_secure(self) -> bool:
+        if self.session_cookie_secure is None:
+            return not self.debug
+        return self.session_cookie_secure
+
     # Rate limiting
     rate_limit_login: str = "5/minute"
     rate_limit_register: str = "3/hour"

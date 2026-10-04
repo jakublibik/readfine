@@ -140,7 +140,10 @@ cp /etc/letsencrypt/live/your-domain.com/fullchain.pem certs/cert.pem
 cp /etc/letsencrypt/live/your-domain.com/privkey.pem   certs/cert.key
 ```
 
-> Skip this step entirely if you're installing on an IP address (HTTP only).
+> Skip this step entirely if you're installing on an IP address (HTTP only). That suits a
+> home network: setup then sets `SESSION_COOKIE_SECURE=false`, since a browser won't keep
+> an HTTPS-only login cookie on a plain-HTTP page, and the cookie travels unencrypted.
+> For an instance reachable from the internet, use a domain with HTTPS.
 
 ### 3. Run setup
 
@@ -201,16 +204,18 @@ That's all most deployments need. The two settings are explained below.
 
 `TRUST_CLOUDFLARE=true` trusts Cloudflare's `CF-Connecting-IP` header. That's only safe if
 your server **cannot** be reached except through Cloudflare. Otherwise someone could hit
-it directly with a forged header. Restrict inbound 80/443 to Cloudflare's IP ranges, e.g.
-with UFW:
+it directly with a forged header. Restrict inbound 80/443 to
+[Cloudflare's IP ranges](https://www.cloudflare.com/ips/).
 
-```bash
-for cidr in $(curl -s https://www.cloudflare.com/ips-v4) $(curl -s https://www.cloudflare.com/ips-v6); do
-  sudo ufw allow from "$cidr" to any port 80,443 proto tcp
-done
-sudo ufw deny 80/tcp
-sudo ufw deny 443/tcp
-```
+The simplest way is your hosting provider's firewall (Hetzner Cloud Firewall,
+DigitalOcean Cloud Firewall, an AWS security group and so on), which filters traffic
+before it reaches the server.
+
+> **UFW alone does not do this.** Docker publishes ports 80 and 443 through its own
+> iptables rules, which bypass UFW, so `ufw deny 80/tcp` never reaches the nginx container.
+> To filter on the server itself, put the rules in the `DOCKER-USER` chain (see Docker's
+> [packet filtering docs](https://docs.docker.com/engine/network/packet-filtering-firewalls/)).
+> Check from another machine that the server's IP no longer answers directly.
 
 ### How `TRUSTED_PROXY_COUNT` works
 

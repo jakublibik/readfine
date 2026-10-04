@@ -213,6 +213,17 @@ class TestBruteForceTracker:
             record_failed_login("1.2.3.4", "a@b.com")
         assert check_login_lockout("1.2.3.4", "other@b.com") is False
 
+    def test_expired_lockout_restarts_count(self):
+        from app.rate_limit import check_login_lockout, record_failed_login, _failed_attempts, _LOCKOUT_THRESHOLD
+        key = ("1.2.3.4", "a@b.com")
+        _failed_attempts[key] = {
+            "count": _LOCKOUT_THRESHOLD,
+            "locked_until": time.monotonic() - 1,
+            "last_attempt": time.monotonic() - 1,
+        }
+        assert record_failed_login("1.2.3.4", "a@b.com") is False
+        assert check_login_lockout("1.2.3.4", "a@b.com") is False
+
     def test_lockout_expires(self):
         from app.rate_limit import check_login_lockout, _failed_attempts, _LOCKOUT_THRESHOLD
         key = ("1.2.3.4", "a@b.com")

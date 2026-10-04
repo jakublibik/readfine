@@ -894,7 +894,8 @@ async def _send_due_briefings() -> None:
                 await session.commit()
                 if notify:
                     try:
-                        send_email(
+                        await asyncio.to_thread(
+                            send_email,
                             app_settings_row,
                             user.email,
                             f"Briefing failed: {config.name}",

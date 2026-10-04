@@ -15,6 +15,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Upgrade notes
 
 - Briefings now go to the account's own address only, unless you allow extra recipients with the new **Briefings to other addresses** in **Admin → Settings**. It is off after the upgrade. Recipients already saved are kept and are sent to again once you switch it on. Admins can always add them.
+- If you installed with `setup.sh`, check your `.env`. It never set `TRUSTED_PROXY_COUNT`, so every visitor looked like the same address: anyone could keep the admin locked out of login, and the sign-up limit applied to the whole instance. Set `TRUSTED_PROXY_COUNT=1` (or `TRUST_CLOUDFLARE=true` behind Cloudflare). Rename `BASE_URL` to `PUBLIC_URL` too, otherwise emails sent by background jobs go out without a link. New installs get both.
+- Behind Cloudflare, the README told you to lock the server down with UFW, which does not filter ports published by Docker. Anyone could then reach the server directly and dodge the login lockout. Use your hosting provider's firewall or Docker's `DOCKER-USER` chain instead (see the README).
 
 ### Changed
 
@@ -23,6 +25,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Fixed
 
 - A custom AI endpoint that answered very slowly could hold up AI scores and summaries for every account on the instance. Each model call now has a time limit (2 minutes for a score, 5 for a summary, chat or context, 10 for a digest). A call that runs past it is retried later, and the rest of that run moves on to other accounts.
+- An install reached by IP address over plain HTTP could not log in, because the browser dropped the HTTPS-only login cookie. The new `SESSION_COOKIE_SECURE=false` fixes it, and `setup.sh` sets it for IP installs. Use it on a home network only.
+- A slow mail server could hold up the whole app while a briefing or a feedback message was being sent. Sending now runs in the background.
 - A deactivated account kept sending its scheduled briefings and spending its AI key on new articles. Both now stop until the account is reactivated.
 
 - A feed whose server sent its response very slowly could stop all feed fetching on the instance until a restart, and a few such addresses could make logins hang. Every fetch now has an overall time limit, a feed that runs past it is recorded as a timeout and retried later like any other failure, and fetching runs separately from the rest of the app.
@@ -38,6 +42,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Saving a link in **Saved** could give you the full text of an article that another account had fetched from a private feed (one with a password or a private address). Such a link is now fetched again as you.
 - Opening the article list with the id of a feed you don't follow showed that feed's last error, which includes its address. It now shows nothing.
 - An OPML import fetches every new feed in the file, and feeds that failed did not count toward the feed limit, so a file full of dead addresses could keep one import running for hours. An import now stops after trying about twice as many feeds as the account still has room for (a fixed 2,000 for admins) and says how many it left out. Feeds you already follow are skipped without a fetch. Imports are limited to 10 an hour.
+- After a login lockout ran out, a single wrong password locked the account again for another 15 minutes. The count of failed attempts now starts over.
+- `setup.sh` generated an `ENCRYPTION_KEY` with only half the strength it should have. New installs get a full-strength key. An existing key keeps working, and changing it would make stored passwords and API keys unreadable, so leave it as it is.
 - Feed and article addresses can no longer reach the 100.64.0.0/10 range (carrier-grade NAT, also used by Tailscale networks). Readfine now refuses every address that is not on the public internet.
 
 ## [0.20.0] - 2026-10-04

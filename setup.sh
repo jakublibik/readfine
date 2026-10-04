@@ -88,7 +88,13 @@ if [[ "$DOMAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     BASE_URL="http://${DOMAIN}"
     ALLOWED_HOSTS="[\"${DOMAIN}\", \"localhost\"]"
     IS_DOMAIN=false
+    # Plain HTTP: a browser drops a Secure cookie from an IP address, so login would
+    # never stick. The cookie then crosses the network unencrypted, hence the warning.
+    COOKIE_SECURE_LINE="SESSION_COOKIE_SECURE=false"
+    warn "Installing on an IP address: plain HTTP, the login cookie is not encrypted."
+    warn "Fine on a home network. For access from the internet, use a domain with HTTPS."
 else
+    COOKIE_SECURE_LINE=""
     BASE_URL="https://${DOMAIN}"
     ALLOWED_HOSTS="[\"${DOMAIN}\", \"www.${DOMAIN}\"]"
     IS_DOMAIN=true
@@ -119,7 +125,9 @@ fi
 # ── 4. Generate secrets ───────────────────────────────────────────────────────
 info "Generating secret keys..."
 SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-ENCRYPTION_KEY=$(python3 -c "import secrets; print(secrets.token_hex(16))")
+# A Fernet key (32 random bytes, base64). A 32-char hex key carries only 64 bits in
+# each of the two halves Fernet splits it into.
+ENCRYPTION_KEY=$(python3 -c "import base64, secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())")
 success "Keys generated."
 
 # ── 5. Write .env ─────────────────────────────────────────────────────────────
@@ -143,7 +151,11 @@ ENCRYPTION_KEY=${ENCRYPTION_KEY}
 
 # ── Application ────────────────────────────────────────────────────────────────
 DEBUG=false
-BASE_URL=${BASE_URL}
+PUBLIC_URL=${BASE_URL}
+# The bundled nginx always sits in front of the app. With Cloudflare in front of it
+# as well, use TRUST_CLOUDFLARE=true instead (README, Client IP setting).
+TRUSTED_PROXY_COUNT=1
+${COOKIE_SECURE_LINE}
 ALLOWED_HOSTS=${ALLOWED_HOSTS}
 
 # ── First admin (removed automatically by setup.sh after startup) ─────────────
