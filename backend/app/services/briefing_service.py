@@ -31,7 +31,7 @@ from app.utils.markdown import md_render_ai
 
 logger = logging.getLogger(__name__)
 from app.utils.smtp import send_html_email
-from app.utils.url_validator import find_blocked_address
+from app.utils.url_validator import find_endpoint_refusal
 
 _inliner = css_inline.CSSInliner(keep_style_tags=True)
 
@@ -147,7 +147,7 @@ def apply_briefing_failure(
     # would leave the user's error line saying nothing. Retry policy is left as it
     # is: unlike an article job there is no spinner waiting on this, and one retry
     # in thirty minutes costs nobody anything.
-    msg = str(find_blocked_address(exc) or exc)
+    msg = str(find_endpoint_refusal(exc) or exc)
     if is_smtp:
         config.briefing_enabled = False
         config.briefing_last_error = f"SMTP error: {msg}"

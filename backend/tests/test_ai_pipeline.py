@@ -1545,7 +1545,7 @@ class TestRefusedAddressIsTerminal:
         assert job.status == "pending"
 
     def test_a_chain_that_never_blocked_is_left_alone(self):
-        from app.services.ai_jobs import find_blocked_address
+        from app.utils.url_validator import find_blocked_address
         try:
             try:
                 raise ValueError("inner")

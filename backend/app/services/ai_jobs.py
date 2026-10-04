@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import ArticleAiJob
 from app.models.settings import AppSettings
 from app.models.user import AI_MIN_CHARS_MIN, UserSettings
-from app.utils.url_validator import find_blocked_address
+from app.utils.url_validator import find_endpoint_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -113,9 +113,12 @@ def apply_job_failure(
     waiting turns an endpoint the instance is not allowed to reach into one it
     is. Retrying it would leave the reader watching a spinner for the length of
     the whole backoff before being told something a human has to fix. Its message
-    replaces the provider's, which at that point is only "Connection error."
+    replaces the provider's, which at that point is only "Connection error." A
+    response over the size cap is treated the same way (``find_endpoint_refusal``):
+    the endpoint is not one that answers like an AI API, and each retry would cost
+    the instance the cap's worth of memory again.
     """
-    blocked = find_blocked_address(exc)
+    blocked = find_endpoint_refusal(exc)
     msg = str(blocked or exc)[:300]
     http_status = extract_http_status(exc)
     retries = job.retry_count + 1

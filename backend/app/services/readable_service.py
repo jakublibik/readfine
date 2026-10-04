@@ -55,7 +55,8 @@ _TOO_LARGE_MSG = "The page is too large to download"
 # ── core extraction ───────────────────────────────────────────────────────────
 
 def _fetch_html(
-    url: str, auth_user: Optional[str], auth_pass: Optional[str]
+    url: str, auth_user: Optional[str], auth_pass: Optional[str],
+    auth_origin: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[str], Optional[int], Optional[str]]:
     """Download article HTML.
 
@@ -71,6 +72,10 @@ def _fetch_html(
     path closes it by connecting to the IP it validated, on every hop. That window
     used to be reachable only while subscribing to a feed, but save-by-URL fetches
     any address on request and repeatedly, which is what a race needs.
+
+    *auth_origin* is the address the credentials were given for (the feed's, for a
+    feed article), when that is not *url* itself. They are sent only while a hop is
+    still on its origin.
     """
     from app.utils.url_validator import ResponseTooLarge, fetch_url_page
     auth = auth_pair(auth_user, auth_pass)
@@ -81,6 +86,7 @@ def _fetch_html(
             timeout=_TIMEOUT,
             headers={"User-Agent": READFINE_UA},
             max_redirects=_MAX_REDIRECTS,
+            credential_origin=auth_origin,
         )
         return page.text, None, None, page.final_url
     except ValueError as exc:
@@ -1189,11 +1195,16 @@ class ReadableResult(NamedTuple):
 
 def extract_readable_with_title(
     url: str, auth_user: Optional[str] = None, auth_pass: Optional[str] = None,
-    reject_wrong_content: bool = False,
+    reject_wrong_content: bool = False, auth_origin: Optional[str] = None,
 ) -> ReadableResult:
     """
     Download URL and extract readable HTML, plus the page's own title, description and
     the address the article really lives at.
+
+    *auth_origin* is the address the credentials belong to: the feed's URL for a
+    feed article, *url* itself when omitted (credentials pasted with a saved URL). An
+    article on another host gets none, and neither does the meta-refresh hop below
+    unless it is still on that origin, wherever HTTP redirects took the first fetch.
 
     The title is returned from the failed-extraction paths too, not just on success:
     when a page downloads but yields no article body, its title is the only thing left
@@ -1210,7 +1221,10 @@ def extract_readable_with_title(
     happens to share with a cookie notice, and a feed whose pages answer a server-side
     fetch with a consent wall would otherwise store that wall for every article.
     """
-    html, fetch_error, http_status, final_url = _fetch_html(url, auth_user, auth_pass)
+    auth_origin = auth_origin or url
+    html, fetch_error, http_status, final_url = _fetch_html(
+        url, auth_user, auth_pass, auth_origin
+    )
     if not html:
         # Nothing was downloaded, so there is no title or address to report either.
         return ReadableResult(error=fetch_error, http_status=http_status)
@@ -1219,7 +1233,9 @@ def extract_readable_with_title(
     # not a thing a real site does, and a loop here is a way to be walked in circles.
     hop = _meta_refresh_target(html, final_url or url)
     if hop:
-        hop_html, _, _, hop_final = _fetch_html(hop, auth_user, auth_pass)
+        # The hop is on final_url's host, which a cross-host HTTP redirect may have
+        # made a stranger's; auth_origin, not the hop, decides about credentials.
+        hop_html, _, _, hop_final = _fetch_html(hop, auth_user, auth_pass, auth_origin)
         if hop_html:
             logger.info("readable: followed a meta refresh from %s to %s", url, hop)
             html, final_url = hop_html, hop_final or hop
@@ -1336,7 +1352,8 @@ def extract_readable_with_title(
 
 
 def extract_readable(url: str, auth_user: Optional[str] = None,
-                     auth_pass: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int], Optional[datetime]]:
+                     auth_pass: Optional[str] = None,
+                     auth_origin: Optional[str] = None) -> tuple[Optional[str], Optional[str], Optional[int], Optional[datetime]]:
     """
     Download URL and extract readable HTML.
     Returns (sanitized HTML, error_message, http_status_code, published_at). On success,
@@ -1344,8 +1361,9 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 
     Feed articles already have a title, so this drops the one
     ``extract_readable_with_title`` collects rather than making every caller unpack it.
+    Callers holding a feed's credentials pass the feed's URL as *auth_origin*.
     """
-    r = extract_readable_with_title(url, auth_user, auth_pass)
+    r = extract_readable_with_title(url, auth_user, auth_pass, auth_origin=auth_origin)
     return r.content, r.error, r.http_status, r.published_at
 
 
@@ -1359,7 +1377,9 @@ def extract_readable(url: str, auth_user: Optional[str] = None,
 _EXTRACT_BUDGET_S = 120
 
 
-async def _extract_for_batch(article: Article, auth) -> ReadableResult:
+async def _extract_for_batch(
+    article: Article, auth, auth_origin: Optional[str] = None
+) -> ReadableResult:
     """One extraction for the batch worker, off the event loop, never raising.
 
     Both kinds of article come back as a ReadableResult so the loop has one shape to
@@ -1371,6 +1391,8 @@ async def _extract_for_batch(article: Article, auth) -> ReadableResult:
     A crash becomes a failed result rather than an exception, because one unlucky
     page must not take the rest of the batch with it. So does running past
     ``_EXTRACT_BUDGET_S``; the worker thread is left to finish on its own.
+
+    *auth* is the feed's credentials and *auth_origin* the feed's URL they belong to.
     """
     import asyncio
 
@@ -1382,7 +1404,7 @@ async def _extract_for_batch(article: Article, auth) -> ReadableResult:
                 _EXTRACT_BUDGET_S,
             )
         content, error, http_status, published_at = await asyncio.wait_for(
-            run_outbound(extract_readable, article.url, auth_user, auth_pass),
+            run_outbound(extract_readable, article.url, auth_user, auth_pass, auth_origin),
             _EXTRACT_BUDGET_S,
         )
         return ReadableResult(
@@ -1485,12 +1507,14 @@ async def process_pending_readable(db: AsyncSession) -> int:
     # feed, so drop the None before it reaches the IN clause.
     feed_ids = list({a.feed_id for a in articles if a.feed_id is not None})
     feeds_result = await db.execute(
-        select(Feed.id, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
+        select(Feed.id, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted, Feed.feed_url)
         .where(Feed.id.in_(feed_ids))
     )
-    auth_by_feed: dict[int, tuple[str, str] | None] = {
-        feed_id: feed_auth(auth_user, auth_pass_enc, context=f"feed {feed_id}")
-        for feed_id, auth_user, auth_pass_enc in feeds_result
+    # The feed's credentials together with the feed URL they were given for, which
+    # decides whether an article page gets them (review H2-02).
+    auth_by_feed: dict[int, tuple[tuple[str, str] | None, str]] = {
+        feed_id: (feed_auth(auth_user, auth_pass_enc, context=f"feed {feed_id}"), feed_url)
+        for feed_id, auth_user, auth_pass_enc, feed_url in feeds_result
     }
 
     processed = 0
@@ -1510,7 +1534,8 @@ async def process_pending_readable(db: AsyncSession) -> int:
             processed += 1
             continue
 
-        result = await _extract_for_batch(article, auth_by_feed.get(article.feed_id))
+        auth, auth_origin = auth_by_feed.get(article.feed_id, (None, None))
+        result = await _extract_for_batch(article, auth, auth_origin)
 
         # Re-check status — on-demand extraction may have already processed this article
         await db.refresh(article)
@@ -2024,7 +2049,9 @@ async def retry_blocked_feeds(db: AsyncSession) -> int:
 
         try:
             content, error, http_status, _ = await asyncio.wait_for(
-                run_outbound(extract_readable, article_url, auth_user, auth_pass),
+                run_outbound(
+                    extract_readable, article_url, auth_user, auth_pass, feed.feed_url
+                ),
                 _EXTRACT_BUDGET_S,
             )
         except Exception as exc:

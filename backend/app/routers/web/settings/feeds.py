@@ -3,7 +3,6 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-import feedparser
 import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -34,7 +33,7 @@ from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
 from app.utils.http_client import READFINE_UA, http_reason, run_outbound
-from app.utils.parsing import safe_int
+from app.utils.parsing import parse_feed_body, safe_int
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_page,
@@ -151,7 +150,9 @@ async def settings_feeds_test(
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": f"{error} — credentials rejected"})
 
-    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
+    parsed = await loop.run_in_executor(
+        None, parse_feed_body, page.content or page.text, page.content_type
+    )
 
     import xml.sax._exceptions as _sax
     is_xml_error = parsed.bozo and isinstance(parsed.bozo_exception, _sax.SAXParseException)

@@ -66,8 +66,12 @@ async def _extract_readable_bg(
     url: str,
     auth_user: str | None,
     auth_pass_enc: str | None,
+    feed_url: str | None,
 ) -> None:
-    """Background readable extraction fired when user opens an article."""
+    """Background readable extraction fired when user opens an article.
+
+    *feed_url* is where the credentials belong; an article on another host gets none.
+    """
     from app.database import async_session_factory
     from app.services.readable_service import extract_readable
     from app.utils.crypto import feed_auth
@@ -78,7 +82,7 @@ async def _extract_readable_bg(
 
     try:
         content, error, http_status, published_at = await run_outbound(
-            extract_readable, url, auth_user, auth_pass
+            extract_readable, url, auth_user, auth_pass, feed_url
         )
     except Exception as exc:
         content, error, http_status, published_at = None, str(exc)[:200], None, None
@@ -1063,6 +1067,7 @@ async def htmx_article_detail(
             Article.url,
             Feed.fetch_auth_user,
             Feed.fetch_auth_pass_encrypted,
+            Feed.feed_url,
             UserFeed.extract_readable,
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
@@ -1091,6 +1096,7 @@ async def htmx_article_detail(
             trigger_row.url,
             trigger_row.fetch_auth_user,
             trigger_row.fetch_auth_pass_encrypted,
+            trigger_row.feed_url,
         ))
     elif (
         trigger_row is not None
@@ -1109,6 +1115,7 @@ async def htmx_article_detail(
                 trigger_row.url,
                 trigger_row.fetch_auth_user,
                 trigger_row.fetch_auth_pass_encrypted,
+                trigger_row.feed_url,
             ))
 
     article = await get_article(user, article_id, db)
@@ -1800,7 +1807,7 @@ async def htmx_extract_readable(
     from app.utils.crypto import feed_auth
 
     stmt = add_article_access_joins(
-        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
+        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted, Feed.feed_url)
         .outerjoin(Feed, Feed.id == Article.feed_id),
         user.id,
     ).where(Article.id == article_id, article_access_predicate())
@@ -1808,7 +1815,7 @@ async def htmx_extract_readable(
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
 
-    article, auth_user, auth_pass_enc = row
+    article, auth_user, auth_pass_enc, feed_url = row
     if not article.url:
         return HTMLResponse("<p class='text-amber-500 p-2 text-xs'>Article has no URL.</p>")
 
@@ -1825,6 +1832,7 @@ async def htmx_extract_readable(
     result = await run_outbound(
         extract_readable_with_title, article.url, auth_user, auth_pass,
         article.feed_id is None,  # consent/paywall check: saved articles only
+        auth_origin=feed_url,
     )
 
     if article.feed_id is None:

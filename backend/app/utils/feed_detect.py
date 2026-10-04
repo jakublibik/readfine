@@ -6,7 +6,12 @@ from urllib.parse import urljoin, urlparse
 from lxml import html
 
 from app.utils.http_client import READFINE_UA, run_outbound
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.parsing import parse_feed_body
+from app.utils.url_validator import (
+    async_validate_feed_url,
+    fetch_url_bytes,
+    fetch_url_with_ssrf_check,
+)
 
 _FEED_MIME_TYPES = {
     "application/rss+xml",
@@ -36,13 +41,12 @@ async def _validate_feed_url(url: str) -> tuple[bool, str | None]:
     Returns (is_feed, feed title) — the title comes for free from the parse the
     validation does anyway, and it's what the subscribe UI shows.
     """
-    import feedparser
     try:
         await async_validate_feed_url(url)
-        body = await run_outbound(
-            fetch_url_with_ssrf_check, url, headers=_FETCH_HEADERS, timeout=10
+        body = await run_outbound(fetch_url_bytes, url, headers=_FETCH_HEADERS, timeout=10)
+        parsed = await asyncio.get_running_loop().run_in_executor(
+            None, parse_feed_body, body.content, body.content_type
         )
-        parsed = feedparser.parse(body)
         if not parsed.entries:
             return False, None
         return True, (parsed.feed.get("title") or "").strip() or None

@@ -38,7 +38,7 @@ class TestExtractReadableBg:
             patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
-            await _extract_readable_bg(7, "https://example.com/a", None, None)
+            await _extract_readable_bg(7, "https://example.com/a", None, None, None)
 
         pipe.assert_awaited_once()
         assert pipe.await_args.args[0] is article
@@ -57,7 +57,7 @@ class TestExtractReadableBg:
             patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
-            await _extract_readable_bg(7, "https://example.com/a", None, None)
+            await _extract_readable_bg(7, "https://example.com/a", None, None, None)
 
         pipe.assert_awaited_once()
 
@@ -75,7 +75,7 @@ class TestExtractReadableBg:
             patch("app.routers.web.app.articles.apply_readable_result", side_effect=fake_apply),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
-            await _extract_readable_bg(7, "https://example.com/a", None, None)
+            await _extract_readable_bg(7, "https://example.com/a", None, None, None)
 
         pipe.assert_not_awaited()
 
@@ -90,7 +90,7 @@ class TestExtractReadableBg:
             patch("app.routers.web.app.articles.apply_readable_result") as apply,
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users", new=AsyncMock()) as pipe,
         ):
-            await _extract_readable_bg(7, "https://example.com/a", None, None)
+            await _extract_readable_bg(7, "https://example.com/a", None, None, None)
 
         apply.assert_not_called()
         pipe.assert_not_awaited()

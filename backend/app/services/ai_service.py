@@ -14,7 +14,12 @@ from app.models.user import UserSettings
 from app.services.relevance_service import parse_terms
 from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
-from app.utils.url_validator import async_validate_ai_endpoint_url, find_blocked_address
+from app.utils.url_validator import (
+    ResponseTooLarge,
+    async_validate_ai_endpoint_url,
+    find_blocked_address,
+    find_cause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -833,6 +838,10 @@ def _friendly_ai_error(exc: Exception) -> str:
             f"{blocked}. A model on a private address has to be listed in "
             "AI_ALLOWED_PRIVATE_HOSTS in the instance's environment."
         )
+    too_large = find_cause(exc, ResponseTooLarge)
+    if too_large is not None:
+        # Same disguise as above. Whatever answered is not answering like an API.
+        return f"{too_large}. Check that the URL points at an OpenAI-compatible API."
 
     raw = str(exc)
     low = raw.lower()

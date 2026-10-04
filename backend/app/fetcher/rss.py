@@ -24,6 +24,7 @@ from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.parsing import (
     count_words,
     normalize_url,
+    parse_feed_body,
     rewrite_relative_urls,
     soften_nbsp_runs,
 )
@@ -107,7 +108,9 @@ async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
     page = await run_outbound(fetch_url_page, url, auth, _TIMEOUT, _HEADERS)
-    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
+    parsed = await loop.run_in_executor(
+        None, parse_feed_body, page.content or page.text, page.content_type
+    )
 
     if parsed.bozo:
         import xml.sax._exceptions as _sax
@@ -209,7 +212,9 @@ async def fetch_feed(
                     )
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
-            parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
+            parsed = await loop.run_in_executor(
+                None, parse_feed_body, resp.content or resp.text, resp.content_type
+            )
 
         if parsed.bozo and not parsed.entries:
             # A prefetched parse carries no body, but it came through

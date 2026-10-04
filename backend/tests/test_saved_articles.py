@@ -1007,7 +1007,7 @@ class TestRetryFinalizesSavedArticle:
     def _db(self, article):
         db = MagicMock()
         row = MagicMock()
-        row.first.return_value = (article, None, None)
+        row.first.return_value = (article, None, None, None)
         db.execute = AsyncMock(return_value=row)
         db.commit = AsyncMock()
         return db

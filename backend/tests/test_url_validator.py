@@ -1324,3 +1324,92 @@ class TestPinnedAsyncTransport:
                 await transport.handle_async_request(
                     httpx.Request("GET", "http://metadata.internal/latest/meta-data/")
                 )
+
+
+class _Chunks(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class TestAiResponseCap:
+    """The AI SDK reads a custom endpoint's body whole, so the transport holds it to
+    the fetch size cap, compressed bodies included (review H2-03)."""
+
+    _URL = "https://ai.example.com/v1/chat/completions"
+
+    def _client(self, response, sent=None):
+        async def fake_send(self, request):
+            if sent is not None:
+                sent["accept-encoding"] = request.headers.get("accept-encoding")
+            return response
+
+        return (
+            patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]),
+            patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send),
+            httpx.AsyncClient(transport=PinnedAsyncTransport()),
+        )
+
+    async def _post(self, response, sent=None):
+        dns, send, client = self._client(response, sent)
+        with dns, send, allowed_private_ai_hosts(""):
+            async with client:
+                return await client.post(self._URL, json={})
+
+    @pytest.mark.asyncio
+    async def test_small_body_passes_and_asks_for_no_compression(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        sent = {}
+        resp = await self._post(httpx.Response(200, stream=_Chunks([b'{"ok": 1}'])), sent)
+        assert resp.json() == {"ok": 1}
+        assert sent["accept-encoding"] == "identity"
+
+    @pytest.mark.asyncio
+    async def test_body_past_the_cap_is_abandoned(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        # Chunked, no Content-Length: only the running count can catch it.
+        with pytest.raises(ResponseTooLarge):
+            await self._post(httpx.Response(200, stream=_Chunks([b"x" * 600] * 3)))
+
+    @pytest.mark.asyncio
+    async def test_declared_length_past_the_cap_is_refused_up_front(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        resp = httpx.Response(200, headers={"content-length": "5000"}, stream=_Chunks([]))
+        with pytest.raises(ResponseTooLarge):
+            await self._post(resp)
+
+    @pytest.mark.asyncio
+    async def test_compressed_body_is_refused(self, monkeypatch):
+        # 2 kB of gzip unpacking to 2 MB would pass a count of the bytes on the wire.
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 100_000)
+        bomb = gzip.compress(b"\0" * 2_000_000)
+        resp = httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=_Chunks([bomb])
+        )
+        with pytest.raises(ResponseTooLarge):
+            await self._post(resp)
+
+    @pytest.mark.asyncio
+    async def test_sdk_error_is_traced_back_to_the_cap(self, monkeypatch):
+        from app.services.ai_service import _friendly_ai_error, _make_custom_client
+        from app.utils.url_validator import find_endpoint_refusal
+
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        client = _make_custom_client("k", "https://ai.example.com/v1", max_retries=0)
+
+        async def fake_send(self, request):
+            return httpx.Response(200, stream=_Chunks([b"x" * 600] * 3))
+
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]), \
+             patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send), \
+             allowed_private_ai_hosts(""):
+            with pytest.raises(Exception) as info:
+                await client.chat.completions.create(
+                    model="m", messages=[{"role": "user", "content": "hi"}]
+                )
+        await client.close()
+        assert isinstance(find_endpoint_refusal(info.value), ResponseTooLarge)
+        assert "size limit" in _friendly_ai_error(info.value)

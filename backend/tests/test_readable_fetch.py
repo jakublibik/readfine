@@ -169,3 +169,63 @@ class TestFinalUrl:
             _html, error, _status, final_url = _fetch_html("https://example.com/a", None, None)
         assert error is None
         assert final_url == "https://example.com/c"
+
+
+class TestCredentialOrigin:
+    """Credentials go only to the origin they were given for (review H2-02).
+
+    A feed's Basic auth belongs to the feed's host. Article pages it links to on other
+    hosts used to get it on the first request, and a meta-refresh stub reached after a
+    cross-host redirect got it on the hop.
+    """
+
+    @staticmethod
+    def _recording(pages):
+        seen = []
+
+        def handler(request):
+            host = request.headers.get("host")
+            seen.append((host, request.url.path, request.headers.get("authorization")))
+            return pages(host, request.url.path)
+
+        return seen, handler
+
+    def test_article_on_another_host_gets_no_feed_credentials(self):
+        seen, handler = self._recording(lambda host, path: _ok(None))
+        with mock_httpx_client(handler), patch("socket.getaddrinfo", return_value=_PUBLIC_IP):
+            _fetch_html("https://news.example/a", "user", "pass", "https://feeds.example/rss")
+        assert seen == [("news.example", "/a", None)]
+
+    def test_article_on_the_feed_host_gets_them(self):
+        seen, handler = self._recording(lambda host, path: _ok(None))
+        with mock_httpx_client(handler), patch("socket.getaddrinfo", return_value=_PUBLIC_IP):
+            # http feed, https article on the same host: the host upgrading itself.
+            _fetch_html("https://feeds.example/a", "user", "pass", "http://feeds.example/rss")
+        assert seen[0][2].startswith("Basic ")
+
+    def test_meta_refresh_after_cross_host_redirect_gets_none(self):
+        from app.services.readable_service import extract_readable_with_title
+
+        stub = (
+            '<html><head><meta http-equiv="refresh" content="0; url=/real">'
+            "</head><body>Redirecting</body></html>"
+        )
+
+        def pages(host, path):
+            if host == "feeds.example":
+                return httpx.Response(302, headers={"location": "https://other.example/stub"})
+            if path == "/stub":
+                return httpx.Response(200, text=stub)
+            return _ok(None)
+
+        seen, handler = self._recording(pages)
+        with mock_httpx_client(handler), patch("socket.getaddrinfo", return_value=_PUBLIC_IP):
+            extract_readable_with_title(
+                "https://feeds.example/a", "user", "pass",
+                auth_origin="https://feeds.example/rss",
+            )
+        assert [(h, p) for h, p, _ in seen] == [
+            ("feeds.example", "/a"), ("other.example", "/stub"), ("other.example", "/real"),
+        ]
+        assert seen[0][2] is not None
+        assert seen[1][2] is None and seen[2][2] is None

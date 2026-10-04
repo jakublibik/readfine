@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai import UserAiKey
 from app.models.article import AiUsageLog
 from app.models.user import UserSettings
-from app.utils.url_validator import find_blocked_address
+from app.utils.url_validator import find_endpoint_refusal
 from app.services.ai_service import (
     ai_client,
     generate_preference_text,
@@ -291,7 +291,7 @@ async def run_auto_generation(user_id: int, db: AsyncSession) -> str:
             # The SDK reports a refused address as a bare "Connection error.", which
             # would leave the banner saying nothing about a problem only the operator
             # can fix.
-            reason = str(find_blocked_address(exc) or exc)
+            reason = str(find_endpoint_refusal(exc) or exc)
             logger.warning("Auto profile generation failed for user=%s: %s", user_id, reason)
             settings.ai_preference_last_attempt_at = now
             _apply_failure(settings, reason, now)

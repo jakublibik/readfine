@@ -30,6 +30,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A deactivated account kept sending its scheduled briefings and spending its AI key on new articles. Both now stop until the account is reactivated.
 
 - A feed whose server sent its response very slowly could stop all feed fetching on the instance until a restart, and a few such addresses could make logins hang. Every fetch now has an overall time limit, a feed that runs past it is recorded as a timeout and retried later like any other failure, and fetching runs separately from the rest of the app.
+- Feeds in an older encoding such as windows-1250 or ISO-8859-2 showed garbled accented letters when the server named the encoding only inside the feed, not in its response headers.
 - A labelled article could miss its AI score when Readfine switched off full-text extraction for a feed that already delivers whole articles. Such articles are now queued for scoring.
 - Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
 - After you unsubscribed from a feed, or unstarred or unsaved an article that no longer had a feed, its labels stayed. The article then sat in the label's list, could not be opened or marked read, and kept the label's unread count up. Labels now go with your access to the article, and the upgrade removes the ones left over. An AI score still queued when you unsubscribed could also bring a label or a star back through your filters. Unsubscribing now cancels those scores.
@@ -42,6 +43,9 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Security
 
+- A feed whose server answered with a bare address instead of a feed made Readfine fetch that address itself, past every check that keeps fetches off private networks and local files, and with no time limit. Anyone with an account could reach services inside your network this way and read what they returned as articles. A feed's response is now only ever read as content.
+- A feed with a username and password sent them to every site its articles linked to whenever full-text extraction fetched an article, over plain HTTP for `http://` links. Credentials now go only to the feed's own host.
+- A custom AI endpoint could answer with a response large enough to run the instance out of memory. Responses are now limited to the same size as feed downloads (`MAX_FETCH_BYTES`), and an endpoint that sends more fails with a message saying so.
 - An API token, or a token from `POST /api/v1/auth/token`, also worked on every page of the web app. Anyone holding an admin's token could open **Admin** and create more tokens that outlived the revoked one. Tokens now work on `/api/v1` only. Scripts that called web pages with a token have to move to the API.
 - **Show AI prompt** in the scrape feed setup could run a script sent by the site being scraped, if that site answered with an error. The error is now shown as plain text.
 - A filter with a badly written regex could freeze the whole instance for minutes, for every account, when it was tested, applied or run on new articles. A regex that runs too long now switches its filter off at once, and **Settings → Filters** marks it "regex too slow". Fix the pattern and turn the filter back on. Testing and applying filters, and loading the term suggestions in **Settings → Relevance**, are now rate limited too.

@@ -1,6 +1,8 @@
+import io
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import feedparser
 import nh3
 
 
@@ -10,6 +12,31 @@ _STRIP_PARAMS = frozenset({
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "fbclid", "gclid", "msclkid",
 })
+
+
+def parse_feed_body(
+    body: bytes | str, content_type: str | None = None
+) -> feedparser.FeedParserDict:
+    """Parse a downloaded feed body, and only ever as a body.
+
+    ``feedparser.parse`` decides for itself what its argument is: a ``str`` with an
+    http, ftp or file scheme is a URL it downloads on its own (urllib, without our
+    SSRF checks or a timeout), and any other ``str`` or ``bytes`` is first tried as a
+    local path. A feed host answering with ``http://169.254.169.254/...`` as its
+    whole body would turn our fetch into one it chose (review H2-01). A stream is
+    the one input it only reads.
+
+    Pass the bytes as they arrived, with the response's *content_type*. feedparser
+    works out the charset from that header, a BOM and the XML declaration together,
+    whereas a ``str`` was decoded by the header alone, as UTF-8 when it named none,
+    so a windows-1250 feed declaring its charset only in the XML came out garbled
+    (review H2-05). A ``str`` is encoded as UTF-8, which is what feedparser itself
+    does with one.
+    """
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    headers = {"content-type": content_type} if content_type else None
+    return feedparser.parse(io.BytesIO(body), response_headers=headers)
 
 
 def normalize_url(url: str | None) -> str | None:
