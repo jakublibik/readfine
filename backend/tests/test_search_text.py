@@ -217,3 +217,26 @@ async def test_single_cjk_character_searches_titles(pg):
     assert set(await found(f"{tok} -猫")) == {in_body, dog}
     # With nothing else in the query there is no rank to sort by: newest first.
     assert await found("猫", sort_order="relevance") == [cat, older_cat]
+
+
+async def test_very_long_query_is_cut_not_a_server_error(pg):
+    """About 1,700 distinct words used to go past Postgres's 1,664-column limit in
+    the tsquery rewrite. The query is cut to MAX_QUERY_LENGTH before it gets there."""
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (aid,) = await _setup(pg, [(f"Title {tok}", "<p>x</p>")])
+    q = tok + " " + " ".join(f"w{i:04d}" for i in range(1800))
+    await list_articles(user=user, db=pg, q=q)  # no TooManyColumnsError
+    assert {a.id for a in await list_articles(user=user, db=pg, q=tok)} == {aid}
+
+
+async def test_tsquery_is_built_once_per_session_and_query(pg):
+    from unittest.mock import patch
+    from app.services import article as article_service
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, _ = await _setup(pg, [(f"Title {tok}", "<p>x</p>")])
+    real = article_service._build_search_tsquery
+    with patch.object(article_service, "_build_search_tsquery", side_effect=real) as build:
+        await list_articles(user=user, db=pg, q=tok)
+        await list_articles(user=user, db=pg, q=tok)
+        await list_articles(user=user, db=pg, q=tok + " other")
+    assert build.await_count == 2

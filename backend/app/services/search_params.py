@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from app.services.article import SCORE_SOURCES
+from app.services.article import MAX_QUERY_LENGTH, SCORE_SOURCES
 
 # The search's List filter: one of the reader's own lists, as the sidebar names them.
 SEARCH_STATES = ("starred", "saved", "archived")
@@ -23,9 +23,6 @@ SEARCH_SORTS = ("relevance", "newest", "oldest", "score")
 
 # The status selector. "All" is the absence of one.
 READ_STATUSES = ("unread", "read", "engaged", "not_engaged")
-
-# A query term longer than this is not a search anyone typed.
-MAX_QUERY_LENGTH = 500
 
 # Same bounds as the list endpoints' Query(...) declarations.
 SINCE_DAYS_MAX = 3650

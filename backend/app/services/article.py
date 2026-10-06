@@ -232,6 +232,11 @@ _FTS_VECTOR = "(" + " || ".join(
     for config, wrap in _FTS_PARSE.items()
 ) + ")"
 
+# A query term longer than this is not a search anyone typed. It also bounds the
+# tsquery rewrite below, which selects one column per word: about 1,700 distinct words
+# went past Postgres's 1,664-column limit and ended in a server error.
+MAX_QUERY_LENGTH = 500
+
 # A word ending in "*" matches every word it begins ("zpráv*" finds "zprávami"). Two
 # letters at least: a one-letter prefix matches nearly everything and is slow.
 _PREFIX_WORD = re.compile(r"(\w{2,})\*")
@@ -280,6 +285,18 @@ def _bigrams(run: str) -> str:
 
 
 async def _search_tsquery(db: AsyncSession, q: str):
+    """:func:`_build_search_tsquery`, once per session and query.
+
+    One search page asks for the same tsquery up to three times (the list, its count,
+    the story members in scope), and each build is two round trips.
+    """
+    cache = db.info.setdefault("search_tsquery", {})
+    if q not in cache:
+        cache[q] = await _build_search_tsquery(db, q)
+    return cache[q]
+
+
+async def _build_search_tsquery(db: AsyncSession, q: str):
     """The tsquery for a search box input: websearch syntax, accent-folded, each word
     matching as written or stemmed, and ``word*`` a prefix match.
 
@@ -566,6 +583,7 @@ async def list_articles(
 
     tsquery = None
     if q:
+        q = q[:MAX_QUERY_LENGTH]  # the web list and the API take it unbounded
         fts_vec = literal_column(_FTS_VECTOR)
         fts_q, cjk_singles = split_cjk_query(q)
         # A lone CJK character ("猫") is not in the index, so it's looked for in the
@@ -795,48 +813,9 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
         return None
 
     article, state, feed_title, custom_title = row
-    return ArticleResponse(
-        id=article.id,
-        feed_id=article.feed_id,
-        feed_title=custom_title or feed_title,
-        url=article.url,
-        title=article.title,
-        author=article.author,
-        content=article.content,
-        content_source=article.content_source,
-        summary=article.summary,
-        readable_content=article.readable_content,
-        readable_status=article.readable_status,
-        readable_error=article.readable_error,
-        readable_active=article.readable_active,
-        published_at=article.published_at,
-        estimated_read_min=article.estimated_read_min,
-        word_count=article.word_count,
-        image_url=article.image_url,
-        is_read=state.is_read if state else False,
-        is_starred=state.is_starred if state else False,
-        is_archived=state.is_archived if state else False,
-        is_saved=bool(state and state.saved_at),
-        read_at=state.read_at if state else None,
-        share_token=state.share_token if state else None,
-        ai_summary=state.ai_summary if state else None,
-        ai_summary_truncated=state.ai_summary_truncated if state else False,
-        ai_context=state.ai_context if state else None,
-        ai_score=state.ai_score if state else None,
-        lexical_score=state.lexical_score if state else None,
-        story_id=article.story_id,
-        labels=[
-            {"id": r.id, "name": r.name, "color": r.color}
-            for r in (await db.execute(
-                select(Label.id, Label.name, Label.color)
-                .join(ArticleLabel, ArticleLabel.label_id == Label.id)
-                .where(
-                    ArticleLabel.article_id == article_id,
-                    ArticleLabel.user_id == user.id,
-                )
-                .order_by(Label.position, func.lower(Label.name))
-            )).all()
-        ],
+    return _article_response(
+        article, state, feed_title, custom_title,
+        await _fetch_labels(article_id, user.id, db),
     )
 
 
@@ -1013,7 +992,8 @@ async def mark_articles_read_batch(
     article_ids = await filter_accessible_article_ids(user.id, article_ids, db)
     if not article_ids:
         return
-    folded = [aid for aid in article_ids if aid not in set(unfolded_ids or ())]
+    unfolded = set(unfolded_ids or ())
+    folded = [aid for aid in article_ids if aid not in unfolded]
     now = datetime.now(timezone.utc)
     stmt = pg_insert(UserArticleState).values([
         {"user_id": user.id, "article_id": aid, "is_read": True,
@@ -1081,13 +1061,26 @@ async def _load_article_for_write(user: User, article_id: int, db: AsyncSession)
         return None
     article, state, feed_title, custom_title, extract_readable = row
     if state is None:
-        state = UserArticleState(user_id=user.id, article_id=article_id)
-        db.add(state)
+        # Two writes on an article with no state yet (a double click) would both add a
+        # row, and the second would fail on the primary key. ON CONFLICT lets it wait
+        # for the first and then pick up its row.
+        await db.execute(
+            pg_insert(UserArticleState)
+            .values(user_id=user.id, article_id=article_id)
+            .on_conflict_do_nothing()
+        )
+        state = await db.scalar(select(UserArticleState).where(
+            UserArticleState.user_id == user.id,
+            UserArticleState.article_id == article_id,
+        ))
     return article, state, feed_title, custom_title, extract_readable
 
 
-def _state_response(article, state, feed_title, custom_title, labels) -> ArticleResponse:
-    """Build the ArticleResponse returned by the state-write endpoints."""
+def _article_response(article, state, feed_title, custom_title, labels) -> ArticleResponse:
+    """The ArticleResponse for one article and the reader's state (None when they have
+    none yet). Shared by the detail read and the state writes: the writes used to build
+    their own and left share_token, the AI fields, story_id and readable_active at
+    their defaults, so a PATCH answered with less than a GET of the same article."""
     return ArticleResponse(
         id=article.id,
         feed_id=article.feed_id,
@@ -1101,17 +1094,23 @@ def _state_response(article, state, feed_title, custom_title, labels) -> Article
         readable_content=article.readable_content,
         readable_status=article.readable_status,
         readable_error=article.readable_error,
+        readable_active=article.readable_active,
         published_at=article.published_at,
         estimated_read_min=article.estimated_read_min,
         word_count=article.word_count,
         image_url=article.image_url,
-        is_read=state.is_read,
-        is_starred=state.is_starred,
-        is_archived=state.is_archived,
-        is_saved=state.saved_at is not None,
-        read_at=state.read_at,
-        ai_score=state.ai_score,
-        lexical_score=state.lexical_score,
+        is_read=state.is_read if state else False,
+        is_starred=state.is_starred if state else False,
+        is_archived=state.is_archived if state else False,
+        is_saved=bool(state and state.saved_at),
+        read_at=state.read_at if state else None,
+        share_token=state.share_token if state else None,
+        ai_summary=state.ai_summary if state else None,
+        ai_summary_truncated=state.ai_summary_truncated if state else False,
+        ai_context=state.ai_context if state else None,
+        ai_score=state.ai_score if state else None,
+        lexical_score=state.lexical_score if state else None,
+        story_id=article.story_id,
         labels=labels,
     )
 
@@ -1161,7 +1160,7 @@ async def toggle_article_state(
     await db.commit()
     await db.refresh(state)
     labels = await _fetch_labels(article_id, user.id, db)
-    return _state_response(article, state, feed_title, custom_title, labels)
+    return _article_response(article, state, feed_title, custom_title, labels)
 
 
 async def update_article_state(
@@ -1221,4 +1220,4 @@ async def update_article_state(
     await db.commit()
     await db.refresh(state)
     labels = await _fetch_labels(article_id, user.id, db)
-    return _state_response(article, state, feed_title, custom_title, labels)
+    return _article_response(article, state, feed_title, custom_title, labels)

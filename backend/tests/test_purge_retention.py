@@ -455,3 +455,30 @@ class TestFetchLogRetention:
         # past the horizon and get swept in the same statement.
         assert await purge_old_fetch_logs(pg) >= 3
 
+
+
+class TestStateWriteResponse:
+    async def test_write_creates_the_state_and_answers_like_a_read(self, pg):
+        """A first write on an article creates the reader's state, and the response
+        carries the same fields as the detail read (it used to drop share_token, the
+        AI fields and story_id)."""
+        from app.services.article import get_article, toggle_article_state
+        pg.commit = pg.flush  # keep the rollback isolation
+        user, feed = await _setup(pg)
+        a = await _article(pg, feed, age_days=1)
+
+        first = await toggle_article_state(user, a.id, "is_read", pg)
+        assert first.is_read is True
+
+        st = (await pg.execute(select(UserArticleState).where(
+            UserArticleState.user_id == user.id, UserArticleState.article_id == a.id,
+        ))).scalar_one()
+        st.share_token = "tok-" + uuid.uuid4().hex[:8]
+        st.ai_summary = "summary"
+        await pg.flush()
+
+        written = await toggle_article_state(user, a.id, "is_starred", pg)
+        read = await get_article(user, a.id, pg)
+        assert written.share_token == st.share_token
+        assert written.ai_summary == "summary"
+        assert written.model_dump() == read.model_dump()

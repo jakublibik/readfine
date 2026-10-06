@@ -52,6 +52,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A feed with one item dated far in the future showed its last article in the future. A feed an admin paused while it was being fetched could come back active or in error.
 - A scrape feed refreshed by hand, or fetched right after subscribing, did not mark articles you already had from another feed as read.
 - The per-feed article cap (`purge_keep_count` in the API) could keep fewer articles than set, because starred and read articles, which are kept anyway, took up places.
+- A search with a very long query (hundreds of words) ended in a server error. Queries are cut to 500 characters, as saved searches already were.
+- `PATCH /api/v1/articles/{id}` answered without the share token, the AI summary and context, and the story id, even when the article had them. It now returns the same fields as a `GET`. Double clicking star or read on an article you had never opened no longer shows an error.
 
 ### Removed
 
