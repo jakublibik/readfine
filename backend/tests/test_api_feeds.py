@@ -136,6 +136,16 @@ class TestSubscribeFeed:
             )
         assert response.status_code == 409
 
+    def test_unreachable_feed_returns_400_not_500(self, client, mock_db):
+        from app.fetcher.errors import FetchProblem
+        from app.services.feed import FeedFetchError
+
+        problem = FetchProblem("http", 404, "Not found (404). The address may no longer exist.")
+        with patch("app.routers.api.v1.feeds.subscribe", side_effect=FeedFetchError(problem)):
+            response = client.post("/api/v1/feeds", json={"url": "https://example.com/gone.xml"})
+        assert response.status_code == 400
+        assert response.json()["detail"] == problem.message
+
     def test_invalid_url_returns_400(self, client, mock_db):
         with patch("app.routers.api.v1.feeds.subscribe", side_effect=ValueError("SSRF blocked")):
             response = client.post(

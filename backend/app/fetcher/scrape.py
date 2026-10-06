@@ -27,6 +27,7 @@ from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
+    mark_fetch_success,
     record_fetch_failure,
 )
 
@@ -221,13 +222,7 @@ async def fetch_scrape_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        feed.last_fetched_at = fetched_at
-        feed.last_fetch_duration_ms = duration_ms
-        feed.status = "active"
-        feed.last_error = None
-        feed.fetch_error_count = 0
-        feed.block_count = 0
-        feed.retry_after_until = None
+        mark_fetch_success(feed, fetched_at, duration_ms)
         # Mirror rss.py: track the newest article date this listing carried. Only
         # advance when at least one link is dated, so a fetch of purely undated
         # links doesn't wipe a previously-known publication date. Stays None for

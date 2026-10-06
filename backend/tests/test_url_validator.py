@@ -1394,7 +1394,7 @@ class TestAiResponseCap:
 
     @pytest.mark.asyncio
     async def test_sdk_error_is_traced_back_to_the_cap(self, monkeypatch):
-        from app.services.ai_service import _friendly_ai_error, _make_custom_client
+        from app.services.ai_service import describe_ai_error, _make_custom_client
         from app.utils.url_validator import find_endpoint_refusal
 
         monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
@@ -1412,4 +1412,4 @@ class TestAiResponseCap:
                 )
         await client.close()
         assert isinstance(find_endpoint_refusal(info.value), ResponseTooLarge)
-        assert "size limit" in _friendly_ai_error(info.value)
+        assert "size limit" in describe_ai_error(info.value)

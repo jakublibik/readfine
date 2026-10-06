@@ -19,7 +19,6 @@ from app.services.ai_jobs import ai_enabled_globally
 from app.services.label_service import list_labels
 from app.templating import templates
 from app.utils.markdown import md_render_ai
-from app.utils.url_validator import find_blocked_address
 
 from .common import _catchup_available
 
@@ -281,10 +280,9 @@ async def htmx_catchup_generate(
                 custom_prompt=prompt,
             )
         except Exception as exc:
+            from app.services.ai_service import describe_ai_error
             logger.exception("catchup: AI generation failed for user %d", user.id)
-            # The SDK reports a refused address as a bare "Connection error.", so ask
-            # what really happened before quoting it back.
-            reason = str(find_blocked_address(exc) or exc)
+            reason = describe_ai_error(exc)
             return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
 
     # Log the run. The config id comes from the form: one the reader does not own, or
@@ -704,8 +702,9 @@ async def htmx_briefing_test_send(
         )
     except Exception as exc:
         # Test briefings generate the digest too, so this catches the AI call as
-        # well as the send, and a refused address arrives here saying nothing.
-        reason = str(find_blocked_address(exc) or exc)
+        # well as the send.
+        from app.services.ai_service import describe_ai_error
+        reason = describe_ai_error(exc)
         return HTMLResponse(
             f'<p class="text-red-600 text-sm">Error: {html_module.escape(reason[:200])}</p>'
         )

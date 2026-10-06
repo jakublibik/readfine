@@ -278,6 +278,24 @@ def clear_failure_state(feed: Feed) -> None:
     feed.retry_after_until = None
 
 
+def mark_fetch_success(feed: Feed, fetched_at: datetime, duration_ms: int) -> None:
+    """Record a successful fetch on the feed row, the counterpart to
+    :func:`record_fetch_failure`.
+
+    A success resets both counters and any deadline a failure left, and brings an
+    ``error`` feed back to ``active``. Shared by the RSS fetcher (a full fetch and a
+    304) and the scrape fetcher, so a column added to the failure path has one place
+    on this side to be undone in. Does not commit.
+    """
+    feed.last_fetched_at = fetched_at
+    feed.last_fetch_duration_ms = duration_ms
+    feed.status = "active"
+    feed.last_error = None
+    feed.fetch_error_count = 0
+    feed.block_count = 0
+    feed.retry_after_until = None
+
+
 async def record_fetch_failure(
     db: AsyncSession, exc: Exception, *, feed_id: int, feed_url: str, feed_block_count: int
 ) -> None:

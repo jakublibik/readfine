@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.fetcher.errors import FetchProblem, describe_fetch_error
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.redirects import url_conflict
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
@@ -75,6 +76,27 @@ class FeedUrlTaken(FeedSubscriptionError):
     def __init__(self, feed_id: int | None = None):
         self.feed_id = feed_id
         super().__init__("Another feed on this instance already uses that address")
+
+
+class FeedFetchError(FeedSubscriptionError):
+    """Fetching the address failed: an HTTP error, a timeout, no feed at the address.
+
+    Carries the classified :class:`~app.fetcher.errors.FetchProblem`, so a caller
+    decides what to offer next (look for a linked feed, set up a scrape) from
+    ``problem.kind`` rather than from the wording of the message.
+    """
+
+    def __init__(self, problem: FetchProblem):
+        self.problem = problem
+        super().__init__(problem.message)
+
+
+def _raise_fetch_error(exc: Exception) -> None:
+    """Re-raise *exc* as :class:`FeedFetchError` when it is a fetch failure. Anything
+    else is a bug of ours and is left for the caller's own ``raise``."""
+    problem = describe_fetch_error(exc)
+    if problem is not None:
+        raise FeedFetchError(problem) from exc
 
 
 class SharedPrivateFeed(FeedSubscriptionError):
@@ -203,6 +225,7 @@ async def _verify_feed_url(
         try:
             html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
+            _raise_fetch_error(exc)
             raise ValueError(f"Could not fetch that page: {exc}") from exc
         if selector and not extract_article_links(html, selector, url):
             raise ValueError(
@@ -211,11 +234,8 @@ async def _verify_feed_url(
         return url
     try:
         _, permanent_url = await fetch_and_parse_url(url, auth=auth)
-    except ValueError:
-        # Already a sentence about the feed itself ("Not a valid RSS/Atom feed",
-        # "The server returned a web page, not a feed", a blocked redirect).
-        raise
     except Exception as exc:
+        _raise_fetch_error(exc)
         raise ValueError(f"Could not fetch that address: {exc}") from exc
     return permanent_url or url
 
@@ -456,6 +476,30 @@ async def _mark_backlog_read(db: AsyncSession, user: User, feed: Feed) -> None:
         await db.refresh(feed)
 
 
+async def _check_subscribe_preconditions(
+    user: User, folder_id: int | None, db: AsyncSession
+) -> None:
+    """The checks every new subscription passes first: the folder is the user's own,
+    and the user is below the instance's feed cap (admins are exempt)."""
+    if folder_id is not None:
+        folder_result = await db.execute(
+            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
+        )
+        if not folder_result.scalar_one_or_none():
+            raise ValueError("Folder not found")
+
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise FeedLimitReached(max_feeds)
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -494,26 +538,7 @@ async def subscribe(
 
     # SSRF protection
     await async_validate_feed_url(url)
-
-    # Validate folder ownership
-    if folder_id is not None:
-        folder_result = await db.execute(
-            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-        )
-        if not folder_result.scalar_one_or_none():
-            raise ValueError("Folder not found")
-
-    # Check subscription limit (admins are exempt)
-    if user.role != "admin":
-        app_settings_result = await db.execute(
-            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-        )
-        max_feeds = app_settings_result.scalar_one_or_none() or 200
-        count_result = await db.execute(
-            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-        )
-        if (count_result.scalar() or 0) >= max_feeds:
-            raise FeedLimitReached(max_feeds)
+    await _check_subscribe_preconditions(user, folder_id, db)
 
     feed: Feed | None = None
     parsed = None
@@ -549,7 +574,11 @@ async def subscribe(
         parsed = None if is_private else get_cached_feed_preview(url)
         permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
+            try:
+                parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
+            except Exception as exc:
+                _raise_fetch_error(exc)
+                raise
 
         # Create the row on the address the host actually serves. Storing the URL the
         # user typed would make every later poll walk the same redirect chain, and on
@@ -717,24 +746,7 @@ async def subscribe_scrape(
         raise ValueError("Username is too long (max 255 characters)")
 
     await async_validate_feed_url(url)
-
-    if folder_id is not None:
-        folder_result = await db.execute(
-            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-        )
-        if not folder_result.scalar_one_or_none():
-            raise ValueError("Folder not found")
-
-    if user.role != "admin":
-        app_settings_result = await db.execute(
-            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-        )
-        max_feeds = app_settings_result.scalar_one_or_none() or 200
-        count_result = await db.execute(
-            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-        )
-        if (count_result.scalar() or 0) >= max_feeds:
-            raise FeedLimitReached(max_feeds)
+    await _check_subscribe_preconditions(user, folder_id, db)
 
     selector = selector.strip()
     if not selector:
@@ -748,6 +760,7 @@ async def subscribe_scrape(
         try:
             html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
+            _raise_fetch_error(exc)
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)
         if not links:

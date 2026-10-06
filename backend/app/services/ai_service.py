@@ -72,7 +72,7 @@ class AiCallTimeout(TimeoutError):
 
     A TimeoutError, so everything that already knows what a timeout is reads it
     as one: the job retry policy backs off instead of failing for good, and
-    ``_friendly_ai_error`` says to try again. It carries a message because the
+    ``describe_ai_error`` says to try again. It carries a message because the
     bare TimeoutError ``asyncio.wait_for`` raises has none, and this one ends up
     in a job's error field and the user's banner.
     """
@@ -817,8 +817,13 @@ def _is_connection_error(exc: Exception) -> bool:
     return isinstance(exc, (ConnectionError, httpx.TransportError, APIConnectionError))
 
 
-def _friendly_ai_error(exc: Exception) -> str:
-    """Turn a provider exception into a sentence the settings page can show.
+def describe_ai_error(exc: Exception) -> str:
+    """Turn a provider exception into a sentence the user can act on.
+
+    The one place AI failures are worded: Verify in Settings, chat, article context,
+    Catch me up, briefings, the preference profile and the AI selector all show what
+    this returns, so a bad API key reads as a bad API key everywhere instead of as
+    "try again" in one place and the SDK's raw JSON in another.
 
     Timeouts and connection failures are named because they are the two a
     self-hoster actually hits, and the SDK's own wording ("Request timed out.")
@@ -843,16 +848,24 @@ def _friendly_ai_error(exc: Exception) -> str:
         # Same disguise as above. Whatever answered is not answering like an API.
         return f"{too_large}. Check that the URL points at an OpenAI-compatible API."
 
+    # The SDKs' status errors carry the code; Gemini's and wrapped ones only say it
+    # in the text, hence the string checks next to each.
+    status = getattr(exc, "status_code", None)
     raw = str(exc)
     low = raw.lower()
-    if "not_found" in low or '"404"' in raw or " 404 " in raw:
+    if status == 404 or "not_found" in low or '"404"' in raw or " 404 " in raw:
         return "Model not found. Check the model name."
-    if "401" in raw or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
+    if (status == 401 or "401" in raw or "authentication" in low
+            or "invalid api key" in low or "unauthorized" in low):
         return "Invalid API key."
-    if "429" in raw or "rate_limit" in low or "too many requests" in low:
+    if status == 529 or "overloaded" in low:
+        return "The AI provider is overloaded. Try again in a moment."
+    if status == 429 or "429" in raw or "rate_limit" in low or "too many requests" in low:
         return "Rate limit reached. Try again later."
-    if "403" in raw or "forbidden" in low:
+    if status == 403 or "403" in raw or "forbidden" in low:
         return "Access denied. Check your API key permissions."
+    if isinstance(status, int) and status >= 500:
+        return f"The AI provider returned a server error ({status}). Try again later."
     if _is_timeout(exc):
         return (
             "Timed out waiting for a reply. A local model can take a while to load "
@@ -1031,7 +1044,7 @@ async def verify_ai_slot(
         _extract_text(provider, resp)
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
-        return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
+        return {"ok": False, "model": model, "error": describe_ai_error(exc)}
     finally:
         await close_ai_client(client, provider)
 

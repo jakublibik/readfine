@@ -39,10 +39,12 @@ from app.utils.url_validator import (
 )
 from app.utils.video import video_body_from_feed
 from app.fetcher import host_throttle
+from app.fetcher.errors import NotAFeed
 from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
+    mark_fetch_success,
     record_fetch_failure,
 )
 
@@ -100,7 +102,8 @@ class ParsedFeed(NamedTuple):
 
 
 async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
-    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure.
+    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP failure, and
+    :class:`NotAFeed` when what came back does not parse as a feed.
 
     *auth* is the HTTP Basic pair for a feed that needs one. Subscribing to such a
     feed goes through here before the row exists, so the credentials cannot be read
@@ -118,9 +121,9 @@ async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
         reason = unparseable_reason(page.text)
         if isinstance(parsed.bozo_exception, _sax.SAXParseException):
             # XML parse error means the response is HTML, not RSS
-            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise NotAFeed(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
         if not parsed.entries and not parsed.feed:
-            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise NotAFeed(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
     return ParsedFeed(parsed, page.permanent_url)
 
@@ -195,13 +198,9 @@ async def fetch_feed(
             if resp.status_code == 304:
                 # Unchanged since last fetch — no body to parse. Record a successful
                 # poll and keep the stored validators.
-                feed.last_fetched_at = datetime.now(timezone.utc)
-                feed.last_fetch_duration_ms = int(time.monotonic() * 1000) - start_ms
-                feed.status = "active"
-                feed.last_error = None
-                feed.fetch_error_count = 0
-                feed.block_count = 0
-                feed.retry_after_until = None
+                mark_fetch_success(
+                    feed, datetime.now(timezone.utc), int(time.monotonic() * 1000) - start_ms
+                )
                 await db.commit()
                 host = host_throttle.host_key(feed_url)
                 if resp.rate_limited_until:
@@ -229,13 +228,7 @@ async def fetch_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        feed.last_fetched_at = datetime.now(timezone.utc)
-        feed.last_fetch_duration_ms = duration_ms
-        feed.status = "active"
-        feed.last_error = None
-        feed.fetch_error_count = 0
-        feed.block_count = 0
-        feed.retry_after_until = None
+        mark_fetch_success(feed, datetime.now(timezone.utc), duration_ms)
         # Update validators from this 200, but keep the last-known ones when the
         # response omits a header (some CDNs send ETag only intermittently) so we
         # don't lose the ability to make conditional requests.

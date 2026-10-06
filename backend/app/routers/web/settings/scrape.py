@@ -14,7 +14,9 @@ from app.fetcher.scrape import extract_article_links, fetch_page_html
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.ai_service import ai_client, generate_css_selector_from_sample
+from app.services.ai_service import (
+    ai_client, describe_ai_error, generate_css_selector_from_sample,
+)
 from app.services.feed import subscribe_scrape
 from app.templating import templates
 from app.utils.crypto import auth_pair
@@ -156,21 +158,16 @@ async def settings_scrape_ai_selector(
         if client is None:
             return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Main model not configured. Set it in <a href='/settings/ai' class='underline'>Settings → AI</a>.</div>")
 
-        in_tok = out_tok = 0
         try:
             selector, in_tok, out_tok = await generate_css_selector_from_sample(
                 url, html_sample, history, client, provider, model
             )
         except Exception as e:
-            db.add(AiUsageLog(
-                user_id=user.id, operation="css_selector_generation",
-                model_slot="quality", model=model, provider=provider,
-                input_tokens=in_tok, output_tokens=out_tok,
-            ))
-            await db.commit()
+            # No usage row: a failed call reports no tokens, and a row of zeros would
+            # only count as a run in the statistics.
             prompt_text = build_selector_prompt(url, html_sample, history)
             return templates.TemplateResponse(request, "settings/partials/scrape_ai_error.html", {
-                "error": f"AI error: {e}",
+                "error": f"AI error: {describe_ai_error(e)}",
                 "prompt_text": prompt_text,
             })
 

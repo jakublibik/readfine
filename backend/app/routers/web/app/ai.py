@@ -20,7 +20,7 @@ from app.services.ai_jobs import (
 )
 from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
-from app.utils.url_validator import find_blocked_address
+from app.services.ai_service import describe_ai_error
 
 router = APIRouter(tags=["web-app"])
 
@@ -226,9 +226,7 @@ async def htmx_ai_context_trigger(
                 focus=focus,
             )
         except Exception as exc:
-            # A refused address reaches here as the SDK's bare "Connection error.",
-            # so ask what really happened before quoting it.
-            msg = html_module.escape(str(find_blocked_address(exc) or exc)[:120])
+            msg = html_module.escape(describe_ai_error(exc)[:200])
             return HTMLResponse(
                 f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
             )
@@ -275,22 +273,8 @@ async def htmx_ai_context_trigger(
 
 
 def _ai_chat_error_message(exc: Exception) -> str:
-    """Map an AI-provider exception to a user-facing chat error line."""
-    if find_blocked_address(exc) is not None:
-        # The one failure here that "try again" cannot fix: it is a decision about
-        # the address, not a hiccup, and the same answer comes back every time.
-        return "The AI endpoint is at an address this instance is not allowed to reach."
-    if isinstance(exc, TimeoutError):
-        return "The AI model took too long to answer. Please try again."
-    exc_str = str(exc)
-    status = getattr(exc, "status_code", None)
-    if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
-        return "AI provider is overloaded. Please try again in a moment."
-    if status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
-        return "Rate limit reached. Please wait a moment and try again."
-    if status and status >= 500:
-        return "AI provider returned a server error. Please try again."
-    return "Chat failed. Please try again."
+    """The chat's error line for a failed AI call."""
+    return f"Chat failed: {describe_ai_error(exc)}"
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)
