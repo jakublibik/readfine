@@ -153,6 +153,7 @@ class TestUpdateLabel:
         db = _make_db()
         label = _make_label(name="Old")
         db.execute.return_value = _scalar_result(label)
+        db.scalar = AsyncMock(return_value=None)  # no other label called "New"
 
         async def mock_refresh(obj):
             pass
@@ -163,6 +164,30 @@ class TestUpdateLabel:
 
         assert label.name == "New"
         db.commit.assert_awaited_once()
+
+    async def test_rename_onto_existing_name_raises(self):
+        user = _make_user()
+        db = _make_db()
+        label = _make_label(name="Old")
+        db.execute.return_value = _scalar_result(label)
+        db.scalar = AsyncMock(return_value=2)  # id of the label already called "Sports"
+
+        with pytest.raises(LabelAlreadyExistsError):
+            await update_label(user, label_id=1, payload=LabelUpdate(name="Sports"), db=db)
+
+        assert label.name == "Old"
+        db.commit.assert_not_awaited()
+
+    async def test_explicit_null_leaves_field_alone(self):
+        # PATCH {"color": null} must not write NULL into a NOT NULL column.
+        user = _make_user()
+        db = _make_db()
+        label = _make_label(name="Tech", color="#111111")
+        db.execute.return_value = _scalar_result(label)
+
+        await update_label(user, label_id=1, payload=LabelUpdate(color=None), db=db)
+
+        assert label.color == "#111111"
 
     async def test_partial_update_preserves_other_fields(self):
         user = _make_user()

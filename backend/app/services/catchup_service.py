@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil, floor
+from typing import Literal, get_args
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import exists, func, or_, select
@@ -19,6 +20,17 @@ from app.services.relevance_service import effective_score_sql
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
 from app.services.story_service import DEDUP_OFF, DEDUP_SUPPRESS, row_count
 from app.utils.text import strip_html
+
+# ── Form vocabulary ───────────────────────────────────────────────────────────
+# What the catch-up form can send. The routes take these as their parameter types,
+# so anything else is refused before it reaches a prompt or an email subject.
+CatchupPeriod = Literal["today", "yesterday", "7days"]
+CatchupStatus = Literal["all", "not_opened"]
+CATCHUP_PERIODS: tuple[str, ...] = get_args(CatchupPeriod)
+CATCHUP_STATUSES: tuple[str, ...] = get_args(CatchupStatus)
+# A custom prompt replaces a default of about 500 characters; this leaves plenty
+# of room while keeping one request from carrying a novel to the provider.
+CUSTOM_PROMPT_MAX = 4000
 
 # ── Sampling constants ────────────────────────────────────────────────────────
 _CATCHUP_COVERAGE_RATIO = 0.6          # scoring enabled
@@ -116,6 +128,8 @@ async def validate_scope(user_id: int, scope_include: str | None, db: AsyncSessi
         items = json.loads(scope_include)
     except (json.JSONDecodeError, TypeError):
         raise ValueError("Invalid scope_include JSON")
+    if not isinstance(items, list):
+        raise ValueError("scope_include must be a JSON list")
     await _validate_scope_list(user_id, items, db)
 
 

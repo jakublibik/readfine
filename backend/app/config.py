@@ -196,6 +196,9 @@ class Settings(BaseSettings):
     # one at a time, not when repeated in parallel.
     rate_limit_filter_run: str = "10/minute"
     rate_limit_relevance_suggestions: str = "20/minute"
+    # A manual refresh fetches the feed inside the request. The host throttle only
+    # steps in once the site answers 429, so this keeps one reader from hammering it.
+    rate_limit_feed_refresh: str = "10/minute"
     # An OPML import fetches every new feed in the file inside the request. One import
     # is capped by the feed limit (see services.opml), this caps how often it repeats.
     rate_limit_opml_import: str = "10/hour"

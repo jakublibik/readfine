@@ -196,7 +196,7 @@
             Custom prompt
           </button>
           <div id="prompt-panel" class="hidden mt-2">
-            <textarea name="custom_prompt" id="custom-prompt"
+            <textarea name="custom_prompt" id="custom-prompt" maxlength="{{ custom_prompt_max }}"
                       rows="4" placeholder="{{ default_catchup_prompt }}"
                       class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm font-mono resize-y"></textarea>
             <div class="text-right mt-1">

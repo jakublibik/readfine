@@ -131,7 +131,7 @@
   <div id="custom-endpoint-row" class="mb-5 {% if not custom_selected %}hidden{% endif %}">
     <div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
       <span class="w-16 text-sm font-medium text-gray-700 shrink-0">Endpoint</span>
-      <input type="url" name="ai_custom_base_url"
+      <input type="url" name="ai_custom_base_url" maxlength="500"
              value="{{ custom_base_url_val or '' }}"
              placeholder="http://localhost:11434/v1"
              class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
@@ -168,7 +168,7 @@
         </select>
       </div>
       <div class="flex items-center gap-2 sm:gap-3 sm:flex-1">
-        <input type="text" name="ai_{{ slot }}_model"
+        <input type="text" name="ai_{{ slot }}_model" maxlength="100"
                value="{{ model_val or '' }}"
                placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
                class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">

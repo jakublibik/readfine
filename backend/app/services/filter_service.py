@@ -22,7 +22,7 @@ from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
 from app.services.relevance_service import effective_score, score_cut
-from app.services.scope_tokens import token_matches_article
+from app.services.scope_tokens import token_id, token_matches_article
 
 logger = logging.getLogger(__name__)
 
@@ -192,11 +192,13 @@ async def _validate_scope_list(user_id: int, scope_list: list[str], db: AsyncSes
     feed_ids: list[int] = []
     folder_ids: list[int] = []
     for item in scope_list:
+        if not isinstance(item, str):
+            raise ValueError(f"Invalid scope item: {item!r}")
         try:
             if item.startswith("feed:"):
-                feed_ids.append(int(item[5:]))
+                feed_ids.append(token_id(item[5:]))
             elif item.startswith("folder:"):
-                folder_id = int(item[7:])
+                folder_id = token_id(item[7:])
                 if folder_id != 0:  # 0 = sentinel for "no folder", no DB check needed
                     folder_ids.append(folder_id)
             else:
@@ -329,7 +331,7 @@ async def update_filter(
         await _validate_label_actions(user_id, payload.actions, db)
 
     scalar_fields = payload.model_dump(
-        exclude_unset=True, exclude={"conditions", "actions", "scope_include", "scope_except"}
+        exclude_unset=True, exclude_none=True, exclude={"conditions", "actions", "scope_include", "scope_except"}
     )
     for field, value in scalar_fields.items():
         setattr(f, field, value)

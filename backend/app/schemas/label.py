@@ -1,12 +1,19 @@
 import re
 from datetime import datetime
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.common import SMALLINT_MAX, clean_name
 
 
 class LabelCreate(BaseModel):
     name: str
     color: str = "#6366f1"
-    position: int = 0
+    position: int = Field(0, ge=0, le=SMALLINT_MAX)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return clean_name(v, "Label")
 
     @field_validator("color")
     @classmethod
@@ -19,7 +26,12 @@ class LabelCreate(BaseModel):
 class LabelUpdate(BaseModel):
     name: str | None = None
     color: str | None = None
-    position: int | None = None
+    position: int | None = Field(None, ge=0, le=SMALLINT_MAX)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        return clean_name(v, "Label") if v is not None else None
 
     @field_validator("color")
     @classmethod

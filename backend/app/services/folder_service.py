@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.feed import Folder, UserFeed
 from app.models.user import UserSettings
+from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
 
 FOLDER_ORDER_MODES = ("name", "custom")
 FOLDER_ORDER_DEFAULT = "name"
@@ -46,6 +47,60 @@ async def next_folder_position(db: AsyncSession, user_id: int) -> int:
         select(func.max(Folder.position)).where(Folder.user_id == user_id)
     )
     return (highest or 0) + 1
+
+
+class FolderAlreadyExistsError(Exception):
+    """Raised when a folder would take a name another of the user's folders has."""
+
+
+async def _name_taken(db: AsyncSession, user_id: int, name: str, exclude_id: int | None = None) -> bool:
+    query = select(Folder.id).where(Folder.user_id == user_id, Folder.name == name)
+    if exclude_id is not None:
+        query = query.where(Folder.id != exclude_id)
+    return await db.scalar(query) is not None
+
+
+async def get_folder(db: AsyncSession, user_id: int, folder_id: int) -> Folder | None:
+    return await db.scalar(
+        select(Folder).where(Folder.id == folder_id, Folder.user_id == user_id)
+    )
+
+
+async def create_folder(
+    db: AsyncSession, user_id: int, name: str, position: int | None = None
+) -> Folder:
+    """Create a folder, at the end of the order unless *position* is given.
+
+    *name* is expected cleaned by the schema (stripped, within the column).
+    Raises FolderAlreadyExistsError for a name the user already has.
+    """
+    if await _name_taken(db, user_id, name):
+        raise FolderAlreadyExistsError(name)
+    if position is None:
+        position = await next_folder_position(db, user_id)
+    folder = Folder(user_id=user_id, name=name, position=position)
+    db.add(folder)
+    await db.commit()
+    await db.refresh(folder)
+    return folder
+
+
+async def rename_folder(db: AsyncSession, folder: Folder, name: str) -> None:
+    """Rename *folder*. Raises FolderAlreadyExistsError if another folder has *name*."""
+    if await _name_taken(db, folder.user_id, name, exclude_id=folder.id):
+        raise FolderAlreadyExistsError(name)
+    folder.name = name
+    await db.commit()
+
+
+async def delete_folder(db: AsyncSession, folder: Folder) -> ScopeCleanupResult:
+    """Delete *folder*, dropping it from filter and catch-up scopes first."""
+    cleanup = await strip_scope_references(
+        db, kind="folder", ref_id=folder.id, user_id=folder.user_id
+    )
+    await db.delete(folder)
+    await db.commit()
+    return cleanup
 
 
 async def folder_ids_with_feeds(db: AsyncSession, user_id: int) -> set[int]:

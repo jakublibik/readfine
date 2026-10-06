@@ -56,6 +56,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 # Matches the column width of user_settings.ai_custom_base_url.
 _MAX_BASE_URL_LEN = 500
+_MAX_MODEL_LEN = 100  # ai_fast_model / ai_quality_model are varchar(100)
 
 # Empty is a valid answer: it means "do not score". Anything else has to be long
 # enough to rate an article against, and two characters is not. The bar is low
@@ -232,18 +233,19 @@ async def settings_ai_preferences_save(
         if "ai_custom_base_url" in form
         else s.ai_custom_base_url
     )
+    # Checked before the column has to hold it: ai_custom_base_url is
+    # varchar(500), and anything longer reaches Postgres as a truncation
+    # error, i.e. a 500 page instead of a sentence about the field. Saved even
+    # when no slot is on custom, so checked regardless.
+    if custom_base_url and len(custom_base_url) > _MAX_BASE_URL_LEN:
+        return await _prefs_error(
+            request, user, db,
+            f"That endpoint URL is too long ({len(custom_base_url)} characters). "
+            f"Maximum is {_MAX_BASE_URL_LEN}.",
+            form,
+        )
     uses_custom = "custom" in (fast_provider, quality_provider)
     if uses_custom:
-        # Checked before the column has to hold it: ai_custom_base_url is
-        # varchar(500), and anything longer reaches Postgres as a truncation
-        # error, i.e. a 500 page instead of a sentence about the field.
-        if custom_base_url and len(custom_base_url) > _MAX_BASE_URL_LEN:
-            return await _prefs_error(
-                request, user, db,
-                f"That endpoint URL is too long ({len(custom_base_url)} characters). "
-                f"Maximum is {_MAX_BASE_URL_LEN}.",
-                form,
-            )
         if not custom_base_url:
             return await _prefs_error(
                 request, user, db,
@@ -279,6 +281,15 @@ async def settings_ai_preferences_save(
             )
 
     fast_model = (form.get("ai_fast_model") or "").strip() or None
+    quality_model = (form.get("ai_quality_model") or "").strip() or None
+    for model in (fast_model, quality_model):
+        if model and len(model) > _MAX_MODEL_LEN:
+            return await _prefs_error(
+                request, user, db,
+                f"That model name is too long ({len(model)} characters). "
+                f"Maximum is {_MAX_MODEL_LEN}.",
+                form,
+            )
     # The fast slot is the one scoring runs on, and a model that always reasons has
     # nothing left of its ten tokens by the time it should answer — it would fail on
     # every article and only say so in the error banner. Ask the model itself before
@@ -300,7 +311,7 @@ async def settings_ai_preferences_save(
     s.ai_fast_provider = fast_provider
     s.ai_fast_model = fast_model
     s.ai_quality_provider = quality_provider
-    s.ai_quality_model = (form.get("ai_quality_model") or "").strip() or None
+    s.ai_quality_model = quality_model
     s.ai_scoring_enabled_default = form.get("ai_scoring_enabled_default") == "on"
     s.ai_summary_enabled_default = form.get("ai_summary_enabled_default") == "on"
     s.ai_chat_enabled = form.get("ai_chat_enabled") == "on"

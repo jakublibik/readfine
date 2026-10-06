@@ -21,6 +21,7 @@ from app.models.user import User, UserCatchupConfig, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.ai_profile_service import PROFILE_MAX_CHARS
 from app.services.briefing_service import reschedule_briefings
+from app.services.catchup_service import CATCHUP_PERIODS, CATCHUP_STATUSES
 from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.services.folder_service import (
@@ -96,9 +97,6 @@ _FEED_PURGE_ATTRS = {"purge-after-days": "purge_after_days", "purge-keep-count":
 # and the ceiling for admins, who have no feed limit.
 _MIN_FAILED_TRIES = 20
 _ADMIN_FEED_TRIES = 2000
-
-_CATCHUP_PERIODS = ("today", "yesterday", "7days")
-_CATCHUP_STATUSES = ("all", "not_opened")
 
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
@@ -1041,7 +1039,7 @@ async def _import_filters(
         if not isinstance(fd, dict):
             continue
         try:
-            name = str(fd.get("name") or f"Imported filter {i + 1}")[:100]
+            name = str(fd.get("name") or "").strip()[:100] or f"Imported filter {i + 1}"
 
             # Detect format: our own export (has "match_operator") vs TTRSS (has "match_any_rule" / "rules")
             is_readfine = "match_operator" in fd
@@ -1058,17 +1056,18 @@ async def _import_filters(
             await db.commit()
 
             if is_readfine:
-                payload = _parse_readfine_filter(fd, labels.ids, feed_url_to_id, folder_name_to_id, result)
+                payload = _parse_readfine_filter(
+                    fd, labels.ids, feed_url_to_id, folder_name_to_id, result, filter_name=name
+                )
             else:
                 payload = _parse_ttrss_filter(
-                    fd, labels.ids, feed_title_to_id, folder_name_to_id, result
+                    fd, labels.ids, feed_title_to_id, folder_name_to_id, result, filter_name=name
                 )
 
             if payload is None:
                 result.filters_skipped += 1
                 continue
 
-            payload.name = name
             # Collapse duplicate conditions. TTRSS scope is per-rule, so once we
             # factor it up to the filter (e.g. a "match-all on 9 feeds" filter),
             # the rules degenerate into identical (field, operator, value) triples;
@@ -1109,15 +1108,17 @@ def _parse_readfine_filter(
     feed_url_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    filter_name: str = "Imported filter",
 ) -> FilterCreate | None:
     """Parse our own export format."""
     conditions = []
     for c in fd.get("conditions", []):
+        cond_position = _int_or_none(c.get("position"))
         conditions.append(FilterConditionCreate(
             field=c["field"],
             operator=c["operator"],
             value=c["value"],
-            position=c.get("position", 0),
+            position=cond_position if cond_position is not None and 0 <= cond_position <= _SMALLINT_MAX else 0,
         ))
 
     actions = []
@@ -1154,7 +1155,7 @@ def _parse_readfine_filter(
 
     position = _int_or_none(fd.get("position"))
     return FilterCreate(
-        name="",
+        name=filter_name,
         is_active=is_active,
         match_operator=fd.get("match_operator", "AND"),
         position=position if position is not None and 0 <= position <= _SMALLINT_MAX else 0,
@@ -1232,6 +1233,7 @@ def _parse_ttrss_filter(
     feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    filter_name: str = "Imported filter",
 ) -> FilterCreate | None:
     """Parse TTRSS OPML filter format (best-effort)."""
     match_operator = "OR" if _truthy(fd.get("match_any_rule")) else "AND"
@@ -1299,7 +1301,7 @@ def _parse_ttrss_filter(
     scope_include = _derive_filter_scope(fd.get("name"), rule_scopes, unresolved_scope, result)
 
     return FilterCreate(
-        name="",
+        name=filter_name,
         is_active=_truthy(fd.get("enabled", True)),
         match_operator=match_operator,
         scope_include=scope_include,
@@ -1564,7 +1566,7 @@ async def _import_catchups(
         name = str(item.get("name") or "").strip()[:100]
         if not name:
             continue
-        period = item.get("period") if item.get("period") in _CATCHUP_PERIODS else "7days"
+        period = item.get("period") if item.get("period") in CATCHUP_PERIODS else "7days"
         if (name, period) in taken:
             result.catchups_skipped += 1
             continue
@@ -1586,7 +1588,7 @@ async def _import_catchups(
             user_id=user.id,
             name=name,
             period=period,
-            filter_status=status if status in _CATCHUP_STATUSES else "all",
+            filter_status=status if status in CATCHUP_STATUSES else "all",
             scope_include=json.dumps(scope) if scope else None,
             label_filter=json.dumps(label_tokens) if label_tokens else None,
             filter_score_min=score_min / 100 if score_ok else None,

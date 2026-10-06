@@ -27,7 +27,7 @@
   <div class="space-y-4">
     <div>
       <label class="block text-sm font-medium text-gray-700 mb-1">Name</label>
-      <input type="text" name="name" required autocomplete="off"
+      <input type="text" name="name" maxlength="100" required autocomplete="off"
              value="{{ fv.name if fv else '' }}"
              class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
     </div>

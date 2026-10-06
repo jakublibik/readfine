@@ -12,7 +12,14 @@ from app.services.saved_search_service import strip_saved_search_references
 
 
 class LabelAlreadyExistsError(Exception):
-    """Raised when creating a label whose name already exists for the user."""
+    """Raised when a label would take a name another of the user's labels has."""
+
+
+async def _name_taken(db: AsyncSession, user_id: int, name: str, exclude_id: int | None = None) -> bool:
+    query = select(Label.id).where(Label.user_id == user_id, Label.name == name)
+    if exclude_id is not None:
+        query = query.where(Label.id != exclude_id)
+    return await db.scalar(query) is not None
 
 
 async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
@@ -25,10 +32,7 @@ async def list_labels(user: User, db: AsyncSession) -> list[LabelResponse]:
 
 
 async def create_label(user: User, payload: LabelCreate, db: AsyncSession) -> LabelResponse:
-    existing = await db.scalar(
-        select(Label).where(Label.user_id == user.id, Label.name == payload.name)
-    )
-    if existing is not None:
+    if await _name_taken(db, user.id, payload.name):
         raise LabelAlreadyExistsError(payload.name)
     label = Label(
         user_id=user.id,
@@ -45,13 +49,20 @@ async def create_label(user: User, payload: LabelCreate, db: AsyncSession) -> La
 async def update_label(
     user: User, label_id: int, payload: LabelUpdate, db: AsyncSession
 ) -> LabelResponse | None:
+    """Update a label; None if it is not the user's.
+
+    Raises LabelAlreadyExistsError when renaming onto another label's name.
+    """
     result = await db.execute(
         select(Label).where(Label.id == label_id, Label.user_id == user.id)
     )
     label = result.scalar_one_or_none()
     if not label:
         return None
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    if payload.name is not None and await _name_taken(db, user.id, payload.name, exclude_id=label.id):
+        raise LabelAlreadyExistsError(payload.name)
+    # None means "leave as is": every column here is NOT NULL.
+    for field, value in payload.model_dump(exclude_unset=True, exclude_none=True).items():
         setattr(label, field, value)
     await db.commit()
     await db.refresh(label)

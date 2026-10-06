@@ -240,6 +240,19 @@ async def _verify_feed_url(
     return permanent_url or url
 
 
+FEED_URL_MAX = 2048  # feeds.feed_url is varchar(2048)
+
+
+def _check_url_length(url: str) -> None:
+    """Refuse an address the column cannot hold, before anything fetches it.
+
+    Past the column it would fail as a database error on insert, and cutting it
+    down would store and poll a different address from the one that was checked.
+    """
+    if len(url) > FEED_URL_MAX:
+        raise ValueError(f"Feed URL is too long (max {FEED_URL_MAX} characters)")
+
+
 async def change_feed_url(
     db: AsyncSession, feed: Feed, new_url: str, *, verify: bool = True
 ) -> bool:
@@ -264,8 +277,7 @@ async def change_feed_url(
     new_url = (new_url or "").strip()
     if not new_url:
         raise ValueError("Feed URL cannot be empty")
-    if len(new_url) > 2048:
-        raise ValueError("Feed URL is too long (max 2048 characters)")
+    _check_url_length(new_url)
 
     # Credentials in the address move into the auth columns, as they do on subscribe:
     # left in feed_url they would reach the backups, the admin screens and an OPML
@@ -533,6 +545,7 @@ async def subscribe(
         fetch_auth_user, fetch_auth_pass = url_auth_user, url_auth_pass
     if fetch_auth_user and len(fetch_auth_user) > 255:
         raise ValueError("Username is too long (max 255 characters)")
+    _check_url_length(url)
 
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
@@ -583,7 +596,8 @@ async def subscribe(
         # Create the row on the address the host actually serves. Storing the URL the
         # user typed would make every later poll walk the same redirect chain, and on
         # an OPML re-import it would create a second row for a feed we already have.
-        if permanent_url and permanent_url != url:
+        # One too long to store keeps the typed address, which still works.
+        if permanent_url and permanent_url != url and len(permanent_url) <= FEED_URL_MAX:
             url = permanent_url
             await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
             feed = await _existing_public_feed(url)
@@ -744,6 +758,7 @@ async def subscribe_scrape(
     is_private = auth is not None
     if auth_user and len(auth_user) > 255:
         raise ValueError("Username is too long (max 255 characters)")
+    _check_url_length(url)
 
     await async_validate_feed_url(url)
     await _check_subscribe_preconditions(user, folder_id, db)
@@ -791,14 +806,14 @@ async def subscribe_scrape(
             raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     else:
         feed = Feed(
-            feed_url=url[:2048],
+            feed_url=url,
             feed_type="scrape",
             is_private=is_private,
             fetch_auth_user=auth_user,
             # See subscribe(): non-NULL, not truthy, so an empty password survives.
             fetch_auth_pass_encrypted=encrypt(auth_pass) if auth_pass is not None else None,
             title=title[:255],
-            site_url=url[:2048],
+            site_url=url,
             type_config={"article_links_selector": selector},
             subscriber_count=0,
             fetch_interval_min=fetch_interval_min,

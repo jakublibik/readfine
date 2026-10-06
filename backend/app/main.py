@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 import secrets
 from urllib.parse import quote
@@ -284,6 +283,7 @@ def create_app() -> FastAPI:
     import logging
     from pydantic import ValidationError as _PydanticValidationError
     from sqlalchemy.exc import IntegrityError as _IntegrityError
+    from app.utils.htmx import error_toast, validation_message
 
     _UNIQUE_VIOLATION = "23505"
 
@@ -291,13 +291,7 @@ def create_app() -> FastAPI:
         if request.url.path.startswith("/api/"):
             return JSONResponse({"detail": message}, status_code=status)
         if request.headers.get("HX-Request"):
-            # htmx does not swap an error response, but it does fire HX-Trigger, so the
-            # message lands in a toast. app.js skips its generic fallback toast for
-            # responses that carry one of their own.
-            return Response(
-                status_code=status,
-                headers={"HX-Trigger": json.dumps({"showToast": {"msg": message, "type": "error"}})},
-            )
+            return error_toast(message, status)
         return _templates.TemplateResponse(
             request, "errors/client.html", {"status": status, "message": message},
             status_code=status,
@@ -308,13 +302,7 @@ def create_app() -> FastAPI:
         # model from bad data of our own, and that should not pass as a user mistake.
         logging.getLogger(__name__).warning(
             "Validation error on %s %s", request.method, request.url.path, exc_info=exc)
-        errors = exc.errors(include_url=False)
-        message = "Invalid input."
-        if errors:
-            field = ".".join(str(p) for p in errors[0].get("loc", ()))
-            text_ = errors[0].get("msg", "")
-            message = f"Invalid {field}: {text_}." if field else f"Invalid input: {text_}."
-        return _client_error_response(request, 400, message)
+        return _client_error_response(request, 400, validation_message(exc))
 
     async def integrity_error_handler(request: Request, exc: _IntegrityError):
         if db.sqlstate(exc) != _UNIQUE_VIOLATION:

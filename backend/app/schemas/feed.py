@@ -1,19 +1,11 @@
 from datetime import datetime
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
-# Ceilings of the columns these land in (SmallInteger, String(n)). Without them a
-# value past the column fails in the database as a 500 instead of a 422.
-_SMALLINT_MAX = 32767
-_FOLDER_NAME_MAX = 100
+from app.schemas.common import SMALLINT_MAX as _SMALLINT_MAX, clean_name
 
 
 def _folder_name(v: str) -> str:
-    v = v.strip()
-    if not v:
-        raise ValueError("Folder name cannot be empty")
-    if len(v) > _FOLDER_NAME_MAX:
-        raise ValueError(f"Folder name cannot be longer than {_FOLDER_NAME_MAX} characters")
-    return v
+    return clean_name(v, "Folder")
 
 
 class FolderCreate(BaseModel):

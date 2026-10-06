@@ -1,7 +1,9 @@
 import json
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
+
+from app.schemas.common import SMALLINT_MAX, clean_name
 
 FieldType = Literal[
     "title_or_content", "title", "content", "author", "url", "published_at",
@@ -17,7 +19,7 @@ class FilterConditionCreate(BaseModel):
     field: FieldType
     operator: OperatorType
     value: str
-    position: int = 0
+    position: int = Field(0, ge=0, le=SMALLINT_MAX)
 
 
 class FilterActionCreate(BaseModel):
@@ -29,24 +31,34 @@ class FilterCreate(BaseModel):
     name: str
     is_active: bool = True
     match_operator: MatchOperator = "AND"
-    position: int = 0
+    position: int = Field(0, ge=0, le=SMALLINT_MAX)
     stop_on_match: bool = False
     scope_include: list[str] = []
     scope_except: list[str] = []
     conditions: list[FilterConditionCreate] = []
     actions: list[FilterActionCreate] = []
 
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        return clean_name(v, "Filter")
+
 
 class FilterUpdate(BaseModel):
     name: str | None = None
     is_active: bool | None = None
     match_operator: MatchOperator | None = None
-    position: int | None = None
+    position: int | None = Field(None, ge=0, le=SMALLINT_MAX)
     stop_on_match: bool | None = None
     scope_include: list[str] | None = None
     scope_except: list[str] | None = None
     conditions: list[FilterConditionCreate] | None = None
     actions: list[FilterActionCreate] | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        return clean_name(v, "Filter") if v is not None else None
 
 
 class FilterConditionResponse(BaseModel):

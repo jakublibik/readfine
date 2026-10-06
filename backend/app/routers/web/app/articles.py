@@ -32,7 +32,7 @@ from app.services.article import (
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result, claim_queued_readable
 from app.services.relevance_terms_service import show_relevance_intro
-from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens, token_id
 from app.services.saved_search_service import get_saved_search
 from app.services.search_params import (
     list_kwargs, modal_values, normalize_search_params, search_score, search_state,
@@ -146,18 +146,36 @@ async def _summary_after_star_bg(article_id: int, user_id: int) -> None:
         logger.info("star summary: article=%d user=%d processed", article_id, user_id)
 
 
+def _article_ids(value) -> list[int]:
+    """Up to 500 article ids from a JSON list, anything that is not one dropped."""
+    if not isinstance(value, list):
+        return []
+    ids = []
+    for item in value[:500]:
+        try:
+            ids.append(token_id(str(item)))
+        except ValueError:
+            pass
+    return ids
+
+
 @router.post("/htmx/articles/set-read-batch")
 async def htmx_set_read_batch(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    data = await request.json()
-    ids = [int(i) for i in (data.get("ids") or [])[:500] if str(i).isdigit()]
+    try:
+        data = await request.json()
+    except ValueError:
+        return HTMLResponse("Invalid JSON", status_code=400)
+    if not isinstance(data, dict):
+        return HTMLResponse("Expected a JSON object", status_code=400)
+    ids = _article_ids(data.get("ids"))
     # Rows whose story is unfolded in the list right now. They are read one by one
     # like any other row and do not close the rest of their group; the browser is the
     # only place that knows which those are.
-    unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    unfolded = _article_ids(data.get("unfolded"))
     await touch_last_active(user, db, request.session)
     await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)

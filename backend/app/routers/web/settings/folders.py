@@ -1,18 +1,19 @@
 """Web routes for folder CRUD in settings."""
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
-from app.models.feed import Folder
 from app.models.user import User
+from app.schemas.feed import FolderCreate
 from app.services.folder_service import (
-    move_folder, next_folder_position, reset_folder_order, set_folder_order,
+    FolderAlreadyExistsError, create_folder, delete_folder, get_folder, move_folder,
+    rename_folder, reset_folder_order, set_folder_order,
 )
-from app.services.scope_cleanup import strip_scope_references
 from app.templating import templates
+from app.utils.htmx import error_toast, validation_message
 
 from .common import _get_feeds_context, _get_or_create_settings
 
@@ -26,15 +27,13 @@ async def settings_folder_create(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    name = form.get("name", "").strip()
-    if name:
-        existing = await db.execute(
-            select(Folder).where(Folder.user_id == user.id, Folder.name == name)
-        )
-        if not existing.scalar_one_or_none():
-            position = await next_folder_position(db, user.id)
-            db.add(Folder(user_id=user.id, name=name, position=position))
-            await db.commit()
+    try:
+        payload = FolderCreate(name=form.get("name", ""))
+        await create_folder(db, user.id, payload.name)
+    except ValidationError as exc:
+        return error_toast(validation_message(exc))
+    except FolderAlreadyExistsError:
+        return error_toast(f'A folder named "{payload.name}" already exists.', 409)
     ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         **ctx,
@@ -49,15 +48,8 @@ async def settings_folder_delete(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-    )
-    folder = result.scalar_one_or_none()
-    cleanup = None
-    if folder:
-        cleanup = await strip_scope_references(db, kind="folder", ref_id=folder_id, user_id=user.id)
-        await db.delete(folder)
-        await db.commit()
+    folder = await get_folder(db, user.id, folder_id)
+    cleanup = await delete_folder(db, folder) if folder else None
     ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         **ctx,
@@ -73,10 +65,7 @@ async def settings_folder_rename_form(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-    )
-    folder = result.scalar_one_or_none()
+    folder = await get_folder(db, user.id, folder_id)
     if not folder:
         return HTMLResponse("", status_code=404)
     return templates.TemplateResponse(request, "settings/partials/folder_rename_form.html", {
@@ -92,14 +81,15 @@ async def settings_folder_rename(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
-    name = form.get("name", "").strip()
-    result = await db.execute(
-        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-    )
-    folder = result.scalar_one_or_none()
-    if folder and name:
-        folder.name = name
-        await db.commit()
+    folder = await get_folder(db, user.id, folder_id)
+    if folder:
+        try:
+            payload = FolderCreate(name=form.get("name", ""))
+            await rename_folder(db, folder, payload.name)
+        except ValidationError as exc:
+            return error_toast(validation_message(exc))
+        except FolderAlreadyExistsError:
+            return error_toast(f'A folder named "{payload.name}" already exists.', 409)
     ctx = await _get_feeds_context(user, db)
     return templates.TemplateResponse(request, "settings/partials/feeds_list.html", {
         **ctx,

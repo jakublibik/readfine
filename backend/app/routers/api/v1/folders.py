@@ -7,10 +7,8 @@ from app.database import get_db
 from app.models.feed import Folder
 from app.models.user import User
 from app.schemas.feed import FolderCreate, FolderResponse, FolderUpdate
-from app.services.folder_service import (
-    folder_order_clause, get_folder_order, next_folder_position,
-)
-from app.services.scope_cleanup import strip_scope_references
+from app.services import folder_service
+from app.services.folder_service import FolderAlreadyExistsError, get_folder
 
 router = APIRouter(prefix="/folders", tags=["folders"])
 
@@ -22,7 +20,7 @@ async def list_folders(
 ):
     # Same order the web UI shows, so a client rendering a sidebar from this
     # does not contradict what the user arranged in settings.
-    order = folder_order_clause(await get_folder_order(db, user.id))
+    order = folder_service.folder_order_clause(await folder_service.get_folder_order(db, user.id))
     result = await db.execute(
         select(Folder).where(Folder.user_id == user.id).order_by(*order)
     )
@@ -35,20 +33,10 @@ async def create_folder(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    existing = await db.execute(
-        select(Folder).where(Folder.user_id == user.id, Folder.name == payload.name)
-    )
-    if existing.scalar_one_or_none():
+    try:
+        return await folder_service.create_folder(db, user.id, payload.name, payload.position)
+    except FolderAlreadyExistsError:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Folder name already exists")
-
-    position = payload.position
-    if position is None:
-        position = await next_folder_position(db, user.id)
-    folder = Folder(user_id=user.id, name=payload.name, position=position)
-    db.add(folder)
-    await db.commit()
-    await db.refresh(folder)
-    return folder
 
 
 @router.patch("/{folder_id}", response_model=FolderResponse)
@@ -58,30 +46,19 @@ async def update_folder(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-    )
-    folder = result.scalar_one_or_none()
+    folder = await get_folder(db, user.id, folder_id)
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
 
-    if payload.name is not None:
-        # Check name uniqueness (ignore self)
-        dup = await db.execute(
-            select(Folder).where(
-                Folder.user_id == user.id,
-                Folder.name == payload.name,
-                Folder.id != folder_id,
-            )
-        )
-        if dup.scalar_one_or_none():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Folder name already exists")
-        folder.name = payload.name
-
     if payload.position is not None:
         folder.position = payload.position
-
-    await db.commit()
+    if payload.name is not None:
+        try:
+            await folder_service.rename_folder(db, folder, payload.name)  # commits the position too
+        except FolderAlreadyExistsError:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Folder name already exists")
+    else:
+        await db.commit()
     await db.refresh(folder)
     return folder
 
@@ -92,13 +69,7 @@ async def delete_folder(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-    )
-    folder = result.scalar_one_or_none()
+    folder = await get_folder(db, user.id, folder_id)
     if not folder:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found")
-
-    await strip_scope_references(db, kind="folder", ref_id=folder_id, user_id=user.id)
-    await db.delete(folder)
-    await db.commit()
+    await folder_service.delete_folder(db, folder)

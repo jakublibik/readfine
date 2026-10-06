@@ -21,6 +21,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Changed
 
 - A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on at once. Briefings to your own address only, and those of admins, have no limit.
+- Refreshing a feed by hand is limited to 10 times a minute.
 
 ### Fixed
 
@@ -35,7 +36,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Deleting an account left behind the articles only that account had starred, archived or saved by URL, until retention removed them weeks later. They are now deleted with the account. Articles another reader keeps stay.
 - After you unsubscribed from a feed, or unstarred or unsaved an article that no longer had a feed, its labels stayed. The article then sat in the label's list, could not be opened or marked read, and kept the label's unread count up. Labels now go with your access to the article, and the upgrade removes the ones left over. An AI score still queued when you unsubscribed could also bring a label or a star back through your filters. Unsubscribing now cancels those scores.
 - A feed that failed partway through an OPML import made every feed after it fail too, and the import then ended in an error. Two people adding the same new feed at the same moment no longer fails either.
-- Some input the app does not accept, such as a name that is too long or one you already use, ended in a server error page. The app now says what was wrong. The API answers with a validation error (to a folder name over 100 characters, or a position or retention value above 32767, among others) and with 409 to a name that already exists.
+- Some input the app does not accept, such as a name that is too long or one you already use, ended in a server error page. The app now says what was wrong. That covers renaming a folder to a name another folder has, a label or filter name of only spaces, and long names of folders, labels, filters and AI models. Creating a folder that already exists now says so instead of doing nothing. The API answers with a validation error (to a name over 100 characters, or a position or retention value above 32767, among others) and with 409 to a name that already exists, now also when renaming a label.
 - Adding a feed through the API ended in a server error when its address could not be fetched (a 404, a timeout). It now answers 400 with the reason. **Test** and **Subscribe** in **Settings → Feeds** give the same message for the same problem, and an OPML import names the reason for each feed that failed in plain words.
 - A wrong API key or model name now says so in chat, article context, **Catch me up**, briefings and the AI selector for scrape feeds. Before, these said "try again" or showed the provider's raw response.
 - Articles you scrolled past just before closing the tab could stay unread.

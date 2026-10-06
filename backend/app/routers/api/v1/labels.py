@@ -48,7 +48,13 @@ async def patch_label(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    label = await update_label(user, label_id, payload, db)
+    try:
+        label = await update_label(user, label_id, payload, db)
+    except LabelAlreadyExistsError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f'A label named "{payload.name}" already exists.',
+        )
     if not label:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Label not found")
     return label

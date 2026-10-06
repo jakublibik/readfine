@@ -16,6 +16,7 @@ from app.database import get_db
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally
+from app.services.catchup_service import CUSTOM_PROMPT_MAX, CatchupPeriod, CatchupStatus
 from app.services.label_service import list_labels
 from app.templating import templates
 from app.utils.markdown import md_render_ai
@@ -100,6 +101,7 @@ async def catchup_page(
         "labels": user_labels,
         "saved_configs": saved_configs,
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
+        "custom_prompt_max": CUSTOM_PROMPT_MAX,
         "period_descs": period_descs,
         "smtp_available": smtp_available,
         # Digests and briefings run on the main model only, so a user who set up
@@ -111,8 +113,8 @@ async def catchup_page(
 @router.get("/htmx/catch-me-up/estimate", response_class=HTMLResponse)
 async def htmx_catchup_estimate(
     request: Request,
-    period: str = Query("7days"),
-    filter_status: str = Query("all"),
+    period: CatchupPeriod = Query("7days"),
+    filter_status: CatchupStatus = Query("all"),
     label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
@@ -190,13 +192,13 @@ async def _cost_line(
 @limiter.limit(app_settings_config.rate_limit_ai_catchup)
 async def htmx_catchup_generate(
     request: Request,
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     config_id: int | None = Form(None),
     user: User = Depends(get_current_user),
@@ -339,12 +341,12 @@ async def htmx_catchup_config_create(
     request: Request,
     name: str = Form(...),
     scope_include: str | None = Form(None),
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -410,12 +412,12 @@ async def htmx_catchup_config_update(
     request: Request,
     name: str = Form(...),
     scope_include: str | None = Form(None),
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -439,7 +441,8 @@ async def htmx_catchup_config_update(
     except ValueError as exc:
         return HTMLResponse(f'<div class="text-red-600 text-sm">Invalid scope: {html_module.escape(str(exc)[:200])}</div>', status_code=422)
 
-    config.name = name.strip()[:100]
+    # An emptied name field keeps the old name rather than saving a blank one.
+    config.name = name.strip()[:100] or config.name
     config.scope_include = scope_include
     config.period = period
     config.filter_status = filter_status
