@@ -20,6 +20,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Changed
 
+- Mail can now go out over port 465 (implicit TLS). Before, a mail server on that port left every send hanging until it timed out. Set the port in **Admin → Settings → SMTP**. The TLS box is for STARTTLS on other ports such as 587.
 - A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on at once. Briefings to your own address only, and those of admins, have no limit.
 - Refreshing a feed by hand is limited to 10 times a minute, and so is adding a scrape feed.
 - A message in the chat about an article is limited to 2,000 characters, like the general chat.

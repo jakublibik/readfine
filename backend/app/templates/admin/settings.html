@@ -279,9 +279,12 @@
       </div>
       <div class="flex items-center justify-between gap-4">
         <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">TLS</label>
-        <input type="checkbox" name="smtp_use_tls" value="true"
-               {% if s.smtp_use_tls %}checked{% endif %}
-               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        <div class="flex-1 flex items-center gap-2">
+          <input type="checkbox" name="smtp_use_tls" value="true" id="smtp_use_tls"
+                 {% if s.smtp_use_tls %}checked{% endif %}
+                 class="w-4 h-4 text-blue-600 rounded border-gray-300">
+          <label for="smtp_use_tls" class="text-xs text-gray-500">STARTTLS. Port 465 always uses implicit TLS instead.</label>
+        </div>
       </div>
       <div class="space-y-2">
         <div class="flex items-center gap-3">
