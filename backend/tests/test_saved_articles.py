@@ -7,11 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.requests import Request
 
-from app.services.readable_service import (
-    _extract_title,
-    apply_readable_result,
-    title_from_url,
-)
+from app.services.readable_service import apply_readable_result, title_from_url
+from app.services.readable_checks import _extract_title
 from app.services.saved_article_service import (
     _USABLE_CONTENT_CHARS,
     adopt_resolved_url,

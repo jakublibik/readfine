@@ -16,10 +16,7 @@ from app.services.readable_service import (
     _extract_with_trafilatura,
     _extract_with_readability,
     _strip_pre_extraction_noise,
-    _lift_mediawiki_chrome,
-    _restore_wiki_tables,
     _meta_refresh_target,
-    _looks_like_a_bot_wall,
     _prefer_readability,
     _repair_headings,
     _has_visible_content,
@@ -27,6 +24,8 @@ from app.services.readable_service import (
     _drop_empty_blocks,
     _EMPTY_CONTENT_MSG,
 )
+from app.services.readable_checks import _looks_like_a_bot_wall
+from app.services.readable_wiki import _lift_mediawiki_chrome, _restore_wiki_tables
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -721,28 +720,28 @@ class TestContentContradictsPage:
     thing that gives it away is that the text has nothing to do with the page's own
     og:description (which on a real article is the lede)."""
 
-    from app.services.readable_service import _content_contradicts_page as _check
+    from app.services.readable_checks import _content_contradicts_page as _check
 
     LEDE = ("Czech Hydrometeorological Institute declared a smog situation for the "
             "whole Usti region and Prague because of high ground level ozone "
             "concentrations, warning seniors and children about physical exertion")
 
     def test_consent_wall_is_rejected(self):
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         consent = ("<p>If you consent to advertising cookies and other network "
                    "identifiers for targeted advertising purposes, our partners will "
                    "display personalised commercial messages based on profiling.</p>")
         assert _content_contradicts_page(consent, self.LEDE) is True
 
     def test_real_article_body_passes(self):
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         body = "<p>" + self.LEDE + ". The institute added further detail.</p>"
         assert _content_contradicts_page(body, self.LEDE) is False
 
     def test_partial_overlap_still_passes(self):
         """The threshold sits far below the worst legitimate case measured (0.55),
         so a lede that is only loosely echoed must not be flagged."""
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         body = ("<p>Czech Hydrometeorological Institute warned about ozone "
                 "concentrations and physical exertion outdoors today.</p>")
         assert _content_contradicts_page(body, self.LEDE) is False
@@ -750,17 +749,17 @@ class TestContentContradictsPage:
     def test_short_description_skips_the_check(self):
         """Under the word floor the score is noise, so the check must abstain rather
         than guess — abstaining means behaving exactly as before."""
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         assert _content_contradicts_page("<p>totally unrelated text here</p>",
                                          "Latest news") is False
 
     def test_missing_description_skips_the_check(self):
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         assert _content_contradicts_page("<p>anything at all</p>", None) is False
 
     def test_empty_body_is_not_flagged_here(self):
         """Empty content is _EMPTY_CONTENT_MSG's job, handled before this runs."""
-        from app.services.readable_service import _content_contradicts_page
+        from app.services.readable_checks import _content_contradicts_page
         assert _content_contradicts_page("", self.LEDE) is False
 
 
@@ -778,7 +777,8 @@ class TestRejectWrongContentIsOptIn:
         assert r.error is None
 
     def test_on_when_requested(self):
-        from app.services.readable_service import extract_readable_with_title, _WRONG_CONTENT_MSG
+        from app.services.readable_service import extract_readable_with_title
+        from app.services.readable_checks import _WRONG_CONTENT_MSG
         consent = "<p>" + ("consent advertising cookies partners profiling " * 20) + "</p>"
         head = '<meta property="og:description" content="Institute declared smog situation because ground level ozone concentrations warned seniors children physical exertion outdoors">'
         page = "<html><head>" + head + "</head><body>" + consent + "</body></html>"
@@ -826,7 +826,8 @@ class TestLooksLikeABotWall:
         assert _looks_like_a_bot_wall("") is False
 
     def test_reported_as_its_own_failure(self):
-        from app.services.readable_service import extract_readable_with_title, _BOT_WALL_MSG
+        from app.services.readable_service import extract_readable_with_title
+        from app.services.readable_checks import _BOT_WALL_MSG
         page = "<html><body>" + self.PUBMED + "</body></html>"
         with patch("app.services.readable_service._fetch_html",
                    return_value=(page, None, None, "https://x.invalid/a")):
@@ -844,7 +845,8 @@ class TestLooksLikeABotWall:
         assert r.error is None
 
     def test_failure_is_terminal(self):
-        from app.services.readable_service import apply_readable_result, _BOT_WALL_MSG
+        from app.services.readable_service import apply_readable_result
+        from app.services.readable_checks import _BOT_WALL_MSG
         article = _make_article()
         apply_readable_result(article, None, _BOT_WALL_MSG, None)
         assert article.readable_status == "failed"
@@ -862,7 +864,7 @@ class TestResolveArticleUrl:
     OGURL = '<meta property="og:url" content="https://www.idnes.cz/zpravy/story">'
 
     def test_prefers_same_host_canonical(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url(
             "https://www.idnes.cz/zpravy/story?utm_source=rss",
             "<html><head>" + self.CANON + "</head></html>",
@@ -870,7 +872,7 @@ class TestResolveArticleUrl:
         assert out == "https://www.idnes.cz/zpravy/story"
 
     def test_falls_back_to_og_url(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url(
             "https://www.idnes.cz/zpravy/story?x=1",
             "<html><head>" + self.OGURL + "</head></html>",
@@ -881,23 +883,23 @@ class TestResolveArticleUrl:
         """A syndicated article naming the original publisher as canonical must not
         drag this article's URL onto another site — that would let dedup attach the
         save to an entirely different article."""
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         page = '<html><head><link rel="canonical" href="https://origin.example/other"></head></html>'
         out = resolve_article_url("https://syndicator.example/copy", page)
         assert out == "https://syndicator.example/copy"
 
     def test_relative_canonical_is_ignored(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         page = '<html><head><link rel="canonical" href="/zpravy/story"></head></html>'
         out = resolve_article_url("https://www.idnes.cz/a", page)
         assert out == "https://www.idnes.cz/a"
 
     def test_no_canonical_keeps_the_fetched_url(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         assert resolve_article_url("https://ex.invalid/a", "<html></html>") == "https://ex.invalid/a"
 
     def test_nothing_fetched(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         assert resolve_article_url(None, "<html></html>") is None
 
     def test_cross_host_redirect_to_a_page_naming_no_address_is_refused(self):
@@ -905,7 +907,7 @@ class TestResolveArticleUrl:
         nor og:url arrived at an interstitial, not at the article. Pasting a Google
         News link lands on consent.google.com exactly like this, and adopting that
         address would make the consent page the saved article's permanent home."""
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url(
             "https://consent.google.com/ml?continue=x",
             "<html><head><title>Before you continue</title></head></html>",
@@ -916,7 +918,7 @@ class TestResolveArticleUrl:
     def test_cross_host_redirect_is_adopted_when_the_page_names_itself(self):
         """The legitimate case: doi.org, youtu.be and m.wikipedia all redirect across
         hosts onto a page that carries both tags."""
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         page = ('<html><head><link rel="canonical" '
                 'href="https://www.nature.com/articles/nature14539"></head></html>')
         out = resolve_article_url(
@@ -926,7 +928,7 @@ class TestResolveArticleUrl:
         assert out == "https://www.nature.com/articles/nature14539"
 
     def test_www_is_not_a_host_change(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url("https://www.ex.invalid/a", "<html></html>",
                                   "https://ex.invalid/a")
         assert out == "https://www.ex.invalid/a"
@@ -934,7 +936,7 @@ class TestResolveArticleUrl:
     def test_a_shared_registrable_domain_is_still_a_host_change(self):
         """consent.google.com and news.google.com share a registrable domain, so
         folding subdomains together would wave the interstitial straight through."""
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url("https://consent.example.com/x", "<html></html>",
                                   "https://news.example.com/story")
         assert out == "https://news.example.com/story"
@@ -942,7 +944,7 @@ class TestResolveArticleUrl:
     def test_same_host_redirect_without_canonical_keeps_the_fetched_url(self):
         """The check is about crossing hosts. Within one host the fetched address is
         still the better one: it is where the redirects actually settled."""
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         out = resolve_article_url("https://ex.invalid/story", "<html></html>",
                                   "https://ex.invalid/story?utm_source=rss")
         assert out == "https://ex.invalid/story"
@@ -959,45 +961,45 @@ class TestRedirectedBackToUs:
     BARE = "<html><head><title>iDNES.cz</title></head></html>"
 
     def test_consent_wall_carrying_the_article(self):
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         wall = "https://www.idnes.cz/nastaveni-souhlasu?url=" + self.ARTICLE
         assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_wall_carrying_only_the_path(self):
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         wall = "https://www.idnes.cz/nastaveni-souhlasu?url=/zpravy/zahranicni/story.A260806_154839_x_y"
         assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_cross_host_consent_page(self):
         """Host-agnostic on purpose: the same signature reads a Google News consent
         page, which resolve_article_url catches only because it changes host."""
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         wall = "https://consent.google.com/ml?continue=" + self.ARTICLE
         assert redirected_back_to_us(wall, self.ARTICLE, self.BARE) is True
 
     def test_no_redirect_is_never_judged(self):
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         assert redirected_back_to_us(self.ARTICLE, self.ARTICLE, self.BARE) is False
 
     def test_redirect_without_a_query_is_not_a_round_trip(self):
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         assert redirected_back_to_us("https://www.idnes.cz/jinam", self.ARTICLE, self.BARE) is False
 
     def test_unrelated_query_parameter(self):
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         assert redirected_back_to_us("https://www.idnes.cz/x?utm_source=rss",
                              self.ARTICLE, self.BARE) is False
 
     def test_a_bare_slash_value_does_not_count(self):
         """Otherwise every ?ref=/ in the wild would read as a round trip."""
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         assert redirected_back_to_us("https://www.idnes.cz/x?ref=/", "https://www.idnes.cz/",
                              self.BARE) is False
 
     def test_page_naming_itself_is_waved_through(self):
         """A viewer legitimately built around ?url= says which address it is. This is
         the escape hatch that keeps a real article out of the check."""
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         page = ('<html><head><link rel="canonical" '
                 'href="https://site.invalid/viewer/doc-42"></head></html>')
         assert redirected_back_to_us("https://site.invalid/viewer?url=" + self.ARTICLE,
@@ -1007,7 +1009,7 @@ class TestRedirectedBackToUs:
         """iDNES's consent page copies the interrupted article's canonical into its
         head, so pointing at the carried address is not a claim of its own. The feed
         link carries a #utm fragment the wall's ?url= does not."""
-        from app.services.readable_service import redirected_back_to_us
+        from app.services.readable_checks import redirected_back_to_us
         page = f'<html><head><link rel="canonical" href="{self.ARTICLE}"></head></html>'
         wall = ("https://www.idnes.cz/nastaveni-souhlasu?url="
                 "https%3a%2f%2fwww.idnes.cz%2fzpravy%2fzahranicni%2fstory.A260806_154839_x_y")
@@ -1032,7 +1034,7 @@ class TestInterstitialIsRejectedOnBothPaths:
             )
 
     def test_saved_article_path(self):
-        from app.services.readable_service import _WRONG_CONTENT_MSG
+        from app.services.readable_checks import _WRONG_CONTENT_MSG
         r = self._extract(True)
         assert r.content is None
         assert r.error == _WRONG_CONTENT_MSG
@@ -1041,7 +1043,7 @@ class TestInterstitialIsRejectedOnBothPaths:
         """Unlike the og:description check, this one reads the redirect chain, so a feed
         article cannot lose a body over its wording and a feed whose pages answer with a
         consent wall does not store that wall for every article."""
-        from app.services.readable_service import _WRONG_CONTENT_MSG
+        from app.services.readable_checks import _WRONG_CONTENT_MSG
         r = self._extract(False)
         assert r.content is None
         assert r.error == _WRONG_CONTENT_MSG
@@ -1061,7 +1063,8 @@ class TestInterstitialIsRejectedOnBothPaths:
     def test_failure_is_terminal(self):
         """A consent wall answers the same every time, so scheduled retries would only
         ask a site that refuses us three times instead of once."""
-        from app.services.readable_service import apply_readable_result, _WRONG_CONTENT_MSG
+        from app.services.readable_service import apply_readable_result
+        from app.services.readable_checks import _WRONG_CONTENT_MSG
         article = _make_article()
         apply_readable_result(article, None, _WRONG_CONTENT_MSG, None)
         assert article.readable_status == "failed"
@@ -1096,35 +1099,35 @@ class TestHeadSlice:
         return f"<html><head>{self.PADDING}{meta}</head><body>text</body></html>"
 
     def test_title_past_the_old_window(self):
-        from app.services.readable_service import _extract_title
+        from app.services.readable_checks import _extract_title
         page = self._page('<meta property="og:title" content="Real title">')
         assert _extract_title(page) == "Real title"
 
     def test_description_past_the_old_window(self):
-        from app.services.readable_service import _extract_og_description
+        from app.services.readable_checks import _extract_og_description
         page = self._page('<meta property="og:description" content="The lede.">')
         assert _extract_og_description(page) == "The lede."
 
     def test_canonical_past_the_old_window(self):
-        from app.services.readable_service import resolve_article_url
+        from app.services.readable_checks import resolve_article_url
         page = self._page('<link rel="canonical" href="https://ex.invalid/story">')
         assert resolve_article_url("https://ex.invalid/story?utm=1", page) == \
             "https://ex.invalid/story"
 
     def test_body_is_not_scanned(self):
         """Whatever an article's own text contains, it is not the page's metadata."""
-        from app.services.readable_service import _extract_title
+        from app.services.readable_checks import _extract_title
         page = ('<html><head><title>Head title</title></head><body>'
                 '<meta property="og:title" content="Body title"></body></html>')
         assert _extract_title(page) == "Head title"
 
     def test_no_closing_tag_falls_back_to_a_prefix(self):
         """Broken markup or a non-HTML response still yields what is in the prefix."""
-        from app.services.readable_service import _extract_title
+        from app.services.readable_checks import _extract_title
         assert _extract_title('<html><title>Only title</title>') == "Only title"
 
     def test_head_beyond_the_cap_is_given_up_on(self):
-        from app.services.readable_service import _extract_title, _HEAD_SCAN_BYTES
+        from app.services.readable_checks import _extract_title, _HEAD_SCAN_BYTES
         page = ("<html><head><script>%s</script>"
                 '<meta property="og:title" content="Too far"></head></html>'
                 % ("a" * (_HEAD_SCAN_BYTES + 1000)))
@@ -1192,7 +1195,8 @@ class TestDescriptionCapture:
     def test_stored_even_when_extraction_failed(self):
         """This is the case it exists for — a consent page yields no body but the
         head still describes the article."""
-        from app.services.readable_service import apply_readable_result, _WRONG_CONTENT_MSG
+        from app.services.readable_service import apply_readable_result
+        from app.services.readable_checks import _WRONG_CONTENT_MSG
         art = self._article(feed_id=None)
         apply_readable_result(art, None, _WRONG_CONTENT_MSG, None, description=self.DESC)
         assert art.summary == self.DESC
@@ -1213,14 +1217,14 @@ class TestDoubleEncodedMetadata:
     """Pages that escaped their own text twice, which one decode leaves half-done."""
 
     def test_description_is_decoded_twice(self):
-        from app.services.readable_service import _extract_og_description
+        from app.services.readable_checks import _extract_og_description
         page = ('<head><meta property="og:description" '
                 'content="Vimeo&amp;#x27;s player is ad-free"></head>')
         assert _extract_og_description(page) == "Vimeo's player is ad-free"
 
     def test_single_encoding_is_left_alone(self):
         """Ordinary text is decoded once and the second pass does not fire."""
-        from app.services.readable_service import _extract_og_description
+        from app.services.readable_checks import _extract_og_description
         page = '<head><meta property="og:description" content="Salt &amp; pepper"></head>'
         assert _extract_og_description(page) == "Salt & pepper"
 
