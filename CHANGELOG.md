@@ -53,6 +53,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A scrape feed refreshed by hand, or fetched right after subscribing, did not mark articles you already had from another feed as read.
 - The per-feed article cap (`purge_keep_count` in the API) could keep fewer articles than set, because starred and read articles, which are kept anyway, took up places.
 
+### Removed
+
+- The API's feed response no longer has `favicon_url`. It was always `null`.
+
 ### Security
 
 - A feed could hide page code in an article's address (a quote ended the link and the rest became part of the article). Opening the article, or its shared link, ran that code in the reader's session with full access to their account. Addresses are now encoded, the article body can no longer trigger requests, and the upgrade cleans articles stored before.

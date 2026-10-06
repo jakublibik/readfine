@@ -147,11 +147,7 @@
           <tr class="{% if uf.feed.status == 'error' %}bg-red-50{% elif uf.feed.status == 'disabled' %}bg-gray-50{% endif %}">
             <td class="pr-2 py-2 w-full max-w-0 min-w-[260px]">
               <div class="flex items-center gap-2">
-                {% if uf.feed.favicon_url %}
-                  <img src="{{ uf.feed.favicon_url }}" alt="" class="w-4 h-4 flex-shrink-0">
-                {% else %}
-                  <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
-                {% endif %}
+                <span class="w-4 h-4 flex-shrink-0 bg-gray-200 rounded-sm"></span>
                 <span class="font-medium text-gray-900 line-clamp-2 break-words min-w-0" title="{{ uf.custom_title or uf.feed.title }}">{{ uf.custom_title or uf.feed.title }}</span>
                 {# Lock first, warning after it: the lock is a fixed property of the feed,
                    the warning comes and goes, so the one that moves is the one that changes. #}

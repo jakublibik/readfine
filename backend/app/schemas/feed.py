@@ -60,7 +60,6 @@ class FeedResponse(BaseModel):
     feed_url: str
     site_url: str | None
     title: str
-    favicon_url: str | None
     status: str
     last_fetched_at: datetime | None
     last_error: str | None

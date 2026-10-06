@@ -12,7 +12,6 @@ def _make_feed(id=1, **kwargs):
         feed_url="https://example.com/feed.xml",
         site_url="https://example.com",
         title="Example Feed",
-        favicon_url=None,
         status="active",
         last_fetched_at=None,
         last_error=None,
