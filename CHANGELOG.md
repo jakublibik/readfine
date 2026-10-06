@@ -63,6 +63,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - The nginx config written by `setup.sh` for a domain now sends `Strict-Transport-Security`, so browsers stop trying plain HTTP. To get it on an existing install, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of your `nginx.conf`.
 - On a private feed with more than one subscriber, any of them could change the fetch interval or the scrape selector for everybody. These are now the sole subscriber's to change (and an admin's, for the interval), like the address and the password.
 - Shared article links kept working after an admin deactivated the account that shared them. They now stop with the account.
+- The Content Security Policy no longer allows `unsafe-eval`, and scripts that arrive in a part of the page loaded after the first one no longer run. If a bug ever let HTML from a feed or an AI answer into the page, the browser would now refuse to run code from it.
 
 ## [0.20.0] - 2026-10-04
 

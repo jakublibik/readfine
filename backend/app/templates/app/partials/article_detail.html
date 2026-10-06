@@ -226,12 +226,12 @@
       {% if ai_available %}
       <div id="context-panel-{{ article.id }}" class="hidden rounded-lg border border-gray-200 dark:border-gray-700 px-4 py-3">
         <p class="text-xs text-gray-500 mb-2">Optional: what to focus on</p>
-        <textarea id="context-focus-{{ article.id }}" rows="2"
+        <textarea id="context-focus-{{ article.id }}" name="focus" rows="2"
                   placeholder="e.g. economic impact, technical details…"
                   class="w-full text-sm border border-gray-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 rounded p-1.5 resize-none mb-2"></textarea>
         <div class="flex items-center gap-2">
           <button hx-post="/htmx/articles/{{ article.id }}/ai-context"
-                  hx-vals="js:{focus: document.getElementById('context-focus-{{ article.id }}').value}"
+                  hx-include="#context-focus-{{ article.id }}"
                   hx-target="#ai-context-area-{{ article.id }}"
                   hx-swap="innerHTML"
                   hx-indicator="#context-spinner-{{ article.id }}"

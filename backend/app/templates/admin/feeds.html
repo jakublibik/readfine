@@ -59,32 +59,6 @@
   </div>
 </div>
 
-<script nonce="{{ request.state.csp_nonce }}">
-(function () {
-  var overlay = document.getElementById('feed-edit-overlay');
-  if (!overlay) return;
-  function open() {
-    overlay.classList.remove('hidden');
-    document.body.classList.add('overflow-hidden');
-  }
-  function close() {
-    overlay.classList.add('hidden');
-    document.body.classList.remove('overflow-hidden');
-  }
-  document.addEventListener('click', function (e) {
-    if (e.target.closest('[data-action="open-feed-edit"]')) {
-      open();
-    } else if (e.target.closest('[data-action="close-feed-edit"]')) {
-      close();
-    }
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') close();
-  });
-  document.body.addEventListener('feedEditDone', close);
-})();
-</script>
-
 {% if has_rate_limits %}
 {# Rate-limits modal overlay #}
 <div id="rate-limits-overlay" class="hidden fixed inset-0 z-50 flex items-center justify-center"
@@ -104,22 +78,6 @@
     </div>
   </div>
 </div>
-
-<script nonce="{{ request.state.csp_nonce }}">
-(function () {
-  var overlay = document.getElementById('rate-limits-overlay');
-  if (!overlay) return;
-  document.addEventListener('click', function (e) {
-    if (e.target.closest('[data-action="open-rate-limits"]')) {
-      overlay.classList.remove('hidden');
-    } else if (e.target.closest('[data-action="close-rate-limits"]')) {
-      overlay.classList.add('hidden');
-    }
-  });
-  document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') overlay.classList.add('hidden');
-  });
-})();
-</script>
 {% endif %}
+<script src="{{ static_url('js/admin-feeds.js') }}"></script>
 {% endblock %}

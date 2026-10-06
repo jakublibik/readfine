@@ -195,7 +195,7 @@
      data-url="{{ article.url or '' }}"
      {% if article.body_permanently_empty %}data-no-body="1"{% endif %}
      hx-get="/htmx/articles/{{ article.id }}"
-     hx-trigger="click[!event.target.closest('[data-stop-propagation]')]"
+     hx-trigger="click"
      hx-target="#article-detail"
      hx-swap="innerHTML">
 

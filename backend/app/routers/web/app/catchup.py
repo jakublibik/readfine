@@ -709,7 +709,11 @@ async def htmx_briefing_test_send(
             f'<p class="text-red-600 text-sm">Error: {html_module.escape(reason[:200])}</p>'
         )
 
+    # A toast rather than a line in the result area: the page runs no scripts that
+    # arrive in a swap, and a toast clears itself. The empty body clears an earlier error.
     return HTMLResponse(
-        '<p class="text-green-600 text-sm font-medium" id="briefing-test-ok">Test briefing sent successfully.</p>'
-        '<script>setTimeout(()=>document.getElementById("briefing-test-ok")?.remove(),5000)</script>'
+        "",
+        headers={"HX-Trigger": json.dumps(
+            {"showToast": {"msg": "Test briefing sent.", "type": "ok"}}
+        )},
     )

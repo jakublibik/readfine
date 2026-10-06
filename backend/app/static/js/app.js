@@ -1448,7 +1448,7 @@ document.body.addEventListener('htmx:configRequest', function (e) {
 // (further down this file), so that a control inside a row does not also open the
 // article. The toggle needs that mark for the same reason, and a listener on document
 // would then never see the click at all: capture runs on the way down, before the
-// button's own listeners. The row's own hx-trigger already filters the click out.
+// button's own listeners. The row's own request is cancelled for it in htmx:confirm.
 document.addEventListener('click', function (e) {
   var btn = e.target.closest && e.target.closest('[data-story-toggle]');
   if (!btn) return;
@@ -2984,7 +2984,7 @@ document.body.addEventListener('htmx:afterSettle', function (e) {
     if (document.documentElement.dataset.openOriginalEmpty !== '1') return;
     var row = e.target.closest('.article-row');
     if (!row || !row.dataset.noBody || !row.dataset.url) return;
-    // Star and label buttons, excluded from the row's own hx-trigger the same way.
+    // Star and label buttons, whose clicks never open the row (htmx:confirm below).
     if (e.target.closest('[data-stop-propagation]')) return;
     // An expanded row is handled by the collapse path and by the title handler above,
     // either of which would otherwise produce a second tab.
@@ -3533,6 +3533,26 @@ document.body.addEventListener('htmx:afterSettle', function (evt) {
   evt.detail.target.querySelectorAll('[data-stop-propagation]').forEach(function (el) {
     el.addEventListener('click', function (e) { e.stopPropagation(); });
   });
+});
+
+// ── Trigger conditions that used to be hx-trigger event filters ────────────
+// Filters like click[...] are evaluated with eval, which htmx has switched off
+// (allowEval in base.html), so the condition is checked here instead: htmx:confirm
+// comes before anything else a request does, and cancelling it drops the request.
+//   - An article row opens on a click anywhere in it except its action buttons. The
+//     stopPropagation above covers rows loaded into the list; this also covers rows
+//     inserted any other way.
+//   - data-enter-only: an element triggered on keydown sends only on Enter.
+document.body.addEventListener('htmx:confirm', function (e) {
+  var elt = e.detail.elt;
+  var evt = e.detail.triggeringEvent;
+  if (!elt || !evt) return;
+  if (elt.classList.contains('article-row') && evt.type === 'click'
+      && evt.target.closest && evt.target.closest('[data-stop-propagation]')) {
+    e.preventDefault();
+  } else if (elt.hasAttribute('data-enter-only') && evt.type === 'keydown' && evt.key !== 'Enter') {
+    e.preventDefault();
+  }
 });
 
 // ── Mobile navigation (small bucket) ──────────────────────────────────────

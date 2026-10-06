@@ -171,17 +171,14 @@ def create_app() -> FastAPI:
         response.headers["Referrer-Policy"] = "same-origin"
         # CSP is sent in every environment (it does not depend on HTTPS and the
         # templates render identically in dev and prod), so XSS protection is
-        # never silently dropped by DEBUG. 'unsafe-eval' is intentionally
-        # retained: HTMX evaluates several template-authored expressions via the
-        # Function constructor — hx-on::*, hx-vals="js:…", and hx-trigger event
-        # filters (e.g. click[…], keydown[key=='Enter']). All are developer-
-        # authored, not user input, so this is not an active injection vector;
-        # the primary XSS defense is the nonce on script-src (injected inline
-        # scripts can't run). Removing it requires migrating those usages to
-        # external JS first — tracked as a post-launch hardening task (review M3).
+        # never silently dropped by DEBUG. No 'unsafe-eval': htmx runs with
+        # allowEval off (base.html), so hx-on, hx-vals="js:" and hx-trigger filters
+        # are not used, and HTML that reaches the page through a swap cannot run code
+        # through them either. Inline scripts need the nonce, which htmx no longer
+        # copies onto scripts in swapped content.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
+            f"script-src 'self' 'nonce-{nonce}'; "
             "img-src * data:; "
             "style-src 'self' 'unsafe-inline'; "
             # The two video players an article body can hold, and nothing else that
