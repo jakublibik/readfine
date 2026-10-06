@@ -43,6 +43,25 @@ def add_article_access_joins(stmt, user_id: int):
     )
 
 
+def unread_clause():
+    """Row-level clause for "this reader has not read the article".
+
+    For queries that outer-join ``UserArticleState`` on this user: no state row
+    (NULL) is unread too, which is why it is not a plain ``is_read IS false``.
+    """
+    return UserArticleState.is_read.is_(None) | UserArticleState.is_read.is_(False)
+
+
+def visible_article_clause():
+    """Row-level clause for "the article shows in the UI": not a retention stub.
+
+    A trimmed article is a body-stripped stub kept only for the interest profile.
+    The list hides it, so every badge and count over a list must too, or the number
+    stands above fewer rows than it claims.
+    """
+    return Article.trimmed_at.is_(None)
+
+
 def permanently_kept_predicate():
     """Row-level clause for "this UserArticleState keeps its article for good".
 
@@ -427,7 +446,7 @@ async def list_articles(
 
     # Retention-trimmed articles are body-stripped stubs kept only for the interest
     # profile — never shown in the UI.
-    stmt = stmt.where(Article.trimmed_at.is_(None))
+    stmt = stmt.where(visible_article_clause())
 
     if feed_id is not None:
         stmt = stmt.where(Article.feed_id == feed_id)
@@ -491,18 +510,14 @@ async def list_articles(
             )
 
     if unread_only:
-        stmt = stmt.where(
-            (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
-        )
+        stmt = stmt.where(unread_clause())
 
     # Search status filter: "unread" / "read" go by the read flag, which scrolling
     # past and mark-all-read set too. "engaged" / "not_engaged" go by what the reader
     # actually did, the Stats definition of read: long enough in front of it, or the
     # original opened. Anything else = all.
     if read_status == "unread":
-        stmt = stmt.where(
-            (UserArticleState.is_read == False) | (UserArticleState.is_read == None)
-        )
+        stmt = stmt.where(unread_clause())
     elif read_status == "read":
         stmt = stmt.where(UserArticleState.is_read == True)
     elif read_status in ("engaged", "not_engaged"):

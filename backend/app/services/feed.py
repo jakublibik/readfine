@@ -20,6 +20,7 @@ from app.models.settings import AppSettings
 from app.models.user import User
 from app.services.article import (
     drop_unreachable_labels, permanently_kept_exists, permanently_kept_predicate,
+    unread_clause, visible_article_clause,
 )
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
@@ -1039,11 +1040,7 @@ async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> No
             (UserArticleState.article_id == Article.id)
             & (UserArticleState.user_id == user_id),
         )
-        .where(
-            Article.feed_id.in_(feed_ids),
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
+        .where(Article.feed_id.in_(feed_ids), visible_article_clause(), unread_clause())
         .group_by(Article.feed_id)
     )).all())
     for uf in user_feeds:

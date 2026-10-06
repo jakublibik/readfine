@@ -29,9 +29,8 @@ from app.services.saved_search_service import (
     mark_saved_search_read,
     update_saved_search,
 )
-from app.services.story_service import DEDUP_COLLAPSE
+from app.services.story_service import DEDUP_COLLAPSE, collapses_stories
 
-from .articles import _collapses_stories
 from .common import _badge_html
 
 router = APIRouter(tags=["web-app"])
@@ -169,7 +168,7 @@ async def htmx_saved_search_counts(
     parts = []
     for saved in await list_saved_searches(db, user.id):
         state = saved.params.get("state")
-        collapsing = _collapses_stories(
+        collapsing = collapses_stories(
             story_dedup=story_dedup, feed_id=None, starred_only=state == "starred",
             archived_only=state == "archived", saved_only=state == "saved",
         )

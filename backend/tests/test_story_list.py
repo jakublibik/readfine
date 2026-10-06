@@ -140,10 +140,10 @@ class TestWhichViewsFold:
     """
 
     def _folds(self, **kw):
-        from app.routers.web.app.articles import _collapses_stories
+        from app.services.story_service import collapses_stories
         opts = {"story_dedup": DEDUP_COLLAPSE, "feed_id": None, "starred_only": False,
                 "archived_only": False, "saved_only": False}
-        return _collapses_stories(**{**opts, **kw})
+        return collapses_stories(**{**opts, **kw})
 
     def test_the_reading_views_fold(self):
         """All articles, a folder and a label all arrive here with nothing set."""

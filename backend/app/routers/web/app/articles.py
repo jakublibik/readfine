@@ -29,6 +29,7 @@ from app.services.article import (
     filter_accessible_article_ids, get_article, has_articles, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
+from app.services.counts_service import view_badge, view_count
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result, claim_queued_readable
 from app.services.relevance_terms_service import show_relevance_intro
@@ -42,7 +43,7 @@ from app.services.story_service import (
     DEDUP_OFF,
     ENGAGED_DWELL_SECONDS,
     MEMBER_LIMIT,
-    row_count,
+    collapses_stories,
     annotate as annotate_stories,
     collapse_page,
     count_members,
@@ -181,64 +182,18 @@ async def htmx_set_read_batch(
     return HTMLResponse("", status_code=200)
 
 
-async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: bool, db: AsyncSession) -> str:
+async def _label_badge_oob(
+    user: User, label_id: int | None, labeled_only: bool, story_dedup: str, db: AsyncSession,
+) -> str:
     """Return OOB HTML snippets to update label badge(s) in the sidebar."""
     if not label_id and not labeled_only:
         return ""
     oob = ""
-    # Rows, not articles: a label view folds a story into one row like the other
-    # reading views, and these badges stand above it (story_service.row_count). Unless
-    # the reader has the feature off, in which case their list folds nothing.
-    story_dedup = await db.scalar(
-        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
-    )
-    rows_drawn = row_count(story_dedup != DEDUP_OFF)
-    # Every one of these carries trimmed_at IS NULL, the filter list_articles applies
-    # and the sidebar counters already had: a retention stub is gone from the list, so
-    # a badge that still counted it would stand above fewer rows than it claims.
     if label_id:
-        lu = (await db.scalar(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .outerjoin(UserArticleState,
-                (UserArticleState.article_id == ArticleLabel.article_id) &
-                (UserArticleState.user_id == user_id))
-            .where(
-                ArticleLabel.user_id == user_id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )) or 0
-        lt = (await db.scalar(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .where(
-                ArticleLabel.user_id == user_id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-            )
-        )) or 0
+        lu, lt = await view_badge(user, db, story_dedup=story_dedup, label_id=label_id)
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
-    all_unread = (await db.scalar(
-        select(rows_drawn)
-        .select_from(Article)
-        .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
-        .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
-        .where(
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
-    )) or 0
-    all_total = (await db.scalar(
-        select(rows_drawn)
-        .select_from(ArticleLabel)
-        .join(Article, Article.id == ArticleLabel.article_id)
-        .where(ArticleLabel.user_id == user_id, Article.trimmed_at.is_(None))
-    )) or 0
+    all_unread, all_total = await view_badge(user, db, story_dedup=story_dedup, labeled_only=True)
     oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
     return oob
 
@@ -423,33 +378,6 @@ async def saved_view_unread_only(
     if unread_filter == "show_all":
         return False
     return await has_articles(user, db, **filters, search=True, unread_only=True)
-
-
-def _collapses_stories(
-    *, story_dedup: str, feed_id: int | None, starred_only: bool,
-    archived_only: bool, saved_only: bool,
-) -> bool:
-    """Whether this view folds the other coverage of a story into one row.
-
-    Nothing folds when the reader has the feature off: the setting is what decides
-    whether the list is theirs to shape at all, and the view only decides where that
-    shaping makes sense.
-
-    The reading views do, search included: a search for a story that five newsrooms
-    filed answered with five rows saying the same thing, and folding only ever hides a
-    row that did match, under the best-matching one, with the marker saying it is
-    there. That last part is why search waited for the list to be able to unfold a
-    group — until then the only way to the folded article led through the article
-    above it, which is too far for a view whose job is to answer "is this in here".
-
-    Starred, saved and archive do not: those are lists the reader assembled by hand,
-    and a row missing from one of them is a row they put there themselves. Nor does a
-    single feed, which is a question about that feed, and hiding one of its articles
-    because another source filed first answers a different one.
-    """
-    if story_dedup == DEDUP_OFF:
-        return False
-    return not (feed_id is not None or starred_only or archived_only or saved_only)
 
 
 def story_scope(
@@ -758,7 +686,7 @@ async def render_list(
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
     pin_score_source(rows, score.get("score_source"))
-    collapses = _collapses_stories(
+    collapses = collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
     )
@@ -785,46 +713,18 @@ async def render_list(
             search=True,
         )
 
-    # Title bar count for mobile hideable mode
-    rows_drawn = row_count(story_dedup != DEDUP_OFF)
+    # Title bar count for mobile hideable mode. The sidebar view's own list, not
+    # this one: the title bar names the view, whatever the reader filtered it to.
     title_bar_count: int | None = None
     title_bar_count_type: str | None = None
-    if label_id is not None:
-        title_bar_count = (await db.execute(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .outerjoin(UserArticleState,
-                (UserArticleState.article_id == ArticleLabel.article_id) &
-                (UserArticleState.user_id == user.id))
-            .where(
-                ArticleLabel.user_id == user.id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )).scalar() or 0
-        title_bar_count_type = "unread"
-    elif labeled_only:
-        title_bar_count = (await db.execute(
-            select(rows_drawn)
-            .select_from(Article)
-            .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
-            .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-            .where(
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )).scalar() or 0
+    if label_id is not None or labeled_only:
+        title_bar_count = await view_count(
+            user, db, story_dedup=story_dedup, unread=True,
+            label_id=label_id, labeled_only=labeled_only,
+        )
         title_bar_count_type = "unread"
     elif starred_only:
-        title_bar_count = (await db.execute(
-            select(func.count(UserArticleState.article_id))
-            .where(
-                UserArticleState.user_id == user.id,
-                UserArticleState.is_starred == True,
-            )
-        )).scalar() or 0
+        title_bar_count = await view_count(user, db, story_dedup=story_dedup, starred_only=True)
         title_bar_count_type = "starred"
     elif view and (effective_unread_only or read_status == "unread"):
         # The rows on the list are all unread, so what it counts is.
@@ -919,7 +819,7 @@ async def render_list(
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
         # A row offers to unfold its story only where the list folded one — see
-        # _collapses_stories. Everywhere else the row keeps the quiet marker instead.
+        # collapses_stories. Everywhere else the row keeps the quiet marker instead.
         story_unfoldable=collapses,
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
@@ -933,7 +833,7 @@ async def render_list(
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
     )
-    oob = await _label_badge_oob(user.id, label_id, labeled_only, db)
+    oob = await _label_badge_oob(user, label_id, labeled_only, story_dedup, db)
     return HTMLResponse(list_html + oob, headers=extra_headers)
 
 
@@ -1021,7 +921,7 @@ async def htmx_article_list_more(
 
     has_more = len(rows) >= articles_per_page
     pin_score_source(rows, score.get("score_source"))
-    collapses = _collapses_stories(
+    collapses = collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
     )
