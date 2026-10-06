@@ -1,5 +1,4 @@
 """OPML import and export service."""
-import asyncio
 import json
 import logging
 import re
@@ -36,6 +35,7 @@ from app.services.saved_search_service import (
     SavedSearchError, create_saved_search, list_saved_searches,
 )
 from app.services.story_service import DEDUP_VALUES
+from app.utils.background import spawn_background
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.email_validate import is_valid_email
 from app.utils.formats import is_valid_format
@@ -721,7 +721,7 @@ async def import_opml(
             if feed_id in _initial_fetch_in_progress:
                 continue
             _initial_fetch_in_progress.add(feed_id)
-            asyncio.create_task(_initial_fetch(feed_id))
+            spawn_background(_initial_fetch(feed_id), name=f"initial-fetch-{feed_id}")
 
     return result
 

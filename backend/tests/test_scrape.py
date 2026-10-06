@@ -637,12 +637,12 @@ class TestSubscribeScrape:
         user = make_mock_user()
         db = self._make_db(existing_feed=None, feed_count=0)
 
-        def _close_coro(coro):
+        def _close_coro(coro, **_kw):
             coro.close()
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
              patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)), \
-             patch("app.services.feed.asyncio.create_task", side_effect=_close_coro):
+             patch("app.services.feed.spawn_background", side_effect=_close_coro):
             uf = await subscribe_scrape(
                 user=user, url="https://example.com/news",
                 selector="article a", title="Example News",

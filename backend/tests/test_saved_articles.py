@@ -59,12 +59,12 @@ def make_state(**kwargs):
 
 
 def swallow_task():
-    """Stand-in for asyncio.create_task that closes the coroutine it is handed.
+    """Stand-in for spawn_background that closes the coroutine it is handed.
 
     Without closing it, Python warns that _import_saved_bg was never awaited — the
     background import is deliberately not exercised here.
     """
-    def _swallow(coro):
+    def _swallow(coro, **_kw):
         coro.close()
         return MagicMock()
     return MagicMock(side_effect=_swallow)
@@ -220,7 +220,7 @@ class TestSaveArticleByUrl:
         into a black hole. The lookup filters it out, and we fall through to insert."""
         db = make_db([None])  # the query excludes trimmed rows → no match
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, already_known = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db
             )
@@ -234,7 +234,7 @@ class TestSaveArticleByUrl:
         made out of the last path segment."""
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db,
                 fallback_title="  Some\n  headline  ",
@@ -258,7 +258,7 @@ class TestSaveArticleByUrl:
     async def test_a_blank_fallback_title_falls_back_to_the_address(self):
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/some-story", SimpleNamespace(id=1), db,
                 fallback_title="   ",
@@ -269,7 +269,7 @@ class TestSaveArticleByUrl:
         db = make_db([None])
         before = datetime.now(timezone.utc)
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db
             )
@@ -280,7 +280,7 @@ class TestSaveArticleByUrl:
                                 readable_retries=3, readable_error="boom")
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "pending"
         assert existing.readable_retries == 0  # backoff attempts restored
@@ -299,7 +299,7 @@ class TestSaveArticleByUrl:
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
              patch("app.services.saved_article_service.finalize_saved_article", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "skipped"
         task.assert_not_called()
@@ -324,7 +324,7 @@ class TestSaveArticleByUrl:
                                 content="Tiny excerpt.")
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "pending"
         task.assert_called_once()
@@ -346,7 +346,7 @@ class TestSaveUrlCredentials:
         importer = MagicMock(return_value=MagicMock())
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
              patch("app.services.saved_article_service._import_saved_bg", importer), \
-             patch("asyncio.create_task", MagicMock()):
+             patch("app.services.saved_article_service.spawn_background", MagicMock()):
             article, known = await save_article_by_url(
                 self.URL, SimpleNamespace(id=1), db
             )
@@ -631,7 +631,7 @@ class TestDedupPicksDeterministically:
 
     async def _save(self, pg, user, url):
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()), \
+             patch("app.services.saved_article_service.spawn_background", swallow_task()), \
              patch.object(pg, "commit", AsyncMock()):
             article, known = await save_article_by_url(url, user, pg)
         return article, known
@@ -1075,7 +1075,7 @@ class TestOverlongUrls:
         url = self._long(extra=0)
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(url, SimpleNamespace(id=1), db)
         assert article.url == url and article.guid == url
         assert article.guid_hash == hashlib.sha256(url.encode()).hexdigest()
@@ -1087,7 +1087,7 @@ class TestOverlongUrls:
         with_creds = url.replace("https://", "https://user:pw@", 1)
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(with_creds, SimpleNamespace(id=1), db)
         assert article.url == url
 

@@ -52,6 +52,7 @@ from app.services.story_service import (
 )
 from app.services.user import touch_last_active
 from app.templating import templates
+from app.utils.background import spawn_background
 from app.utils.http_client import run_outbound
 
 from .common import _ai_availability, _badge_html
@@ -1091,13 +1092,13 @@ async def htmx_article_detail(
             )
         )
         await db.commit()
-        asyncio.create_task(_extract_readable_bg(
+        spawn_background(_extract_readable_bg(
             article_id,
             trigger_row.url,
             trigger_row.fetch_auth_user,
             trigger_row.fetch_auth_pass_encrypted,
             trigger_row.feed_url,
-        ))
+        ), name=f"readable-{article_id}")
     elif (
         trigger_row is not None
         and trigger_row.extract_readable is not None  # the reader subscribes to the feed
@@ -1110,13 +1111,13 @@ async def htmx_article_detail(
         claimed = await claim_queued_readable(db, article_id)
         await db.commit()
         if claimed:
-            asyncio.create_task(_extract_readable_bg(
+            spawn_background(_extract_readable_bg(
                 article_id,
                 trigger_row.url,
                 trigger_row.fetch_auth_user,
                 trigger_row.fetch_auth_pass_encrypted,
                 trigger_row.feed_url,
-            ))
+            ), name=f"readable-{article_id}")
 
     article = await get_article(user, article_id, db)
     if not article:
@@ -1648,7 +1649,10 @@ async def htmx_toggle_star(
                 await db.commit()
                 if enqueued:
                     summary_started = True
-                    asyncio.create_task(_summary_after_star_bg(article_id, user.id))
+                    spawn_background(
+                        _summary_after_star_bg(article_id, user.id),
+                        name=f"star-summary-{article_id}",
+                    )
     else:
         # Unstarred — cancel a not-yet-run summary job so a mis-click doesn't
         # produce (and bill) a summary via the debounce task or the batch worker.

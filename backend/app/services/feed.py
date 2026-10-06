@@ -1,5 +1,4 @@
 """Feed subscription service: subscribe, unsubscribe, list."""
-import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,6 +23,7 @@ from app.services.article import (
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
+from app.utils.background import spawn_background
 from app.utils.crypto import auth_pair, encrypt, feed_auth
 from app.utils.text import feed_title_text
 from app.utils.url_validator import (
@@ -635,7 +635,10 @@ async def subscribe(
         _initial_fetch_in_progress.add(feed.id)
         # Reuse the parse we already have (new public feed) so the initial import
         # doesn't re-download — one fetch for the whole subscribe.
-        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit, prefetched=parsed))
+        spawn_background(
+            _initial_fetch(feed.id, import_mode, import_limit, prefetched=parsed),
+            name=f"initial-fetch-{feed.id}",
+        )
 
     return user_feed
 
@@ -806,7 +809,7 @@ async def subscribe_scrape(
     # Mark in-progress synchronously before spawning (see subscribe() for why).
     if is_new_feed and feed.id not in _initial_fetch_in_progress:
         _initial_fetch_in_progress.add(feed.id)
-        asyncio.create_task(_initial_fetch_scrape(feed.id))
+        spawn_background(_initial_fetch_scrape(feed.id), name=f"initial-fetch-{feed.id}")
 
     return user_feed
 

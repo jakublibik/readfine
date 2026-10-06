@@ -1276,14 +1276,6 @@ async def catch_me_up(
     return answer.text, answer.input_tokens, answer.output_tokens
 
 
-async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:
-    """Generate a CSS selector for article links from a page."""
-    from app.utils.scrape_ai import generate_selector_prompt
-    prompt = generate_selector_prompt(url, html)
-    answer = await _complete(prompt, client, provider, model, max_tokens=200)
-    return answer.text.strip().strip('`"\'').split('\n')[0].strip()
-
-
 async def generate_css_selector_from_sample(
     url: str,
     sample: str,

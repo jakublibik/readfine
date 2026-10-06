@@ -4,7 +4,6 @@ An article saved this way has no feed. ``UserArticleState.saved_at`` carries its
 visibility (the Saved view), its access (see ``article_access_predicate``) and its
 exemption from retention purge, so it never has to borrow a star to stay alive.
 """
-import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
@@ -21,6 +20,7 @@ from app.services.readable_service import (
     extract_readable_with_title,
     title_from_url,
 )
+from app.utils.background import spawn_background
 from app.utils.http_client import run_outbound
 from app.utils.parsing import normalize_url
 
@@ -211,11 +211,11 @@ async def save_article_by_url(
             # from another feed on another host, and that host has no business
             # receiving them.
             same_address = existing.url == url
-            asyncio.create_task(_import_saved_bg(
+            spawn_background(_import_saved_bg(
                 existing.id, user.id, existing.url,
                 auth_user if same_address else None,
                 auth_pass if same_address else None,
-            ))
+            ), name=f"saved-import-{existing.id}")
         else:
             await db.commit()
             # Nothing to extract, so nothing will call the post-extraction pass later.
@@ -246,7 +246,10 @@ async def save_article_by_url(
     await _upsert_saved_state(article.id, user.id, db)
     await db.commit()
 
-    asyncio.create_task(_import_saved_bg(article.id, user.id, url, auth_user, auth_pass))
+    spawn_background(
+        _import_saved_bg(article.id, user.id, url, auth_user, auth_pass),
+        name=f"saved-import-{article.id}",
+    )
     return article, False
 
 

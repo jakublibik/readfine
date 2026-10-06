@@ -906,8 +906,11 @@ async def _send_due_briefings() -> None:
                             f"Your briefing '{config.name}' could not be sent after 2 attempts.\n\nError: {config.briefing_last_error}\n\nYou can check and re-enable it in Catch me up & Briefings."
                             + (f"\n{settings.public_url.rstrip('/')}/app/catch-me-up" if settings.public_url else ""),
                         )
-                    except Exception:
-                        pass
+                    except Exception as mail_exc:
+                        logger.warning(
+                            "Briefing failure notice for config %d not sent: %s",
+                            config_id, mail_exc,
+                        )
 
 
 async def _send_dormancy_warnings() -> None:

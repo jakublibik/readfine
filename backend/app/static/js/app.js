@@ -652,7 +652,14 @@ function _reportUnhandledHtmxError(e, msg) {
 document.body.addEventListener('htmx:responseError', function (e) {
   // An expired session does not come through here: it answers 200 with HX-Redirect to
   // the login page (main.py), so htmx navigates instead of failing.
-  var status = e.detail && e.detail.xhr ? e.detail.xhr.status : 0;
+  var xhr = e.detail && e.detail.xhr;
+  var status = xhr ? xhr.status : 0;
+  // A response that brought its own toast (the 400/409 safety nets in main.py) has
+  // already said what went wrong, and htmx fired it before getting here.
+  if (xhr && /showToast/.test(xhr.getResponseHeader('HX-Trigger') || '')) {
+    _claimHtmxError(e);
+    return;
+  }
   _reportUnhandledHtmxError(e, status === 429
     ? 'Too many requests in a row. Wait a minute and try again.'
     : 'That did not go through (HTTP ' + status + '). Please try again.');

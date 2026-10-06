@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import secrets
 from urllib.parse import quote
@@ -84,6 +85,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     sched.shutdown(wait=True)
+    # A subscribe or a save just before the deploy is still fetching in the background.
+    from app.utils.background import wait_background
+    await wait_background(timeout=5)
     from app.services.host_rate_limit_service import flush
     async with db.async_session_factory() as session:
         await flush(session)
@@ -272,6 +276,59 @@ def create_app() -> FastAPI:
         return await _default_http_exception_handler(request, exc)
 
     app.add_exception_handler(_StarletteHTTPException, auth_redirect_handler)
+
+    # Safety nets for input the routes did not check themselves. A web form built into
+    # a schema by hand (LabelCreate(...)) raises pydantic's ValidationError, and a name
+    # that collides with a unique index raises IntegrityError on flush. Both are the
+    # user's input, not a server fault, so they answer 400/409 instead of the 500 page.
+    # Routes that check on their own still give the better message; this only catches
+    # what slips past. FastAPI's own request validation is a different class
+    # (RequestValidationError) and keeps its 422.
+    import logging
+    from pydantic import ValidationError as _PydanticValidationError
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+
+    _UNIQUE_VIOLATION = "23505"
+
+    def _client_error_response(request: Request, status: int, message: str) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": message}, status_code=status)
+        if request.headers.get("HX-Request"):
+            # htmx does not swap an error response, but it does fire HX-Trigger, so the
+            # message lands in a toast. app.js skips its generic fallback toast for
+            # responses that carry one of their own.
+            return Response(
+                status_code=status,
+                headers={"HX-Trigger": json.dumps({"showToast": {"msg": message, "type": "error"}})},
+            )
+        return _templates.TemplateResponse(
+            request, "errors/client.html", {"status": status, "message": message},
+            status_code=status,
+        )
+
+    async def validation_error_handler(request: Request, exc: _PydanticValidationError):
+        # Logged with the trace: the same class also comes from a bug that builds a
+        # model from bad data of our own, and that should not pass as a user mistake.
+        logging.getLogger(__name__).warning(
+            "Validation error on %s %s", request.method, request.url.path, exc_info=exc)
+        errors = exc.errors(include_url=False)
+        message = "Invalid input."
+        if errors:
+            field = ".".join(str(p) for p in errors[0].get("loc", ()))
+            text_ = errors[0].get("msg", "")
+            message = f"Invalid {field}: {text_}." if field else f"Invalid input: {text_}."
+        return _client_error_response(request, 400, message)
+
+    async def integrity_error_handler(request: Request, exc: _IntegrityError):
+        if db.sqlstate(exc) != _UNIQUE_VIOLATION:
+            # A foreign key or NOT NULL failing is our bug, not a duplicate name.
+            return await server_error_handler(request, exc)
+        logging.getLogger(__name__).warning(
+            "Unique violation on %s %s: %s", request.method, request.url.path, exc.orig)
+        return _client_error_response(request, 409, "That already exists.")
+
+    app.add_exception_handler(_PydanticValidationError, validation_error_handler)
+    app.add_exception_handler(_IntegrityError, integrity_error_handler)
 
     @app.exception_handler(Exception)
     async def server_error_handler(request: Request, exc: Exception):
