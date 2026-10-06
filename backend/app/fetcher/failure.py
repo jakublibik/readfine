@@ -34,7 +34,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import httpx
-from sqlalchemy import case, literal, update
+from sqlalchemy import case, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -278,7 +278,9 @@ def clear_failure_state(feed: Feed) -> None:
     feed.retry_after_until = None
 
 
-def mark_fetch_success(feed: Feed, fetched_at: datetime, duration_ms: int) -> None:
+async def mark_fetch_success(
+    db: AsyncSession, feed: Feed, fetched_at: datetime, duration_ms: int
+) -> None:
     """Record a successful fetch on the feed row, the counterpart to
     :func:`record_fetch_failure`.
 
@@ -286,10 +288,14 @@ def mark_fetch_success(feed: Feed, fetched_at: datetime, duration_ms: int) -> No
     ``error`` feed back to ``active``. Shared by the RSS fetcher (a full fetch and a
     304) and the scrape fetcher, so a column added to the failure path has one place
     on this side to be undone in. Does not commit.
+
+    The status is read fresh rather than taken from *feed*, which was loaded before
+    the fetch: an admin who paused the feed while it was in flight keeps the pause.
     """
+    current = await db.scalar(select(Feed.status).where(Feed.id == feed.id))
     feed.last_fetched_at = fetched_at
     feed.last_fetch_duration_ms = duration_ms
-    feed.status = "active"
+    feed.status = "paused" if current == "paused" else "active"
     feed.last_error = None
     feed.fetch_error_count = 0
     feed.block_count = 0
@@ -382,6 +388,9 @@ def failure_values(exc: Exception, *, feed_url: str, feed_block_count: int, now:
             else FETCH_ERROR_DISABLE_THRESHOLD
         )
         status = case(
+            # Paused by an admin while the fetch was running: a failure must not
+            # turn it into "error", which the scheduler picks up again.
+            (Feed.status == "paused", Feed.status),
             (Feed.fetch_error_count >= threshold, literal("disabled")),
             else_=literal("error"),
         )

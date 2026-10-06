@@ -198,8 +198,8 @@ async def fetch_feed(
             if resp.status_code == 304:
                 # Unchanged since last fetch — no body to parse. Record a successful
                 # poll and keep the stored validators.
-                mark_fetch_success(
-                    feed, datetime.now(timezone.utc), int(time.monotonic() * 1000) - start_ms
+                await mark_fetch_success(
+                    db, feed, datetime.now(timezone.utc), int(time.monotonic() * 1000) - start_ms
                 )
                 await db.commit()
                 host = host_throttle.host_key(feed_url)
@@ -228,7 +228,7 @@ async def fetch_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        mark_fetch_success(feed, datetime.now(timezone.utc), duration_ms)
+        await mark_fetch_success(db, feed, datetime.now(timezone.utc), duration_ms)
         # Update validators from this 200, but keep the last-known ones when the
         # response omits a header (some CDNs send ETag only intermittently) so we
         # don't lose the ability to make conditional requests.
@@ -238,7 +238,7 @@ async def fetch_feed(
             if resp.last_modified:
                 feed.last_modified = resp.last_modified
 
-        latest_pub = _latest_published(parsed.entries)
+        latest_pub = _latest_published(parsed.entries, datetime.now(timezone.utc))
         if latest_pub:
             feed.last_published_at = latest_pub
 
@@ -650,12 +650,14 @@ def _clamp_published_at(dt: datetime | None, fetched_at: datetime) -> datetime |
     return dt
 
 
-def _latest_published(entries) -> datetime | None:
+def _latest_published(entries, fetched_at: datetime) -> datetime | None:
+    """Newest entry date, clamped like the articles' own, so one entry dated 2099
+    does not leave the feed's "last article" in the future."""
     dates = []
     for e in entries:
         t = e.get("published_parsed") or e.get("updated_parsed")
-        if t:
-            dates.append(_struct_to_dt(t))
+        if t and (dt := _clamp_published_at(_struct_to_dt(t), fetched_at)):
+            dates.append(dt)
     return max(dates) if dates else None
 
 

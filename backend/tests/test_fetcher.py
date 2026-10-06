@@ -828,6 +828,9 @@ class TestExtractContent:
 
 # ── _latest_published ─────────────────────────────────────────────────────────
 
+_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+
 class TestLatestPublished:
     def test_returns_maximum_date(self):
         entries = [
@@ -835,18 +838,18 @@ class TestLatestPublished:
             {"published_parsed": (2026, 1, 20, 0, 0, 0, 0, 0, 0)},
             {"published_parsed": (2026, 1, 5, 0, 0, 0, 0, 0, 0)},
         ]
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
 
     def test_empty_entries_returns_none(self):
-        assert _latest_published([]) is None
+        assert _latest_published([], _NOW) is None
 
     def test_entries_without_date_ignored(self):
-        assert _latest_published([{"title": "no date"}]) is None
+        assert _latest_published([{"title": "no date"}], _NOW) is None
 
     def test_falls_back_to_updated_parsed(self):
         entries = [{"updated_parsed": (2026, 3, 1, 0, 0, 0, 0, 0, 0)}]
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     def test_published_preferred_over_updated(self):
@@ -855,8 +858,16 @@ class TestLatestPublished:
             "updated_parsed":   (2026, 1, 25, 0, 0, 0, 0, 0, 0),
         }]
         # feedparser `or` picks published_parsed first
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
+
+    def test_future_date_ignored(self):
+        """An entry dated 2099 is clamped away like the article's own date."""
+        entries = [
+            {"published_parsed": (2099, 1, 1, 0, 0, 0, 0, 0, 0)},
+            {"published_parsed": (2026, 5, 1, 0, 0, 0, 0, 0, 0)},
+        ]
+        assert _latest_published(entries, _NOW) == datetime(2026, 5, 1, tzinfo=timezone.utc)
 
 
 # ── Error circuit breaker — threshold constants ───────────────────────────────

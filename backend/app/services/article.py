@@ -773,7 +773,9 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     """Return article detail with user state. Returns None if not accessible.
 
     Access is granted if the user subscribes to the feed, OR has a starred/archived
-    state for the article (remains accessible after unsubscribing).
+    state for the article (remains accessible after unsubscribing). A retention stub
+    is not an article any more (see visible_article_clause): a stale list or a link
+    by id gets None, as it would for a deleted one.
     """
     stmt = add_article_access_joins(
         select(
@@ -786,6 +788,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     ).where(
         Article.id == article_id,
         article_access_predicate(),
+        visible_article_clause(),
     )
     row = (await db.execute(stmt)).first()
     if not row:
@@ -1071,6 +1074,7 @@ async def _load_article_for_write(user: User, article_id: int, db: AsyncSession)
     ).where(
         Article.id == article_id,
         article_access_predicate(),
+        visible_article_clause(),
     )
     row = (await db.execute(stmt)).first()
     if not row:

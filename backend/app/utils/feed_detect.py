@@ -22,6 +22,10 @@ _FEED_MIME_TYPES = {
 }
 _COMMON_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/feed.xml", "/feeds/posts/default"]
 _FETCH_HEADERS = {"User-Agent": READFINE_UA, "Accept": "text/html,*/*"}
+# Each <link rel="alternate"> is fetched to check it, so a page listing a thousand of
+# them would turn one subscribe into a thousand requests. Real pages list a handful
+# (posts, comments, a few categories), and the first ones are the main feeds.
+_MAX_CANDIDATES = 10
 
 _YT_CHANNEL_RE = re.compile(r"youtube\.com/channel/(UC[\w-]+)")
 _YT_USER_RE = re.compile(r"youtube\.com/user/([\w-]+)")
@@ -89,6 +93,7 @@ async def detect_feeds(url: str) -> list[dict]:
     except Exception:
         pass
 
+    results = _dedup(results)[:_MAX_CANDIDATES]
     if results:
         # Validate candidates in parallel — only keep reachable feeds
         validations = await asyncio.gather(*[_validate_feed_url(r["url"]) for r in results])
@@ -99,7 +104,7 @@ async def detect_feeds(url: str) -> list[dict]:
             for r, (ok, title) in zip(results, validations) if ok
         ]
         if validated:
-            return _dedup(validated)
+            return validated
         results = []  # all candidates failed — don't carry them into the fallback
 
     # Fallback: try common paths in parallel

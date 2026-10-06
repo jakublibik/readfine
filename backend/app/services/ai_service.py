@@ -182,6 +182,15 @@ def _empty_response_detail(provider: str, resp) -> str:
     return ""
 
 
+def _openai_usage(resp) -> tuple[int, int]:
+    """(prompt, completion) tokens of an OpenAI-wire reply. Some compatible servers
+    leave ``usage`` out, which must not turn a good answer into an error."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return 0, 0
+    return usage.prompt_tokens or 0, usage.completion_tokens or 0
+
+
 def _extract_truncated(provider: str, resp) -> bool:
     """True when the provider stopped generating because it hit the token cap.
 
@@ -375,9 +384,17 @@ async def get_api_key(user_id: int, provider: str, db: AsyncSession) -> str | No
         return None
 
 
+def _key_prefix(api_key: str) -> str:
+    """The start of the key, shown next to the saved key so the user can tell which
+    one it is. Stored in plaintext, so never more than a quarter of the key: a short
+    custom-endpoint key would otherwise sit there whole. Never empty either, since
+    an empty prefix reads as "no key saved"."""
+    return api_key[:min(8, len(api_key) // 4)] or "*"
+
+
 async def save_api_key(user_id: int, provider: str, api_key: str, db: AsyncSession) -> None:
     encrypted = encrypt(api_key)
-    prefix = api_key[:8]
+    prefix = _key_prefix(api_key)
     row = await db.scalar(
         select(UserAiKey).where(UserAiKey.user_id == user_id, UserAiKey.provider == provider)
     )
@@ -1197,11 +1214,7 @@ async def _chat_unbounded(
         resp = await client.chat.completions.create(
             model=model, messages=openai_msgs,
             **_openai_token_kwargs(provider, model, 600))
-        return (
-            _extract_text(provider, resp),
-            resp.usage.prompt_tokens,
-            resp.usage.completion_tokens,
-        )
+        return (_extract_text(provider, resp), *_openai_usage(resp))
 
     elif provider == "gemini":
         from google.genai import types
@@ -1311,27 +1324,6 @@ async def generate_css_selector_from_sample(
 PROFILE_MAX_WINDOW_DAYS = 180
 
 
-async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
-    """Return count of strong reading signals (g1 + g2) used for preference generation."""
-    from sqlalchemy import text
-    now = datetime.now(timezone.utc)
-    g1 = await db.execute(text("""
-        SELECT COUNT(*) FROM user_article_states uas
-        WHERE uas.user_id = :uid
-          AND uas.user_starred = true
-          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
-          AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)})
-    g2 = await db.execute(text("""
-        SELECT COUNT(*) FROM user_article_states uas
-        WHERE uas.user_id = :uid
-          AND uas.user_starred = false
-          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
-          AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=120)})
-    return int(g1.scalar() or 0) + int(g2.scalar() or 0)
-
-
 # ── interest profile generation ─────────────────────────────────────────────
 
 def _pref_snippet(ai_summary: str | None, readable: str | None,
@@ -1432,8 +1424,11 @@ def _build_preference_prompt(groups: dict[str, list[tuple[str, str]]], feeds_str
     return f"{_PREF_INSTRUCTION}\n\n---\n{data}"
 
 
-async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
-    """Generate preference text from user's reading behaviour signals."""
+async def generate_preference_text(
+    user_id: int, db: AsyncSession, client, provider: str, model: str
+) -> tuple[str, int, int]:
+    """Generate preference text from user's reading behaviour signals.
+    Returns (text, input tokens, output tokens)."""
     from sqlalchemy import text
     now = datetime.now(timezone.utc)
     cutoff_180 = now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
@@ -1745,8 +1740,7 @@ async def _complete_unbounded(
         )
         return Completion(
             _extract_text(provider, resp),
-            resp.usage.prompt_tokens,
-            resp.usage.completion_tokens,
+            *_openai_usage(resp),
             _extract_truncated(provider, resp),
         )
     elif provider == "gemini":

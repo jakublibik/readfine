@@ -3,6 +3,9 @@
   {% if error %}
   <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
   {% endif %}
+  {% if warning %}
+  <div class="mb-3 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">{{ warning }}</div>
+  {% endif %}
   {% if success %}
   <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">{{ success }}</div>
   {% endif %}

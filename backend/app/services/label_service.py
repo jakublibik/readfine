@@ -1,9 +1,11 @@
 """Label service: CRUD + article label assignment."""
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.article import Article
 from app.models.feed import UserFeed
+from app.models.filter import Filter, FilterAction
 from app.models.label import ArticleLabel, Label
 from app.models.user import User
 from app.schemas.label import LabelCreate, LabelResponse, LabelUpdate
@@ -69,7 +71,41 @@ async def update_label(
     return LabelResponse.model_validate(label)
 
 
-async def delete_label(user: User, label_id: int, db: AsyncSession) -> "Label | None":
+async def _drop_label_actions(db: AsyncSession, user_id: int, label_id: int) -> list[str]:
+    """Remove the "add label" actions that point at a label being deleted.
+
+    Left in place, the action would do nothing (and with it, the scoring a label
+    triggers), the filter list would show a bare id, and saving the filter would
+    fail on "Label action requires a label". A filter with no action left is
+    switched off. Returns the names of filters switched off here, for the user.
+    Does not commit.
+    """
+    filters = (await db.execute(
+        select(Filter)
+        .join(FilterAction, FilterAction.filter_id == Filter.id)
+        .where(
+            Filter.user_id == user_id,
+            FilterAction.action_type == "label",
+            FilterAction.action_value == str(label_id),
+        )
+        .options(selectinload(Filter.actions))
+        .distinct()
+    )).scalars().all()
+    switched_off = []
+    for f in filters:
+        f.actions = [
+            a for a in f.actions
+            if not (a.action_type == "label" and a.action_value == str(label_id))
+        ]
+        if not f.actions and f.is_active:
+            f.is_active = False
+            switched_off.append(f.name)
+    return switched_off
+
+
+async def delete_label(user: User, label_id: int, db: AsyncSession) -> list[str] | None:
+    """Delete one of the user's labels. Returns the names of filters switched off
+    because the label was their only action, or None when the label is not theirs."""
     result = await db.execute(
         select(Label).where(Label.id == label_id, Label.user_id == user.id)
     )
@@ -77,9 +113,10 @@ async def delete_label(user: User, label_id: int, db: AsyncSession) -> "Label | 
     if not label:
         return None
     await strip_saved_search_references(db, kind="label", ref_id=label.id, user_id=user.id)
+    switched_off = await _drop_label_actions(db, user.id, label.id)
     await db.delete(label)
     await db.commit()
-    return label
+    return switched_off
 
 
 async def assign_label(

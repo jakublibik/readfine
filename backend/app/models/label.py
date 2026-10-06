@@ -17,7 +17,11 @@ class Label(Base):
 
     # Relationships
     user: Mapped["User"] = relationship(back_populates="labels")
-    article_labels: Mapped[list["ArticleLabel"]] = relationship(back_populates="label", cascade="all, delete-orphan")
+    # passive_deletes: the FK cascades in the database, so deleting a label does not
+    # first load every assignment it has into the session to delete them one by one.
+    article_labels: Mapped[list["ArticleLabel"]] = relationship(
+        back_populates="label", cascade="all, delete-orphan", passive_deletes=True,
+    )
 
 
 class ArticleLabel(Base):

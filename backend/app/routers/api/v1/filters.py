@@ -103,12 +103,11 @@ async def post_filter_apply(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
+    # Up front: the apply returns zeros for a filter that is not there as well as for
+    # one that matched nothing.
+    if not await get_filter(user.id, filter_id, db):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Filter not found")
     matched, changed, scoring_queued = await apply_filter_retroactively(
         user.id, filter_id, db, enqueue_scoring=enqueue_scoring
     )
-    if matched == 0 and changed == 0:
-        # Distinguish "not found" from "matched nothing" by checking existence
-        f = await get_filter(user.id, filter_id, db)
-        if not f:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Filter not found")
     return {"matched": matched, "changed": changed, "scoring_queued": scoring_queued}

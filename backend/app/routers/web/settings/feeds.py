@@ -13,6 +13,7 @@ from app.database import get_db
 from app.fetcher.errors import describe_fetch_error
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.interval import auto_interval_min
+from app.fetcher.scrape import check_selector
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.feed import Folder, UserFeed
 from app.models.settings import AppSettings
@@ -349,6 +350,14 @@ async def settings_feed_update(
 
     form = await request.form()
 
+    # Before the address, which saves on its own, so a bad selector saves nothing.
+    new_selector = form.get("article_links_selector", "").strip()
+    if new_selector and uf.feed.feed_type == "scrape" and may_edit_feed_settings(uf.feed):
+        try:
+            check_selector(new_selector)
+        except ValueError as exc:
+            return await _feed_edit_page(request, uf, user, db, selector_error=str(exc))
+
     # The address first, and on its own: it fetches, it can fail with something the
     # user has to read, and it is the one field here whose save is worth reporting
     # separately from "the form was saved". Nothing else has been written yet at this
@@ -419,7 +428,6 @@ async def settings_feed_update(
             uf.feed.is_private = True
 
     if uf.feed.feed_type == "scrape" and may_edit_feed_settings(uf.feed):
-        new_selector = form.get("article_links_selector", "").strip()
         if new_selector:
             uf.feed.type_config = {**(uf.feed.type_config or {}), "article_links_selector": new_selector}
 

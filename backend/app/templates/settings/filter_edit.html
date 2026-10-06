@@ -39,7 +39,8 @@
                class="rounded">
         Active
       </label>
-      <label class="flex items-center gap-2 text-sm text-gray-700">
+      <label class="flex items-center gap-2 text-sm text-gray-700"
+             title="A match keeps the later filters in the same group from running on the article. Filters on the AI score, or AI else basic, are a group of their own and still run.">
         <input type="hidden" name="stop_on_match" value="false">
         <input type="checkbox" name="stop_on_match" value="true"
                {% if fv and fv.stop_on_match %}checked{% endif %}
@@ -148,8 +149,8 @@
   <div>
     <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Conditions</h2>
     <div id="score-filter-notice" class="hidden mb-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-700">
-      <p data-phase="ai" class="hidden">This filter reads the AI score, so it runs after regular filters and AI scoring, and only reaches articles that have an AI score.<br>Pipeline: regular filters → AI scoring (labeled articles) → this filter.</p>
-      <p data-phase="relevance" class="hidden">This filter reads AI, else basic, so it runs right after the regular filters. When one of them sends the article to AI scoring, it waits for the AI score, and uses the basic score if scoring fails.</p>
+      <p data-phase="ai" class="hidden">This filter reads the AI score, so it runs after regular filters and AI scoring, and only reaches articles that have an AI score.<br>Pipeline: regular filters → AI scoring (labeled articles) → this filter. Stop on match in a regular filter does not stop it.</p>
+      <p data-phase="relevance" class="hidden">This filter reads AI, else basic, so it runs right after the regular filters. When one of them sends the article to AI scoring, it waits for the AI score, and uses the basic score if scoring fails. Stop on match in a regular filter does not stop it.</p>
       <p data-phase="fetch" class="hidden">The basic score is there as soon as an article arrives, so this filter runs with the regular filters, in run order.</p>
     </div>
     {% set score_source_fields = {'ai_score': 'ai', 'basic_score': 'basic', 'relevance_score': 'relevance'} %}

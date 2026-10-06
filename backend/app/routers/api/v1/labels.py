@@ -66,7 +66,7 @@ async def del_label(
     user: User = Depends(get_api_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if not await delete_label(user, label_id, db):
+    if await delete_label(user, label_id, db) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Label not found")
 
 

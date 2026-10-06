@@ -11,6 +11,13 @@
           <span class="font-semibold">{{ scope_cleanup.deactivated_filters | join(', ') }}</span>.
           Re-scope and re-enable in Filters if still needed.</p>
       {% endif %}
+      {% if scope_cleanup.unscoped_inactive_filters %}
+        <p>{{ scope_cleanup.unscoped_inactive_filters | length }} inactive
+          filter{{ 's were' if scope_cleanup.unscoped_inactive_filters | length != 1 else ' was' }}
+          scoped only to what you just removed and would now apply to all feeds:
+          <span class="font-semibold">{{ scope_cleanup.unscoped_inactive_filters | join(', ') }}</span>.
+          Re-scope before turning {{ 'it' if scope_cleanup.unscoped_inactive_filters | length == 1 else 'them' }} back on.</p>
+      {% endif %}
       {% if scope_cleanup.disabled_briefings %}
         <p>Disabled the briefing on {{ scope_cleanup.disabled_briefings | length }}
           digest{{ 's' if scope_cleanup.disabled_briefings | length != 1 }}

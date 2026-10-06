@@ -1038,3 +1038,19 @@ class TestScoreComparison:
         _validate_score_conditions([make_condition("basic_score", "gte", "60")])
         with pytest.raises(ValueError, match="only for a score"):
             _validate_score_conditions([make_condition("title", "gte", "60")])
+
+
+# ── regex validation uses the engine the condition runs with ────────────────
+
+class TestRegexValidationEngine:
+    def _check(self, pattern):
+        from app.services.filter_service import _validate_regex_conditions
+        _validate_regex_conditions([SimpleNamespace(operator="regex", value=pattern)])
+
+    def test_accepts_regex_only_syntax(self):
+        # \p{L} is a Unicode property class: valid in `regex`, an error in `re`.
+        self._check(r"\p{Lu}\p{L}+")
+
+    def test_rejects_what_regex_cannot_compile(self):
+        with pytest.raises(ValueError, match="Invalid regex pattern"):
+            self._check(r"(unclosed")

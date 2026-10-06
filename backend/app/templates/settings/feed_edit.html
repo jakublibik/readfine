@@ -158,7 +158,10 @@
     <input type="text" name="article_links_selector" id="selector-input"
            value="{{ uf.feed.type_config.article_links_selector if uf.feed.type_config else '' }}"
            placeholder="e.g. article.b-item h3 a"
-           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+           class="w-full border {{ 'border-red-300' if selector_error is defined else 'border-gray-300' }} rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    {% if selector_error is defined %}
+    <p class="text-xs text-red-600 mt-1">{{ selector_error }}</p>
+    {% endif %}
 
     <div class="flex gap-2 mt-2">
       {% if ai_selector_available %}

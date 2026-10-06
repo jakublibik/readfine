@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
+import soupsieve
 from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,7 @@ from app.utils.url_validator import (
     redact_url,
 )
 from app.fetcher.redirects import adopt_permanent_url
+from app.fetcher.rss import _dedup_cross_feed
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
@@ -155,10 +157,25 @@ def _metadata_context(elem):
     return elem
 
 
+def check_selector(selector: str) -> None:
+    """Raise ValueError when *selector* is not valid CSS.
+
+    soupsieve's SelectorSyntaxError is a plain Exception, so left alone it would get
+    past every ``except ValueError`` on the subscribe and edit paths, and the fetcher
+    would file it as a fault of ours ("Internal error") on every run, never counting
+    it against the feed.
+    """
+    try:
+        soupsieve.compile(selector)
+    except soupsieve.SelectorSyntaxError as exc:
+        raise ValueError(f"Invalid CSS selector: {str(exc).splitlines()[0]}") from exc
+
+
 def extract_article_links(
     html: str, selector: str, feed_url: str
 ) -> list[tuple[str, str, datetime | None, str | None]]:
     """Apply CSS selector, return (url, title, published_at, excerpt) tuples."""
+    check_selector(selector)
     soup = BeautifulSoup(html, "lxml")
     results: list[tuple[str, str, datetime | None, str | None]] = []
     seen_urls: set[str] = set()
@@ -222,7 +239,7 @@ async def fetch_scrape_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        mark_fetch_success(feed, fetched_at, duration_ms)
+        await mark_fetch_success(db, feed, fetched_at, duration_ms)
         # Mirror rss.py: track the newest article date this listing carried. Only
         # advance when at least one link is dated, so a fetch of purely undated
         # links doesn't wipe a previously-known publication date. Stays None for
@@ -337,6 +354,11 @@ async def _save_scrape_articles(
 
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        # Same per-feed URL dedup as RSS. The scheduler's global pass would catch
+        # these too, but a manual refresh and the first fetch after subscribing run
+        # outside any round.
+        await _dedup_cross_feed(feed.id, new_articles, db)
 
         # See rss._save_articles: inside a scheduler round the post-gather pass does
         # this once for every feed, and doing it here as well only pays for the trigram

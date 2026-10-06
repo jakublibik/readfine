@@ -31,7 +31,6 @@ from app.services.ai_service import (
     ai_client,
     delete_api_key,
     generate_preference_text,
-    get_preference_strong_count,
     list_api_keys,
     save_api_key,
     scoring_model_rejection,
@@ -42,6 +41,7 @@ from app.services.ai_profile_service import (
     PROFILE_MAX_CHARS,
     preference_auto_status,
     quality_slot_blocker,
+    signal_counts,
 )
 from app.services.stats_service import get_ai_cost_stats
 from app.utils.formats import format_thousands
@@ -94,7 +94,7 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         "providers": SUPPORTED_PROVIDERS,
         "provider_docs": PROVIDER_DOCS_URLS,
         "provider_labels": PROVIDER_LABELS,
-        "pref_strong_count": await get_preference_strong_count(user.id, db),
+        "pref_strong_count": (await signal_counts(user.id, None, db))[0],
         "pref_auto_status": auto_status,
         "pref_auto_detail": auto_detail,
         "pref_auto_intervals": AUTO_INTERVALS,
@@ -472,7 +472,7 @@ async def settings_ai_generate_preference(
     ))
     await db.commit()
 
-    strong_count = await get_preference_strong_count(user.id, db)
+    strong_count, _ = await signal_counts(user.id, None, db)
     has_terms = bool((await db.scalar(
         select(UserSettings.relevance_terms).where(UserSettings.user_id == user.id)
     ) or "").strip())

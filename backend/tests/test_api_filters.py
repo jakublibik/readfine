@@ -168,6 +168,13 @@ class TestTestFilter:
 
 
 class TestApplyFilter:
+    @pytest.fixture(autouse=True)
+    def _filter_exists(self):
+        with patch("app.routers.api.v1.filters.get_filter",
+                   new=AsyncMock(return_value=_make_filter_response())) as get:
+            self.get_filter = get
+            yield
+
     def test_returns_counts(self, client):
         with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(10, 5, 3))):
             response = client.post("/api/v1/filters/1/apply")
@@ -192,17 +199,17 @@ class TestApplyFilter:
         assert mock.await_args.kwargs["enqueue_scoring"] is True
 
     def test_zero_counts_with_existing_filter(self, client):
-        f = _make_filter_response()
         with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0, 0))):
-            with patch("app.routers.api.v1.filters.get_filter", new=AsyncMock(return_value=f)):
-                response = client.post("/api/v1/filters/1/apply")
+            response = client.post("/api/v1/filters/1/apply")
         assert response.status_code == 200
 
-    def test_zero_counts_filter_not_found_returns_404(self, client):
-        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=AsyncMock(return_value=(0, 0, 0))):
-            with patch("app.routers.api.v1.filters.get_filter", new=AsyncMock(return_value=None)):
-                response = client.post("/api/v1/filters/99/apply")
+    def test_filter_not_found_returns_404_without_applying(self, client):
+        self.get_filter.return_value = None
+        apply = AsyncMock(return_value=(0, 0, 0))
+        with patch("app.routers.api.v1.filters.apply_filter_retroactively", new=apply):
+            response = client.post("/api/v1/filters/99/apply")
         assert response.status_code == 404
+        apply.assert_not_awaited()
 
     def test_requires_auth(self, unauth_client):
         response = unauth_client.post("/api/v1/filters/1/apply")

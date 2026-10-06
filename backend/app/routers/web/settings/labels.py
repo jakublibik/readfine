@@ -81,5 +81,14 @@ async def settings_label_delete(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    await delete_label(user, label_id, db)
+    switched_off = await delete_label(user, label_id, db)
+    if switched_off:
+        n = len(switched_off)
+        return await _labels_list(
+            request, user, db,
+            warning=(
+                f"Turned off {n} filter{'s' if n != 1 else ''} whose only action was "
+                f"this label: {', '.join(switched_off)}."
+            ),
+        )
     return await _labels_list(request, user, db)

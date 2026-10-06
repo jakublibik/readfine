@@ -48,7 +48,14 @@
         <td class="py-2 text-gray-700">
           {# No slot chip: the line under Scoring and the Main total below already
              say which model each row ran on. #}
+          {% if op.operation == "chat" %}
+          {# Article chats keep one running token total per chat, so a chat counts
+             wholly in the period of its last message. #}
+          <span class="border-b border-dotted border-gray-400 cursor-help"
+                title="Approximate: a chat about an article counts in full, every message included, in the period of its last message. The trend is approximate too.">{{ op.label }}</span>
+          {% else %}
           {{ op.label }}
+          {% endif %}
         </td>
         {% if op.is_placeholder %}
         <td class="py-2 text-right text-gray-400 text-xs" colspan="3">no runs yet</td>

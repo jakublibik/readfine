@@ -769,10 +769,13 @@ async def subscribe_scrape(
         raise ValueError("CSS selector is required")
     if len(selector) > 500:
         raise ValueError("CSS selector is too long (max 500 characters)")
+    # Syntax always, even when the live check below is skipped: an OPML backup can
+    # carry a selector that never compiled.
+    from app.fetcher.scrape import check_selector, extract_article_links, fetch_page_html
+    check_selector(selector)
 
     # Validate selector against the live page before saving
     if validate_selector:
-        from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
             html = await fetch_page_html(url, auth=auth)
         except Exception as exc:

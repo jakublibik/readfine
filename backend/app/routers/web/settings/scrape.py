@@ -21,7 +21,13 @@ from app.services.feed import subscribe_scrape
 from app.templating import templates
 from app.utils.crypto import auth_pair
 from app.utils.parsing import safe_int
-from app.utils.scrape_ai import build_selector_prompt, extract_article_sample, generate_selector_prompt
+from app.utils.scrape_ai import (
+    SAMPLE_MAX_CHARS,
+    build_selector_prompt,
+    extract_article_sample,
+    generate_selector_prompt,
+    parse_selector_history,
+)
 from app.utils.url_validator import split_url_credentials
 
 from .common import (
@@ -130,18 +136,14 @@ async def settings_scrape_ai_selector(
 
     form = await request.form()
     url, auth = await _scrape_target(form, user, db)
-    html_sample = (form.get("html_sample") or "").strip()
-    history_raw = (form.get("conversation_history") or "[]").strip()
+    # Both come back from the page; capped at what the page itself would send.
+    html_sample = (form.get("html_sample") or "").strip()[:SAMPLE_MAX_CHARS]
+    history = parse_selector_history(
+        form.get("conversation_history") or "[]", form.get("refinement") or "",
+    )
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")
-
-    try:
-        history: list[dict] = _json.loads(history_raw)
-        if not isinstance(history, list):
-            history = []
-    except Exception:
-        history = []
 
     if not html_sample:
         try:
@@ -238,6 +240,7 @@ async def settings_scrape_show_prompt(
 
 
 @router.post("/feeds/scrape", response_class=HTMLResponse)
+@limiter.limit("10/minute")  # fetches the page to check the selector, like preview
 async def settings_scrape_subscribe(
     request: Request,
     user: User = Depends(get_current_user),

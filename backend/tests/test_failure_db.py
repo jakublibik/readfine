@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
@@ -27,6 +27,7 @@ from app.fetcher.failure import (
     NOT_FOUND_DISABLE_THRESHOLD,
 )
 from app.fetcher.rss import fetch_feed
+from app.utils.url_validator import ConditionalResponse
 from app.models.feed import Feed
 from app.models.fetch_log import FetchLog
 
@@ -165,6 +166,50 @@ class TestErrorTierWrites:
         assert feed.fetch_error_count == 1
         assert feed.block_count == 0
         assert feed.status == "error"
+
+
+class TestPausedMidFetch:
+    """An admin pausing the feed while its fetch is in flight keeps the pause."""
+
+    async def _pause_behind_orm(self, session, feed):
+        # The fetch loaded the feed as active; the pause lands in the row only, as it
+        # would from the admin's own request.
+        await session.execute(
+            update(Feed).where(Feed.id == feed.id).values(status="paused"),
+            execution_options={"synchronize_session": False},
+        )
+        await session.commit()
+        assert feed.status == "active"
+
+    async def test_failure_keeps_paused(self, pg):
+        feed = await _feed(pg, status="active", fetch_error_count=0)
+        await self._pause_behind_orm(pg, feed)
+        await _fail(pg, feed, httpx.ConnectTimeout("timed out"))
+        assert feed.status == "paused"
+        assert feed.fetch_error_count == 1
+
+    async def test_success_keeps_paused(self, pg):
+        feed = await _feed(pg, status="active")
+        await self._pause_behind_orm(pg, feed)
+        with (
+            patch("app.fetcher.rss.async_validate_feed_url", new_callable=AsyncMock),
+            patch("app.fetcher.rss.fetch_url_conditional",
+                  return_value=ConditionalResponse(304, "", None, None)),
+        ):
+            await fetch_feed(feed, pg)
+        await pg.refresh(feed)
+        assert feed.status == "paused"
+
+    async def test_success_still_revives_an_error_feed(self, pg):
+        feed = await _feed(pg, status="error", fetch_error_count=2)
+        with (
+            patch("app.fetcher.rss.async_validate_feed_url", new_callable=AsyncMock),
+            patch("app.fetcher.rss.fetch_url_conditional",
+                  return_value=ConditionalResponse(304, "", None, None)),
+        ):
+            await fetch_feed(feed, pg)
+        await pg.refresh(feed)
+        assert (feed.status, feed.fetch_error_count) == ("active", 0)
 
 
 class TestNotFoundTierWrites:

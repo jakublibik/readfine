@@ -1047,10 +1047,13 @@ async def _import_filters(
             # A label the filter applies but the account lacks is created, so the
             # action survives the move instead of being dropped. Except for digits
             # in a Readfine file from before the format marker: those exports wrote
-            # the id of a label deleted since (deleting one leaves its filter
-            # actions in place) and creating a label called "17" helps nobody.
+            # the id of a label deleted since (deleting one used to leave its
+            # filter actions in place) and creating a label called "17" helps nobody.
             for label_name in _filter_label_names(fd, is_readfine):
-                if is_readfine and not versioned and label_name.isdigit()                         and label_name not in labels.ids:
+                if (
+                    is_readfine and not versioned and label_name.isdigit()
+                    and label_name not in labels.ids
+                ):
                     continue
                 await labels.ensure(label_name, db)
             await db.commit()

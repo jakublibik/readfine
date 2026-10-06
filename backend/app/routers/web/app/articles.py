@@ -991,7 +991,9 @@ async def htmx_article_detail(
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.id == article_id)
+        # A retention stub stays a stub: extracting it would put back the body the
+        # trim removed, into a row no list shows.
+        .where(Article.id == article_id, Article.trimmed_at.is_(None))
     )).first()
 
     if (

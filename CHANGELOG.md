@@ -21,7 +21,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Changed
 
 - A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on at once. Briefings to your own address only, and those of admins, have no limit.
-- Refreshing a feed by hand is limited to 10 times a minute.
+- Refreshing a feed by hand is limited to 10 times a minute, and so is adding a scrape feed.
+- A message in the chat about an article is limited to 2,000 characters, like the general chat.
 
 ### Fixed
 
@@ -44,6 +45,13 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A failed OPML import (too many imports in an hour, a file too large) replaced the whole page with the raw error. It now shows a message and leaves the page as it was. Renaming or deleting a saved **Catch me up** configuration no longer replaces the list with an error text when it fails.
 - A label name containing `<` showed up mangled in the action list of a new filter rule.
 - **Catch me up** could show a server error, after the digest was already generated, when the configuration it ran from had been deleted in another tab.
+- Deleting a label left its "add label" action in your filters. The action did nothing, the filter list showed a number instead of the label, and saving the filter failed. The action now goes with the label, a filter left with no action is turned off and named in a message, and the upgrade removes the ones left over.
+- A scrape feed with a broken CSS selector (from an OPML file, or edited later) failed on every fetch with "Internal error" and was never switched off. A selector that is not valid CSS is now refused with the reason when you add or edit the feed, and one already saved counts as the feed's own error.
+- **Regenerate** in the AI selector for scrape feeds ignored what you wrote about the previous attempt. The model now gets your note.
+- Removing a feed or folder now also warns about inactive filters scoped only to it, which would apply to all feeds once turned back on.
+- A feed with one item dated far in the future showed its last article in the future. A feed an admin paused while it was being fetched could come back active or in error.
+- A scrape feed refreshed by hand, or fetched right after subscribing, did not mark articles you already had from another feed as read.
+- The per-feed article cap (`purge_keep_count` in the API) could keep fewer articles than set, because starred and read articles, which are kept anyway, took up places.
 
 ### Security
 

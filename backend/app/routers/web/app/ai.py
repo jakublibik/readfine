@@ -48,6 +48,29 @@ def _ai_context_block(article_id: int, context: str) -> str:
 
 
 _CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
+_CHAT_MAX_MESSAGE_CHARS = 2000  # what the user types, in both chats
+# The general chat's history comes back from the client. A reply is longer than a
+# question, so this is a ceiling against a hand-made request, not a limit on answers.
+_CHAT_MAX_HISTORY_ITEM_CHARS = 20000
+
+
+def _parse_chat_history(raw: str) -> list[dict]:
+    """The general chat's history from the form, reduced to what a real one holds:
+    user and assistant turns with string content. Anything else (a "system" turn, a
+    non-dict, a missing field) is dropped rather than passed to the provider."""
+    try:
+        items = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    return [
+        {"role": m["role"], "content": m["content"][:_CHAT_MAX_HISTORY_ITEM_CHARS]}
+        for m in items
+        if isinstance(m, dict)
+        and m.get("role") in ("user", "assistant")
+        and isinstance(m.get("content"), str)
+    ]
 
 
 def _chat_macros():
@@ -306,16 +329,11 @@ async def htmx_general_ai_chat(
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
-    msg_text = message.strip()[:2000]
+    msg_text = message.strip()[:_CHAT_MAX_MESSAGE_CHARS]
     if not msg_text:
         return HTMLResponse("", status_code=400)
 
-    try:
-        current_messages: list[dict] = json.loads(history)
-        if not isinstance(current_messages, list):
-            current_messages = []
-    except (json.JSONDecodeError, ValueError):
-        current_messages = []
+    current_messages = _parse_chat_history(history)
 
     current_messages.append({"role": "user", "content": msg_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
@@ -420,7 +438,7 @@ async def htmx_ai_chat(
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
-    msg_text = message.strip()
+    msg_text = message.strip()[:_CHAT_MAX_MESSAGE_CHARS]
     if not msg_text:
         return HTMLResponse("", status_code=400)
 

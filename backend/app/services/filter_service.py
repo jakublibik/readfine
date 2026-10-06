@@ -173,9 +173,12 @@ def _validate_regex_conditions(conditions) -> None:
             raise ValueError(f"Regex pattern too long (max {_REGEX_MAX_LEN} characters).")
         if _REDOS_PATTERNS.search(c.value):
             raise ValueError("Regex pattern contains potentially unsafe constructs (nested quantifiers).")
+        # The same engine and flags the condition runs with (_compile_user_regex):
+        # validating with `re` turned down valid `regex` syntax such as \p{L}, and
+        # accepted patterns that mean something else under `regex`.
         try:
-            re.compile(c.value)
-        except re.error as e:
+            _regex.compile(c.value, _regex.IGNORECASE)
+        except _regex.error as e:
             raise ValueError(f"Invalid regex pattern: {e}") from e
 
 
@@ -578,11 +581,14 @@ async def _execute_actions(
         try:
             if action.action_type == "label" and action.action_value:
                 label_id = int(action.action_value)
-                # Verify label belongs to this user
-                label_check = await db.execute(
-                    select(Label.id).where(Label.id == label_id, Label.user_id == user_id)
-                )
-                if not label_check.scalar_one_or_none():
+                # Verify label belongs to this user. Once per session, not per article:
+                # a fetch or a retroactive apply runs the same action over many.
+                owned = db.info.setdefault("filter_label_owned", {})
+                if (user_id, label_id) not in owned:
+                    owned[(user_id, label_id)] = await db.scalar(
+                        select(Label.id).where(Label.id == label_id, Label.user_id == user_id)
+                    ) is not None
+                if not owned[(user_id, label_id)]:
                     continue
                 existing = await db.execute(
                     select(ArticleLabel).where(

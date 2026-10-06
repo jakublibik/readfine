@@ -93,8 +93,8 @@ def normalize_preference_text(raw: str | None) -> tuple[str | None, str | None]:
 async def signal_counts(user_id: int, since: datetime | None, db: AsyncSession) -> tuple[int, int]:
     """Return (strong signals, new signals since ``since``) in one pass.
 
-    Strong signals mirror groups G1+G2 of the generator (and
-    ``get_preference_strong_count``). New signals count engagement whose most
+    Strong signals mirror groups G1+G2 of the generator; the settings page shows
+    the same count. New signals count engagement whose most
     recent timestamp is newer than ``since``; ``user_article_states`` has no
     ``updated_at``, so GREATEST over the timestamps it does have is the closest
     approximation. ``is_read`` is never a signal — mark-all-read would fake it.

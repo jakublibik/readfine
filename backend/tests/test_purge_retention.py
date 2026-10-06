@@ -228,47 +228,34 @@ class TestTrim:
 # ── T2 delete (trimmed stubs past the profile window) ────────────────────────
 
 class TestT2Delete:
-    def _t2_delete(self, session, feed_id):
-        cutoff_t2 = NOW - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
-        recent = (
-            select(UserArticleState.article_id)
-            .where(
-                UserArticleState.article_id == Article.id,
-                UserArticleState.created_at >= cutoff_t2,
-            )
-            .exists()
-        )
-        return session.execute(
-            delete(Article).where(
-                Article.feed_id == feed_id,
-                Article.trimmed_at.isnot(None),
-                ~recent,
-                ~_fully_protected_exists(),
-            )
-        )
+    """Through purge_old_articles, so the test exercises the production query. Global
+    age/count purge is off (see _set_globals_null) so only T2 acts on these stubs."""
+
+    async def _purge(self, session):
+        from app.services.purge_service import purge_old_articles
+        await _set_globals_null(session)
+        session.commit = session.flush  # keep the rollback isolation
+        await purge_old_articles(session)
 
     async def test_old_stub_deleted(self, pg):
         user, feed = await _setup(pg)
         a = await _article(pg, feed, age_days=200, readable="snip", trimmed_at=NOW - timedelta(days=130))
         await _state(pg, user, a, dwell=120, created_days=200)  # engaged 200d ago > 180
-        res = await self._t2_delete(pg, feed.id)
-        assert res.rowcount == 1
+        await self._purge(pg)
         assert not await _exists(pg, a.id)
 
     async def test_stub_with_recent_signal_kept(self, pg):
         user, feed = await _setup(pg)
         a = await _article(pg, feed, age_days=200, readable="snip", trimmed_at=NOW - timedelta(days=130))
         await _state(pg, user, a, dwell=120, created_days=90)  # signal within 180d → keep
-        res = await self._t2_delete(pg, feed.id)
-        assert res.rowcount == 0
+        await self._purge(pg)
         assert await _exists(pg, a.id)
 
     async def test_untrimmed_not_touched_by_t2(self, pg):
         user, feed = await _setup(pg)
         a = await _article(pg, feed, age_days=200, readable="full", trimmed_at=None)
         await _state(pg, user, a, dwell=120, created_days=200)
-        res = await self._t2_delete(pg, feed.id)
-        assert res.rowcount == 0
+        await self._purge(pg)
         assert await _exists(pg, a.id)
 
 
@@ -380,6 +367,36 @@ class TestCountOrdering:
         assert await _exists(pg, b.id)
         assert await _exists(pg, c.id)
 
+    async def test_keep_count_counts_cold_articles_only(self, pg):
+        """Starred and engaged articles do not take up keep_count places: with
+        keep_count=2 the two newest cold articles survive behind two newer kept ones."""
+        from app.services.purge_service import purge_old_articles
+
+        await _set_globals_null(pg)
+        user, feed = await _setup(pg)
+        uf = (await pg.execute(
+            select(UserFeed).where(UserFeed.feed_id == feed.id, UserFeed.user_id == user.id)
+        )).scalar_one()
+        uf.purge_keep_count = 2
+        await pg.flush()
+
+        starred = await _article(pg, feed, age_days=1)
+        await _state(pg, user, starred, starred=True)
+        engaged = await _article(pg, feed, age_days=2)
+        await _state(pg, user, engaged, dwell=120)
+        cold_new = await _article(pg, feed, age_days=3)
+        cold_mid = await _article(pg, feed, age_days=4)
+        cold_old = await _article(pg, feed, age_days=5)
+
+        pg.commit = pg.flush
+        await purge_old_articles(pg)
+
+        assert await _exists(pg, starred.id)
+        assert await _exists(pg, engaged.id)
+        assert await _exists(pg, cold_new.id)
+        assert await _exists(pg, cold_mid.id)
+        assert not await _exists(pg, cold_old.id)
+
 
 # ── visibility: trimmed stubs are hidden from listings ───────────────────────
 
@@ -393,6 +410,16 @@ class TestHidden:
         ids = {it.id for it in items}
         assert normal.id in ids
         assert trimmed.id not in ids
+
+    async def test_get_article_by_id_hides_trimmed(self, pg):
+        """A stale list or a link by id must not reopen a stub (or re-extract it)."""
+        from app.services.article import get_article, toggle_article_state
+        user, feed = await _setup(pg)
+        normal = await _article(pg, feed, age_days=5, content="<p>normal</p>")
+        trimmed = await _article(pg, feed, age_days=100, content="snip", trimmed_at=NOW)
+        assert await get_article(user, normal.id, pg) is not None
+        assert await get_article(user, trimmed.id, pg) is None
+        assert await toggle_article_state(user, trimmed.id, "is_read", pg) is None
 
 
 class TestFetchLogRetention:
