@@ -32,7 +32,7 @@
             <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500 align-middle"
                   title="No activity for {{ item.inactive_days|num if item.inactive_days is not none else 'many' }} days. {{ dormant_note }}">dormant</span>
           {% elif item.dormant_on %}
-            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-yellow-100 text-yellow-700 align-middle whitespace-nowrap"
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 align-middle whitespace-nowrap"
                   title="Warned by email, falls dormant on {{ item.dormant_on | localtime('long') }} unless they come back. {{ dormant_note }}">dormant {{ item.dormant_on | localtime('numdate') }}</span>
           {% endif %}
         </div>
@@ -40,7 +40,7 @@
       </td>
       <td class="px-2 py-2">
         {% if not u.email_verified %}
-          <span class="px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-700">unverified</span>
+          <span class="px-2 py-0.5 text-xs rounded bg-amber-100 text-amber-700">unverified</span>
         {% elif u.is_active %}
           <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
         {% else %}
