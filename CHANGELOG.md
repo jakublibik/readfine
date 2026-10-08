@@ -24,6 +24,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - Mail can now go out over port 465 (implicit TLS). Before, every send to that port hung until it timed out. The TLS box in **Admin → Settings → SMTP** is for STARTTLS on other ports such as 587.
 - A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on (admins have no limit).
 - New rate limits: refreshing a feed by hand and adding a scrape feed (10 a minute), testing and applying filters, the term suggestions in **Settings → Relevance**, and OPML imports (10 an hour). A message in the article chat is limited to 2,000 characters, like the general chat.
+- New screenshots, each in a light and a dark version, in `landing.example.html` and the README. The install dialog of the app (PWA) shows them too.
 - The regex tips in the filter editor are now folded under a **Regex tips** link instead of always taking up space below the conditions.
 
 ### Fixed

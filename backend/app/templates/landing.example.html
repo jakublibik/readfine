@@ -221,17 +221,23 @@
 
     <section class="max-w-5xl mx-auto px-4 py-16">
       <h2 class="text-2xl font-bold text-center mb-12">See it in action</h2>
+      {#- Each shot comes in a light and a dark version, switched by the page's own
+          theme class (it has a toggle), so not by a <picture> media query. A lazy
+          image that is display:none is never fetched, so a visitor loads one set. -#}
+      {% macro shot(name, alt, width, height) -%}
+        <img src="/static/images/landing/{{ name }}.webp" alt="{{ alt }}" width="{{ width }}" height="{{ height }}"
+             class="dark:hidden w-full h-auto rounded-lg border border-gray-200 shadow-sm" loading="lazy">
+        <img src="/static/images/landing/{{ name }}_dark.webp" alt="{{ alt }}" width="{{ width }}" height="{{ height }}"
+             class="hidden dark:block w-full h-auto rounded-lg border border-gray-800 shadow-sm" loading="lazy">
+      {%- endmacro %}
       <div class="space-y-8">
-        <img src="/static/images/landing/desktop_reading.png" alt="Readfine adaptive reading layout"
-             class="w-full rounded-lg border border-gray-200 dark:border-gray-800 shadow-sm" loading="lazy">
+        <div>{{ shot("desktop_toppicks", "Top picks: articles from every feed, sorted by relevance", 2000, 1250) }}</div>
         <div class="grid gap-8 grid-cols-1 sm:grid-cols-3">
-          <img src="/static/images/landing/mobile_summary.png" alt="AI summary on mobile"
-               class="w-full rounded-lg border border-gray-200 dark:border-gray-800 shadow-sm" loading="lazy">
-          <img src="/static/images/landing/mobile_catchmeup.png" alt="Catch me up briefing on mobile"
-               class="w-full rounded-lg border border-gray-200 dark:border-gray-800 shadow-sm" loading="lazy">
-          <img src="/static/images/landing/mobile_filters.png" alt="Filters and rules on mobile"
-               class="w-full rounded-lg border border-gray-200 dark:border-gray-800 shadow-sm" loading="lazy">
+          <div>{{ shot("mobile_summary", "AI summary on mobile", 600, 1290) }}</div>
+          <div>{{ shot("mobile_catchmeup", "Catch me up briefing on mobile", 600, 1290) }}</div>
+          <div>{{ shot("mobile_filters", "Filters and rules on mobile", 600, 1290) }}</div>
         </div>
+        <div>{{ shot("desktop_reading", "Readfine three-panel reading view with an AI summary", 2000, 1250) }}</div>
       </div>
     </section>
 
