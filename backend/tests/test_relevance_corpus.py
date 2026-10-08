@@ -120,6 +120,18 @@ class TestRebuild:
             select(LexicalTerm.doc_freq).where(LexicalTerm.term == COMMON)) == 3
 
     async def test_html_is_stripped_before_counting(self, pg):
+        markup = ("div", "span", "class", "intro")
+
+        async def counts():
+            return {t: await pg.scalar(
+                select(LexicalTerm.doc_freq).where(LexicalTerm.term == t)) for t in markup}
+
+        # The window also takes in whatever the database already holds, and real
+        # articles say "class" too. So the markup words are compared with a build
+        # made without the test's articles rather than expected to be absent.
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        before = await counts()
+
         await _article(pg, "one", "<p class='intro'>zorble text</p>")
         await _article(pg, "two", "<div class='intro'>zorble text</div>")
         await _article(pg, "three", "<span class='intro'>zorble text</span>")
@@ -127,9 +139,7 @@ class TestRebuild:
 
         assert await pg.scalar(
             select(LexicalTerm.doc_freq).where(LexicalTerm.term == "zorble")) == 3
-        for markup in ("div", "span", "class", "intro"):
-            assert await pg.scalar(
-                select(LexicalTerm.doc_freq).where(LexicalTerm.term == markup)) is None
+        assert await counts() == before
 
     async def test_empty_window_writes_an_empty_table(self, pg):
         """A window nothing falls into: the table is emptied, not left stale."""
