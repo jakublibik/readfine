@@ -938,6 +938,24 @@ function _syncMobileQuicklink() {
 // The nav item restored on page load, until its list arrives (see below).
 var _restoredNavGet = null;
 
+// The remembered view (and its mobile title) lives in the browser, which outlives a
+// logout. When another account signs in there, forget it, so the account does not
+// reopen the previous one's view (its saved search answers 404) or see its name.
+// A browser with no owner recorded yet keeps what it has.
+(function () {
+  var list = document.getElementById('article-list');
+  var owner = list && list.dataset.navOwner;
+  if (!owner) return;
+  try {
+    var prev = localStorage.getItem('lastNavOwner');
+    if (prev && prev !== owner) {
+      localStorage.removeItem('lastNavItem');
+      localStorage.removeItem('mobile_title_text');
+    }
+    localStorage.setItem('lastNavOwner', owner);
+  } catch (e) {}
+})();
+
 // Restore last-selected nav on page load; fall back to All Articles.
 // A ?view=starred|labeled deep-link (e.g. from the Stats page) overrides the
 // saved nav and is consumed from the URL, like ?open_article_id.

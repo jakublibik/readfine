@@ -86,7 +86,7 @@
     {% if config.briefing_last_sent_at or config.briefing_last_error %}
     <div class="text-xs text-gray-400 space-y-0.5 border-t border-gray-100 pt-2">
       {% if config.briefing_last_sent_at %}
-      <p>Last sent: {{ config.briefing_last_sent_at.strftime('%b %-d, %Y at %H:%M UTC') }}</p>
+      <p>Last sent: {{ config.briefing_last_sent_at|localtime('long') }}</p>
       {% endif %}
       {% if config.briefing_last_error %}
       <p class="text-red-500">Last error: {{ config.briefing_last_error }}</p>

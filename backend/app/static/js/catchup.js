@@ -358,6 +358,14 @@
     }
   });
 
+  // A sent test says so next to the button for a few seconds.
+  document.body.addEventListener('htmx:afterSwap', function (e) {
+    var target = e.detail.target;
+    if (!target || target.id !== 'briefing-test-result') return;
+    var ok = target.querySelector('[data-briefing-test-ok]');
+    if (ok) setTimeout(function () { if (ok.parentNode) ok.remove(); }, 5000);
+  });
+
   // Said in place next to the button, so the generic toast in app.js stays out. On
   // responseError rather than afterRequest: htmx hands each event its own detail
   // object, and the fallback checks the one it was given.
