@@ -18,7 +18,10 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 > security-sensitive parts (auth, key storage, SSRF protection) before trusting
 > it with anything sensitive. No warranty; see [License](#license).
 
-![Readfine reading view](backend/app/static/images/landing/desktop_reading.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/desktop_toppicks_dark.webp">
+  <img src="backend/app/static/images/landing/desktop_toppicks.webp" alt="Readfine Top picks: articles from every feed, sorted by relevance">
+</picture>
 
 ## Contents
 
@@ -52,10 +55,24 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 See [FEATURES.md](FEATURES.md) for the full list, grouped by area (also at `/features` in the app).
 
 <p>
-  <img src="backend/app/static/images/landing/mobile_summary.png" width="30%" alt="AI summary" />
-  <img src="backend/app/static/images/landing/mobile_filters.png" width="30%" alt="Filters" />
-  <img src="backend/app/static/images/landing/mobile_catchmeup.png" width="30%" alt="Catch me up" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_summary_dark.webp">
+    <img src="backend/app/static/images/landing/mobile_summary.webp" alt="AI summary" width="30%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_catchmeup_dark.webp">
+    <img src="backend/app/static/images/landing/mobile_catchmeup.webp" alt="Catch me up" width="30%">
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_filters_dark.webp">
+    <img src="backend/app/static/images/landing/mobile_filters.webp" alt="Filters" width="30%">
+  </picture>
 </p>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/desktop_reading_dark.webp">
+  <img src="backend/app/static/images/landing/desktop_reading.webp" alt="Readfine three-panel reading view with an AI summary">
+</picture>
 
 ## Quick demo (try locally)
 

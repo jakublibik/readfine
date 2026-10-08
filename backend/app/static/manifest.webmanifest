@@ -43,5 +43,42 @@
       "type": "image/png",
       "purpose": "maskable"
     }
+  ],
+  "screenshots": [
+    {
+      "src": "/static/images/landing/desktop_toppicks.webp",
+      "sizes": "2000x1250",
+      "type": "image/webp",
+      "form_factor": "wide",
+      "label": "Top picks: articles from every feed, sorted by relevance"
+    },
+    {
+      "src": "/static/images/landing/desktop_reading.webp",
+      "sizes": "2000x1250",
+      "type": "image/webp",
+      "form_factor": "wide",
+      "label": "Three-panel reading view with an AI summary"
+    },
+    {
+      "src": "/static/images/landing/mobile_summary.webp",
+      "sizes": "600x1290",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "AI summary"
+    },
+    {
+      "src": "/static/images/landing/mobile_catchmeup.webp",
+      "sizes": "600x1290",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "Catch me up briefing"
+    },
+    {
+      "src": "/static/images/landing/mobile_filters.webp",
+      "sizes": "600x1290",
+      "type": "image/webp",
+      "form_factor": "narrow",
+      "label": "Filters and rules"
+    }
   ]
 }
