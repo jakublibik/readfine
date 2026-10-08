@@ -1832,6 +1832,7 @@ async def htmx_save_url(
         # element never reaches document.body, so HX-Trigger-After-Settle would go
         # nowhere. The handler waits for the settle itself.
         events["savedArticleAdded"] = {"id": saved_id}
+        events["sidebarRefresh"] = True
     if events:
         response.headers["HX-Trigger"] = json.dumps(events)
     return response
