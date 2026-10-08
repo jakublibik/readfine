@@ -45,8 +45,8 @@ async def _auth_by_bearer(
     """Resolve a user from a Bearer credential: JWT first, then a hashed API token.
 
     Returns None when there is no credential or it doesn't resolve to an active
-    user. Shared by both the web (session-or-bearer) and API (bearer-only) deps so
-    the token-verification path exists in exactly one place.
+    user. Used by the API dependency only; the web takes a session and nothing
+    else (see get_current_user).
     """
     if not credentials:
         return None

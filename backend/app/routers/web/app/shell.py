@@ -29,11 +29,11 @@ from app.services.label_service import list_labels
 from app.services.saved_search_service import (
     get_saved_search, has_missing_references, list_saved_searches,
 )
+from app.services.scope_tokens import token_id
 from app.services.search_params import modal_values, normalize_search_params
 from app.services.story_service import DEDUP_COLLAPSE
 from app.services.user import FEEDS_RESUMED_SESSION_KEY, touch_last_active
 from app.templating import templates
-from app.utils.parsing import safe_int
 
 from .common import _ai_availability, _badge_html, _badge_total_html
 
@@ -141,10 +141,11 @@ async def htmx_mark_articles_read(
         before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
     except ValueError:
         return HTMLResponse("", status_code=400)
-    lid = safe_int(label_id)
-    if label_id and lid is None:
-        # Not a missing label but a garbled one: falling back to None would widen the
-        # scope to every subscribed article.
+    try:
+        lid = token_id(label_id) if label_id else None
+    except ValueError:
+        # Not a missing label but a garbled one (or past the id column): falling back
+        # to None would widen the scope to every subscribed article.
         return HTMLResponse("", status_code=400)
     await mark_scope_read(
         user, db, before=before_dt,
