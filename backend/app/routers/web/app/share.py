@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed
+from app.models.user import User
 from app.templating import templates
 
 router = APIRouter(tags=["web-app"])
@@ -23,7 +24,10 @@ async def public_share_view(
         select(Article, Feed.title.label("feed_title"))
         .join(UserArticleState, UserArticleState.article_id == Article.id)
         .outerjoin(Feed, Feed.id == Article.feed_id)
-        .where(UserArticleState.share_token == token)
+        # A deactivated account's links go dark with it. Deleting the account drops
+        # the state rows, and with them the tokens; deactivating used to leave them up.
+        .join(User, User.id == UserArticleState.user_id)
+        .where(UserArticleState.share_token == token, User.is_active == True)
     )
     row = (await db.execute(stmt)).first()
     if not row:

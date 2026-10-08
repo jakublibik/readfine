@@ -19,7 +19,9 @@ from app.models.article import (
 )
 from app.models.feed import Feed, UserFeed
 from app.schemas.article import ArticleListItem, StoryMember, SuppressedArticle
-from app.services.article import add_article_access_joins, article_access_predicate
+from app.services.article import (
+    add_article_access_joins, article_access_predicate, unread_clause,
+)
 
 # A group is small by construction (measured median 2, largest 13), so this is a guard
 # against a pathological cluster, not a page size. Nothing paginates the footer.
@@ -318,6 +320,33 @@ def row_count(collapsing: bool = True):
     return func.count(func.distinct(func.coalesce(Article.story_id, -Article.id)))
 
 
+def collapses_stories(
+    *, story_dedup: str, feed_id: int | None, starred_only: bool,
+    archived_only: bool, saved_only: bool,
+) -> bool:
+    """Whether this view folds the other coverage of a story into one row.
+
+    Nothing folds when the reader has the feature off: the setting is what decides
+    whether the list is theirs to shape at all, and the view only decides where that
+    shaping makes sense.
+
+    The reading views do, search included: a search for a story that five newsrooms
+    filed answered with five rows saying the same thing, and folding only ever hides a
+    row that did match, under the best-matching one, with the marker saying it is
+    there. That last part is why search waited for the list to be able to unfold a
+    group — until then the only way to the folded article led through the article
+    above it, which is too far for a view whose job is to answer "is this in here".
+
+    Starred, saved and archive do not: those are lists the reader assembled by hand,
+    and a row missing from one of them is a row they put there themselves. Nor does a
+    single feed, which is a question about that feed, and hiding one of its articles
+    because another source filed first answers a different one.
+    """
+    if story_dedup == DEDUP_OFF:
+        return False
+    return not (feed_id is not None or starred_only or archived_only or saved_only)
+
+
 def collapse_page(
     items: list[ArticleListItem], already_shown: list[int] | None = None
 ) -> list[ArticleListItem]:
@@ -496,7 +525,7 @@ async def mark_group_read(
             Article.id.not_in(article_ids),
             Article.trimmed_at.is_(None),
             article_access_predicate(),
-            (UserArticleState.is_read.is_(None)) | (UserArticleState.is_read.is_(False)),
+            unread_clause(),
         )
     )).scalars().all()
     if not members:

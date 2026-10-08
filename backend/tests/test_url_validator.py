@@ -178,6 +178,14 @@ class TestSSRFProtection:
             with pytest.raises(ValueError, match="disallowed"):
                 validate_feed_url("http://link-local.example/feed")
 
+    @pytest.mark.parametrize("ip", ["100.64.0.1", "100.100.100.100", "100.127.255.254"])
+    def test_shared_address_space_rejected(self, ip):
+        # 100.64.0.0/10 is neither private nor reserved to the ipaddress module, and
+        # it is where a Tailscale network lives.
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", (ip, 0))]):
+            with pytest.raises(ValueError, match="disallowed"):
+                validate_feed_url("http://tailnet-host.example/feed")
+
     def test_public_ip_allowed(self):
         with patch("socket.getaddrinfo", return_value=[
             (2, 1, 6, "", ("93.184.216.34", 0))
@@ -861,6 +869,52 @@ class TestProtocolErrorRetry:
         assert resolve.call_count == 1
 
 
+class TestOverallDeadline:
+    """httpx's timeout bounds each read; the overall deadline bounds the fetch.
+
+    A host trickling its body never trips the per-read timeout, so without this a
+    single slow feed kept a worker thread (and with it the scheduler round) busy until
+    the size cap, which is days at a few bytes a read.
+    """
+
+    def _clock(self, step: float):
+        """A monotonic clock that moves *step* seconds every time it is read."""
+        import itertools
+        ticks = itertools.count(start=0, step=step)
+        return patch("app.utils.url_validator.time.monotonic", side_effect=lambda: next(ticks))
+
+    def test_trickling_body_is_abandoned_at_the_deadline(self):
+        chunks_sent = []
+
+        def body():
+            for i in range(1000):
+                chunks_sent.append(i)
+                yield b"x"
+
+        def handler(request):
+            return httpx.Response(200, content=body())
+
+        # timeout=30 gives a 60 s overall budget; the clock moves 5 s per reading.
+        with _mock_httpx_client(handler), self._clock(5):
+            with pytest.raises(httpx.ReadTimeout):
+                fetch_url_with_ssrf_check("https://example.com/slow", timeout=30)
+        assert len(chunks_sent) < 20  # gave up long before draining the source
+
+    def test_deadline_counts_as_a_source_error(self):
+        # The fetcher has to treat it like any other timeout: the feed's fault, with
+        # the usual backoff, not "Internal error".
+        from app.fetcher.failure import is_source_error
+        assert is_source_error(httpx.ReadTimeout("slow"))
+
+    def test_fast_body_is_unaffected(self):
+        def handler(request):
+            return httpx.Response(200, content=iter([b"a" * 10, b"b" * 10]))
+
+        with _mock_httpx_client(handler), self._clock(1):
+            body = fetch_url_with_ssrf_check("https://example.com/ok", timeout=30)
+        assert body == "a" * 10 + "b" * 10
+
+
 class TestResponseSizeCap:
     """A body past the cap is abandoned rather than held in memory.
 
@@ -1270,3 +1324,92 @@ class TestPinnedAsyncTransport:
                 await transport.handle_async_request(
                     httpx.Request("GET", "http://metadata.internal/latest/meta-data/")
                 )
+
+
+class _Chunks(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def __aiter__(self):
+        for chunk in self._chunks:
+            yield chunk
+
+
+class TestAiResponseCap:
+    """The AI SDK reads a custom endpoint's body whole, so the transport holds it to
+    the fetch size cap, compressed bodies included (review H2-03)."""
+
+    _URL = "https://ai.example.com/v1/chat/completions"
+
+    def _client(self, response, sent=None):
+        async def fake_send(self, request):
+            if sent is not None:
+                sent["accept-encoding"] = request.headers.get("accept-encoding")
+            return response
+
+        return (
+            patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]),
+            patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send),
+            httpx.AsyncClient(transport=PinnedAsyncTransport()),
+        )
+
+    async def _post(self, response, sent=None):
+        dns, send, client = self._client(response, sent)
+        with dns, send, allowed_private_ai_hosts(""):
+            async with client:
+                return await client.post(self._URL, json={})
+
+    @pytest.mark.asyncio
+    async def test_small_body_passes_and_asks_for_no_compression(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        sent = {}
+        resp = await self._post(httpx.Response(200, stream=_Chunks([b'{"ok": 1}'])), sent)
+        assert resp.json() == {"ok": 1}
+        assert sent["accept-encoding"] == "identity"
+
+    @pytest.mark.asyncio
+    async def test_body_past_the_cap_is_abandoned(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        # Chunked, no Content-Length: only the running count can catch it.
+        with pytest.raises(ResponseTooLarge):
+            await self._post(httpx.Response(200, stream=_Chunks([b"x" * 600] * 3)))
+
+    @pytest.mark.asyncio
+    async def test_declared_length_past_the_cap_is_refused_up_front(self, monkeypatch):
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        resp = httpx.Response(200, headers={"content-length": "5000"}, stream=_Chunks([]))
+        with pytest.raises(ResponseTooLarge):
+            await self._post(resp)
+
+    @pytest.mark.asyncio
+    async def test_compressed_body_is_refused(self, monkeypatch):
+        # 2 kB of gzip unpacking to 2 MB would pass a count of the bytes on the wire.
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 100_000)
+        bomb = gzip.compress(b"\0" * 2_000_000)
+        resp = httpx.Response(
+            200, headers={"content-encoding": "gzip"}, stream=_Chunks([bomb])
+        )
+        with pytest.raises(ResponseTooLarge):
+            await self._post(resp)
+
+    @pytest.mark.asyncio
+    async def test_sdk_error_is_traced_back_to_the_cap(self, monkeypatch):
+        from app.services.ai_service import describe_ai_error, _make_custom_client
+        from app.utils.url_validator import find_endpoint_refusal
+
+        monkeypatch.setattr(app_settings, "max_fetch_bytes", 1000)
+        client = _make_custom_client("k", "https://ai.example.com/v1", max_retries=0)
+
+        async def fake_send(self, request):
+            return httpx.Response(200, stream=_Chunks([b"x" * 600] * 3))
+
+        with patch("socket.getaddrinfo", return_value=[(2, 1, 6, "", ("93.184.216.34", 0))]), \
+             patch.object(httpx.AsyncHTTPTransport, "handle_async_request", fake_send), \
+             allowed_private_ai_hosts(""):
+            with pytest.raises(Exception) as info:
+                await client.chat.completions.create(
+                    model="m", messages=[{"role": "user", "content": "hi"}]
+                )
+        await client.close()
+        assert isinstance(find_endpoint_refusal(info.value), ResponseTooLarge)
+        assert "size limit" in describe_ai_error(info.value)

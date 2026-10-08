@@ -37,6 +37,13 @@ async def lifespan(app: FastAPI):
             "NOT marked Secure, /docs is exposed, and the insecure-config guard "
             "is bypassed. Never run with DEBUG=true in production."
         )
+    elif not settings.session_cookie_is_secure:
+        import logging
+        logging.getLogger(__name__).warning(
+            "SESSION_COOKIE_SECURE=false: the session cookie also travels over plain "
+            "HTTP, where anyone on the network can read it. Fine for a home LAN, "
+            "not for an instance reachable from the internet."
+        )
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=20))
     db.engine = db.create_engine(settings.database_url)
     db.async_session_factory = db.create_session_factory(db.engine)
@@ -77,6 +84,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     sched.shutdown(wait=True)
+    # A subscribe or a save just before the deploy is still fetching in the background.
+    from app.utils.background import wait_background
+    await wait_background(timeout=5)
     from app.services.host_rate_limit_service import flush
     async with db.async_session_factory() as session:
         await flush(session)
@@ -105,7 +115,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.secret_key,
-        https_only=not settings.debug,
+        https_only=settings.session_cookie_is_secure,
         same_site="lax",
         # Sliding expiry, re-stamped on each response; see session_max_age_days.
         max_age=settings.session_max_age_days * 24 * 3600,
@@ -123,6 +133,7 @@ def create_app() -> FastAPI:
             re.compile(r"^/resend-verification$"),
         ],
         sensitive_cookies={"session"},
+        cookie_secure=settings.session_cookie_is_secure,
     )
 
     # Rate limiting
@@ -159,17 +170,14 @@ def create_app() -> FastAPI:
         response.headers["Referrer-Policy"] = "same-origin"
         # CSP is sent in every environment (it does not depend on HTTPS and the
         # templates render identically in dev and prod), so XSS protection is
-        # never silently dropped by DEBUG. 'unsafe-eval' is intentionally
-        # retained: HTMX evaluates several template-authored expressions via the
-        # Function constructor — hx-on::*, hx-vals="js:…", and hx-trigger event
-        # filters (e.g. click[…], keydown[key=='Enter']). All are developer-
-        # authored, not user input, so this is not an active injection vector;
-        # the primary XSS defense is the nonce on script-src (injected inline
-        # scripts can't run). Removing it requires migrating those usages to
-        # external JS first — tracked as a post-launch hardening task (review M3).
+        # never silently dropped by DEBUG. No 'unsafe-eval': htmx runs with
+        # allowEval off (base.html), so hx-on, hx-vals="js:" and hx-trigger filters
+        # are not used, and HTML that reaches the page through a swap cannot run code
+        # through them either. Inline scripts need the nonce, which htmx no longer
+        # copies onto scripts in swapped content.
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            f"script-src 'self' 'unsafe-eval' 'nonce-{nonce}'; "
+            f"script-src 'self' 'nonce-{nonce}'; "
             "img-src * data:; "
             "style-src 'self' 'unsafe-inline'; "
             # The two video players an article body can hold, and nothing else that
@@ -264,6 +272,48 @@ def create_app() -> FastAPI:
         return await _default_http_exception_handler(request, exc)
 
     app.add_exception_handler(_StarletteHTTPException, auth_redirect_handler)
+
+    # Safety nets for input the routes did not check themselves. A web form built into
+    # a schema by hand (LabelCreate(...)) raises pydantic's ValidationError, and a name
+    # that collides with a unique index raises IntegrityError on flush. Both are the
+    # user's input, not a server fault, so they answer 400/409 instead of the 500 page.
+    # Routes that check on their own still give the better message; this only catches
+    # what slips past. FastAPI's own request validation is a different class
+    # (RequestValidationError) and keeps its 422.
+    import logging
+    from pydantic import ValidationError as _PydanticValidationError
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+    from app.utils.htmx import error_toast, validation_message
+
+    _UNIQUE_VIOLATION = "23505"
+
+    def _client_error_response(request: Request, status: int, message: str) -> Response:
+        if request.url.path.startswith("/api/"):
+            return JSONResponse({"detail": message}, status_code=status)
+        if request.headers.get("HX-Request"):
+            return error_toast(message, status)
+        return _templates.TemplateResponse(
+            request, "errors/client.html", {"status": status, "message": message},
+            status_code=status,
+        )
+
+    async def validation_error_handler(request: Request, exc: _PydanticValidationError):
+        # Logged with the trace: the same class also comes from a bug that builds a
+        # model from bad data of our own, and that should not pass as a user mistake.
+        logging.getLogger(__name__).warning(
+            "Validation error on %s %s", request.method, request.url.path, exc_info=exc)
+        return _client_error_response(request, 400, validation_message(exc))
+
+    async def integrity_error_handler(request: Request, exc: _IntegrityError):
+        if db.sqlstate(exc) != _UNIQUE_VIOLATION:
+            # A foreign key or NOT NULL failing is our bug, not a duplicate name.
+            return await server_error_handler(request, exc)
+        logging.getLogger(__name__).warning(
+            "Unique violation on %s %s: %s", request.method, request.url.path, exc.orig)
+        return _client_error_response(request, 409, "That already exists.")
+
+    app.add_exception_handler(_PydanticValidationError, validation_error_handler)
+    app.add_exception_handler(_IntegrityError, integrity_error_handler)
 
     @app.exception_handler(Exception)
     async def server_error_handler(request: Request, exc: Exception):

@@ -2,30 +2,36 @@
 manual feed refresh, search modal)."""
 import json
 import logging
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
-from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
+from app.rate_limit import limiter
 from app.routers.web.settings.filters import score_sources
 from app.services.article import SINCE_DAYS_OPTIONS, mark_scope_read
+from app.services.counts_service import (
+    mark_read_total, sidebar_counts, story_dedup_of, view_badge, view_count,
+)
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
 from app.services.saved_search_service import (
     get_saved_search, has_missing_references, list_saved_searches,
 )
+from app.services.scope_tokens import token_id
 from app.services.search_params import modal_values, normalize_search_params
-from app.services.story_service import DEDUP_COLLAPSE, DEDUP_OFF, row_count
+from app.services.story_service import DEDUP_COLLAPSE
 from app.services.user import FEEDS_RESUMED_SESSION_KEY, touch_last_active
 from app.templating import templates
 
@@ -92,155 +98,14 @@ async def htmx_sidebar(
     )
     user_labels = await list_labels(user, db)
 
-    feed_ids = [uf.feed_id for uf in user_feeds]
     # A reader with story dedup off gets a list that folds nothing, so their badges
     # count articles again.
-    story_dedup = settings.story_dedup if settings else DEDUP_COLLAPSE
-    rows_drawn = row_count(story_dedup != DEDUP_OFF)
-
-    # Nav counts. Every counter over a view that folds stories counts rows rather than
-    # articles (story_service.row_count): the badge stands above a list, and a list that
-    # shows one row for five sources must not be labelled 5.
-    nav_total = (await db.execute(
-        select(rows_drawn).select_from(Article)
-        .join(UserFeed, UserFeed.feed_id == Article.feed_id)
-        .where(UserFeed.user_id == user.id, Article.trimmed_at.is_(None))
-    )).scalar() or 0
-    # Every counter here joins Article for trimmed_at IS NULL, the same filter
-    # list_articles applies, so a badge can never stand above a list that opens onto
-    # fewer rows. Retention cannot trim an article while it is starred, archived or
-    # saved (purge_service._fully_protected_exists), but the reverse reaches it: a
-    # stub trimmed overnight can still be starred from a list rendered before the
-    # trim, and the resulting drift never heals on its own.
-    uas_row = (await db.execute(
-        select(
-            func.count().filter(UserArticleState.is_starred == True).label("starred"),
-            func.count().filter((UserArticleState.is_starred == True) & (UserArticleState.is_read == False)).label("unread_starred"),
-            func.count().filter(UserArticleState.is_archived == True).label("archived"),
-            func.count().filter((UserArticleState.is_archived == True) & (UserArticleState.is_read == False)).label("unread_archived"),
-            func.count().filter(UserArticleState.saved_at.is_not(None)).label("saved"),
-            func.count().filter((UserArticleState.saved_at.is_not(None)) & (UserArticleState.is_read == False)).label("unread_saved"),
-        )
-        .select_from(UserArticleState)
-        .join(Article, Article.id == UserArticleState.article_id)
-        .where(UserArticleState.user_id == user.id, Article.trimmed_at.is_(None))
-    )).one()
-    nav_starred = uas_row.starred or 0
-    nav_unread_starred = uas_row.unread_starred or 0
-    nav_archived = uas_row.archived or 0
-    nav_unread_archived = uas_row.unread_archived or 0
-    nav_saved = uas_row.saved or 0
-    nav_unread_saved = uas_row.unread_saved or 0
-    nav_labeled = (await db.execute(
-        select(rows_drawn)
-        .select_from(ArticleLabel)
-        .join(Article, Article.id == ArticleLabel.article_id)
-        .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
-    )).scalar() or 0
-    nav_unread_labeled = (await db.execute(
-        select(rows_drawn)
-        .select_from(Article)
-        .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
-        .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-        .where(
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
-    )).scalar() or 0
-
-    # Feed total + unread counts (batch, computed from DB — not cached unread_count)
-    if feed_ids:
-        feed_total_counts = dict((await db.execute(
-            select(Article.feed_id, func.count(Article.id))
-            .where(Article.feed_id.in_(feed_ids), Article.trimmed_at.is_(None))
-            .group_by(Article.feed_id)
-        )).all())
-        feed_unread_counts = dict((await db.execute(
-            select(Article.feed_id, func.count(Article.id))
-            .outerjoin(
-                UserArticleState,
-                (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-            )
-            .where(
-                Article.feed_id.in_(feed_ids),
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-            .group_by(Article.feed_id)
-        )).all())
-    else:
-        feed_total_counts = {}
-        feed_unread_counts = {}
-
-    # Folder and nav counters are asked for separately rather than added up from the
-    # feed ones. A story runs across feeds, so two of its articles in two feeds of one
-    # folder are one row in the folder's list; summing would count them twice. The feed
-    # counters above stay a plain count of articles, since a feed's own list shows every
-    # row it has.
-    def _scoped(*extra):
-        return (
-            select(UserFeed.folder_id, rows_drawn)
-            .select_from(Article)
-            .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-            .outerjoin(
-                UserArticleState,
-                (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-            )
-            .where(Article.trimmed_at.is_(None), *extra)
-            .group_by(UserFeed.folder_id)
-        )
-
-    folder_total_counts: dict[int | None, int] = dict(
-        (await db.execute(_scoped())).all()
+    counts = await sidebar_counts(
+        db, user.id,
+        feed_ids=[uf.feed_id for uf in user_feeds],
+        label_ids=[lb.id for lb in user_labels],
+        story_dedup=settings.story_dedup if settings else DEDUP_COLLAPSE,
     )
-    folder_unread_counts: dict[int | None, int] = dict((await db.execute(_scoped(
-        (UserArticleState.is_read == None) | (UserArticleState.is_read == False)
-    ))).all())
-
-    nav_unread = (await db.execute(
-        select(rows_drawn)
-        .select_from(Article)
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .outerjoin(
-            UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id),
-        )
-        .where(
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
-    )).scalar() or 0
-
-    # Label article counts (batch)
-    label_ids = [lb.id for lb in user_labels]
-    if label_ids:
-        label_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, rows_drawn)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .where(
-                ArticleLabel.user_id == user.id,
-                ArticleLabel.label_id.in_(label_ids),
-                Article.trimmed_at.is_(None),
-            )
-            .group_by(ArticleLabel.label_id)
-        )).all())
-        label_unread_counts = dict((await db.execute(
-            select(ArticleLabel.label_id, rows_drawn)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .outerjoin(UserArticleState,
-                (UserArticleState.article_id == ArticleLabel.article_id) &
-                (UserArticleState.user_id == user.id))
-            .where(
-                ArticleLabel.user_id == user.id,
-                ArticleLabel.label_id.in_(label_ids),
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-            .group_by(ArticleLabel.label_id)
-        )).all())
-    else:
-        label_counts = {}
-        label_unread_counts = {}
 
     pinned = request.query_params.get("pinned", "true").lower() != "false"
 
@@ -253,22 +118,7 @@ async def htmx_sidebar(
         "user_feeds": user_feeds,
         "user_labels": user_labels,
         "saved_searches": await list_saved_searches(db, user.id),
-        "feed_total_counts": feed_total_counts,
-        "feed_unread_counts": feed_unread_counts,
-        "label_counts": label_counts,
-        "nav_total": nav_total,
-        "nav_unread": nav_unread,
-        "nav_starred": nav_starred,
-        "nav_unread_starred": nav_unread_starred,
-        "nav_archived": nav_archived,
-        "nav_unread_archived": nav_unread_archived,
-        "nav_saved": nav_saved,
-        "nav_unread_saved": nav_unread_saved,
-        "nav_labeled": nav_labeled,
-        "nav_unread_labeled": nav_unread_labeled,
-        "label_unread_counts": label_unread_counts,
-        "folder_unread_counts": folder_unread_counts,
-        "folder_total_counts": folder_total_counts,
+        **asdict(counts),
         "pinned": pinned,
         "chat_available": chat_available,
         "catchup_available": catchup_avail,
@@ -291,18 +141,27 @@ async def htmx_mark_articles_read(
         before_dt = datetime.fromisoformat(before.replace("Z", "+00:00"))
     except ValueError:
         return HTMLResponse("", status_code=400)
+    try:
+        lid = token_id(label_id) if label_id else None
+    except ValueError:
+        # Not a missing label but a garbled one (or past the id column): falling back
+        # to None would widen the scope to every subscribed article.
+        return HTMLResponse("", status_code=400)
     await mark_scope_read(
         user, db, before=before_dt,
         starred_only=starred_only == "1",
         archived_only=archived_only == "1",
         saved_only=saved_only == "1",
         labeled_only=labeled_only == "1",
-        label_id=int(label_id) if label_id else None,
+        label_id=lid,
     )
-    lid = int(label_id) if label_id else None
-    total = await _mark_read_total(
-        user, db, starred_only == "1", archived_only == "1", saved_only == "1",
-        labeled_only == "1", lid,
+    total = await mark_read_total(
+        user, db,
+        starred_only=starred_only == "1",
+        archived_only=archived_only == "1",
+        saved_only=saved_only == "1",
+        labeled_only=labeled_only == "1",
+        label_id=lid,
     )
     resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
@@ -321,13 +180,11 @@ async def htmx_mark_feed_read(
     except ValueError:
         return HTMLResponse("", status_code=400)
     await mark_scope_read(user, db, before=before_dt, feed_id=feed_id)
-    # Scope the count to the user's own subscription — otherwise it leaks the
-    # article count of any feed_id (mark_scope_read itself is already scoped).
-    total = (await db.execute(
-        select(func.count(Article.id))
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.feed_id == feed_id)
-    )).scalar() or 0
+    # The feed's own list, which requires a subscription: a feed_id the reader
+    # doesn't follow counts nothing (mark_scope_read itself is already scoped).
+    total = await view_count(
+        user, db, story_dedup=await story_dedup_of(db, user.id), feed_id=feed_id,
+    )
     resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
@@ -345,12 +202,9 @@ async def htmx_mark_folder_read(
     except ValueError:
         return HTMLResponse("", status_code=400)
     await mark_scope_read(user, db, before=before_dt, folder_id=folder_id)
-    folder_cond = UserFeed.folder_id.is_(None) if folder_id == 0 else (UserFeed.folder_id == folder_id)
-    total = (await db.execute(
-        select(func.count(Article.id))
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(folder_cond)
-    )).scalar() or 0
+    total = await view_count(
+        user, db, story_dedup=await story_dedup_of(db, user.id), folder_id=folder_id,
+    )
     resp = HTMLResponse(_badge_total_html(total), status_code=200)
     resp.headers["HX-Trigger"] = "sidebarRefresh"
     return resp
@@ -363,65 +217,11 @@ def _feed_error_oob(feed_id: int, status: str | None, last_error: str | None) ->
     return str(macros.feed_error(feed_id, status, last_error, oob=True))
 
 
-async def _mark_read_total(
-    user: User, db: AsyncSession,
-    starred_only: bool, archived_only: bool, saved_only: bool, labeled_only: bool,
-    label_id: int | None,
-) -> int:
-    """How many articles the ✓ on a sidebar row covers, for the badge next to it.
-
-    Every branch filters ``Article.trimmed_at IS NULL``, the same as the counters in
-    htmx_sidebar and the same as list_articles: a retention stub is hidden in the
-    list and in the badge, so counting it here would leave the two numbers on one
-    row disagreeing.
-    """
-    async def _states(*conditions) -> int:
-        return (await db.execute(
-            select(func.count())
-            .select_from(UserArticleState)
-            .join(Article, Article.id == UserArticleState.article_id)
-            .where(
-                UserArticleState.user_id == user.id,
-                Article.trimmed_at.is_(None),
-                *conditions,
-            )
-        )).scalar() or 0
-
-    if starred_only:
-        return await _states(UserArticleState.is_starred == True)
-    if archived_only:
-        return await _states(UserArticleState.is_archived == True)
-    if saved_only:
-        return await _states(UserArticleState.saved_at.is_not(None))
-    if label_id is not None:
-        return (await db.execute(
-            select(func.count(ArticleLabel.article_id))
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .where(
-                ArticleLabel.user_id == user.id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-            )
-        )).scalar() or 0
-    if labeled_only:
-        return (await db.execute(
-            select(func.count(func.distinct(ArticleLabel.article_id)))
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .where(ArticleLabel.user_id == user.id, Article.trimmed_at.is_(None))
-        )).scalar() or 0
-    # All articles
-    return (await db.execute(
-        select(func.count(Article.id))
-        .join(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.trimmed_at.is_(None))
-    )).scalar() or 0
-
-
 @router.post("/htmx/feeds/{feed_id}/refresh", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_feed_refresh)
 async def htmx_refresh_feed(
     feed_id: int,
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -474,16 +274,9 @@ async def htmx_refresh_feed(
         if cd2 is not None:
             error_msg = f"Rate-limited — try again in {format_retry_in(cd2, now2)}."
 
-    unread = await db.scalar(
-        select(func.count(Article.id))
-        .outerjoin(UserArticleState,
-            (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-        .where(Article.feed_id == feed_id,
-               (UserArticleState.is_read == None) | (UserArticleState.is_read == False))
-    ) or 0
-    total = await db.scalar(
-        select(func.count(Article.id)).where(Article.feed_id == feed_id)
-    ) or 0
+    unread, total = await view_badge(
+        user, db, story_dedup=await story_dedup_of(db, user.id), feed_id=feed_id,
+    )
 
     badge = _badge_html(unread, total)
     # Refresh the sidebar error indicator out-of-band: it lives outside the swapped

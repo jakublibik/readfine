@@ -202,15 +202,15 @@ class TestRegex:
     def test_catastrophic_pattern_times_out_instead_of_hanging(self):
         # A catastrophic-backtracking pattern that bypasses the create-time
         # heuristic must not freeze evaluation: it is capped by the per-match
-        # timeout and treated as "no match" rather than hanging the event loop.
+        # timeout and reported, so the caller can switch the filter off.
         import time
-        from app.services.filter_service import _REGEX_MATCH_TIMEOUT_S
+        from app.services.filter_service import _REGEX_MATCH_TIMEOUT_S, RegexTimedOut
         article = make_article(title="a" * 60 + "!")
         cond = make_condition("title", "regex", r"(a|a|a)+$")
         start = time.monotonic()
-        result = _matches_condition(cond, article, None)
+        with pytest.raises(RegexTimedOut):
+            _matches_condition(cond, article, None)
         elapsed = time.monotonic() - start
-        assert result is False
         # Bounded by the timeout (plus slack for check granularity), not exponential:
         # this pattern would run for years unbounded.
         assert elapsed < _REGEX_MATCH_TIMEOUT_S * 2
@@ -1038,3 +1038,19 @@ class TestScoreComparison:
         _validate_score_conditions([make_condition("basic_score", "gte", "60")])
         with pytest.raises(ValueError, match="only for a score"):
             _validate_score_conditions([make_condition("title", "gte", "60")])
+
+
+# ── regex validation uses the engine the condition runs with ────────────────
+
+class TestRegexValidationEngine:
+    def _check(self, pattern):
+        from app.services.filter_service import _validate_regex_conditions
+        _validate_regex_conditions([SimpleNamespace(operator="regex", value=pattern)])
+
+    def test_accepts_regex_only_syntax(self):
+        # \p{L} is a Unicode property class: valid in `regex`, an error in `re`.
+        self._check(r"\p{Lu}\p{L}+")
+
+    def test_rejects_what_regex_cannot_compile(self):
+        with pytest.raises(ValueError, match="Invalid regex pattern"):
+            self._check(r"(unclosed")

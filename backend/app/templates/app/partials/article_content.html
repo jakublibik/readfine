@@ -21,11 +21,13 @@
     {% if article.content %}Showing feed content.{% endif %}
   </p>
   {% endif %}
-  <div class="prose max-w-none text-gray-800 article-body">
-    {% if article.readable_status == 'success' and article.readable_content %}
-      {{ article.readable_content | video_thumbs }}
-    {% elif article.content %}
-      {{ article.content | video_thumbs }}
+  {%- set body_html = article.readable_content if (article.readable_status == 'success' and article.readable_content) else article.content %}
+  {#- hx-disable: the body is the feed's HTML and htmx must not act on anything in it
+      (an hx-post with hx-trigger=load would carry our CSRF header). Only when the body
+      is shown, since the other branches hold our own Retry button. -#}
+  <div class="prose max-w-none text-gray-800 article-body"{% if body_html %} hx-disable{% endif %}>
+    {% if body_html %}
+      {{ body_html | video_thumbs }}
     {% elif article.summary and article.feed_id is none %}
       {#- Extraction produced nothing to read, but the page told us about itself.
           Shown for feedless (saved) articles only, which are the only ones that

@@ -153,6 +153,7 @@ class TestUpdateLabel:
         db = _make_db()
         label = _make_label(name="Old")
         db.execute.return_value = _scalar_result(label)
+        db.scalar = AsyncMock(return_value=None)  # no other label called "New"
 
         async def mock_refresh(obj):
             pass
@@ -163,6 +164,30 @@ class TestUpdateLabel:
 
         assert label.name == "New"
         db.commit.assert_awaited_once()
+
+    async def test_rename_onto_existing_name_raises(self):
+        user = _make_user()
+        db = _make_db()
+        label = _make_label(name="Old")
+        db.execute.return_value = _scalar_result(label)
+        db.scalar = AsyncMock(return_value=2)  # id of the label already called "Sports"
+
+        with pytest.raises(LabelAlreadyExistsError):
+            await update_label(user, label_id=1, payload=LabelUpdate(name="Sports"), db=db)
+
+        assert label.name == "Old"
+        db.commit.assert_not_awaited()
+
+    async def test_explicit_null_leaves_field_alone(self):
+        # PATCH {"color": null} must not write NULL into a NOT NULL column.
+        user = _make_user()
+        db = _make_db()
+        label = _make_label(name="Tech", color="#111111")
+        db.execute.return_value = _scalar_result(label)
+
+        await update_label(user, label_id=1, payload=LabelUpdate(color=None), db=db)
+
+        assert label.color == "#111111"
 
     async def test_partial_update_preserves_other_fields(self):
         user = _make_user()
@@ -195,13 +220,16 @@ class TestDeleteLabel:
         db.execute.return_value = _scalar_result(label)
 
         # Saved-search cleanup runs against the real DB in test_saved_searches.py.
-        with patch("app.services.label_service.strip_saved_search_references", AsyncMock()) as strip:
+        # So does the filter-action cleanup, in test_label_delete_filters.py.
+        with patch("app.services.label_service.strip_saved_search_references", AsyncMock()) as strip,              patch("app.services.label_service._drop_label_actions",
+                   AsyncMock(return_value=["f"])) as drop:
             result = await delete_label(user, label_id=1, db=db)
 
         strip.assert_awaited_once_with(db, kind="label", ref_id=label.id, user_id=user.id)
+        drop.assert_awaited_once_with(db, user.id, label.id)
         db.delete.assert_awaited_once_with(label)
         db.commit.assert_awaited_once()
-        assert result is label
+        assert result == ["f"]
 
 
 # ── assign_label ──────────────────────────────────────────────────────────────

@@ -471,7 +471,18 @@
     <meta name="csp-nonce" content="{{ request.state.csp_nonce | default('') }}">
     <script src="{{ static_url('js/init.js') }}"></script>
     <script src="{{ static_url('js/htmx.min.js') }}"></script>
-    <script nonce="{{ request.state.csp_nonce }}">htmx.config.inlineScriptNonce = document.querySelector('meta[name="csp-nonce"]').content;</script>
+    {#- No history cache: before every pushed URL (each boosted settings save) htmx would
+        copy the page into localStorage, which outlives logout. A feed's edit page alone
+        holds its address, tokens and all. Back reloads the page instead.
+        No eval and no inlineScriptNonce: CSP has no 'unsafe-eval', and a <script>
+        that arrives in a swap is not given the page's nonce, so it does not run. Page
+        scripts are external files, which htmx loads from 'self' after a boosted swap.
+        Without allowEval, hx-on, hx-vals="js:" and hx-trigger filters do nothing;
+        conditions go in JS instead (htmx:confirm in app.js). -#}
+    <script nonce="{{ request.state.csp_nonce }}">htmx.config.allowEval = false;
+    htmx.config.historyCacheSize = 0;
+    htmx.config.refreshOnHistoryMiss = true;
+    try { localStorage.removeItem('htmx-history-cache'); } catch (e) {}</script>
     <script src="{{ static_url('js/csrf.js') }}"></script>
     <script src="{{ static_url('js/app.js') }}" defer></script>
 </head>

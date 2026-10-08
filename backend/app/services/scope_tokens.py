@@ -13,27 +13,52 @@ sentinels) is defined once instead of re-parsed in every consumer.
 import json
 
 
+_INT_MAX = 2**31 - 1
+
+
+def token_id(raw: str) -> int:
+    """The id in a token (``feed:<id>`` minus its prefix).
+
+    Raises ValueError for anything but a number that fits the Integer id
+    columns: one past them would fail in the database query that uses it.
+    """
+    value = int(raw)
+    if not 0 <= value <= _INT_MAX:
+        raise ValueError(f"Invalid id in token: {raw}")
+    return value
+
+
+def _json_list(raw: str | None) -> list:
+    """*raw* parsed as a JSON array, or [] for anything else.
+
+    The value comes from a form or a query string, so ``5`` or ``{}`` is as
+    likely as a list and must not reach the loops below.
+    """
+    if not raw:
+        return []
+    try:
+        items = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return items if isinstance(items, list) else []
+
+
 def parse_scope_tokens(scope_json: str | None) -> tuple[list[int], list[int]]:
     """Return ``(feed_ids, folder_ids)`` from a JSON scope list.
 
     ``folder_id`` 0 is kept as-is (the "no folder" sentinel — callers handle it).
     Empty, null or invalid JSON yields ``([], [])``; malformed items are skipped.
     """
-    if not scope_json:
-        return [], []
-    try:
-        items = json.loads(scope_json)
-    except (json.JSONDecodeError, TypeError):
-        return [], []
+    items = _json_list(scope_json)
 
     feed_ids: list[int] = []
     folder_ids: list[int] = []
     for item in items:
         try:
             if item.startswith("feed:"):
-                feed_ids.append(int(item[5:]))
+                feed_ids.append(token_id(item[5:]))
             elif item.startswith("folder:"):
-                folder_ids.append(int(item[7:]))
+                folder_ids.append(token_id(item[7:]))
         except (ValueError, IndexError, AttributeError):
             pass
     return feed_ids, folder_ids
@@ -64,19 +89,14 @@ def parse_label_tokens(label_json: str | None) -> tuple[bool, list[int]]:
     ``"any"`` ("has at least one label") takes precedence over specific ids.
     Empty or invalid input means no label filtering: ``(False, [])``.
     """
-    if not label_json:
-        return False, []
-    try:
-        items = json.loads(label_json)
-    except (json.JSONDecodeError, TypeError):
-        return False, []
+    items = _json_list(label_json)
     if "any" in items:
         return True, []
     ids: list[int] = []
     for item in items:
         if isinstance(item, str) and item.startswith("label:"):
             try:
-                ids.append(int(item[6:]))
+                ids.append(token_id(item[6:]))
             except ValueError:
                 pass
     return False, ids

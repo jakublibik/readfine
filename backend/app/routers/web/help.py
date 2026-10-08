@@ -29,7 +29,7 @@ async def changelog_page(request: Request, db: AsyncSession = Depends(get_db)):
     is_admin = False
     if request.session.get("user_id"):
         try:
-            user = await get_current_user(request, None, db)
+            user = await get_current_user(request, db)
             is_admin = user.role == "admin"
         except HTTPException:  # stale session: shown as signed out
             pass

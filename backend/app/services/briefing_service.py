@@ -1,6 +1,7 @@
 """Briefing service: scheduled email digest per UserCatchupConfig."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import smtplib
@@ -8,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import css_inline
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings as app_config
@@ -26,11 +27,10 @@ from app.services.catchup_service import (
 )
 from app.templating import templates
 from app.utils.datetime_format import format_local
-from app.utils.markdown import md_render
+from app.utils.markdown import md_render_ai
 
 logger = logging.getLogger(__name__)
 from app.utils.smtp import send_html_email
-from app.utils.url_validator import find_blocked_address
 
 _inliner = css_inline.CSSInliner(keep_style_tags=True)
 
@@ -41,6 +41,37 @@ _PERIOD_LABELS = {
 }
 
 _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+# Briefings with additional recipients one account may have switched on at once.
+# Only those count: mail to other people is what could be abused, and a briefing
+# to one's own address bothers nobody else. Generous for real use (a daily and a
+# weekly for a few people), and it puts a ceiling on how much mail one account
+# can have the instance send to others. Admins are exempt.
+MAX_BRIEFINGS_WITH_RECIPIENTS = 5
+
+
+def extra_recipients_allowed(app_settings: AppSettings, user: User) -> bool:
+    """May this account's briefings go to addresses other than its own?
+
+    Off unless the admin allows it, because the extra addresses never confirm
+    anything and the text follows the user's own prompt: on an open instance
+    that is anyone sending mail of their choosing from the instance's domain.
+    Admins are trusted with it either way.
+    """
+    return bool(app_settings.briefing_extra_recipients_enabled) or user.role == "admin"
+
+
+async def other_briefings_with_recipients(user_id: int, config_id: int, db: AsyncSession) -> int:
+    """How many of the user's other configs have a briefing with additional
+    recipients switched on."""
+    return int(await db.scalar(
+        select(func.count()).select_from(UserCatchupConfig).where(
+            UserCatchupConfig.user_id == user_id,
+            UserCatchupConfig.id != config_id,
+            UserCatchupConfig.briefing_enabled.is_(True),
+            UserCatchupConfig.briefing_recipients.isnot(None),
+        )
+    ) or 0)
 
 
 def compute_next_send_at(
@@ -111,18 +142,18 @@ def apply_briefing_failure(
     - Second failure: give up this cycle, reschedule the next normal slot, and
       return True so the caller notifies the user.
     """
-    # A refused AI endpoint arrives as the SDK's bare "Connection error.", which
-    # would leave the user's error line saying nothing. Retry policy is left as it
-    # is: unlike an article job there is no spinner waiting on this, and one retry
-    # in thirty minutes costs nobody anything.
-    msg = str(find_blocked_address(exc) or exc)
     if is_smtp:
         config.briefing_enabled = False
-        config.briefing_last_error = f"SMTP error: {msg}"
+        config.briefing_last_error = f"SMTP error: {exc}"
         config.briefing_next_send_at = None
         return False
 
-    config.briefing_last_error = msg
+    # Worded like every other AI failure (a refused endpoint, for one, arrives as the
+    # SDK's bare "Connection error."). Retry policy is the same whatever the cause:
+    # unlike an article job there is no spinner waiting on this, and one retry in
+    # thirty minutes costs nobody anything.
+    from app.services.ai_service import describe_ai_error  # noqa: PLC0415
+    config.briefing_last_error = describe_ai_error(exc)
     if config.briefing_retry_count == 0:
         config.briefing_retry_count = 1
         config.briefing_next_send_at = datetime.now(timezone.utc) + timedelta(minutes=30)
@@ -152,7 +183,7 @@ def _build_email_html(
     """*public_url* (the PUBLIC_URL setting) turns the footer's "Readfine" into a link
     and adds one to the briefing's settings. A scheduled send has no request to take
     the host from, so without it the footer stays plain text."""
-    content_html = md_render(markdown_text)
+    content_html = md_render_ai(markdown_text)
     # Outlook renders <blockquote> with its own grey border regardless of CSS — replace with <div>
     content_html = content_html.replace("<blockquote>", _BQ_OPEN).replace("</blockquote>", _BQ_CLOSE)
     raw = templates.env.get_template("email/briefing.html").render(
@@ -296,8 +327,14 @@ async def send_briefing(
         public_url=app_config.public_url,
     )
 
+    # A test goes to the account itself only: it is the button that can be pressed
+    # every minute, and checking how the digest reads needs no one else.
     extra_recipients: list[str] = []
-    if config.briefing_recipients:
+    if (
+        config.briefing_recipients
+        and not test_mode
+        and extra_recipients_allowed(app_settings, user)
+    ):
         try:
             extra_recipients = json.loads(config.briefing_recipients) or []
         except (json.JSONDecodeError, TypeError):
@@ -306,7 +343,10 @@ async def send_briefing(
     # The account owner set up the briefing, so they go in the visible To:;
     # extra recipients go to Bcc so subscribers don't see each other.
     # May raise smtplib.SMTPException — caller handles
-    send_html_email(app_settings, [user.email], subject, html_body, text, bcc=extra_recipients)
+    # Off the event loop: a slow SMTP server would otherwise hold up the whole app.
+    await asyncio.to_thread(
+        send_html_email, app_settings, [user.email], subject, html_body, text, bcc=extra_recipients,
+    )
 
     db.add(CatchupLog(
         user_id=user.id,

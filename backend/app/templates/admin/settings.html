@@ -279,9 +279,12 @@
       </div>
       <div class="flex items-center justify-between gap-4">
         <label class="text-sm font-medium text-gray-700 w-36 flex-shrink-0">TLS</label>
-        <input type="checkbox" name="smtp_use_tls" value="true"
-               {% if s.smtp_use_tls %}checked{% endif %}
-               class="w-4 h-4 text-blue-600 rounded border-gray-300">
+        <div class="flex-1 flex items-center gap-2">
+          <input type="checkbox" name="smtp_use_tls" value="true" id="smtp_use_tls"
+                 {% if s.smtp_use_tls %}checked{% endif %}
+                 class="w-4 h-4 text-blue-600 rounded border-gray-300">
+          <label for="smtp_use_tls" class="text-xs text-gray-500">STARTTLS. Port 465 always uses implicit TLS instead.</label>
+        </div>
       </div>
       <div class="space-y-2">
         <div class="flex items-center gap-3">
@@ -317,25 +320,25 @@
                {% if s.feedback_enabled %}checked{% endif %}
                class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
       </div>
+
+      <div class="flex items-start justify-between gap-4 pt-2 border-t border-gray-100">
+        <div>
+          <label class="text-sm font-medium text-gray-700">Briefings to other addresses</label>
+          <p class="text-xs text-gray-400">
+            Let users add extra recipients to their scheduled briefings. Those addresses
+            never confirm anything and the user's own prompt shapes the text, so on an
+            instance open to registration this lets anyone send mail from your domain.
+            Admins can always add them.
+          </p>
+        </div>
+        <input type="checkbox" name="briefing_extra_recipients_enabled" value="true"
+               {% if s.briefing_extra_recipients_enabled %}checked{% endif %}
+               class="w-4 h-4 text-blue-600 rounded border-gray-300 flex-shrink-0 mt-0.5">
+      </div>
     </div>
   </section>
 
 </form>
 
-<script nonce="{{ request.state.csp_nonce }}">
-document.querySelector('[name="registration_enabled"]').addEventListener('change', function() {
-    var enabled = this.checked;
-    document.getElementById('legal-section').classList.toggle('hidden', !enabled);
-    var w = document.getElementById('legal-warning');
-    if (w) w.classList.toggle('hidden', !enabled);
-    document.getElementById('traffic-closed-note').classList.toggle('hidden', enabled);
-});
-var dormantWarning = document.querySelector('[name="dormant_warning_enabled"]');
-var dormantUrlNote = document.getElementById('dormant-url-note');
-if (dormantWarning && dormantUrlNote) {
-    dormantWarning.addEventListener('change', function() {
-        dormantUrlNote.classList.toggle('hidden', !this.checked);
-    });
-}
-</script>
+<script src="{{ static_url('js/admin-settings.js') }}"></script>
 {% endblock %}

@@ -4,12 +4,11 @@ An article saved this way has no feed. ``UserArticleState.saved_at`` carries its
 visibility (the Saved view), its access (see ``article_access_predicate``) and its
 exemption from retention purge, so it never has to borrow a star to stay alive.
 """
-import asyncio
 import hashlib
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +20,8 @@ from app.services.readable_service import (
     extract_readable_with_title,
     title_from_url,
 )
+from app.utils.background import spawn_background
+from app.utils.http_client import run_outbound
 from app.utils.parsing import normalize_url
 
 logger = logging.getLogger(__name__)
@@ -142,17 +143,39 @@ async def save_article_by_url(
         # deterministic. Without an ORDER BY you can end up attached to a copy from a
         # feed you don't subscribe to while your own copy sits right there, and Saved
         # then shows a feed name you don't recognise.
-        from app.models.feed import UserFeed
+        #
+        # Matching hands the saver access to the row's body, so the match is limited to
+        # rows anyone may read: your own subscription, a public feed, or a feedless row
+        # somebody saved by URL. A private feed's article was fetched with its one
+        # subscriber's credentials, and knowing its public address must not be enough
+        # to read the copy they paid for. An orphan (feed_id NULL after an unsubscribe)
+        # may come from such a feed and no longer says so, so it only counts when it is
+        # a saved row. Anything else builds a fresh article and extracts it as you.
+        from app.models.feed import Feed, UserFeed
 
+        saved_by_url = (
+            select(UserArticleState.article_id)
+            .where(
+                UserArticleState.article_id == Article.id,
+                UserArticleState.saved_at.is_not(None),
+            )
+            .exists()
+        )
         existing = await db.scalar(
             select(Article)
             .outerjoin(
                 UserFeed,
                 (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id),
             )
+            .outerjoin(Feed, Feed.id == Article.feed_id)
             .where(
                 Article.url_normalized == normalized,
                 Article.trimmed_at.is_(None),
+                or_(
+                    UserFeed.id.is_not(None),
+                    Feed.is_private.is_(False),
+                    and_(Article.feed_id.is_(None), saved_by_url),
+                ),
             )
             .order_by(
                 UserFeed.id.is_(None),                      # a copy you subscribe to wins
@@ -188,11 +211,11 @@ async def save_article_by_url(
             # from another feed on another host, and that host has no business
             # receiving them.
             same_address = existing.url == url
-            asyncio.create_task(_import_saved_bg(
+            spawn_background(_import_saved_bg(
                 existing.id, user.id, existing.url,
                 auth_user if same_address else None,
                 auth_pass if same_address else None,
-            ))
+            ), name=f"saved-import-{existing.id}")
         else:
             await db.commit()
             # Nothing to extract, so nothing will call the post-extraction pass later.
@@ -223,7 +246,10 @@ async def save_article_by_url(
     await _upsert_saved_state(article.id, user.id, db)
     await db.commit()
 
-    asyncio.create_task(_import_saved_bg(article.id, user.id, url, auth_user, auth_pass))
+    spawn_background(
+        _import_saved_bg(article.id, user.id, url, auth_user, auth_pass),
+        name=f"saved-import-{article.id}",
+    )
     return article, False
 
 
@@ -241,7 +267,11 @@ async def unsave_article(article_id: int, user_id: int, db: AsyncSession) -> Non
         )
     )
     if state is not None:
+        from app.services.article import drop_unreachable_labels
+
         state.saved_at = None
+        await db.flush()
+        await drop_unreachable_labels(db, user_id, [article_id])
         await db.commit()
 
 
@@ -292,10 +322,9 @@ async def _import_saved_bg(
     """
     from app.database import async_session_factory
 
-    loop = asyncio.get_running_loop()
     try:
-        result = await loop.run_in_executor(
-            None, extract_readable_with_title, url, auth_user, auth_pass, True
+        result = await run_outbound(
+            extract_readable_with_title, url, auth_user, auth_pass, True
         )
     except Exception as exc:
         result = ReadableResult(error=str(exc)[:200])

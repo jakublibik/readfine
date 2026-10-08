@@ -1,10 +1,7 @@
 """Web routes for feed subscription, testing, editing, and listing in settings."""
 import asyncio
 import logging
-from datetime import datetime, timezone
 
-import feedparser
-import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
@@ -13,17 +10,21 @@ from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_current_user
 from app.database import get_db
+from app.fetcher.errors import describe_fetch_error
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.interval import auto_interval_min
+from app.fetcher.scrape import check_selector
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.feed import Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.feed import (
+    FeedFetchError,
     cache_feed_preview,
     change_feed_url,
     may_edit_feed_auth,
+    may_edit_feed_settings,
     may_edit_feed_url,
     subscribe,
     unsubscribe,
@@ -32,13 +33,11 @@ from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_claus
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
-from app.utils.http_client import READFINE_UA, http_reason
-from app.utils.parsing import safe_int
+from app.utils.http_client import READFINE_UA, run_outbound
+from app.utils.parsing import parse_feed_body, safe_int
 from app.utils.url_validator import (
     async_validate_feed_url,
     fetch_url_page,
-    format_retry_in,
-    rate_limited_until,
     redact_url,
     split_url_credentials,
 )
@@ -69,6 +68,19 @@ async def settings_feeds(
         "purge_count": app_s.default_purge_keep_count if app_s else None,
         "default_fetch_interval_min": (app_s.default_fetch_interval_min if app_s else None) or 60,
     })
+
+
+async def _detect_feeds_quietly(url: str) -> list[dict]:
+    """Feeds linked from the page at *url*, or none when looking for them fails.
+
+    Only ever a suggestion next to an error the user already has, so its own
+    failure is not worth a second error line.
+    """
+    try:
+        return await detect_feeds(url)
+    except Exception:
+        logger.debug("Feed detection failed (url=%s)", redact_url(url), exc_info=True)
+        return []
 
 
 @router.post("/feeds/test", response_class=HTMLResponse)
@@ -111,59 +123,47 @@ async def settings_feeds_test(
     loop = asyncio.get_running_loop()
 
     async def _fetch(with_auth):
-        """Returns (page, error_string). Uses SSRF-safe redirect loop."""
+        """Returns (page, problem). Uses SSRF-safe redirect loop."""
         fetch_auth = auth if with_auth else None
         try:
-            page = await loop.run_in_executor(
-                None,
-                lambda: fetch_url_page(url, auth=fetch_auth, timeout=15, headers=_headers),
+            page = await run_outbound(
+                fetch_url_page, url, auth=fetch_auth, timeout=15, headers=_headers
             )
             return page, None
-        except httpx.HTTPStatusError as e:
-            sc = e.response.status_code
-            if sc == 403:
-                return None, "HTTP 403: Access denied. The server is likely blocking requests from this host (geo-block or datacenter IP block)."
-            reason = http_reason(sc)
-            return None, f"HTTP {sc}: {reason}" if reason else f"HTTP {sc}"
-        except (httpx.RequestError, ValueError) as e:
-            return None, f"Connection error: {e}"
+        except Exception as e:
+            problem = describe_fetch_error(e)
+            if problem is None:
+                raise
+            return None, problem
 
     # Always fetch with the configured auth (or no auth if none provided)
-    page, error = await _fetch(with_auth=True)
+    page, problem = await _fetch(with_auth=True)
 
-    auth_status = None  # will be set when credentials were provided
-    if has_auth and page is None and error and "401" in error:
-        # Credentials provided but got 401 → wrong credentials
-        auth_status = "wrong"
-    elif has_auth and page is not None:
-        # Succeeded with auth — check if auth was actually needed
-        no_auth_page, no_auth_error = await _fetch(with_auth=False)
-        if no_auth_page is not None:
-            auth_status = "not_required"
+    if problem is not None:
+        if has_auth and problem.status == 401:
+            error = "The server rejected these credentials (401)."
         else:
-            auth_status = "required_ok"
-
-    if error and auth_status != "wrong":
+            error = problem.message
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
                                           {"error": error})
 
-    if auth_status == "wrong":
-        return templates.TemplateResponse(request, "settings/partials/feed_test_result.html",
-                                          {"error": f"{error} — credentials rejected"})
+    auth_status = None  # will be set when credentials were provided
+    if has_auth:
+        # Succeeded with auth: check if auth was actually needed
+        no_auth_page, _ = await _fetch(with_auth=False)
+        auth_status = "not_required" if no_auth_page is not None else "required_ok"
 
-    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
+    parsed = await loop.run_in_executor(
+        None, parse_feed_body, page.content or page.text, page.content_type
+    )
 
     import xml.sax._exceptions as _sax
     is_xml_error = parsed.bozo and isinstance(parsed.bozo_exception, _sax.SAXParseException)
     is_empty_feed = parsed.bozo and not parsed.entries and not parsed.feed
 
     if is_xml_error or is_empty_feed:
-        # Not RSS — try to detect RSS feeds linked from the page
-        detected_feeds = []
-        try:
-            detected_feeds = await detect_feeds(url)
-        except Exception:
-            pass
+        # Not RSS, try to detect RSS feeds linked from the page
+        detected_feeds = await _detect_feeds_quietly(url)
         return templates.TemplateResponse(request, "settings/partials/feed_test_result.html", {
             "detected_feeds": detected_feeds,
             "scrape_available": url.startswith(("http://", "https://")),
@@ -212,6 +212,7 @@ async def settings_feeds_subscribe(
 
     error = None
     detected_feeds = []
+    offer_alternatives = False
     try:
         uf = await subscribe(user=user, url=url, folder_id=folder_id,
                              custom_title=custom_title, fetch_auth_user=fetch_auth_user,
@@ -223,60 +224,22 @@ async def settings_feeds_subscribe(
         if request.headers.get("HX-Request"):
             return Response(headers={"HX-Redirect": redirect_url})
         return RedirectResponse(redirect_url, status_code=303)
+    except FeedFetchError as e:
+        error = str(e)
+        if e.problem.kind == "transport":
+            logger.warning("Transport error during feed subscribe (url=%s): %s",
+                           redact_url(url), e.__cause__)
+        offer_alternatives = e.problem.wrong_kind_of_page
+        if offer_alternatives:
+            detected_feeds = await _detect_feeds_quietly(url)
     except ValueError as e:
         error = str(e)
-        if "valid RSS" in error or "valid feed" in error or "Not a valid" in error or "parse" in error.lower():
-            try:
-                detected_feeds = await detect_feeds(url)
-            except Exception:
-                pass
-    except httpx.HTTPStatusError as e:
-        status = e.response.status_code
-        if status == 404:
-            error = "Feed not found (404). The URL may no longer exist."
-        elif status == 403:
-            error = "Access denied (403). The server is likely blocking requests from this host (geo-block or datacenter IP block)."
-        elif status == 401:
-            error = "Authentication required (401). Try adding HTTP credentials."
-        elif status == 429:
-            # Reads Retry-After and x-ratelimit-reset (Reddit sends the latter, no
-            # Retry-After). Resets are often seconds, so show seconds under ~90s.
-            now = datetime.now(timezone.utc)
-            until = rate_limited_until(e.response.headers, now)
-            if until is not None:
-                error = (f"Too many requests (429) — the server is rate-limiting this host. "
-                         f"Try again in {format_retry_in(until, now)}.")
-            else:
-                error = ("Too many requests (429) — the server is rate-limiting this host. "
-                         "Try again in a few minutes.")
-        elif status in (500, 502, 503, 504):
-            error = (f"The feed server returned an error ({status}). "
-                     "It may be temporarily down — try again later.")
-        else:
-            error = f"HTTP error {status} when fetching the feed."
-        try:
-            detected_feeds = await detect_feeds(url)
-        except Exception:
-            pass
-    except httpx.TimeoutException:
-        error = ("The feed server took too long to respond (timeout). "
-                 "It may be temporarily down or slow — try again later.")
-    except httpx.TransportError as e:
-        # Connection dropped / refused before any HTTP status (e.g. RemoteProtocolError
-        # "Server disconnected without sending a response"). CDNs like Cloudflare do
-        # this to throttle datacenter IPs instead of returning a 429, so distinguish it
-        # from a bad URL.
-        logger.warning("Transport error during feed subscribe (url=%s): %s", redact_url(url), e)
-        error = ("The feed server closed the connection without responding — it is likely "
-                 "blocking or rate-limiting requests from this host (common for datacenter "
-                 "IPs). Try again later.")
     except Exception as e:
         logger.error("Unexpected error during feed subscribe (url=%s): %s", redact_url(url), e)
         error = "Could not subscribe to feed. Please check the URL and try again."
 
-    is_rss_error = error and any(k in error for k in ("valid RSS", "valid feed", "Not a valid", "parse", "404", "403", "HTTP error"))
     show_scrape_option = (
-        is_rss_error
+        offer_alternatives
         and not detected_feeds
         and url.startswith(("http://", "https://"))
     )
@@ -332,7 +295,7 @@ async def _feed_edit_page(
             max_interval_min=max_interval,
         ),
         "is_sole_subscriber": is_sole_subscriber,
-        "can_edit_interval": user.role == "admin" or uf.feed.is_private or is_sole_subscriber,
+        "can_edit_interval": user.role == "admin" or may_edit_feed_settings(uf.feed),
         # Same function the POST handler gates on, so the form cannot offer a field the
         # save would then ignore.
         "can_edit_auth": may_edit_feed_auth(uf.feed),
@@ -387,6 +350,14 @@ async def settings_feed_update(
 
     form = await request.form()
 
+    # Before the address, which saves on its own, so a bad selector saves nothing.
+    new_selector = form.get("article_links_selector", "").strip()
+    if new_selector and uf.feed.feed_type == "scrape" and may_edit_feed_settings(uf.feed):
+        try:
+            check_selector(new_selector)
+        except ValueError as exc:
+            return await _feed_edit_page(request, uf, user, db, selector_error=str(exc))
+
     # The address first, and on its own: it fetches, it can fail with something the
     # user has to read, and it is the one field here whose save is worth reporting
     # separately from "the form was saved". Nothing else has been written yet at this
@@ -434,17 +405,16 @@ async def settings_feed_update(
     if form.get("ai_summary_enabled_present") == "1":
         uf.ai_summary_enabled = form.get("ai_summary_enabled") == "on"
 
-    # Interval is feed-wide. Only let the user change it when the feed is
-    # effectively theirs (private or sole subscriber) or they're an admin;
-    # on a shared public feed it's read-only (see feed_edit.html).
-    if user.role == "admin" or uf.feed.is_private or uf.feed.subscriber_count == 1:
+    # Interval is feed-wide: the sole subscriber's or an admin's to change, read-only
+    # on a shared feed (see services.feed.may_edit_feed_settings and feed_edit.html).
+    if user.role == "admin" or may_edit_feed_settings(uf.feed):
         interval_raw = safe_int(form.get("fetch_interval_min"))
         if interval_raw is not None:
             uf.feed.fetch_interval_min = _snap_interval(interval_raw)
         else:
             uf.feed.fetch_interval_min = None
 
-    # Unlike the interval above, credentials are a sole subscriber's to change; see
+    # Credentials are a sole subscriber's to change, with no admin exception; see
     # services.feed.may_edit_feed_auth for why, and feed_edit.html, which hides the
     # fields under the same rule and tells a shared feed's subscriber how to get a
     # credentialed copy of their own.
@@ -457,8 +427,7 @@ async def settings_feed_update(
         if (fetch_auth_user or fetch_auth_pass) and not uf.feed.is_private:
             uf.feed.is_private = True
 
-    if uf.feed.feed_type == "scrape" and (uf.feed.is_private or uf.feed.subscriber_count == 1):
-        new_selector = form.get("article_links_selector", "").strip()
+    if uf.feed.feed_type == "scrape" and may_edit_feed_settings(uf.feed):
         if new_selector:
             uf.feed.type_config = {**(uf.feed.type_config or {}), "article_links_selector": new_selector}
 

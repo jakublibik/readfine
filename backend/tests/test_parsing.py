@@ -7,6 +7,7 @@ from app.utils.parsing import (
     NBSP_RUN_LIMIT,
     count_text_words,
     count_words,
+    encode_unsafe_url_chars,
     rewrite_relative_urls,
     soften_nbsp_runs,
 )
@@ -68,6 +69,31 @@ class TestRewriteRelativeUrls:
         html = '<img src="photo.jpg">'
         result = rewrite_relative_urls(html, "https://example.com/section/")
         assert result == '<img src="https://example.com/section/photo.jpg">'
+
+    def test_query_ampersand_stays_escaped(self):
+        html = '<img src="/p.jpg?a=1&amp;b=2">'
+        assert rewrite_relative_urls(html, BASE) == '<img src="https://example.com/p.jpg?a=1&amp;b=2">'
+
+    def test_quote_in_base_url_cannot_close_the_attribute(self):
+        # The article address comes from the feed. A quote in it used to end the
+        # src attribute and put the rest of the address into the body as markup.
+        base = 'https://e.com/a"><div hx-get=/x hx-trigger=load q=>/'
+        result = rewrite_relative_urls('<p>hi <img src="pic.png"></p>', base)
+        assert "<div" not in result
+        assert result.count('"') == 2
+        assert 'src="https://e.com/a&quot;&gt;&lt;div' in result
+
+
+class TestEncodeUnsafeUrlChars:
+    def test_ordinary_url_unchanged(self):
+        url = "https://example.com/a/b?x=1&y=%20#frag"
+        assert encode_unsafe_url_chars(url) == url
+
+    def test_quotes_brackets_and_whitespace_encoded(self):
+        assert encode_unsafe_url_chars('https://e.com/a"<b> c`\td') == "https://e.com/a%22%3Cb%3E%20c%60%09d"
+
+    def test_control_characters_encoded(self):
+        assert encode_unsafe_url_chars("https://e.com/a\x00b\nc\x7f") == "https://e.com/a%00b%0Ac%7F"
 
 
 NBSP = " "

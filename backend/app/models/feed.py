@@ -20,8 +20,6 @@ class Feed(Base):
     fetch_auth_pass_encrypted: Mapped[str | None] = mapped_column(Text)
     site_url: Mapped[str | None] = mapped_column(String(2048))
     title: Mapped[str] = mapped_column(String(255), nullable=False)
-    favicon_url: Mapped[str | None] = mapped_column(String(2048))
-    favicon_data: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     fetch_error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Consecutive fetches refused by the host itself (anti-bot 403 / bare 429), kept

@@ -297,7 +297,7 @@ class TestRunAutoGeneration:
         assert settings.ai_preference_text == original
         assert settings.ai_preference_prev_text is None
         assert settings.ai_preference_fail_count == 1
-        assert "invalid api key" in settings.ai_preference_last_error
+        assert settings.ai_preference_last_error == "Invalid API key."
         assert settings.ai_preference_auto_days == 14
         # A paid attempt starts the cooldown, so tomorrow's run skips instead of retrying.
         assert settings.ai_preference_last_attempt_at is not None

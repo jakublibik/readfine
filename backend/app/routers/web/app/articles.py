@@ -29,10 +29,11 @@ from app.services.article import (
     filter_accessible_article_ids, get_article, has_articles, list_articles,
     mark_articles_read_batch, toggle_article_state, update_article_state,
 )
+from app.services.counts_service import view_badge, view_count
 from app.services.label_service import list_labels
 from app.services.readable_service import apply_readable_result, claim_queued_readable
 from app.services.relevance_terms_service import show_relevance_intro
-from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
+from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens, token_id
 from app.services.saved_search_service import get_saved_search
 from app.services.search_params import (
     list_kwargs, modal_values, normalize_search_params, search_score, search_state,
@@ -42,7 +43,7 @@ from app.services.story_service import (
     DEDUP_OFF,
     ENGAGED_DWELL_SECONDS,
     MEMBER_LIMIT,
-    row_count,
+    collapses_stories,
     annotate as annotate_stories,
     collapse_page,
     count_members,
@@ -52,6 +53,8 @@ from app.services.story_service import (
 )
 from app.services.user import touch_last_active
 from app.templating import templates
+from app.utils.background import spawn_background
+from app.utils.http_client import run_outbound
 
 from .common import _ai_availability, _badge_html
 
@@ -65,8 +68,12 @@ async def _extract_readable_bg(
     url: str,
     auth_user: str | None,
     auth_pass_enc: str | None,
+    feed_url: str | None,
 ) -> None:
-    """Background readable extraction fired when user opens an article."""
+    """Background readable extraction fired when user opens an article.
+
+    *feed_url* is where the credentials belong; an article on another host gets none.
+    """
     from app.database import async_session_factory
     from app.services.readable_service import extract_readable
     from app.utils.crypto import feed_auth
@@ -75,10 +82,9 @@ async def _extract_readable_bg(
         auth_user, auth_pass_enc, context=f"article {article_id}"
     ) or (None, None)
 
-    loop = asyncio.get_running_loop()
     try:
-        content, error, http_status, published_at = await loop.run_in_executor(
-            None, extract_readable, url, auth_user, auth_pass
+        content, error, http_status, published_at = await run_outbound(
+            extract_readable, url, auth_user, auth_pass, feed_url
         )
     except Exception as exc:
         content, error, http_status, published_at = None, str(exc)[:200], None, None
@@ -141,81 +147,53 @@ async def _summary_after_star_bg(article_id: int, user_id: int) -> None:
         logger.info("star summary: article=%d user=%d processed", article_id, user_id)
 
 
+def _article_ids(value) -> list[int]:
+    """Up to 500 article ids from a JSON list, anything that is not one dropped."""
+    if not isinstance(value, list):
+        return []
+    ids = []
+    for item in value[:500]:
+        try:
+            ids.append(token_id(str(item)))
+        except ValueError:
+            pass
+    return ids
+
+
 @router.post("/htmx/articles/set-read-batch")
 async def htmx_set_read_batch(
     request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    data = await request.json()
-    ids = [int(i) for i in (data.get("ids") or [])[:500] if str(i).isdigit()]
+    try:
+        data = await request.json()
+    except ValueError:
+        return HTMLResponse("Invalid JSON", status_code=400)
+    if not isinstance(data, dict):
+        return HTMLResponse("Expected a JSON object", status_code=400)
+    ids = _article_ids(data.get("ids"))
     # Rows whose story is unfolded in the list right now. They are read one by one
     # like any other row and do not close the rest of their group; the browser is the
     # only place that knows which those are.
-    unfolded = [int(i) for i in (data.get("unfolded") or [])[:500] if str(i).isdigit()]
+    unfolded = _article_ids(data.get("unfolded"))
     await touch_last_active(user, db, request.session)
     await mark_articles_read_batch(user, ids, db, unfolded_ids=unfolded)
     return HTMLResponse("", status_code=200)
 
 
-async def _label_badge_oob(user_id: int, label_id: int | None, labeled_only: bool, db: AsyncSession) -> str:
+async def _label_badge_oob(
+    user: User, label_id: int | None, labeled_only: bool, story_dedup: str, db: AsyncSession,
+) -> str:
     """Return OOB HTML snippets to update label badge(s) in the sidebar."""
     if not label_id and not labeled_only:
         return ""
     oob = ""
-    # Rows, not articles: a label view folds a story into one row like the other
-    # reading views, and these badges stand above it (story_service.row_count). Unless
-    # the reader has the feature off, in which case their list folds nothing.
-    story_dedup = await db.scalar(
-        select(UserSettings.story_dedup).where(UserSettings.user_id == user_id)
-    )
-    rows_drawn = row_count(story_dedup != DEDUP_OFF)
-    # Every one of these carries trimmed_at IS NULL, the filter list_articles applies
-    # and the sidebar counters already had: a retention stub is gone from the list, so
-    # a badge that still counted it would stand above fewer rows than it claims.
     if label_id:
-        lu = (await db.scalar(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .outerjoin(UserArticleState,
-                (UserArticleState.article_id == ArticleLabel.article_id) &
-                (UserArticleState.user_id == user_id))
-            .where(
-                ArticleLabel.user_id == user_id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )) or 0
-        lt = (await db.scalar(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .where(
-                ArticleLabel.user_id == user_id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-            )
-        )) or 0
+        lu, lt = await view_badge(user, db, story_dedup=story_dedup, label_id=label_id)
         oob += f'<span id="label-badge-{label_id}" hx-swap-oob="innerHTML">{_badge_html(lu, lt)}</span>'
     # Aggregate "Labels" badge
-    all_unread = (await db.scalar(
-        select(rows_drawn)
-        .select_from(Article)
-        .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user_id))
-        .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id))
-        .where(
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
-    )) or 0
-    all_total = (await db.scalar(
-        select(rows_drawn)
-        .select_from(ArticleLabel)
-        .join(Article, Article.id == ArticleLabel.article_id)
-        .where(ArticleLabel.user_id == user_id, Article.trimmed_at.is_(None))
-    )) or 0
+    all_unread, all_total = await view_badge(user, db, story_dedup=story_dedup, labeled_only=True)
     oob += f'<span id="label-badge-all" hx-swap-oob="innerHTML">{_badge_html(all_unread, all_total)}</span>'
     return oob
 
@@ -400,33 +378,6 @@ async def saved_view_unread_only(
     if unread_filter == "show_all":
         return False
     return await has_articles(user, db, **filters, search=True, unread_only=True)
-
-
-def _collapses_stories(
-    *, story_dedup: str, feed_id: int | None, starred_only: bool,
-    archived_only: bool, saved_only: bool,
-) -> bool:
-    """Whether this view folds the other coverage of a story into one row.
-
-    Nothing folds when the reader has the feature off: the setting is what decides
-    whether the list is theirs to shape at all, and the view only decides where that
-    shaping makes sense.
-
-    The reading views do, search included: a search for a story that five newsrooms
-    filed answered with five rows saying the same thing, and folding only ever hides a
-    row that did match, under the best-matching one, with the marker saying it is
-    there. That last part is why search waited for the list to be able to unfold a
-    group — until then the only way to the folded article led through the article
-    above it, which is too far for a view whose job is to answer "is this in here".
-
-    Starred, saved and archive do not: those are lists the reader assembled by hand,
-    and a row missing from one of them is a row they put there themselves. Nor does a
-    single feed, which is a question about that feed, and hiding one of its articles
-    because another source filed first answers a different one.
-    """
-    if story_dedup == DEDUP_OFF:
-        return False
-    return not (feed_id is not None or starred_only or archived_only or saved_only)
 
 
 def story_scope(
@@ -735,7 +686,7 @@ async def render_list(
     # page means there is more behind it even if half of it folded into one row.
     has_more = len(rows) >= articles_per_page
     pin_score_source(rows, score.get("score_source"))
-    collapses = _collapses_stories(
+    collapses = collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
     )
@@ -762,46 +713,18 @@ async def render_list(
             search=True,
         )
 
-    # Title bar count for mobile hideable mode
-    rows_drawn = row_count(story_dedup != DEDUP_OFF)
+    # Title bar count for mobile hideable mode. The sidebar view's own list, not
+    # this one: the title bar names the view, whatever the reader filtered it to.
     title_bar_count: int | None = None
     title_bar_count_type: str | None = None
-    if label_id is not None:
-        title_bar_count = (await db.execute(
-            select(rows_drawn)
-            .select_from(ArticleLabel)
-            .join(Article, Article.id == ArticleLabel.article_id)
-            .outerjoin(UserArticleState,
-                (UserArticleState.article_id == ArticleLabel.article_id) &
-                (UserArticleState.user_id == user.id))
-            .where(
-                ArticleLabel.user_id == user.id,
-                ArticleLabel.label_id == label_id,
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )).scalar() or 0
-        title_bar_count_type = "unread"
-    elif labeled_only:
-        title_bar_count = (await db.execute(
-            select(rows_drawn)
-            .select_from(Article)
-            .join(ArticleLabel, (ArticleLabel.article_id == Article.id) & (ArticleLabel.user_id == user.id))
-            .outerjoin(UserArticleState, (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user.id))
-            .where(
-                Article.trimmed_at.is_(None),
-                (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-            )
-        )).scalar() or 0
+    if label_id is not None or labeled_only:
+        title_bar_count = await view_count(
+            user, db, story_dedup=story_dedup, unread=True,
+            label_id=label_id, labeled_only=labeled_only,
+        )
         title_bar_count_type = "unread"
     elif starred_only:
-        title_bar_count = (await db.execute(
-            select(func.count(UserArticleState.article_id))
-            .where(
-                UserArticleState.user_id == user.id,
-                UserArticleState.is_starred == True,
-            )
-        )).scalar() or 0
+        title_bar_count = await view_count(user, db, story_dedup=story_dedup, starred_only=True)
         title_bar_count_type = "starred"
     elif view and (effective_unread_only or read_status == "unread"):
         # The rows on the list are all unread, so what it counts is.
@@ -825,7 +748,13 @@ async def render_list(
 
     extra_headers: dict[str, str] = {}
     if feed_id is not None:
-        feed_obj = await db.get(Feed, feed_id)
+        # Only a feed the reader subscribes to: the message quotes the feed's address,
+        # and any other id would hand out someone else's.
+        feed_obj = await db.scalar(
+            select(Feed)
+            .join(UserFeed, (UserFeed.feed_id == Feed.id) & (UserFeed.user_id == user.id))
+            .where(Feed.id == feed_id)
+        )
         if feed_obj and feed_obj.status in ("error", "disabled") and feed_obj.last_error:
             extra_headers["HX-Trigger"] = json.dumps(
                 {"showToast": {"msg": feed_obj.last_error[:150], "type": "warning"}}
@@ -890,7 +819,7 @@ async def render_list(
         label_display=label_display,
         show_ai_score=settings.ai_score_show_in_list if settings else False,
         # A row offers to unfold its story only where the list folded one — see
-        # _collapses_stories. Everywhere else the row keeps the quiet marker instead.
+        # collapses_stories. Everywhere else the row keeps the quiet marker instead.
         story_unfoldable=collapses,
         story_scope_qs=urlencode(story_scope(
             feed_id=feed_id, folder_id=folder_id, scope_include=scope_include,
@@ -904,7 +833,7 @@ async def render_list(
         title_bar_count_type=title_bar_count_type,
         **extra_ctx,
     )
-    oob = await _label_badge_oob(user.id, label_id, labeled_only, db)
+    oob = await _label_badge_oob(user, label_id, labeled_only, story_dedup, db)
     return HTMLResponse(list_html + oob, headers=extra_headers)
 
 
@@ -992,7 +921,7 @@ async def htmx_article_list_more(
 
     has_more = len(rows) >= articles_per_page
     pin_score_source(rows, score.get("score_source"))
-    collapses = _collapses_stories(
+    collapses = collapses_stories(
         story_dedup=story_dedup, feed_id=feed_id, starred_only=in_starred,
         archived_only=in_archived, saved_only=in_saved,
     )
@@ -1057,11 +986,14 @@ async def htmx_article_detail(
             Article.url,
             Feed.fetch_auth_user,
             Feed.fetch_auth_pass_encrypted,
+            Feed.feed_url,
             UserFeed.extract_readable,
         )
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .outerjoin(UserFeed, (UserFeed.feed_id == Article.feed_id) & (UserFeed.user_id == user.id))
-        .where(Article.id == article_id)
+        # A retention stub stays a stub: extracting it would put back the body the
+        # trim removed, into a row no list shows.
+        .where(Article.id == article_id, Article.trimmed_at.is_(None))
     )).first()
 
     if (
@@ -1080,12 +1012,13 @@ async def htmx_article_detail(
             )
         )
         await db.commit()
-        asyncio.create_task(_extract_readable_bg(
+        spawn_background(_extract_readable_bg(
             article_id,
             trigger_row.url,
             trigger_row.fetch_auth_user,
             trigger_row.fetch_auth_pass_encrypted,
-        ))
+            trigger_row.feed_url,
+        ), name=f"readable-{article_id}")
     elif (
         trigger_row is not None
         and trigger_row.extract_readable is not None  # the reader subscribes to the feed
@@ -1098,12 +1031,13 @@ async def htmx_article_detail(
         claimed = await claim_queued_readable(db, article_id)
         await db.commit()
         if claimed:
-            asyncio.create_task(_extract_readable_bg(
+            spawn_background(_extract_readable_bg(
                 article_id,
                 trigger_row.url,
                 trigger_row.fetch_auth_user,
                 trigger_row.fetch_auth_pass_encrypted,
-            ))
+                trigger_row.feed_url,
+            ), name=f"readable-{article_id}")
 
     article = await get_article(user, article_id, db)
     if not article:
@@ -1635,7 +1569,10 @@ async def htmx_toggle_star(
                 await db.commit()
                 if enqueued:
                     summary_started = True
-                    asyncio.create_task(_summary_after_star_bg(article_id, user.id))
+                    spawn_background(
+                        _summary_after_star_bg(article_id, user.id),
+                        name=f"star-summary-{article_id}",
+                    )
     else:
         # Unstarred — cancel a not-yet-run summary job so a mis-click doesn't
         # produce (and bill) a summary via the debounce task or the batch worker.
@@ -1794,7 +1731,7 @@ async def htmx_extract_readable(
     from app.utils.crypto import feed_auth
 
     stmt = add_article_access_joins(
-        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted)
+        select(Article, Feed.fetch_auth_user, Feed.fetch_auth_pass_encrypted, Feed.feed_url)
         .outerjoin(Feed, Feed.id == Article.feed_id),
         user.id,
     ).where(Article.id == article_id, article_access_predicate())
@@ -1802,7 +1739,7 @@ async def htmx_extract_readable(
     if not row:
         return HTMLResponse("<p class='text-red-500 p-2 text-xs'>Article not found.</p>", status_code=404)
 
-    article, auth_user, auth_pass_enc = row
+    article, auth_user, auth_pass_enc, feed_url = row
     if not article.url:
         return HTMLResponse("<p class='text-amber-500 p-2 text-xs'>Article has no URL.</p>")
 
@@ -1813,13 +1750,13 @@ async def htmx_extract_readable(
         auth_user, auth_pass_enc, context=f"article {article.id}"
     ) or (None, None)
 
-    loop = asyncio.get_running_loop()
     # Ask for the title too: on a feedless saved article the page is the only source
     # of one, so a retry should refresh it. apply_readable_result ignores it for feed
     # articles, which keep their feed-supplied title.
-    result = await loop.run_in_executor(
-        None, extract_readable_with_title, article.url, auth_user, auth_pass,
+    result = await run_outbound(
+        extract_readable_with_title, article.url, auth_user, auth_pass,
         article.feed_id is None,  # consent/paywall check: saved articles only
+        auth_origin=feed_url,
     )
 
     if article.feed_id is None:

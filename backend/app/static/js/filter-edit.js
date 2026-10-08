@@ -205,7 +205,6 @@
   });
 
   document.getElementById('add-action').addEventListener('click', function () {
-    var labelOptions = LABELS.map(function (l) { return '<option value="' + l.id + '">' + l.name + '</option>'; }).join('');
     var row = document.createElement('div');
     row.className = 'flex flex-wrap items-center gap-2 action-row';
     row.innerHTML =
@@ -213,9 +212,12 @@
         ACTION_TYPES.map(function (t) { return '<option value="' + t + '">' + t + '</option>'; }).join('') +
       '</select>' +
       '<select name="action_value" class="border border-gray-300 rounded px-2 py-1.5 text-sm hidden label-select">' +
-        '<option value="">-- select label --</option>' + labelOptions +
+        '<option value="">-- select label --</option>' +
       '</select>' +
       '<button type="button" class="text-red-400 hover:text-red-600 text-sm remove-row">✕</button>';
+    // Label names are user text (and arrive from OPML imports), so they go in as text.
+    var labelSelect = row.querySelector('.label-select');
+    LABELS.forEach(function (l) { labelSelect.add(new Option(l.name, l.id)); });
     row.querySelector('.remove-row').addEventListener('click', function () { row.remove(); });
     var typeSelect = row.querySelector('.action-type-select');
     typeSelect.addEventListener('change', function () { toggleActionValue(typeSelect); });

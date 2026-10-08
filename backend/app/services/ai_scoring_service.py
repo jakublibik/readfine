@@ -9,7 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article, ArticleAiJob, UserArticleState
 from app.models.user import UserSettings
 from app.services.ai_jobs import (
-    ai_enabled_globally, apply_job_failure, clear_last_ai_error, normalize_content,
+    ai_enabled_globally, ai_work_held_back, apply_job_failure, clear_last_ai_error,
+    normalize_content,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,10 +93,7 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
     if not scoring_eligible(s, uf):
         return False
 
-    # A dormant reader still gets articles from a feed someone awake keeps fetched,
-    # but nobody reads them, so no tokens are spent on them (dormancy_service).
-    from app.services.dormancy_service import is_user_dormant
-    if await is_user_dormant(user_id, db):
+    if await ai_work_held_back(user_id, db):
         return False
 
     # Idempotent: skip if any job already exists for this article/user/operation
@@ -125,29 +123,32 @@ async def enqueue_scoring_job(article: Article, user_id: int, db: AsyncSession) 
 async def _execute_scoring_job(
     job: ArticleAiJob, article: Article, s: UserSettings, db: AsyncSession, now: datetime,
     pool=None,
-) -> None:
+) -> bool:
     """Process a single scoring job — AI call + result write. Does not commit.
 
     *pool* is the batch's client pool when this runs as part of one, so a run of
     jobs shares a connection instead of opening one each. Without it the client
     is built and closed for this job alone, which is what the single-article path
     does.
+
+    Returns True when the call ran out of its time budget, so a batch can stop
+    waiting on that account for the rest of the run.
     """
     if not s.ai_preference_text or not s.ai_fast_provider or not s.ai_fast_model:
         job.status = "skipped"
         job.processed_at = now
-        return
+        return False
 
     content_text = normalize_content(
         article.title, article.readable_content or article.content, _CONTENT_MAX_CHARS
     )
 
-    from app.services.ai_service import ai_client, score_article
+    from app.services.ai_service import AiCallTimeout, ai_client, score_article
     async with ai_client(job.user_id, "fast", db, pool) as (client, provider, model):
         if client is None:
             job.status = "skipped"
             job.processed_at = now
-            return
+            return False
 
         # Recorded before the call, so a failed attempt also says which model failed.
         job.provider = provider
@@ -179,6 +180,8 @@ async def _execute_scoring_job(
 
         except Exception as exc:
             apply_job_failure(job, exc, now, operation="scoring", settings=s)
+            return isinstance(exc, AiCallTimeout)
+    return False
 
 
 async def process_pending_scoring(db: AsyncSession) -> int:
@@ -235,11 +238,18 @@ async def process_pending_scoring(db: AsyncSession) -> int:
     from app.services.ai_service import AiClientPool
 
     processed = 0
+    # Accounts whose model ran out of time in this run. Their remaining jobs stay
+    # pending for the next one: every job waits behind the one before it, so an
+    # endpoint that answers slowly (or on purpose never) would otherwise cost the
+    # full budget once per job and hold up everyone else's scores with it.
+    timed_out: set[int] = set()
     # One pool for the whole run: the jobs are mostly one user's, and the summary
     # that follows a score runs on the same account, so both slots are set up once
     # rather than once per article.
     async with AiClientPool() as pool:
         for job in jobs:
+            if job.user_id in timed_out:
+                continue
             article = articles_map.get(job.article_id)
             s = settings_map.get(job.user_id)
 
@@ -249,7 +259,8 @@ async def process_pending_scoring(db: AsyncSession) -> int:
                 processed += 1
                 continue
 
-            await _execute_scoring_job(job, article, s, db, now, pool)
+            if await _execute_scoring_job(job, article, s, db, now, pool):
+                timed_out.add(job.user_id)
 
             if job.status == "success":
                 from app.services.ai_pipeline_service import _run_ai_filters_now, _run_summary_now

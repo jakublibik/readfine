@@ -14,7 +14,12 @@ from app.models.user import UserSettings
 from app.services.relevance_service import parse_terms
 from app.utils.crypto import decrypt, encrypt
 from app.utils.text import strip_html
-from app.utils.url_validator import async_validate_ai_endpoint_url, find_blocked_address
+from app.utils.url_validator import (
+    ResponseTooLarge,
+    async_validate_ai_endpoint_url,
+    find_blocked_address,
+    find_cause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +65,45 @@ class ModelCannotSkipThinking(Exception):
             f"so nothing is left of the ten tokens a score gets. Choose another model "
             f"for the scoring slot."
         )
+
+
+class AiCallTimeout(TimeoutError):
+    """A model call ran past its wall-clock budget (see ``_within_budget``).
+
+    A TimeoutError, so everything that already knows what a timeout is reads it
+    as one: the job retry policy backs off instead of failing for good, and
+    ``describe_ai_error`` says to try again. It carries a message because the
+    bare TimeoutError ``asyncio.wait_for`` raises has none, and this one ends up
+    in a job's error field and the user's banner.
+    """
+
+
+# Wall-clock budgets for one model call, retries included.
+#
+# The SDKs' own timeouts are per read, not per request: a server that keeps the
+# connection alive by sending a byte now and then never trips them, and each
+# SDK retries a timeout twice on top. The custom provider may point anywhere
+# public, so without a cap one account could hold a call open indefinitely, and
+# with it the scoring or summary batch every other account waits behind (the
+# batches run one at a time). The numbers leave room for a local model on CPU,
+# which is the slowest thing that legitimately answers here: a score is ten
+# tokens, a summary or a chat reply is minutes at worst, and a digest asks for
+# up to 8000 tokens.
+_SCORING_BUDGET_SECONDS = 120
+_TEXT_BUDGET_SECONDS = 300
+_DIGEST_BUDGET_SECONDS = 600
+
+
+async def _within_budget(coro, seconds: float):
+    """Await *coro*, cancelling it and raising AiCallTimeout after *seconds*."""
+    try:
+        return await asyncio.wait_for(coro, seconds)
+    except TimeoutError as exc:
+        if isinstance(exc, AiCallTimeout):
+            raise
+        raise AiCallTimeout(
+            f"The model did not finish answering within {int(seconds)} seconds."
+        ) from exc
 
 
 def _extract_text(provider: str, resp) -> str:
@@ -136,6 +180,15 @@ def _empty_response_detail(provider: str, resp) -> str:
     except Exception:  # noqa: BLE001 — diagnostics must never mask the real failure
         return ""
     return ""
+
+
+def _openai_usage(resp) -> tuple[int, int]:
+    """(prompt, completion) tokens of an OpenAI-wire reply. Some compatible servers
+    leave ``usage`` out, which must not turn a good answer into an error."""
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return 0, 0
+    return usage.prompt_tokens or 0, usage.completion_tokens or 0
 
 
 def _extract_truncated(provider: str, resp) -> bool:
@@ -331,9 +384,17 @@ async def get_api_key(user_id: int, provider: str, db: AsyncSession) -> str | No
         return None
 
 
+def _key_prefix(api_key: str) -> str:
+    """The start of the key, shown next to the saved key so the user can tell which
+    one it is. Stored in plaintext, so never more than a quarter of the key: a short
+    custom-endpoint key would otherwise sit there whole. Never empty either, since
+    an empty prefix reads as "no key saved"."""
+    return api_key[:min(8, len(api_key) // 4)] or "*"
+
+
 async def save_api_key(user_id: int, provider: str, api_key: str, db: AsyncSession) -> None:
     encrypted = encrypt(api_key)
-    prefix = api_key[:8]
+    prefix = _key_prefix(api_key)
     row = await db.scalar(
         select(UserAiKey).where(UserAiKey.user_id == user_id, UserAiKey.provider == provider)
     )
@@ -458,6 +519,7 @@ _CUSTOM_CLIENT_TIMEOUT = (5.0, 600.0)
 # attempts buy nothing here: a server still loading its model fails all three, and
 # the user is being told to try again anyway.
 _VERIFY_CLIENT_KWARGS = {"read_timeout": 60.0, "max_retries": 0}
+_VERIFY_BUDGET_SECONDS = 90
 
 
 def _make_custom_client(
@@ -772,8 +834,13 @@ def _is_connection_error(exc: Exception) -> bool:
     return isinstance(exc, (ConnectionError, httpx.TransportError, APIConnectionError))
 
 
-def _friendly_ai_error(exc: Exception) -> str:
-    """Turn a provider exception into a sentence the settings page can show.
+def describe_ai_error(exc: Exception) -> str:
+    """Turn a provider exception into a sentence the user can act on.
+
+    The one place AI failures are worded: Verify in Settings, chat, article context,
+    Catch me up, briefings, the preference profile and the AI selector all show what
+    this returns, so a bad API key reads as a bad API key everywhere instead of as
+    "try again" in one place and the SDK's raw JSON in another.
 
     Timeouts and connection failures are named because they are the two a
     self-hoster actually hits, and the SDK's own wording ("Request timed out.")
@@ -793,17 +860,29 @@ def _friendly_ai_error(exc: Exception) -> str:
             f"{blocked}. A model on a private address has to be listed in "
             "AI_ALLOWED_PRIVATE_HOSTS in the instance's environment."
         )
+    too_large = find_cause(exc, ResponseTooLarge)
+    if too_large is not None:
+        # Same disguise as above. Whatever answered is not answering like an API.
+        return f"{too_large}. Check that the URL points at an OpenAI-compatible API."
 
+    # The SDKs' status errors carry the code; Gemini's and wrapped ones only say it
+    # in the text, hence the string checks next to each.
+    status = getattr(exc, "status_code", None)
     raw = str(exc)
     low = raw.lower()
-    if "not_found" in low or '"404"' in raw or " 404 " in raw:
+    if status == 404 or "not_found" in low or '"404"' in raw or " 404 " in raw:
         return "Model not found. Check the model name."
-    if "401" in raw or "authentication" in low or "invalid api key" in low or "unauthorized" in low:
+    if (status == 401 or "401" in raw or "authentication" in low
+            or "invalid api key" in low or "unauthorized" in low):
         return "Invalid API key."
-    if "429" in raw or "rate_limit" in low or "too many requests" in low:
+    if status == 529 or "overloaded" in low:
+        return "The AI provider is overloaded. Try again in a moment."
+    if status == 429 or "429" in raw or "rate_limit" in low or "too many requests" in low:
         return "Rate limit reached. Try again later."
-    if "403" in raw or "forbidden" in low:
+    if status == 403 or "403" in raw or "forbidden" in low:
         return "Access denied. Check your API key permissions."
+    if isinstance(status, int) and status >= 500:
+        return f"The AI provider returned a server error ({status}). Try again later."
     if _is_timeout(exc):
         return (
             "Timed out waiting for a reply. A local model can take a while to load "
@@ -949,36 +1028,40 @@ async def verify_ai_slot(
     if client is None:
         return {"ok": False, "model": None, "error": "No provider/model/key configured for this slot."}
 
-    try:
+    async def _greet():
         if provider == "anthropic":
-            resp = await _anthropic_create(
+            return await _anthropic_create(
                 client,
                 model=model,
                 max_tokens=_VERIFY_MAX_TOKENS,
                 messages=[{"role": "user", "content": "Hi"}],
             )
-        elif provider in _OPENAI_WIRE:
+        if provider in _OPENAI_WIRE:
             # Thinking off for the check itself: it asks for a greeting, and a
             # local model that reasons first would spend the 200 tokens on that
             # and report the whole slot as broken when nothing is wrong with it.
-            resp = await _openai_wire_create(
+            return await _openai_wire_create(
                 client, provider, True,
                 model=model,
                 messages=[{"role": "user", "content": "Hi"}],
                 **_openai_token_kwargs(provider, model, _VERIFY_MAX_TOKENS),
             )
-        elif provider == "gemini":
-            resp = await client.aio.models.generate_content(
-                model=model,
-                contents="Hi",
-            )
+        return await client.aio.models.generate_content(
+            model=model,
+            contents="Hi",
+        )
+
+    try:
+        # The read timeout above is per read, so it is held to a total as well:
+        # the same reasoning as the job budgets, at Verify's own patience.
+        resp = await _within_budget(_greet(), _VERIFY_BUDGET_SECONDS)
         # Read the answer, don't just touch the envelope: a model that accepts the
         # request and then writes nothing (all of its budget spent reasoning) used
         # to pass this check, so the slot reported OK while every real call failed.
         _extract_text(provider, resp)
         return {"ok": True, "model": model, "error": None}
     except Exception as exc:
-        return {"ok": False, "model": model, "error": _friendly_ai_error(exc)}
+        return {"ok": False, "model": model, "error": describe_ai_error(exc)}
     finally:
         await close_ai_client(client, provider)
 
@@ -998,7 +1081,8 @@ async def score_article(
         f"Reply with only a decimal number between 0.0 and 1.0."
     )
     answer = await _complete(
-        prompt, client, provider, model, max_tokens=10, require_thinking_off=True
+        prompt, client, provider, model, max_tokens=10, require_thinking_off=True,
+        budget=_SCORING_BUDGET_SECONDS,
     )
     raw = answer.text
     # Extract the first decimal number — tolerates models that wrap the score in
@@ -1085,6 +1169,19 @@ async def chat_with_article(
     model: str,
 ) -> tuple[str, int, int]:
     """Multi-turn chat. Returns (text, input_tokens, output_tokens)."""
+    return await _within_budget(
+        _chat_unbounded(messages, article_content, client, provider, model),
+        _TEXT_BUDGET_SECONDS,
+    )
+
+
+async def _chat_unbounded(
+    messages: list[dict],
+    article_content: str | None,
+    client,
+    provider: str,
+    model: str,
+) -> tuple[str, int, int]:
     if article_content:
         system_prompt = (
             "You are a helpful assistant discussing the following article. "
@@ -1117,11 +1214,7 @@ async def chat_with_article(
         resp = await client.chat.completions.create(
             model=model, messages=openai_msgs,
             **_openai_token_kwargs(provider, model, 600))
-        return (
-            _extract_text(provider, resp),
-            resp.usage.prompt_tokens,
-            resp.usage.completion_tokens,
-        )
+        return (_extract_text(provider, resp), *_openai_usage(resp))
 
     elif provider == "gemini":
         from google.genai import types
@@ -1202,16 +1295,11 @@ async def catch_me_up(
         )
 
     full_prompt = f"{system_prompt}\n\n{user_prompt}"
-    answer = await _complete(full_prompt, client, provider, model, max_tokens=8000)
+    answer = await _complete(
+        full_prompt, client, provider, model, max_tokens=8000,
+        budget=_DIGEST_BUDGET_SECONDS,
+    )
     return answer.text, answer.input_tokens, answer.output_tokens
-
-
-async def generate_css_selector(url: str, html: str, client, provider: str, model: str) -> str:
-    """Generate a CSS selector for article links from a page."""
-    from app.utils.scrape_ai import generate_selector_prompt
-    prompt = generate_selector_prompt(url, html)
-    answer = await _complete(prompt, client, provider, model, max_tokens=200)
-    return answer.text.strip().strip('`"\'').split('\n')[0].strip()
 
 
 async def generate_css_selector_from_sample(
@@ -1234,27 +1322,6 @@ async def generate_css_selector_from_sample(
 # trim/delete (purge_service T2) keeps engaged article stubs at least this long so the
 # profile still sees their signal. Keep > the admin retention horizon max (120).
 PROFILE_MAX_WINDOW_DAYS = 180
-
-
-async def get_preference_strong_count(user_id: int, db: AsyncSession) -> int:
-    """Return count of strong reading signals (g1 + g2) used for preference generation."""
-    from sqlalchemy import text
-    now = datetime.now(timezone.utc)
-    g1 = await db.execute(text("""
-        SELECT COUNT(*) FROM user_article_states uas
-        WHERE uas.user_id = :uid
-          AND uas.user_starred = true
-          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
-          AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)})
-    g2 = await db.execute(text("""
-        SELECT COUNT(*) FROM user_article_states uas
-        WHERE uas.user_id = :uid
-          AND uas.user_starred = false
-          AND (uas.dwell_seconds >= 60 OR uas.link_opened = true)
-          AND uas.created_at >= :cutoff
-    """), {"uid": user_id, "cutoff": now - timedelta(days=120)})
-    return int(g1.scalar() or 0) + int(g2.scalar() or 0)
 
 
 # ── interest profile generation ─────────────────────────────────────────────
@@ -1357,8 +1424,11 @@ def _build_preference_prompt(groups: dict[str, list[tuple[str, str]]], feeds_str
     return f"{_PREF_INSTRUCTION}\n\n---\n{data}"
 
 
-async def generate_preference_text(user_id: int, db: AsyncSession, client, provider: str, model: str) -> str:
-    """Generate preference text from user's reading behaviour signals."""
+async def generate_preference_text(
+    user_id: int, db: AsyncSession, client, provider: str, model: str
+) -> tuple[str, int, int]:
+    """Generate preference text from user's reading behaviour signals.
+    Returns (text, input tokens, output tokens)."""
     from sqlalchemy import text
     now = datetime.now(timezone.utc)
     cutoff_180 = now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
@@ -1621,6 +1691,21 @@ async def _anthropic_create(
 async def _complete(
     prompt: str, client, provider: str, model: str, max_tokens: int = 500,
     reasoning_headroom: int = 0, require_thinking_off: bool = False,
+    budget: float = _TEXT_BUDGET_SECONDS,
+) -> Completion:
+    """:func:`_complete_unbounded`, held to *budget* seconds of wall clock."""
+    return await _within_budget(
+        _complete_unbounded(
+            prompt, client, provider, model, max_tokens,
+            reasoning_headroom, require_thinking_off,
+        ),
+        budget,
+    )
+
+
+async def _complete_unbounded(
+    prompt: str, client, provider: str, model: str, max_tokens: int = 500,
+    reasoning_headroom: int = 0, require_thinking_off: bool = False,
 ) -> Completion:
     """Send a prompt to whichever provider the slot uses and return its answer.
 
@@ -1655,8 +1740,7 @@ async def _complete(
         )
         return Completion(
             _extract_text(provider, resp),
-            resp.usage.prompt_tokens,
-            resp.usage.completion_tokens,
+            *_openai_usage(resp),
             _extract_truncated(provider, resp),
         )
     elif provider == "gemini":

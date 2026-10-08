@@ -160,6 +160,18 @@ class Settings(BaseSettings):
     # (see session_token_version).
     session_max_age_days: int = 30
 
+    # Whether the session cookie is marked Secure (sent over HTTPS only). Unset, it
+    # follows DEBUG: on in production, off in dev. A browser refuses a Secure cookie
+    # from a plain-HTTP page other than localhost, so an install reached over HTTP by
+    # its IP address (a home server on the LAN) needs it off to be able to log in.
+    session_cookie_secure: bool | None = None
+
+    @property
+    def session_cookie_is_secure(self) -> bool:
+        if self.session_cookie_secure is None:
+            return not self.debug
+        return self.session_cookie_secure
+
     # Rate limiting
     rate_limit_login: str = "5/minute"
     rate_limit_register: str = "3/hour"
@@ -179,6 +191,17 @@ class Settings(BaseSettings):
     # can start. The profile is meant to change every few weeks, hence an hourly cap.
     rate_limit_ai_preference: str = "5/hour"
     rate_limit_feedback: str = "3/hour"
+    # Testing, previewing or applying a filter evaluates it over every article the
+    # user has, and the relevance suggestions tokenize up to a month of them. Cheap
+    # one at a time, not when repeated in parallel.
+    rate_limit_filter_run: str = "10/minute"
+    rate_limit_relevance_suggestions: str = "20/minute"
+    # A manual refresh fetches the feed inside the request. The host throttle only
+    # steps in once the site answers 429, so this keeps one reader from hammering it.
+    rate_limit_feed_refresh: str = "10/minute"
+    # An OPML import fetches every new feed in the file inside the request. One import
+    # is capped by the feed limit (see services.opml), this caps how often it repeats.
+    rate_limit_opml_import: str = "10/hour"
     # Video-thumbnail proxy. Public (a shared article page renders video figures for
     # signed-out readers), so it is rate-limited by IP. A single article view fires
     # one request per video figure and the browser then caches it, so this is

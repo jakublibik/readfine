@@ -229,6 +229,8 @@ def _subscribe_db(existing_feed=None, private_dupe=False):
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
     db.flush = AsyncMock()
+    # The new feed row goes in under a savepoint.
+    db.begin_nested = MagicMock(return_value=AsyncMock())
     db.added = added
     return db
 
@@ -242,7 +244,7 @@ def _no_network():
         patch("app.services.feed.fetch_and_parse_url",
               new=AsyncMock(return_value=(parsed, None))) as fetch,
         patch("app.services.feed.is_full_content_feed", return_value=False),
-        patch("app.services.feed.asyncio.create_task"),
+        patch("app.services.feed.spawn_background"),
     ):
         yield fetch
 
@@ -353,7 +355,7 @@ class TestSubscribeScrapeSplitsCredentials:
                   new=AsyncMock(return_value="<html/>")) as fetch,
             patch("app.fetcher.scrape.extract_article_links",
                   return_value=[("https://example.com/a", "A", None, None)]),
-            patch("app.services.feed.asyncio.create_task"),
+            patch("app.services.feed.spawn_background"),
             patch("app.services.feed._initial_fetch_scrape", new=MagicMock()),
         ):
             await subscribe_scrape(

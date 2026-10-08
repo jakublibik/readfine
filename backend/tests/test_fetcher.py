@@ -263,6 +263,61 @@ class TestRunThrottled:
         assert overlap["seen"] is True
 
 
+class TestFetchBudget:
+    """One stuck feed must not hold the scheduler round (and every later one) hostage."""
+
+    async def test_fetch_past_budget_is_abandoned_and_recorded(self):
+        from app.fetcher import scheduler
+
+        async def stuck(_feed_id):
+            await asyncio.sleep(10)
+
+        recorded = AsyncMock()
+        with (
+            patch.object(scheduler, "_FEED_FETCH_BUDGET", timedelta(milliseconds=20)),
+            patch.object(scheduler, "_record_budget_timeout", recorded),
+        ):
+            await asyncio.wait_for(scheduler._fetch_within_budget(7, stuck), 2)
+        recorded.assert_awaited_once_with(7)
+
+    async def test_fetch_within_budget_records_nothing(self):
+        from app.fetcher import scheduler
+
+        done = []
+
+        async def quick(feed_id):
+            done.append(feed_id)
+
+        recorded = AsyncMock()
+        with patch.object(scheduler, "_record_budget_timeout", recorded):
+            await scheduler._fetch_within_budget(7, quick)
+        assert done == [7]
+        recorded.assert_not_awaited()
+
+    async def test_budget_timeout_is_recorded_as_a_source_failure(self):
+        # A timeout is the feed's problem, so it lands in the error tier with the
+        # normal backoff rather than as "Internal error" with the counters untouched.
+        from app.fetcher import scheduler
+
+        feed = SimpleNamespace(feed_url="https://slow.example/feed", block_count=0)
+        session = MagicMock()
+        session.get = AsyncMock(return_value=feed)
+        factory = MagicMock()
+        factory.return_value.__aenter__ = AsyncMock(return_value=session)
+        factory.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        with (
+            patch("app.database.async_session_factory", factory),
+            patch("app.fetcher.failure.record_fetch_failure", new=AsyncMock()) as record,
+        ):
+            await scheduler._record_budget_timeout(7)
+
+        record.assert_awaited_once()
+        exc = record.await_args.args[1]
+        assert isinstance(exc, httpx.TimeoutException)
+        assert record.await_args.kwargs["feed_id"] == 7
+
+
 # ── _quantize15 ───────────────────────────────────────────────────────────────
 
 class TestQuantize15:
@@ -683,6 +738,9 @@ class TestSafeUrl:
     def test_whitespace_stripped(self):
         assert _safe_url("  https://example.com/  ") == "https://example.com/"
 
+    def test_quote_and_brackets_percent_encoded(self):
+        assert _safe_url('https://e.com/a"><b c') == "https://e.com/a%22%3E%3Cb%20c"
+
 
 # ── feedparser entry mock ─────────────────────────────────────────────────────
 
@@ -770,6 +828,9 @@ class TestExtractContent:
 
 # ── _latest_published ─────────────────────────────────────────────────────────
 
+_NOW = datetime(2026, 6, 1, tzinfo=timezone.utc)
+
+
 class TestLatestPublished:
     def test_returns_maximum_date(self):
         entries = [
@@ -777,18 +838,18 @@ class TestLatestPublished:
             {"published_parsed": (2026, 1, 20, 0, 0, 0, 0, 0, 0)},
             {"published_parsed": (2026, 1, 5, 0, 0, 0, 0, 0, 0)},
         ]
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
 
     def test_empty_entries_returns_none(self):
-        assert _latest_published([]) is None
+        assert _latest_published([], _NOW) is None
 
     def test_entries_without_date_ignored(self):
-        assert _latest_published([{"title": "no date"}]) is None
+        assert _latest_published([{"title": "no date"}], _NOW) is None
 
     def test_falls_back_to_updated_parsed(self):
         entries = [{"updated_parsed": (2026, 3, 1, 0, 0, 0, 0, 0, 0)}]
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
 
     def test_published_preferred_over_updated(self):
@@ -797,8 +858,16 @@ class TestLatestPublished:
             "updated_parsed":   (2026, 1, 25, 0, 0, 0, 0, 0, 0),
         }]
         # feedparser `or` picks published_parsed first
-        result = _latest_published(entries)
+        result = _latest_published(entries, _NOW)
         assert result == datetime(2026, 1, 20, 0, 0, 0, tzinfo=timezone.utc)
+
+    def test_future_date_ignored(self):
+        """An entry dated 2099 is clamped away like the article's own date."""
+        entries = [
+            {"published_parsed": (2099, 1, 1, 0, 0, 0, 0, 0, 0)},
+            {"published_parsed": (2026, 5, 1, 0, 0, 0, 0, 0, 0)},
+        ]
+        assert _latest_published(entries, _NOW) == datetime(2026, 5, 1, tzinfo=timezone.utc)
 
 
 # ── Error circuit breaker — threshold constants ───────────────────────────────

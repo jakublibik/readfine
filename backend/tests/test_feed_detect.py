@@ -5,8 +5,13 @@ import feedparser
 import pytest
 
 from app.utils.feed_detect import _dedup, _validate_feed_url, _youtube_feed_url, detect_feeds
+from app.utils.url_validator import BytesResponse
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _body(text):
+    return BytesResponse(text.encode("utf-8"), "application/rss+xml", "https://example.com/")
+
 
 def _mock_validate():
     return AsyncMock(return_value=None)
@@ -102,7 +107,7 @@ class TestValidateFeedUrl:
     async def test_valid_feed_with_entries_returns_true_and_its_title(self):
         rss = _rss_with_entries(3)
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=rss):
+             patch("app.utils.feed_detect.fetch_url_bytes", return_value=_body(rss)):
             assert await _validate_feed_url("https://example.com/feed.xml") == (True, "Test Feed")
 
     async def test_titleless_feed_is_valid_without_a_title(self):
@@ -112,19 +117,19 @@ class TestValidateFeedUrl:
             "</channel></rss>"
         )
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=rss):
+             patch("app.utils.feed_detect.fetch_url_bytes", return_value=_body(rss)):
             assert await _validate_feed_url("https://example.com/feed.xml") == (True, None)
 
     async def test_html_page_with_title_but_no_entries_returns_false(self):
         html = "<html><head><title>My Site</title></head><body></body></html>"
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=html):
+             patch("app.utils.feed_detect.fetch_url_bytes", return_value=_body(html)):
             assert await _validate_feed_url("https://example.com/") == (False, None)
 
     async def test_empty_rss_channel_no_entries_returns_false(self):
         empty_rss = '<?xml version="1.0"?><rss version="2.0"><channel><title>Feed</title></channel></rss>'
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", return_value=empty_rss):
+             patch("app.utils.feed_detect.fetch_url_bytes", return_value=_body(empty_rss)):
             assert await _validate_feed_url("https://example.com/feed") == (False, None)
 
     async def test_http_404_returns_false(self):
@@ -134,7 +139,7 @@ class TestValidateFeedUrl:
             response=httpx.Response(404),
         )
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
+             patch("app.utils.feed_detect.fetch_url_bytes", side_effect=exc):
             assert await _validate_feed_url("https://example.com/feed/") == (False, None)
 
     async def test_http_403_returns_false(self):
@@ -144,13 +149,13 @@ class TestValidateFeedUrl:
             response=httpx.Response(403),
         )
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=exc):
+             patch("app.utils.feed_detect.fetch_url_bytes", side_effect=exc):
             assert await _validate_feed_url("https://example.com/feed/") == (False, None)
 
     async def test_connection_error_returns_false(self):
         import httpx
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check",
+             patch("app.utils.feed_detect.fetch_url_bytes",
                    side_effect=httpx.ConnectError("refused")):
             assert await _validate_feed_url("https://example.com/feed") == (False, None)
 
@@ -327,12 +332,16 @@ class TestDetectFeedsCommonPaths:
         def fake_fetch(url, **kwargs):
             if url == "https://example.com":
                 return plain_html
+            raise ValueError("not found")
+
+        def fake_fetch_bytes(url, **kwargs):
             if url == "https://example.com/feed":
-                return rss
+                return _body(rss)
             raise ValueError("not found")
 
         with patch("app.utils.feed_detect.async_validate_feed_url", _mock_validate()), \
-             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch):
+             patch("app.utils.feed_detect.fetch_url_with_ssrf_check", side_effect=fake_fetch), \
+             patch("app.utils.feed_detect.fetch_url_bytes", side_effect=fake_fetch_bytes):
             result = await detect_feeds("https://example.com")
 
         found = [f for f in result if f["url"] == "https://example.com/feed"]

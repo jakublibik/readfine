@@ -8,6 +8,17 @@ import pytest
 from app.services.ai_service import AiClientPool, Completion
 
 
+@pytest.fixture(autouse=True)
+def _account_active():
+    """Every account here is active and awake. The db mocks below answer a fixed
+    sequence of queries about the article, and whether AI work is held back for
+    the account is a question of its own, tested in test_dormancy."""
+    held = AsyncMock(return_value=False)
+    with patch("app.services.ai_scoring_service.ai_work_held_back", held), \
+            patch("app.services.ai_summary_service.ai_work_held_back", held):
+        yield
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def make_article(**kwargs):
@@ -836,7 +847,7 @@ class TestApplyAiFiltersForState:
             conditions=[SimpleNamespace(field="ai_score", operator="gt", value="50")],
             actions=[SimpleNamespace(action_type="mark_read")],
             match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed_actions = []
@@ -862,12 +873,12 @@ class TestApplyAiFiltersForState:
         f1 = SimpleNamespace(
             id=1, stop_on_match=True,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
         f2 = SimpleNamespace(
             id=2, stop_on_match=False,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed = []
@@ -891,7 +902,7 @@ class TestApplyAiFiltersForState:
         f = SimpleNamespace(
             id=1, stop_on_match=False,
             conditions=[], actions=[], match_operator="AND",
-            scope_include=None, scope_except=None,
+            scope_include=None, scope_except=None, disabled_reason=None,
         )
 
         executed = []
@@ -1534,7 +1545,7 @@ class TestRefusedAddressIsTerminal:
         assert job.status == "pending"
 
     def test_a_chain_that_never_blocked_is_left_alone(self):
-        from app.services.ai_jobs import find_blocked_address
+        from app.utils.url_validator import find_blocked_address
         try:
             try:
                 raise ValueError("inner")

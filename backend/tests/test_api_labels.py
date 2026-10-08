@@ -95,12 +95,12 @@ class TestUpdateLabel:
 
 class TestDeleteLabel:
     def test_deletes_successfully(self, client):
-        with patch("app.routers.api.v1.labels.delete_label", new=AsyncMock(return_value=True)):
+        with patch("app.routers.api.v1.labels.delete_label", new=AsyncMock(return_value=[])):
             response = client.delete("/api/v1/labels/1")
         assert response.status_code == 204
 
     def test_not_found_returns_404(self, client):
-        with patch("app.routers.api.v1.labels.delete_label", new=AsyncMock(return_value=False)):
+        with patch("app.routers.api.v1.labels.delete_label", new=AsyncMock(return_value=None)):
             response = client.delete("/api/v1/labels/99")
         assert response.status_code == 404
 

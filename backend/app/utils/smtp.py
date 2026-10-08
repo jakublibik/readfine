@@ -83,6 +83,30 @@ def send_html_email(
     _smtp_send(s, to_list + bcc, msg.as_string())
 
 
+# The submission port for implicit TLS (RFC 8314): the connection is TLS from the
+# first byte, with no STARTTLS. Sending a plaintext EHLO there just hangs until the
+# timeout, so the port alone decides; there is no setting for it.
+IMPLICIT_TLS_PORT = 465
+
+
+def _connect(s: AppSettings, port: int) -> smtplib.SMTP:
+    """An open, EHLO'd connection, encrypted the way the port and the TLS box ask:
+    implicit TLS on 465, otherwise STARTTLS when "use TLS" is on, plain if off."""
+    if port == IMPLICIT_TLS_PORT:
+        return smtplib.SMTP_SSL(
+            s.smtp_host, port, timeout=10, context=ssl.create_default_context(),
+        )
+    conn = smtplib.SMTP(s.smtp_host, port, timeout=10)
+    try:
+        conn.ehlo()
+        if s.smtp_use_tls:
+            conn.starttls(context=ssl.create_default_context())
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
 def _smtp_send(s: AppSettings, recipients: list[str], raw_message: str) -> None:
     password = _get_password(s)
     port = s.smtp_port or 587
@@ -91,17 +115,7 @@ def _smtp_send(s: AppSettings, recipients: list[str], raw_message: str) -> None:
     # the envelope sender (MAIL FROM) must be the bare address only.
     envelope_from = parseaddr(s.smtp_from_email)[1] or s.smtp_from_email
 
-    if s.smtp_use_tls:
-        context = ssl.create_default_context()
-        with smtplib.SMTP(s.smtp_host, port, timeout=10) as conn:
-            conn.ehlo()
-            conn.starttls(context=context)
-            if s.smtp_user and password:
-                conn.login(s.smtp_user, password)
-            conn.sendmail(envelope_from, recipients, raw_message)
-    else:
-        with smtplib.SMTP(s.smtp_host, port, timeout=10) as conn:
-            conn.ehlo()
-            if s.smtp_user and password:
-                conn.login(s.smtp_user, password)
-            conn.sendmail(envelope_from, recipients, raw_message)
+    with _connect(s, port) as conn:
+        if s.smtp_user and password:
+            conn.login(s.smtp_user, password)
+        conn.sendmail(envelope_from, recipients, raw_message)

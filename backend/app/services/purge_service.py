@@ -225,7 +225,15 @@ async def purge_old_articles(db: AsyncSession) -> int:
                 )
                 .label("rn"),
             )
-            .where(Article.feed_id.in_(feed_counts.keys()))
+            # Rank cold articles only. Ranking every article would let starred,
+            # engaged and trimmed ones fill the first keep_count places, and the
+            # DELETE (which skips them) would then leave fewer cold ones than promised.
+            .where(
+                Article.feed_id.in_(feed_counts.keys()),
+                Article.trimmed_at.is_(None),
+                ~_fully_protected_exists(),
+                ~_engaged_exists(),
+            )
             .subquery()
         )
         from sqlalchemy import case, literal
@@ -251,8 +259,10 @@ async def purge_old_articles(db: AsyncSession) -> int:
     total_deleted += count_deleted
 
     # ── Pass 3: T2 — delete trimmed stubs past the profile window ─────────────
-    # Drop a stub once no engaged state references it within PROFILE_MAX_WINDOW_DAYS
-    # (mirrors the profile lookback, keyed on uas.created_at).
+    # Drop a stub once no state of any kind was created for it within
+    # PROFILE_MAX_WINDOW_DAYS (mirrors the profile lookback, keyed on uas.created_at).
+    # Any state, not only an engaged one: wider than the profile needs, so at worst a
+    # stub is kept longer than necessary, never dropped while a signal is still live.
     cutoff_t2 = now - timedelta(days=PROFILE_MAX_WINDOW_DAYS)
     recent_state = (
         select(UserArticleState.article_id)

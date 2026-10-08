@@ -21,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.ai import UserAiKey
 from app.models.article import AiUsageLog
 from app.models.user import UserSettings
-from app.utils.url_validator import find_blocked_address
 from app.services.ai_service import (
     ai_client,
+    describe_ai_error,
     generate_preference_text,
     provider_requires_key,
 )
@@ -93,8 +93,8 @@ def normalize_preference_text(raw: str | None) -> tuple[str | None, str | None]:
 async def signal_counts(user_id: int, since: datetime | None, db: AsyncSession) -> tuple[int, int]:
     """Return (strong signals, new signals since ``since``) in one pass.
 
-    Strong signals mirror groups G1+G2 of the generator (and
-    ``get_preference_strong_count``). New signals count engagement whose most
+    Strong signals mirror groups G1+G2 of the generator; the settings page shows
+    the same count. New signals count engagement whose most
     recent timestamp is newer than ``since``; ``user_article_states`` has no
     ``updated_at``, so GREATEST over the timestamps it does have is the closest
     approximation. ``is_read`` is never a signal — mark-all-read would fake it.
@@ -288,11 +288,8 @@ async def run_auto_generation(user_id: int, db: AsyncSession) -> str:
         try:
             raw, in_tok, out_tok = await generate_preference_text(user_id, db, client, provider, model)
         except Exception as exc:
-            # The SDK reports a refused address as a bare "Connection error.", which
-            # would leave the banner saying nothing about a problem only the operator
-            # can fix.
-            reason = str(find_blocked_address(exc) or exc)
-            logger.warning("Auto profile generation failed for user=%s: %s", user_id, reason)
+            reason = describe_ai_error(exc)
+            logger.warning("Auto profile generation failed for user=%s: %s", user_id, exc)
             settings.ai_preference_last_attempt_at = now
             _apply_failure(settings, reason, now)
             await db.commit()

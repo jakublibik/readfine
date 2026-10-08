@@ -1,6 +1,9 @@
+import html as html_lib
+import io
 import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+import feedparser
 import nh3
 
 
@@ -10,6 +13,31 @@ _STRIP_PARAMS = frozenset({
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "utm_id", "fbclid", "gclid", "msclkid",
 })
+
+
+def parse_feed_body(
+    body: bytes | str, content_type: str | None = None
+) -> feedparser.FeedParserDict:
+    """Parse a downloaded feed body, and only ever as a body.
+
+    ``feedparser.parse`` decides for itself what its argument is: a ``str`` with an
+    http, ftp or file scheme is a URL it downloads on its own (urllib, without our
+    SSRF checks or a timeout), and any other ``str`` or ``bytes`` is first tried as a
+    local path. A feed host answering with ``http://169.254.169.254/...`` as its
+    whole body would turn our fetch into one it chose (review H2-01). A stream is
+    the one input it only reads.
+
+    Pass the bytes as they arrived, with the response's *content_type*. feedparser
+    works out the charset from that header, a BOM and the XML declaration together,
+    whereas a ``str`` was decoded by the header alone, as UTF-8 when it named none,
+    so a windows-1250 feed declaring its charset only in the XML came out garbled
+    (review H2-05). A ``str`` is encoded as UTF-8, which is what feedparser itself
+    does with one.
+    """
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    headers = {"content-type": content_type} if content_type else None
+    return feedparser.parse(io.BytesIO(body), response_headers=headers)
 
 
 def normalize_url(url: str | None) -> str | None:
@@ -38,11 +66,29 @@ def normalize_url(url: str | None) -> str | None:
 
 
 def rewrite_relative_urls(html: str, base_url: str) -> str:
-    """Rewrite relative src/href attributes in sanitized HTML to absolute URLs."""
+    """Rewrite relative src/href attributes in sanitized HTML to absolute URLs.
+
+    Runs after the sanitizer, so whatever it writes goes out as it is: the joined
+    URL is escaped again here. The base is the article's address, which comes from
+    the feed, and a quote in it would otherwise close the attribute and put the rest
+    of the address into the page as markup.
+    """
     def _abs(m: re.Match) -> str:
         attr, url = m.group(1), m.group(2)
-        return f'{attr}="{urljoin(base_url, url)}"'
+        joined = urljoin(base_url, html_lib.unescape(url))
+        return f'{attr}="{html_lib.escape(joined, quote=True)}"'
     return re.sub(r'(src|href)="([^"]*)"', _abs, html)
+
+
+# Characters that are never valid in a URL as written (RFC 3986), which feeds and
+# scraped pages still hand over. Percent-encoding them keeps the address working
+# and keeps it from being anything but an address wherever it ends up.
+_URL_UNSAFE_RE = re.compile(r'[\x00-\x20"<>`\x7f]')
+
+
+def encode_unsafe_url_chars(url: str) -> str:
+    """Percent-encode quotes, angle brackets, whitespace and control characters."""
+    return _URL_UNSAFE_RE.sub(lambda m: f"%{ord(m.group()):02X}", url)
 
 
 # ── non-breaking space runs ───────────────────────────────────────────────────

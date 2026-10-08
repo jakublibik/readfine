@@ -10,9 +10,8 @@ from typing import NamedTuple
 from urllib.parse import urlparse, urlunparse
 
 import feedparser
-import httpx
 import nh3
-from sqlalchemy import literal, select, update
+from sqlalchemy import literal, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,12 +19,13 @@ from sqlalchemy.orm import aliased
 
 from app.models.article import SUPPRESSED_BY_URL, Article, UserArticleState
 from app.models.feed import Feed, UserFeed
-from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
-from app.utils.http_client import READFINE_UA
+from app.utils.http_client import READFINE_UA, run_outbound
 from app.utils.parsing import (
     count_words,
+    encode_unsafe_url_chars,
     normalize_url,
+    parse_feed_body,
     rewrite_relative_urls,
     soften_nbsp_runs,
 )
@@ -39,13 +39,13 @@ from app.utils.url_validator import (
 )
 from app.utils.video import video_body_from_feed
 from app.fetcher import host_throttle
+from app.fetcher.errors import NotAFeed
 from app.fetcher.redirects import adopt_permanent_url
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported: the scheduler and tests import it from here.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
-    arm_host_cooldown,
-    failure_values,
-    log_failure_message,
+    mark_fetch_success,
+    record_fetch_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,8 @@ class ParsedFeed(NamedTuple):
 
 
 async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
-    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP or parse failure.
+    """Fetch a URL and parse it as RSS/Atom. Raises on HTTP failure, and
+    :class:`NotAFeed` when what came back does not parse as a feed.
 
     *auth* is the HTTP Basic pair for a feed that needs one. Subscribing to such a
     feed goes through here before the row exists, so the credentials cannot be read
@@ -110,19 +111,19 @@ async def fetch_and_parse_url(url: str, auth=None) -> ParsedFeed:
     """
     await async_validate_feed_url(url)
     loop = asyncio.get_running_loop()
-    page = await loop.run_in_executor(
-        None, fetch_url_page, url, auth, _TIMEOUT, _HEADERS
+    page = await run_outbound(fetch_url_page, url, auth, _TIMEOUT, _HEADERS)
+    parsed = await loop.run_in_executor(
+        None, parse_feed_body, page.content or page.text, page.content_type
     )
-    parsed = await loop.run_in_executor(None, feedparser.parse, page.text)
 
     if parsed.bozo:
         import xml.sax._exceptions as _sax
         reason = unparseable_reason(page.text)
         if isinstance(parsed.bozo_exception, _sax.SAXParseException):
             # XML parse error means the response is HTML, not RSS
-            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise NotAFeed(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
         if not parsed.entries and not parsed.feed:
-            raise ValueError(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
+            raise NotAFeed(reason or f"Not a valid RSS/Atom feed: {parsed.bozo_exception}")
 
     return ParsedFeed(parsed, page.permanent_url)
 
@@ -190,20 +191,16 @@ async def fetch_feed(
                 context=f"feed {feed_id}",
             )
             loop = asyncio.get_running_loop()
-            resp = await loop.run_in_executor(
-                None, fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
+            resp = await run_outbound(
+                fetch_url_conditional, feed_url, auth, _TIMEOUT, _HEADERS,
                 feed.etag, feed.last_modified,
             )
             if resp.status_code == 304:
                 # Unchanged since last fetch — no body to parse. Record a successful
                 # poll and keep the stored validators.
-                feed.last_fetched_at = datetime.now(timezone.utc)
-                feed.last_fetch_duration_ms = int(time.monotonic() * 1000) - start_ms
-                feed.status = "active"
-                feed.last_error = None
-                feed.fetch_error_count = 0
-                feed.block_count = 0
-                feed.retry_after_until = None
+                await mark_fetch_success(
+                    db, feed, datetime.now(timezone.utc), int(time.monotonic() * 1000) - start_ms
+                )
                 await db.commit()
                 host = host_throttle.host_key(feed_url)
                 if resp.rate_limited_until:
@@ -215,7 +212,9 @@ async def fetch_feed(
                     )
                 logger.info("Feed %d not modified (304)", feed_id)
                 return 0
-            parsed = await loop.run_in_executor(None, feedparser.parse, resp.text)
+            parsed = await loop.run_in_executor(
+                None, parse_feed_body, resp.content or resp.text, resp.content_type
+            )
 
         if parsed.bozo and not parsed.entries:
             # A prefetched parse carries no body, but it came through
@@ -229,13 +228,7 @@ async def fetch_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        feed.last_fetched_at = datetime.now(timezone.utc)
-        feed.last_fetch_duration_ms = duration_ms
-        feed.status = "active"
-        feed.last_error = None
-        feed.fetch_error_count = 0
-        feed.block_count = 0
-        feed.retry_after_until = None
+        await mark_fetch_success(db, feed, datetime.now(timezone.utc), duration_ms)
         # Update validators from this 200, but keep the last-known ones when the
         # response omits a header (some CDNs send ETag only intermittently) so we
         # don't lose the ability to make conditional requests.
@@ -245,7 +238,7 @@ async def fetch_feed(
             if resp.last_modified:
                 feed.last_modified = resp.last_modified
 
-        latest_pub = _latest_published(parsed.entries)
+        latest_pub = _latest_published(parsed.entries, datetime.now(timezone.utc))
         if latest_pub:
             feed.last_published_at = latest_pub
 
@@ -275,21 +268,9 @@ async def fetch_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error fetching feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
-        now = datetime.now(timezone.utc)
-        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        db.add(FetchLog(
-            feed_id=feed_id,
-            failed_at=now,
-            http_status=http_status,
-            error_message=log_failure_message(exc, feed_url),
-        ))
-        arm_host_cooldown(feed_url, exc, http_status, now)
-        await db.execute(
-            update(Feed).where(Feed.id == feed_id).values(
-                **failure_values(exc, feed_url=feed_url, feed_block_count=block_count, now=now)
-            )
+        await record_fetch_failure(
+            db, exc, feed_id=feed_id, feed_url=feed_url, feed_block_count=block_count
         )
-        await db.commit()
         return 0
 
 
@@ -669,12 +650,14 @@ def _clamp_published_at(dt: datetime | None, fetched_at: datetime) -> datetime |
     return dt
 
 
-def _latest_published(entries) -> datetime | None:
+def _latest_published(entries, fetched_at: datetime) -> datetime | None:
+    """Newest entry date, clamped like the articles' own, so one entry dated 2099
+    does not leave the feed's "last article" in the future."""
     dates = []
     for e in entries:
         t = e.get("published_parsed") or e.get("updated_parsed")
-        if t:
-            dates.append(_struct_to_dt(t))
+        if t and (dt := _clamp_published_at(_struct_to_dt(t), fetched_at)):
+            dates.append(dt)
     return max(dates) if dates else None
 
 
@@ -701,4 +684,4 @@ def _safe_url(value: str | None, max_len: int = 2048) -> str | None:
     stripped = value.strip()
     if not stripped.lower().startswith(("http://", "https://")):
         return None
-    return stripped[:max_len]
+    return encode_unsafe_url_chars(stripped)[:max_len]

@@ -1,5 +1,4 @@
 """Feed subscription service: subscribe, unsubscribe, list."""
-import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -11,17 +10,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.fetcher.errors import FetchProblem, describe_fetch_error
 from app.fetcher.failure import clear_failure_state
 from app.fetcher.redirects import url_conflict
 from app.fetcher.rss import fetch_and_parse_url, fetch_feed, is_full_content_feed
-from app.models.article import SUPPRESSED_BY_BACKLOG, Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BACKLOG, Article, ArticleAiJob, UserArticleState
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.settings import AppSettings
 from app.models.user import User
-from app.services.article import permanently_kept_exists, permanently_kept_predicate
+from app.services.article import (
+    drop_unreachable_labels, permanently_kept_exists, permanently_kept_predicate,
+    unread_clause, visible_article_clause,
+)
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.readable_service import sample_feed_content
 from app.services.scope_cleanup import ScopeCleanupResult, strip_scope_references
+from app.utils.background import spawn_background
 from app.utils.crypto import auth_pair, encrypt, feed_auth
 from app.utils.text import feed_title_text
 from app.utils.url_validator import (
@@ -73,6 +77,27 @@ class FeedUrlTaken(FeedSubscriptionError):
     def __init__(self, feed_id: int | None = None):
         self.feed_id = feed_id
         super().__init__("Another feed on this instance already uses that address")
+
+
+class FeedFetchError(FeedSubscriptionError):
+    """Fetching the address failed: an HTTP error, a timeout, no feed at the address.
+
+    Carries the classified :class:`~app.fetcher.errors.FetchProblem`, so a caller
+    decides what to offer next (look for a linked feed, set up a scrape) from
+    ``problem.kind`` rather than from the wording of the message.
+    """
+
+    def __init__(self, problem: FetchProblem):
+        self.problem = problem
+        super().__init__(problem.message)
+
+
+def _raise_fetch_error(exc: Exception) -> None:
+    """Re-raise *exc* as :class:`FeedFetchError` when it is a fetch failure. Anything
+    else is a bug of ours and is left for the caller's own ``raise``."""
+    problem = describe_fetch_error(exc)
+    if problem is not None:
+        raise FeedFetchError(problem) from exc
 
 
 class SharedPrivateFeed(FeedSubscriptionError):
@@ -172,6 +197,19 @@ def may_edit_feed_url(feed: Feed) -> bool:
     return feed.subscriber_count == 1
 
 
+def may_edit_feed_settings(feed: Feed) -> bool:
+    """Whether a subscriber may change the feed-wide fetch settings of *feed*: the
+    fetch interval and a scrape feed's link selector.
+
+    Sole subscriber only, like the address and the credentials. Both used to be open to
+    any subscriber of a private feed, but a private row can still be shared (see
+    :func:`may_edit_feed_auth`), and on one of those a selector that matches nothing
+    stops the feed for everybody. The interval has an admin exception, applied by the
+    caller.
+    """
+    return feed.subscriber_count == 1
+
+
 async def _verify_feed_url(
     url: str, *, feed_type: str, selector: str | None, auth
 ) -> str:
@@ -188,6 +226,7 @@ async def _verify_feed_url(
         try:
             html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
+            _raise_fetch_error(exc)
             raise ValueError(f"Could not fetch that page: {exc}") from exc
         if selector and not extract_article_links(html, selector, url):
             raise ValueError(
@@ -196,13 +235,23 @@ async def _verify_feed_url(
         return url
     try:
         _, permanent_url = await fetch_and_parse_url(url, auth=auth)
-    except ValueError:
-        # Already a sentence about the feed itself ("Not a valid RSS/Atom feed",
-        # "The server returned a web page, not a feed", a blocked redirect).
-        raise
     except Exception as exc:
+        _raise_fetch_error(exc)
         raise ValueError(f"Could not fetch that address: {exc}") from exc
     return permanent_url or url
+
+
+FEED_URL_MAX = 2048  # feeds.feed_url is varchar(2048)
+
+
+def _check_url_length(url: str) -> None:
+    """Refuse an address the column cannot hold, before anything fetches it.
+
+    Past the column it would fail as a database error on insert, and cutting it
+    down would store and poll a different address from the one that was checked.
+    """
+    if len(url) > FEED_URL_MAX:
+        raise ValueError(f"Feed URL is too long (max {FEED_URL_MAX} characters)")
 
 
 async def change_feed_url(
@@ -229,8 +278,7 @@ async def change_feed_url(
     new_url = (new_url or "").strip()
     if not new_url:
         raise ValueError("Feed URL cannot be empty")
-    if len(new_url) > 2048:
-        raise ValueError("Feed URL is too long (max 2048 characters)")
+    _check_url_length(new_url)
 
     # Credentials in the address move into the auth columns, as they do on subscribe:
     # left in feed_url they would reach the backups, the admin screens and an OPML
@@ -441,6 +489,30 @@ async def _mark_backlog_read(db: AsyncSession, user: User, feed: Feed) -> None:
         await db.refresh(feed)
 
 
+async def _check_subscribe_preconditions(
+    user: User, folder_id: int | None, db: AsyncSession
+) -> None:
+    """The checks every new subscription passes first: the folder is the user's own,
+    and the user is below the instance's feed cap (admins are exempt)."""
+    if folder_id is not None:
+        folder_result = await db.execute(
+            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
+        )
+        if not folder_result.scalar_one_or_none():
+            raise ValueError("Folder not found")
+
+    if user.role != "admin":
+        app_settings_result = await db.execute(
+            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+        )
+        max_feeds = app_settings_result.scalar_one_or_none() or 200
+        count_result = await db.execute(
+            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
+        )
+        if (count_result.scalar() or 0) >= max_feeds:
+            raise FeedLimitReached(max_feeds)
+
+
 async def subscribe(
     user: User,
     url: str,
@@ -474,31 +546,13 @@ async def subscribe(
         fetch_auth_user, fetch_auth_pass = url_auth_user, url_auth_pass
     if fetch_auth_user and len(fetch_auth_user) > 255:
         raise ValueError("Username is too long (max 255 characters)")
+    _check_url_length(url)
 
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
     await async_validate_feed_url(url)
-
-    # Validate folder ownership
-    if folder_id is not None:
-        folder_result = await db.execute(
-            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-        )
-        if not folder_result.scalar_one_or_none():
-            raise ValueError("Folder not found")
-
-    # Check subscription limit (admins are exempt)
-    if user.role != "admin":
-        app_settings_result = await db.execute(
-            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-        )
-        max_feeds = app_settings_result.scalar_one_or_none() or 200
-        count_result = await db.execute(
-            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-        )
-        if (count_result.scalar() or 0) >= max_feeds:
-            raise FeedLimitReached(max_feeds)
+    await _check_subscribe_preconditions(user, folder_id, db)
 
     feed: Feed | None = None
     parsed = None
@@ -534,12 +588,17 @@ async def subscribe(
         parsed = None if is_private else get_cached_feed_preview(url)
         permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None:
-            parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
+            try:
+                parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
+            except Exception as exc:
+                _raise_fetch_error(exc)
+                raise
 
         # Create the row on the address the host actually serves. Storing the URL the
         # user typed would make every later poll walk the same redirect chain, and on
         # an OPML re-import it would create a second row for a feed we already have.
-        if permanent_url and permanent_url != url:
+        # One too long to store keeps the typed address, which still works.
+        if permanent_url and permanent_url != url and len(permanent_url) <= FEED_URL_MAX:
             url = permanent_url
             await _raise_if_already_subscribed_private(db, user, url, fetch_auth_user)
             feed = await _existing_public_feed(url)
@@ -569,8 +628,18 @@ async def subscribe(
             subscriber_count=0,
             fetch_interval_min=fetch_interval_min,
         )
-        db.add(feed)
-        await db.flush()  # get feed.id
+        try:
+            # In a savepoint: another request can create the same public feed while
+            # this one is fetching it, and the unique index then fails this insert.
+            # Only the insert is undone, so the caller's session stays usable.
+            async with db.begin_nested():
+                db.add(feed)
+                await db.flush()  # get feed.id
+        except IntegrityError:
+            feed = await _existing_public_feed(url)
+            if feed is None:
+                raise
+            is_new_feed = False
 
     # Determine whether readable extraction makes sense for this feed
     if parsed is not None:
@@ -610,7 +679,10 @@ async def subscribe(
         _initial_fetch_in_progress.add(feed.id)
         # Reuse the parse we already have (new public feed) so the initial import
         # doesn't re-download — one fetch for the whole subscribe.
-        asyncio.create_task(_initial_fetch(feed.id, import_mode, import_limit, prefetched=parsed))
+        spawn_background(
+            _initial_fetch(feed.id, import_mode, import_limit, prefetched=parsed),
+            name=f"initial-fetch-{feed.id}",
+        )
 
     return user_feed
 
@@ -687,39 +759,27 @@ async def subscribe_scrape(
     is_private = auth is not None
     if auth_user and len(auth_user) > 255:
         raise ValueError("Username is too long (max 255 characters)")
+    _check_url_length(url)
 
     await async_validate_feed_url(url)
-
-    if folder_id is not None:
-        folder_result = await db.execute(
-            select(Folder).where(Folder.id == folder_id, Folder.user_id == user.id)
-        )
-        if not folder_result.scalar_one_or_none():
-            raise ValueError("Folder not found")
-
-    if user.role != "admin":
-        app_settings_result = await db.execute(
-            select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
-        )
-        max_feeds = app_settings_result.scalar_one_or_none() or 200
-        count_result = await db.execute(
-            select(func.count(UserFeed.id)).where(UserFeed.user_id == user.id)
-        )
-        if (count_result.scalar() or 0) >= max_feeds:
-            raise FeedLimitReached(max_feeds)
+    await _check_subscribe_preconditions(user, folder_id, db)
 
     selector = selector.strip()
     if not selector:
         raise ValueError("CSS selector is required")
     if len(selector) > 500:
         raise ValueError("CSS selector is too long (max 500 characters)")
+    # Syntax always, even when the live check below is skipped: an OPML backup can
+    # carry a selector that never compiled.
+    from app.fetcher.scrape import check_selector, extract_article_links, fetch_page_html
+    check_selector(selector)
 
     # Validate selector against the live page before saving
     if validate_selector:
-        from app.fetcher.scrape import extract_article_links, fetch_page_html
         try:
             html = await fetch_page_html(url, auth=auth)
         except Exception as exc:
+            _raise_fetch_error(exc)
             raise ValueError(f"Could not fetch the page: {exc}") from exc
         links = extract_article_links(html, selector, url)
         if not links:
@@ -750,14 +810,14 @@ async def subscribe_scrape(
             raise AlreadySubscribed(f"Already subscribed to this URL with the same CSS selector ({selector})")
     else:
         feed = Feed(
-            feed_url=url[:2048],
+            feed_url=url,
             feed_type="scrape",
             is_private=is_private,
             fetch_auth_user=auth_user,
             # See subscribe(): non-NULL, not truthy, so an empty password survives.
             fetch_auth_pass_encrypted=encrypt(auth_pass) if auth_pass is not None else None,
             title=title[:255],
-            site_url=url[:2048],
+            site_url=url,
             type_config={"article_links_selector": selector},
             subscriber_count=0,
             fetch_interval_min=fetch_interval_min,
@@ -781,7 +841,7 @@ async def subscribe_scrape(
     # Mark in-progress synchronously before spawning (see subscribe() for why).
     if is_new_feed and feed.id not in _initial_fetch_in_progress:
         _initial_fetch_in_progress.add(feed.id)
-        asyncio.create_task(_initial_fetch_scrape(feed.id))
+        spawn_background(_initial_fetch_scrape(feed.id), name=f"initial-fetch-{feed.id}")
 
     return user_feed
 
@@ -809,7 +869,8 @@ async def _initial_fetch_scrape(feed_id: int) -> None:
 async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeCleanupResult:
     """Remove a user's subscription with full lifecycle cleanup.
 
-    1. Deletes UserArticleState rows for articles the user does not keep for good.
+    1. Deletes UserArticleState rows for articles the user does not keep for good,
+       and the user's pending AI jobs on those articles.
     2. Deletes the UserFeed row.
     3. Decrements subscriber_count on the Feed.
     4. If subscriber_count reaches 0: deletes orphan articles (kept for good by
@@ -842,9 +903,28 @@ async def unsubscribe(user: User, user_feed_id: int, db: AsyncSession) -> ScopeC
             ~permanently_kept_predicate(),
         )
     )
+    # A job still queued would score the article afterwards, write a fresh state
+    # row and run the AI filters on it, which can label or star an article the
+    # user just let go of. What they keep still has its state row; that is the
+    # one case the job stays for.
+    await db.execute(
+        delete(ArticleAiJob).where(
+            ArticleAiJob.user_id == user.id,
+            ArticleAiJob.status == "pending",
+            ArticleAiJob.article_id.in_(article_ids_subq),
+            ~exists().where(
+                UserArticleState.user_id == user.id,
+                UserArticleState.article_id == ArticleAiJob.article_id,
+            ),
+        )
+    )
 
-    # 2. Delete the subscription
+    # 2. Delete the subscription, and the user's labels on what it alone gave them
     await db.delete(user_feed)
+    await db.flush()
+    await drop_unreachable_labels(
+        db, user.id, select(Article.id).where(Article.feed_id == feed_id)
+    )
 
     # 3. Atomically decrement subscriber_count (floor 0)
     await db.execute(
@@ -887,8 +967,11 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     """Clean up all feed subscriptions for a user being deleted (no commit).
 
     For each subscription: removes UserArticleState rows, decrements subscriber_count,
-    and deletes the feed + its articles if no subscribers remain.
-    Called by admin delete_user before the user row is deleted.
+    and deletes the feed + its articles if no subscribers remain. Finally deletes the
+    feedless articles (saved by URL, or left behind by an earlier unsubscribe) that
+    only this account kept.
+    Called by admin delete_user and self-service account deletion before the user
+    row is deleted.
     """
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
@@ -896,8 +979,10 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
     user_feeds = user_feeds_result.scalars().all()
 
     # Same rule as unsubscribe: an article another user keeps for good must outlive
-    # this account's feeds, and saving counts as keeping.
-    kept_by_someone = permanently_kept_exists()
+    # this account's feeds, and saving counts as keeping. Unlike unsubscribe, this
+    # account's own stars and saves do not count: its state rows are about to go with
+    # it, and an article kept only by them would be left behind with no owner.
+    kept_by_someone = permanently_kept_exists(exclude_user_id=user_id)
 
     for uf in user_feeds:
         feed_id = uf.feed_id
@@ -928,6 +1013,17 @@ async def cleanup_user_feeds(user_id: int, db: AsyncSession) -> None:
             )
             await db.delete(feed)
 
+    # Feedless articles this account kept and nobody else does.
+    own_state = (
+        select(UserArticleState.article_id)
+        .where(UserArticleState.article_id == Article.id, UserArticleState.user_id == user_id)
+        .correlate(Article)
+        .exists()
+    )
+    await db.execute(
+        delete(Article).where(Article.feed_id.is_(None), own_state, ~kept_by_someone)
+    )
+
 
 async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> None:
     """Set each feed's ``unread_count`` from a value computed fresh from the DB.
@@ -947,11 +1043,7 @@ async def attach_unread_counts(user_id: int, user_feeds, db: AsyncSession) -> No
             (UserArticleState.article_id == Article.id)
             & (UserArticleState.user_id == user_id),
         )
-        .where(
-            Article.feed_id.in_(feed_ids),
-            Article.trimmed_at.is_(None),
-            (UserArticleState.is_read == None) | (UserArticleState.is_read == False),
-        )
+        .where(Article.feed_id.in_(feed_ids), visible_article_clause(), unread_clause())
         .group_by(Article.feed_id)
     )).all())
     for uf in user_feeds:

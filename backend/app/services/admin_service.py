@@ -201,10 +201,17 @@ async def toggle_user_active(db: AsyncSession, user_id: int, admin_id: int) -> U
 
 
 async def delete_user(db: AsyncSession, user_id: int, admin_id: int) -> bool:
-    """Delete a user and all their data. Cannot delete yourself."""
+    """Delete a user and all their data.
+
+    Same rule as the users table, which offers Delete only on a deactivated or
+    unverified account, never your own and never another admin's. An admin's audit
+    rows hold a RESTRICT foreign key to them, so the commit would fail anyway.
+    """
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or user.id == admin_id:
+    if not user or user.id == admin_id or user.role == "admin":
+        return False
+    if user.is_active and user.email_verified:
         return False
     from app.services.feed import cleanup_user_feeds
     await cleanup_user_feeds(user_id, db)
@@ -372,7 +379,9 @@ async def get_feed(db: AsyncSession, feed_id: int) -> Feed | None:
 
 async def toggle_feed_pause(db: AsyncSession, feed_id: int) -> Feed | None:
     feed = await db.get(Feed, feed_id)
-    if not feed or feed.status == "error":
+    # Only the two states the button is shown for. An error or disabled feed comes
+    # back through clear_feed_error, which also drops its failure trail.
+    if not feed or feed.status not in ("active", "paused"):
         return None
     feed.status = "paused" if feed.status == "active" else "active"
     await db.commit()
@@ -418,6 +427,10 @@ async def update_feed_admin(
     feed = await db.get(Feed, feed_id)
     if not feed:
         return None
+    sel = (article_links_selector or "").strip()
+    if feed.feed_type == "scrape" and sel:
+        from app.fetcher.scrape import check_selector
+        check_selector(sel)  # before any field is touched, so a bad one saves nothing
     title = (title or "").strip()
     if title:
         feed.title = title[:255]
@@ -431,10 +444,8 @@ async def update_feed_admin(
         if status == "active" and feed.status in ("error", "disabled"):
             clear_failure_state(feed)
         feed.status = status
-    if feed.feed_type == "scrape" and article_links_selector is not None:
-        sel = article_links_selector.strip()
-        if sel:
-            feed.type_config = {**(feed.type_config or {}), "article_links_selector": sel}
+    if feed.feed_type == "scrape" and sel:
+        feed.type_config = {**(feed.type_config or {}), "article_links_selector": sel}
     await db.commit()
     await db.refresh(feed)
     return feed

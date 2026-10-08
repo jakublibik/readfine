@@ -405,7 +405,10 @@ class TestAiJobs:
         )
         for dormant, expected in ((True, False), (False, True)):
             db = make_mock_db()
-            db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed(), None])
+            # AI on, settings, the feed override, the account active, no job yet.
+            db.scalar = AsyncMock(
+                side_effect=[True, make_settings(), make_user_feed(), True, None]
+            )
             db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
             with patch.object(dormancy_service, "is_user_dormant", new=AsyncMock(return_value=dormant)):
                 assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is expected
@@ -417,11 +420,33 @@ class TestAiJobs:
         )
         for dormant, expected in ((True, False), (False, True)):
             db = make_mock_db()
-            db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed()])
+            db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed(), True])
             db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
             with patch.object(dormancy_service, "is_user_dormant", new=AsyncMock(return_value=dormant)):
                 article = make_article(content="word " * 500)
                 assert await enqueue_summary_job(article, user_id=1, db=db) is expected
+
+    async def test_nothing_queued_for_deactivated_account(self):
+        """Dormancy only ever applies to active accounts, so a deactivated one has to
+        be held back on its own, or its key keeps being spent after an admin stopped it."""
+        from app.services.ai_scoring_service import enqueue_scoring_job
+        from app.services.ai_summary_service import enqueue_summary_job
+        from tests.test_ai_pipeline import (
+            make_article, make_execute_result, make_mock_db, make_settings, make_user_feed,
+        )
+        is_dormant = AsyncMock(return_value=False)
+        with patch.object(dormancy_service, "is_user_dormant", new=is_dormant):
+            db = make_mock_db()
+            db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed(), False, None])
+            db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+            assert await enqueue_scoring_job(make_article(), user_id=1, db=db) is False
+
+            db = make_mock_db()
+            db.scalar = AsyncMock(side_effect=[True, make_settings(), make_user_feed(), False])
+            db.execute = AsyncMock(return_value=make_execute_result(rowcount=1))
+            article = make_article(content="word " * 500)
+            assert await enqueue_summary_job(article, user_id=1, db=db) is False
+            db.execute.assert_not_called()
 
     @pytest.mark.real_dormancy
     async def test_is_user_dormant_reads_the_stored_setting(self, pg):

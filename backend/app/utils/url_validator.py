@@ -6,7 +6,7 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import NamedTuple
+from typing import NamedTuple, TypeVar
 from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import httpx
@@ -78,9 +78,28 @@ def find_blocked_address(exc: BaseException | None) -> BlockedAddressError | Non
     ``__context__`` is ignored on purpose: an exception raised while handling
     another one says nothing about the cause.
     """
+    return find_cause(exc, BlockedAddressError)
+
+
+def find_endpoint_refusal(exc: BaseException | None) -> Exception | None:
+    """A refusal of ours behind an AI call's *exc*: a blocked address, or a response
+    over the size cap. Either is a configuration answer that a retry will not change,
+    and both arrive from the SDK as a bare "Connection error."
+    """
+    return find_blocked_address(exc) or find_cause(exc, ResponseTooLarge)
+
+
+_E = TypeVar("_E", bound=BaseException)
+
+
+def find_cause(exc: BaseException | None, cls: type[_E]) -> _E | None:
+    """The first *cls* on the ``__cause__`` chain of *exc*, *exc* itself included.
+
+    See :func:`find_blocked_address` for why the chain and not the exception.
+    """
     seen = 0
     while exc is not None and seen < 10:
-        if isinstance(exc, BlockedAddressError):
+        if isinstance(exc, cls):
             return exc
         exc = exc.__cause__
         seen += 1
@@ -433,7 +452,12 @@ def _resolve_and_pin(hostname: str) -> str:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+        # not is_global is the rule; the named checks stay as a floor under it. The
+        # names alone missed ranges that are neither private nor reserved and still
+        # not on the internet, such as 100.64.0.0/10 (carrier-grade NAT, and the
+        # addresses a Tailscale network hands out), which reached a tailnet from here.
+        if (not ip.is_global or ip.is_loopback or ip.is_private or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast):
             raise BlockedAddressError(
                 f"URL resolves to a disallowed address ({ip}): "
                 "localhost, private, and link-local addresses are not permitted"
@@ -602,9 +626,19 @@ class PinnedAsyncTransport(httpx.AsyncHTTPTransport):
     which resolve inside the container network rather than through us. Every
     other host is still pinned, so listing an Ollama no longer costs the
     protection on a public endpoint the same account may also use.
+
+    Every response, allowlisted or not, is also held to the fetch size cap (see
+    :class:`_CappedAsyncStream`). The SDK reads a body whole, and the endpoint is
+    any server a user names.
     """
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Uncompressed only: the cap counts the bytes as they arrive, and a few kB of
+        # gzip would unpack into gigabytes after it, inside httpx.
+        request.headers["Accept-Encoding"] = "identity"
+        return await _capped(request, await self._send(request))
+
+    async def _send(self, request: httpx.Request) -> httpx.Response:
         if _is_allowed_private_endpoint(
             request.url.host, request.url.port, request.url.scheme
         ):
@@ -622,6 +656,51 @@ class PinnedAsyncTransport(httpx.AsyncHTTPTransport):
             request.headers[name] = value
         request.extensions = {**request.extensions, **extensions}
         return await super().handle_async_request(request)
+
+
+class _CappedAsyncStream(httpx.AsyncByteStream):
+    """A response body that gives up once it goes past *max_bytes*.
+
+    The async counterpart of :func:`_read_capped`, for the AI client, whose body
+    the provider SDK reads rather than our own fetch code (review H2-03).
+    """
+
+    def __init__(self, stream: httpx.AsyncByteStream, url: str, max_bytes: int):
+        self._stream = stream
+        self._url = url
+        self._max_bytes = max_bytes
+
+    async def __aiter__(self):
+        total = 0
+        async for chunk in self._stream:
+            total += len(chunk)
+            if total > self._max_bytes:
+                _too_large(self._url, self._max_bytes, "AI endpoint, still going past the cap")
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
+
+
+async def _capped(request: httpx.Request, response: httpx.Response) -> httpx.Response:
+    """*response* with its body held to the fetch size cap, or an error now.
+
+    A body compressed in spite of ``Accept-Encoding: identity`` is refused outright,
+    because httpx would decompress it after the cap had counted it.
+    """
+    url = redact_url(str(request.url))
+    max_bytes = _max_fetch_bytes()
+    encoding = response.headers.get("content-encoding", "identity").strip().lower()
+    declared = response.headers.get("content-length", "")
+    if encoding not in ("", "identity") or (declared.isdigit() and int(declared) > max_bytes):
+        logger.warning("AI endpoint response refused (encoding=%s, length=%s): %s",
+                       encoding, declared or "?", url)
+        await response.aclose()
+        raise ResponseTooLarge(
+            "The AI endpoint sent a compressed or oversized response"
+        )
+    response.stream = _CappedAsyncStream(response.stream, url, max_bytes)
+    return response
 
 
 def _permanent_redirect_target(original: str, candidate: str) -> str | None:
@@ -704,7 +783,24 @@ def _max_fetch_bytes() -> int:
     return settings.max_fetch_bytes
 
 
-def _read_capped(response: httpx.Response, url: str, max_bytes: int) -> bytes:
+# How long a whole fetch may take, as a multiple of the per-operation timeout the
+# caller passed. httpx's timeout bounds each connect and each read on its own, never
+# the request as a whole, so a host that sends a few bytes every 29 s keeps a 30 s
+# fetch going until the size cap, which at 10 MB is days. This is the ceiling on the
+# whole exchange, redirect hops included.
+_TOTAL_TIMEOUT_FACTOR = 2
+
+
+def _check_deadline(deadline: float, url: str, request: httpx.Request | None) -> None:
+    """Give up on a fetch that has run past its overall *deadline* (monotonic)."""
+    if time.monotonic() > deadline:
+        logger.warning("fetch abandoned at its overall deadline: %s", redact_url(url))
+        raise httpx.ReadTimeout("The server took too long to send its response", request=request)
+
+
+def _read_capped(
+    response: httpx.Response, url: str, max_bytes: int, deadline: float | None = None
+) -> bytes:
     """Read a streamed body, giving up as soon as it goes past *max_bytes*.
 
     The declared ``Content-Length`` is checked first, which costs nothing and turns
@@ -714,6 +810,9 @@ def _read_capped(response: httpx.Response, url: str, max_bytes: int) -> bytes:
     into gigabytes. The running total below is therefore the real cap — it counts
     the bytes :meth:`iter_bytes` yields, which are the decompressed ones, i.e. the
     memory this actually costs us.
+
+    *deadline* (a ``time.monotonic()`` value) is checked after every chunk, so a body
+    that trickles in slowly enough to never trip the per-read timeout still ends.
     """
     declared = response.headers.get("content-length")
     if declared and declared.isdigit() and int(declared) > max_bytes:
@@ -724,6 +823,8 @@ def _read_capped(response: httpx.Response, url: str, max_bytes: int) -> bytes:
         total += len(chunk)
         if total > max_bytes:
             _too_large(url, max_bytes, "still going past the cap")
+        if deadline is not None:
+            _check_deadline(deadline, url, response.request)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -785,6 +886,7 @@ def _get_once_retrying_protocol_error(
     host_overlay: dict,
     extensions: dict,
     auth=None,
+    deadline: float | None = None,
 ) -> httpx.Response:
     """GET *connect_url*, retrying once if the connection dies mid-request.
 
@@ -813,6 +915,9 @@ def _get_once_retrying_protocol_error(
     the retry cover a connection that dies part-way through the body — the same
     failure the retry exists for, just later in the exchange. The partial body is
     dropped with the attempt.
+
+    *deadline* is the overall one from :func:`_resolve_response`, passed through to the
+    body read; a retry gets no fresh budget.
     """
     max_bytes = _max_fetch_bytes()
     for attempt in range(2):
@@ -828,7 +933,7 @@ def _get_once_retrying_protocol_error(
                 # should cost us the header and nothing more.
                 body = (
                     b"" if response.has_redirect_location
-                    else _read_capped(response, logical_url, max_bytes)
+                    else _read_capped(response, logical_url, max_bytes, deadline)
                 )
             finally:
                 response.close()
@@ -851,6 +956,7 @@ def _resolve_response(
     timeout: int = 30,
     headers: dict | None = None,
     max_redirects: int = _MAX_REDIRECTS,
+    credential_origin: str | None = None,
 ) -> tuple[httpx.Response, str | None, str]:
     """Fetch a URL following redirects, validating every hop against SSRF.
 
@@ -878,9 +984,19 @@ def _resolve_response(
     to wherever a ``Location`` header points, so one 302 from a feed host would hand
     that host's neighbour the subscriber's Basic auth header. The credentials were
     given for one host, so they are sent per request and only while the hop is still
-    on it (see :func:`_keeps_credentials`).
+    on it (see :func:`_keeps_credentials`). *credential_origin* names that host when
+    it is not *url*'s own: a feed's credentials were given for the feed's address,
+    and an article page on another host must not get them on the first request
+    either (review H2-02).
+
+    The whole chain shares one overall deadline, *timeout* times
+    ``_TOTAL_TIMEOUT_FACTOR``, because *timeout* alone bounds each read and not the
+    exchange. It is checked before every hop and after every chunk of the body; a
+    host that stalls while still sending headers is not covered by it, which is what
+    the callers' own ``asyncio`` budgets and the separate outbound pool are for.
     """
-    origin = _origin(url)
+    deadline = time.monotonic() + timeout * _TOTAL_TIMEOUT_FACTOR
+    origin = _origin(credential_origin or url)
     current_url = url
     # Last URL reached through 301/308 hops only; frozen at the first hop that is
     # not permanent, so a temporary redirect never contributes a stored address.
@@ -894,6 +1010,7 @@ def _resolve_response(
         timeout=timeout, follow_redirects=False, headers=headers, http2=True
     ) as client:
         for hop in range(max_redirects + 1):
+            _check_deadline(deadline, current_url, None)
             # Validate + pin every hop to its resolved IP; connecting to the IP
             # (with the original Host header and HTTPS SNI) removes the re-resolve
             # that would otherwise reopen the DNS-rebinding window.
@@ -909,6 +1026,7 @@ def _resolve_response(
             response = _get_once_retrying_protocol_error(
                 client, current_url, connect_url, host_overlay, extensions,
                 auth=auth if _keeps_credentials(origin, current_url) else None,
+                deadline=deadline,
             )
             # Only an actual redirect (3xx with a Location) is followed; 304 has a
             # redirect-class status but no Location, so it falls through as terminal.
@@ -941,10 +1059,17 @@ class PageResponse(NamedTuple):
     the URL it asked for; ``None`` means keep the original. ``final_url`` is where
     the redirect chain ended regardless of what kind of redirects it followed, so it
     is always set — for a page fetched without redirects it is the requested URL.
+
+    ``content`` and ``content_type`` are the body as it arrived and the header that
+    describes it, for a parser that also reads the charset off the document itself
+    (a feed's XML declaration). ``text`` has already been decoded by the header
+    alone, as UTF-8 when it named no charset.
     """
     text: str
     permanent_url: str | None
     final_url: str
+    content: bytes = b""
+    content_type: str = ""
 
 
 def fetch_url_page(
@@ -953,6 +1078,7 @@ def fetch_url_page(
     timeout: int = 30,
     headers: dict | None = None,
     max_redirects: int = _MAX_REDIRECTS,
+    credential_origin: str | None = None,
 ) -> PageResponse:
     """SSRF-safe fetch that also reports a permanent redirect target.
 
@@ -960,11 +1086,16 @@ def fetch_url_page(
     *stored* (feed rows), so a moved feed stops walking its redirect chain on
     every poll, or wherever the page has to be read in the context of the address
     it was really served from (readable extraction).
+
+    *credential_origin*: see :func:`_resolve_response`.
     """
     response, permanent_url, final_url = _resolve_response(
-        url, auth, timeout, headers, max_redirects
+        url, auth, timeout, headers, max_redirects, credential_origin
     )
-    return PageResponse(response.text, permanent_url, final_url)
+    return PageResponse(
+        response.text, permanent_url, final_url,
+        response.content, response.headers.get("content-type", ""),
+    )
 
 
 def fetch_url_with_ssrf_check(
@@ -1033,6 +1164,9 @@ class ConditionalResponse(NamedTuple):
     # Address this URL permanently moved to, safe to store in its place. None when
     # the response was not (only) permanently redirected. See _resolve_response.
     permanent_url: str | None = None
+    # The body as it arrived, undecoded, and its header. See PageResponse.
+    content: bytes = b""
+    content_type: str = ""
 
 
 def fetch_url_conditional(
@@ -1069,4 +1203,6 @@ def fetch_url_conditional(
         rate_limited_until=rate_limited_until(response.headers, now),
         spacing_seconds=spacing_from_headers(response.headers, now),
         permanent_url=permanent_url,
+        content=response.content,
+        content_type=response.headers.get("content-type", ""),
     )

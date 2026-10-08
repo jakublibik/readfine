@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import sqlstate
 from app.models.article import SUPPRESSED_BY_BULK, Article, UserArticleState
 from app.models.feed import Folder, UserFeed
 from app.models.label import Label
@@ -273,16 +274,10 @@ async def count_saved_search(
             )
             await db.execute(text("SET LOCAL statement_timeout = DEFAULT"))
     except DBAPIError as exc:
-        if _sqlstate(exc) != _QUERY_CANCELED:
+        if sqlstate(exc) != _QUERY_CANCELED:
             raise
         return None
     return unread, total
-
-
-def _sqlstate(exc: DBAPIError) -> str | None:
-    # The asyncpg dialect's own error carries it, or the asyncpg error behind it.
-    return getattr(exc.orig, "sqlstate", None) or getattr(
-        getattr(exc.orig, "__cause__", None), "sqlstate", None)
 
 
 async def mark_saved_search_read(

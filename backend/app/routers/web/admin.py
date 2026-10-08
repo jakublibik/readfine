@@ -17,6 +17,7 @@ from app.database import get_db
 from app.fetcher import host_throttle
 from app.fetcher.failure import has_failure_trail
 from app.fetcher.interval import auto_interval_min
+from app.fetcher.scrape import check_selector
 from app.fetcher.scheduler import compute_next_fetch_at
 from app.models.feed import Feed
 from app.models.user import User
@@ -271,6 +272,7 @@ async def admin_settings_save(
         "smtp_use_tls": form.get("smtp_use_tls") == "true",
         "ai_enabled": form.get("ai_enabled") == "true",
         "feedback_enabled": form.get("feedback_enabled") == "true",
+        "briefing_extra_recipients_enabled": form.get("briefing_extra_recipients_enabled") == "true",
         "traffic_stats_enabled": form.get("traffic_stats_enabled") == "true",
         "legal_operator_name": form.get("legal_operator_name", "").strip() or None,
         "legal_contact_email": form.get("legal_contact_email", "").strip() or None,
@@ -607,6 +609,7 @@ async def _feed_edit_form_response(
     group: str,
     *,
     url_error: str | None = None,
+    selector_error: str | None = None,
 ) -> HTMLResponse:
     """Render the admin feed-edit form. Also the POST's error path, which redraws the
     form inside the open modal instead of swapping in the feeds table."""
@@ -627,7 +630,16 @@ async def _feed_edit_form_response(
             min_interval_min=min_interval, max_interval_min=max_interval,
         ),
         "url_error": url_error,
+        "selector_error": selector_error,
     })
+
+
+def _back_into_modal(resp: HTMLResponse) -> HTMLResponse:
+    """The form posts into the feeds table; a redrawn form has to go back into the
+    modal it came from instead, or it would replace the table with itself."""
+    resp.headers["HX-Retarget"] = "#feed-edit-content"
+    resp.headers["HX-Reswap"] = "innerHTML"
+    return resp
 
 
 @router.post("/feeds/{feed_id}/edit", response_class=HTMLResponse)
@@ -639,6 +651,17 @@ async def admin_feed_update(
     db: AsyncSession = Depends(get_db),
 ):
     form = await request.form()
+
+    # Checked before the address, which saves on its own, so a bad selector leaves the
+    # whole form unsaved.
+    selector = (form.get("article_links_selector") or "").strip()
+    if selector:
+        try:
+            check_selector(selector)
+        except ValueError as exc:
+            return _back_into_modal(await _feed_edit_form_response(
+                request, db, feed_id, group, selector_error=str(exc),
+            ))
 
     # The address before anything else: it fetches, and a rejected one has to come back
     # as a message on the field rather than as a silently unchanged feed. Blank means
@@ -655,12 +678,9 @@ async def admin_feed_update(
             )
         except ValueError as exc:
             await db.rollback()
-            resp = await _feed_edit_form_response(request, db, feed_id, group, url_error=str(exc))
-            # The form posts into the feeds table; a redrawn form has to go back into
-            # the modal it came from instead, or it would replace the table with itself.
-            resp.headers["HX-Retarget"] = "#feed-edit-content"
-            resp.headers["HX-Reswap"] = "innerHTML"
-            return resp
+            return _back_into_modal(await _feed_edit_form_response(
+                request, db, feed_id, group, url_error=str(exc),
+            ))
         if changed:
             await log_audit(
                 db, user.id, "feed_url_change", target_type="feed", target_id=feed_id,

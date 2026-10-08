@@ -65,7 +65,7 @@ class _Patched:
         self.saved_extractions = []
         self.feed_extractions = []
 
-    def _extract_readable(self, url, auth_user, auth_pass):
+    def _extract_readable(self, url, auth_user, auth_pass, auth_origin=None):
         self.feed_extractions.append(url)
         r = self.feed_result
         return r.content, r.error, r.http_status, r.published_at

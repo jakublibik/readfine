@@ -24,15 +24,6 @@ class SaveUrlRequest(BaseModel):
         return v
 
 
-class ArticleStateResponse(BaseModel):
-    is_read: bool
-    is_starred: bool
-    is_archived: bool
-    read_at: datetime | None
-
-    model_config = {"from_attributes": True}
-
-
 class _EffectiveScore:
     """`score` and `score_is_ai` for anything that carries both scorers' numbers.
 

@@ -7,11 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.requests import Request
 
-from app.services.readable_service import (
-    _extract_title,
-    apply_readable_result,
-    title_from_url,
-)
+from app.services.readable_service import apply_readable_result, title_from_url
+from app.services.readable_checks import _extract_title
 from app.services.saved_article_service import (
     _USABLE_CONTENT_CHARS,
     adopt_resolved_url,
@@ -59,12 +56,12 @@ def make_state(**kwargs):
 
 
 def swallow_task():
-    """Stand-in for asyncio.create_task that closes the coroutine it is handed.
+    """Stand-in for spawn_background that closes the coroutine it is handed.
 
     Without closing it, Python warns that _import_saved_bg was never awaited — the
     background import is deliberately not exercised here.
     """
-    def _swallow(coro):
+    def _swallow(coro, **_kw):
         coro.close()
         return MagicMock()
     return MagicMock(side_effect=_swallow)
@@ -220,7 +217,7 @@ class TestSaveArticleByUrl:
         into a black hole. The lookup filters it out, and we fall through to insert."""
         db = make_db([None])  # the query excludes trimmed rows → no match
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, already_known = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db
             )
@@ -234,7 +231,7 @@ class TestSaveArticleByUrl:
         made out of the last path segment."""
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db,
                 fallback_title="  Some\n  headline  ",
@@ -258,7 +255,7 @@ class TestSaveArticleByUrl:
     async def test_a_blank_fallback_title_falls_back_to_the_address(self):
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/some-story", SimpleNamespace(id=1), db,
                 fallback_title="   ",
@@ -269,7 +266,7 @@ class TestSaveArticleByUrl:
         db = make_db([None])
         before = datetime.now(timezone.utc)
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(
                 "https://example.com/story", SimpleNamespace(id=1), db
             )
@@ -280,7 +277,7 @@ class TestSaveArticleByUrl:
                                 readable_retries=3, readable_error="boom")
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "pending"
         assert existing.readable_retries == 0  # backoff attempts restored
@@ -299,7 +296,7 @@ class TestSaveArticleByUrl:
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
              patch("app.services.saved_article_service.finalize_saved_article", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "skipped"
         task.assert_not_called()
@@ -324,7 +321,7 @@ class TestSaveArticleByUrl:
                                 content="Tiny excerpt.")
         db = make_db([existing])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()) as task:
+             patch("app.services.saved_article_service.spawn_background", swallow_task()) as task:
             await save_article_by_url("https://example.com/story", SimpleNamespace(id=1), db)
         assert existing.readable_status == "pending"
         task.assert_called_once()
@@ -346,7 +343,7 @@ class TestSaveUrlCredentials:
         importer = MagicMock(return_value=MagicMock())
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
              patch("app.services.saved_article_service._import_saved_bg", importer), \
-             patch("asyncio.create_task", MagicMock()):
+             patch("app.services.saved_article_service.spawn_background", MagicMock()):
             article, known = await save_article_by_url(
                 self.URL, SimpleNamespace(id=1), db
             )
@@ -543,7 +540,7 @@ class TestSavedFiltersNeverScore:
             id=1, conditions=[SimpleNamespace(field="title", operator="contains",
                                               value="story", position=0)],
             actions=[action], match_operator="AND", is_active=True, stop_on_match=False,
-            scope_include=None, scope_except=None, user_id=1,
+            scope_include=None, scope_except=None, user_id=1, disabled_reason=None,
         )
         result = MagicMock()
         result.scalars.return_value.all.return_value = [flt]
@@ -631,7 +628,7 @@ class TestDedupPicksDeterministically:
 
     async def _save(self, pg, user, url):
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()), \
+             patch("app.services.saved_article_service.spawn_background", swallow_task()), \
              patch.object(pg, "commit", AsyncMock()):
             article, known = await save_article_by_url(url, user, pg)
         return article, known
@@ -653,6 +650,43 @@ class TestDedupPicksDeterministically:
 
         article, _ = await self._save(pg, user, url)
         assert article.id == good.id
+
+    async def test_private_feed_copy_is_not_handed_out(self, pg):
+        """Its body was fetched with someone else's credentials; knowing the public
+        address must not be enough to read it."""
+        user, url = await self._fixtures(pg)
+        private = await self._feed(pg, None)
+        private.is_private = True
+        theirs = await self._copy(pg, private, url)
+
+        article, known = await self._save(pg, user, url)
+        assert known is False
+        assert article.id != theirs.id
+        assert article.feed_id is None
+
+    async def test_private_feed_copy_is_used_by_its_own_subscriber(self, pg):
+        user, url = await self._fixtures(pg)
+        private = await self._feed(pg, user)
+        private.is_private = True
+        mine = await self._copy(pg, private, url)
+
+        article, known = await self._save(pg, user, url)
+        assert known is True
+        assert article.id == mine.id
+
+    async def test_orphan_only_matches_when_someone_saved_it(self, pg):
+        """An orphan may come from a private feed and no longer says so."""
+        user, url = await self._fixtures(pg)
+        orphan = await self._copy(pg, await self._feed(pg, None), url)
+        orphan.feed_id = None
+        await pg.flush()
+
+        article, known = await self._save(pg, user, url)
+        assert known is False and article.id != orphan.id
+
+        other, _ = await self._fixtures(pg)
+        again, known = await self._save(pg, other, url)
+        assert known is True and again.id == article.id, "a saved feedless row is shared"
 
     async def test_trimmed_copy_is_skipped_even_when_subscribed(self, pg):
         """The stub is hidden by list_articles, so attaching to it would save into a
@@ -970,7 +1004,7 @@ class TestRetryFinalizesSavedArticle:
     def _db(self, article):
         db = MagicMock()
         row = MagicMock()
-        row.first.return_value = (article, None, None)
+        row.first.return_value = (article, None, None, None)
         db.execute = AsyncMock(return_value=row)
         db.commit = AsyncMock()
         return db
@@ -1038,7 +1072,7 @@ class TestOverlongUrls:
         url = self._long(extra=0)
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(url, SimpleNamespace(id=1), db)
         assert article.url == url and article.guid == url
         assert article.guid_hash == hashlib.sha256(url.encode()).hexdigest()
@@ -1050,7 +1084,7 @@ class TestOverlongUrls:
         with_creds = url.replace("https://", "https://user:pw@", 1)
         db = make_db([None])
         with patch("app.utils.url_validator.async_validate_feed_url", AsyncMock()), \
-             patch("asyncio.create_task", swallow_task()):
+             patch("app.services.saved_article_service.spawn_background", swallow_task()):
             article, _ = await save_article_by_url(with_creds, SimpleNamespace(id=1), db)
         assert article.url == url
 

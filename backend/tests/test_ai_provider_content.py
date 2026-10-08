@@ -35,7 +35,7 @@ from app.services.ai_service import (
 
 class _ApiError(Exception):
     """Stands in for an SDK error: the HTTP status is both an attribute and part
-    of the message, which is the shape _friendly_ai_error reads."""
+    of the message, which is the shape describe_ai_error reads."""
 
     def __init__(self, status_code, message):
         super().__init__(f"Error code: {status_code} - {message}")
@@ -1035,7 +1035,7 @@ class TestFriendlyAiError:
     def test_a_timeout_says_the_model_may_still_be_loading(self):
         import httpx
 
-        message = ai_service._friendly_ai_error(httpx.ReadTimeout("timed out"))
+        message = ai_service.describe_ai_error(httpx.ReadTimeout("timed out"))
         assert "Timed out" in message
         assert "Try again" in message
 
@@ -1043,12 +1043,12 @@ class TestFriendlyAiError:
         # asyncio.wait_for raises this, and str() on it is empty — which used to
         # take splitlines()[0] out through an IndexError, 500 the route, and leave
         # the page showing "Verifying…" forever.
-        assert "Timed out" in ai_service._friendly_ai_error(TimeoutError())
+        assert "Timed out" in ai_service.describe_ai_error(TimeoutError())
 
     def test_an_unreachable_endpoint_points_at_the_server(self):
         import httpx
 
-        message = ai_service._friendly_ai_error(httpx.ConnectError("nope"))
+        message = ai_service.describe_ai_error(httpx.ConnectError("nope"))
         assert "Could not reach the endpoint" in message
 
     def test_a_timeout_is_not_reported_as_an_unreachable_endpoint(self):
@@ -1057,21 +1057,21 @@ class TestFriendlyAiError:
         from openai import APITimeoutError
 
         exc = APITimeoutError(request=SimpleNamespace(url="http://localhost:11434/v1"))
-        assert "Timed out" in ai_service._friendly_ai_error(exc)
+        assert "Timed out" in ai_service.describe_ai_error(exc)
 
     def test_an_http_status_still_wins_over_the_transport_branches(self):
-        assert ai_service._friendly_ai_error(_ApiError(404, "model not found")) == (
+        assert ai_service.describe_ai_error(_ApiError(404, "model not found")) == (
             "Model not found. Check the model name."
         )
 
     def test_an_exception_with_no_message_falls_back_to_its_class(self):
-        assert ai_service._friendly_ai_error(ValueError()) == "ValueError"
+        assert ai_service.describe_ai_error(ValueError()) == "ValueError"
 
     def test_a_refused_address_is_not_reported_as_an_unreachable_server(self):
         # The worst wording of the lot before this: the server may be running
         # perfectly well and we refused to call it, so "check that the server is
         # running" sends the reader to the one place where nothing is wrong.
-        message = ai_service._friendly_ai_error(_blocked_as_the_sdk_reports_it())
+        message = ai_service.describe_ai_error(_blocked_as_the_sdk_reports_it())
         assert "disallowed address" in message
         assert "AI_ALLOWED_PRIVATE_HOSTS" in message
         assert "Could not reach the endpoint" not in message
@@ -1089,8 +1089,16 @@ class TestChatErrorMessage:
 
     def test_a_refused_address_does_not_invite_a_pointless_retry(self):
         message = self._message(_blocked_as_the_sdk_reports_it())
-        assert "not allowed to reach" in message
+        assert "AI_ALLOWED_PRIVATE_HOSTS" in message
         assert "try again" not in message.lower()
+
+    def test_a_bad_key_says_so_instead_of_inviting_a_retry(self):
+        message = self._message(_ApiError(401, "invalid x-api-key"))
+        assert "Invalid API key" in message
+        assert "try again" not in message.lower()
+
+    def test_a_provider_server_error_says_try_again(self):
+        assert "try again" in self._message(_ApiError(502, "bad gateway")).lower()
 
     def test_an_overloaded_provider_still_says_try_again(self):
         assert "try again" in self._message(RuntimeError("529 overloaded")).lower()

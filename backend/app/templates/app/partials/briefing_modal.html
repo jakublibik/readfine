@@ -68,7 +68,8 @@
       </p>
     </div>
 
-    {# Additional recipients — collapsible #}
+    {# Additional recipients — collapsible, only where the instance allows them #}
+    {% if recipients_allowed %}
     <details class="text-sm" {% if config.briefing_recipients %}open{% endif %}>
       <summary class="cursor-pointer text-gray-500 hover:text-gray-700 select-none">Additional recipients</summary>
       <div class="mt-2">
@@ -76,15 +77,16 @@
                value="{% if config.briefing_recipients %}{{ config.briefing_recipients | parse_json_list | join(', ') }}{% endif %}"
                placeholder="email1@example.com, email2@example.com"
                class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
-        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included. Additional recipients are added as Bcc, so they can't see each other.</p>
+        <p class="text-xs text-gray-400 mt-1">Comma-separated. Max 5. Your account email is always included. Additional recipients are added as Bcc, so they can't see each other. A test briefing goes to your own address only.</p>
       </div>
     </details>
+    {% endif %}
 
     {# Status info #}
     {% if config.briefing_last_sent_at or config.briefing_last_error %}
     <div class="text-xs text-gray-400 space-y-0.5 border-t border-gray-100 pt-2">
       {% if config.briefing_last_sent_at %}
-      <p>Last sent: {{ config.briefing_last_sent_at.strftime('%b %-d, %Y at %H:%M UTC') }}</p>
+      <p>Last sent: {{ config.briefing_last_sent_at|localtime('long') }}</p>
       {% endif %}
       {% if config.briefing_last_error %}
       <p class="text-red-500">Last error: {{ config.briefing_last_error }}</p>
@@ -112,7 +114,7 @@
 
 </form>
 
-{# Test send — outside form to prevent hx-on::after-request bubbling to form #}
+{# Test send, outside the form so its request events are not mistaken for the form's #}
 <div class="flex items-center gap-3 pt-2 mt-2 border-t border-gray-100">
   <button type="button"
           hx-post="/htmx/catchup-configs/{{ config.id }}/briefing/test"
@@ -120,7 +122,7 @@
           hx-swap="innerHTML"
           hx-disabled-elt="this"
           hx-indicator="#briefing-test-spinner"
-          hx-on::after-request="if(event.detail.xhr.status===429){var el=document.getElementById('briefing-test-result');el.innerHTML='<p class=\'text-yellow-600 text-sm\'>Wait a moment before sending another test.</p>';setTimeout(()=>el.innerHTML='',5000)}"
+          data-briefing-test
           class="text-sm text-gray-500 hover:text-gray-700 underline disabled:opacity-50">
     Send test now
   </button>

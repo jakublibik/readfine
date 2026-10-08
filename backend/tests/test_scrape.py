@@ -415,7 +415,7 @@ class TestFetchScrapeFeedSuccess:
             extract_readable_result,  # extract_readable query
         ])
         with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)), \
-             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
+             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()),              patch("app.fetcher.scrape._dedup_cross_feed", new=AsyncMock()):
             count = await fetch_scrape_feed(feed, session)
         assert count == 3
 
@@ -458,7 +458,7 @@ class TestFetchScrapeFeedSuccess:
             MagicMock(scalars=MagicMock(return_value=MagicMock(__iter__=lambda s: iter([])))),  # url_normalized
         ])
         with patch("app.fetcher.scrape.fetch_url_page", return_value=_page(_HTML_WITH_ARTICLES)), \
-             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()):
+             patch("app.services.filter_service.apply_filters_to_new_articles", new=AsyncMock()),              patch("app.fetcher.scrape._dedup_cross_feed", new=AsyncMock()):
             await fetch_scrape_feed(feed, session)
 
         assert all(a.readable_status == "skipped" for a in saved_articles)
@@ -637,12 +637,12 @@ class TestSubscribeScrape:
         user = make_mock_user()
         db = self._make_db(existing_feed=None, feed_count=0)
 
-        def _close_coro(coro):
+        def _close_coro(coro, **_kw):
             coro.close()
 
         with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()), \
              patch("app.fetcher.scrape.fetch_page_html", new=AsyncMock(return_value=_HTML_WITH_ARTICLES)), \
-             patch("app.services.feed.asyncio.create_task", side_effect=_close_coro):
+             patch("app.services.feed.spawn_background", side_effect=_close_coro):
             uf = await subscribe_scrape(
                 user=user, url="https://example.com/news",
                 selector="article a", title="Example News",
@@ -945,3 +945,85 @@ class TestScrapePreviewEndpoint:
 
         assert resp.status_code == 200
         assert fetch.await_args.args[0] == "https://example.com/news?api_key=s3cret"
+
+
+class TestScrapeShowPromptEndpoint:
+    URL = "/settings/feeds/scrape-show-prompt"
+
+    def test_fetch_error_from_the_server_is_escaped(self, client):
+        # An HTTP error's message carries the reason phrase the fetched server sent,
+        # and HTMX runs any <script> it swaps in (with the page's nonce), so the
+        # error must reach the page as text.
+        import httpx
+
+        response = httpx.Response(
+            500, extensions={"reason_phrase": b"<script>alert(1)</script>"},
+            request=httpx.Request("GET", "https://evil.example/"),
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            error = exc
+        with patch("app.routers.web.settings.scrape.fetch_page_html",
+                   new=AsyncMock(side_effect=error)):
+            resp = client.post(self.URL, data={"url": "https://evil.example/"})
+
+        assert resp.status_code == 200
+        assert "<script>" not in resp.text
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in resp.text
+
+
+# ── selector syntax ──────────────────────────────────────────────────────────
+
+class TestSelectorSyntax:
+    """soupsieve's SelectorSyntaxError is not a ValueError; check_selector makes it
+    one, so subscribe/edit report it and the fetcher counts it against the feed."""
+
+    def test_check_selector_rejects_malformed(self):
+        from app.fetcher.scrape import check_selector
+        with pytest.raises(ValueError, match="Invalid CSS selector"):
+            check_selector("div[")
+
+    def test_check_selector_accepts_valid(self):
+        from app.fetcher.scrape import check_selector
+        check_selector("article.item h2 a")
+
+    def test_extract_raises_value_error(self):
+        from app.fetcher.failure import is_source_error
+        with pytest.raises(ValueError) as info:
+            extract_article_links(_HTML_WITH_ARTICLES, "a[href", "https://example.com/")
+        assert is_source_error(info.value)
+
+    async def test_subscribe_scrape_rejects_without_live_check(self):
+        """OPML import skips the live check; the syntax is still checked."""
+        from app.services.feed import subscribe_scrape
+        user = MagicMock(id=1)
+        with patch("app.services.feed.async_validate_feed_url", new=AsyncMock()),              patch("app.services.feed._check_subscribe_preconditions", new=AsyncMock()):
+            with pytest.raises(ValueError, match="Invalid CSS selector"):
+                await subscribe_scrape(
+                    user, "https://example.com/news", "div[", "t", None,
+                    _make_session(), validate_selector=False,
+                )
+
+
+# ── AI selector refinement history ───────────────────────────────────────────
+
+class TestSelectorHistory:
+    def test_refinement_becomes_feedback_on_the_last_attempt(self):
+        import json
+        from app.utils.scrape_ai import parse_selector_history
+        raw = json.dumps([{"selector": "a", "feedback": "x"}, {"selector": "b", "feedback": ""}])
+        assert parse_selector_history(raw, "  matched vote links  ") == [
+            {"selector": "a", "feedback": "x"},
+            {"selector": "b", "feedback": "matched vote links"},
+        ]
+
+    def test_bad_shapes_dropped_and_capped(self):
+        import json
+        from app.utils.scrape_ai import parse_selector_history
+        raw = json.dumps(["str", 5, {"selector": "s" * 2000}] + [{"selector": str(i)} for i in range(10)])
+        history = parse_selector_history(raw)
+        assert [h["selector"] for h in history] == ["5", "6", "7", "8", "9"]
+        assert parse_selector_history(json.dumps([{"selector": "s" * 2000}]))[0]["selector"] == "s" * 500
+        assert parse_selector_history("{}") == []
+        assert parse_selector_history("not json") == []

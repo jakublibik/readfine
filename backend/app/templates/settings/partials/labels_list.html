@@ -3,6 +3,9 @@
   {% if error %}
   <div class="mb-3 px-4 py-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">{{ error }}</div>
   {% endif %}
+  {% if warning %}
+  <div class="mb-3 px-4 py-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-700">{{ warning }}</div>
+  {% endif %}
   {% if success %}
   <div class="mb-3 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">{{ success }}</div>
   {% endif %}
@@ -32,7 +35,7 @@
                 class="space-y-3">
             <div>
               <label class="block text-xs text-gray-500 mb-1">Name</label>
-              <input type="text" name="name" value="{{ label.name }}" required
+              <input type="text" name="name" maxlength="100" value="{{ label.name }}" required
                      class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
             </div>
             <div>

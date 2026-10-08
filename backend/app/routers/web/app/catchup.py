@@ -16,10 +16,10 @@ from app.database import get_db
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
 from app.services.ai_jobs import ai_enabled_globally
+from app.services.catchup_service import CUSTOM_PROMPT_MAX, CatchupPeriod, CatchupStatus
 from app.services.label_service import list_labels
 from app.templating import templates
-from app.utils.markdown import md_render as _md_render
-from app.utils.url_validator import find_blocked_address
+from app.utils.markdown import md_render_ai
 
 from .common import _catchup_available
 
@@ -101,6 +101,7 @@ async def catchup_page(
         "labels": user_labels,
         "saved_configs": saved_configs,
         "default_catchup_prompt": _DEFAULT_CATCHUP_PROMPT,
+        "custom_prompt_max": CUSTOM_PROMPT_MAX,
         "period_descs": period_descs,
         "smtp_available": smtp_available,
         # Digests and briefings run on the main model only, so a user who set up
@@ -112,8 +113,8 @@ async def catchup_page(
 @router.get("/htmx/catch-me-up/estimate", response_class=HTMLResponse)
 async def htmx_catchup_estimate(
     request: Request,
-    period: str = Query("7days"),
-    filter_status: str = Query("all"),
+    period: CatchupPeriod = Query("7days"),
+    filter_status: CatchupStatus = Query("all"),
     label_filter: str | None = Query(None),
     filter_score_min: float | None = Query(None),
     scope_include: str | None = Query(None),
@@ -191,13 +192,13 @@ async def _cost_line(
 @limiter.limit(app_settings_config.rate_limit_ai_catchup)
 async def htmx_catchup_generate(
     request: Request,
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     scope_include: str | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     config_id: int | None = Form(None),
     user: User = Depends(get_current_user),
@@ -281,13 +282,21 @@ async def htmx_catchup_generate(
                 custom_prompt=prompt,
             )
         except Exception as exc:
+            from app.services.ai_service import describe_ai_error
             logger.exception("catchup: AI generation failed for user %d", user.id)
-            # The SDK reports a refused address as a bare "Connection error.", so ask
-            # what really happened before quoting it back.
-            reason = str(find_blocked_address(exc) or exc)
+            reason = describe_ai_error(exc)
             return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
 
-    # Log the run
+    # Log the run. The config id comes from the form: one the reader does not own, or
+    # one deleted meanwhile in another tab, is logged as no config rather than failing
+    # the foreign key after the AI call has already been paid for.
+    if config_id is not None:
+        from app.models.user import UserCatchupConfig
+        config_id = await db.scalar(
+            select(UserCatchupConfig.id).where(
+                UserCatchupConfig.id == config_id, UserCatchupConfig.user_id == user.id,
+            )
+        )
     log = CatchupLog(
         user_id=user.id,
         config_id=config_id,
@@ -301,7 +310,7 @@ async def htmx_catchup_generate(
     db.add(log)
     await db.commit()
 
-    rendered = _md_render(text)
+    rendered = md_render_ai(text)
     return HTMLResponse(
         f'<div class="prose prose-sm dark:prose-invert max-w-none">{rendered}</div>'
     )
@@ -332,12 +341,12 @@ async def htmx_catchup_config_create(
     request: Request,
     name: str = Form(...),
     scope_include: str | None = Form(None),
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -403,12 +412,12 @@ async def htmx_catchup_config_update(
     request: Request,
     name: str = Form(...),
     scope_include: str | None = Form(None),
-    period: str = Form("7days"),
-    filter_status: str = Form("all"),
+    period: CatchupPeriod = Form("7days"),
+    filter_status: CatchupStatus = Form("all"),
     label_filter: str | None = Form(None),
     filter_score_min: float | None = Form(None),
     article_limit: int = Form(500),
-    custom_prompt: str | None = Form(None),
+    custom_prompt: str | None = Form(None, max_length=CUSTOM_PROMPT_MAX),
     include_snippet: str | None = Form(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -432,7 +441,8 @@ async def htmx_catchup_config_update(
     except ValueError as exc:
         return HTMLResponse(f'<div class="text-red-600 text-sm">Invalid scope: {html_module.escape(str(exc)[:200])}</div>', status_code=422)
 
-    config.name = name.strip()[:100]
+    # An emptied name field keeps the old name rather than saving a blank one.
+    config.name = name.strip()[:100] or config.name
     config.scope_include = scope_include
     config.period = period
     config.filter_status = filter_status
@@ -515,10 +525,12 @@ async def htmx_briefing_modal_get(
     if not config:
         return HTMLResponse("Not found", status_code=404)
 
-    smtp_cfg = (await db.execute(
-        select(_AS.smtp_host, _AS.smtp_from_email).where(_AS.id == 1)
-    )).one_or_none()
-    smtp_available = bool(smtp_cfg and smtp_cfg[0] and smtp_cfg[1])
+    from app.services.briefing_service import extra_recipients_allowed
+
+    app_settings = await db.scalar(select(_AS).where(_AS.id == 1))
+    smtp_available = bool(
+        app_settings and app_settings.smtp_host and app_settings.smtp_from_email
+    )
 
     settings = (await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
@@ -530,6 +542,9 @@ async def htmx_briefing_modal_get(
         "smtp_available": smtp_available,
         "tz_str": tz_str,
         "is_admin": user.role == "admin",
+        "recipients_allowed": bool(
+            app_settings and extra_recipients_allowed(app_settings, user)
+        ),
     })
 
 
@@ -545,8 +560,12 @@ async def htmx_briefing_modal_save(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.models.settings import AppSettings as _AS
     from app.models.user import UserCatchupConfig
-    from app.services.briefing_service import compute_next_send_at
+    from app.services.briefing_service import (
+        MAX_BRIEFINGS_WITH_RECIPIENTS, compute_next_send_at, extra_recipients_allowed,
+        other_briefings_with_recipients,
+    )
 
     config = (await db.execute(
         select(UserCatchupConfig).where(
@@ -582,6 +601,14 @@ async def htmx_briefing_modal_save(
     except (ValueError, IndexError):
         return _validation_error("Invalid time format (use HH:MM).")
 
+    # Extra recipients only where the instance allows them. Where it does not,
+    # the field is not on the form, and what is stored stays as it is: sending
+    # ignores it, and it comes back if the admin allows recipients again.
+    app_settings = await db.scalar(select(_AS).where(_AS.id == 1))
+    recipients_allowed = bool(app_settings and extra_recipients_allowed(app_settings, user))
+    if not recipients_allowed and briefing_recipients and briefing_recipients.strip():
+        return _validation_error("Additional recipients are not enabled on this instance.")
+
     # Validate extra recipients
     extra_emails: list[str] = []
     if briefing_recipients:
@@ -594,6 +621,17 @@ async def htmx_briefing_modal_save(
                 return _validation_error(f"Invalid email address: {html_module.escape(addr)}")
         extra_emails = raw_emails
 
+    # The cap is on mail to other people, which is what could be abused; a
+    # briefing to one's own address only spams oneself. Admins are not held to it.
+    if (
+        briefing_enabled and extra_emails and user.role != "admin"
+        and await other_briefings_with_recipients(user.id, config.id, db) >= MAX_BRIEFINGS_WITH_RECIPIENTS
+    ):
+        return _validation_error(
+            f"You already have {MAX_BRIEFINGS_WITH_RECIPIENTS} briefings with additional "
+            f"recipients switched on. Turn one of them off or remove its recipients first."
+        )
+
     settings = (await db.execute(
         select(UserSettings).where(UserSettings.user_id == user.id)
     )).scalar_one_or_none()
@@ -603,7 +641,8 @@ async def htmx_briefing_modal_save(
     config.briefing_interval = briefing_interval
     config.briefing_day = briefing_day
     config.briefing_time = briefing_time
-    config.briefing_recipients = json.dumps(extra_emails) if extra_emails else None
+    if recipients_allowed:
+        config.briefing_recipients = json.dumps(extra_emails) if extra_emails else None
 
     if briefing_enabled:
         config.briefing_next_send_at = compute_next_send_at(
@@ -666,13 +705,15 @@ async def htmx_briefing_test_send(
         )
     except Exception as exc:
         # Test briefings generate the digest too, so this catches the AI call as
-        # well as the send, and a refused address arrives here saying nothing.
-        reason = str(find_blocked_address(exc) or exc)
+        # well as the send.
+        from app.services.ai_service import describe_ai_error
+        reason = describe_ai_error(exc)
         return HTMLResponse(
             f'<p class="text-red-600 text-sm">Error: {html_module.escape(reason[:200])}</p>'
         )
 
+    # Said next to the button, inside the modal. catchup.js clears it after a few
+    # seconds (no script in the swap: htmx runs none that arrives that way).
     return HTMLResponse(
-        '<p class="text-green-600 text-sm font-medium" id="briefing-test-ok">Test briefing sent successfully.</p>'
-        '<script>setTimeout(()=>document.getElementById("briefing-test-ok")?.remove(),5000)</script>'
+        '<p class="text-green-600 text-sm font-medium" data-briefing-test-ok>Test briefing sent.</p>'
     )

@@ -69,7 +69,10 @@
     <input type="text" name="article_links_selector"
            value="{{ feed.type_config.article_links_selector if feed.type_config else '' }}"
            placeholder="e.g. article.b-item h3 a"
-           class="w-full border border-gray-300 rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+           class="w-full border {{ 'border-red-300' if selector_error else 'border-gray-300' }} rounded px-3 py-1.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-blue-500">
+    {% if selector_error %}
+    <p class="text-xs text-red-600 mt-1">{{ selector_error }}</p>
+    {% endif %}
     {# Preview fetches the feed's stored URL, which the server looks up from this id.
        The URL itself stays out of the page: it can hold an API token or credentials. #}
     <input type="hidden" name="feed_id" value="{{ feed.id }}">

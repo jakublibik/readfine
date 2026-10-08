@@ -57,6 +57,9 @@
             {% if not f.is_active %}
               <span class="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">inactive</span>
             {% endif %}
+            {% if f.disabled_reason == 'regex_timeout' %}
+              <span class="text-xs text-red-700 bg-red-50 px-1.5 py-0.5 rounded" title="Its regex took too long on an article, so the filter was switched off. Simplify the pattern, then turn the filter back on.">regex too slow</span>
+            {% endif %}
             {% if f.stop_on_match %}
               <span class="text-xs text-orange-500 bg-orange-50 px-1.5 py-0.5 rounded">stop on match</span>
             {% endif %}

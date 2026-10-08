@@ -32,6 +32,10 @@ class AppSettings(Base):
     smtp_use_tls: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     feedback_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Briefings to addresses other than the account's own (briefing_service).
+    briefing_extra_recipients_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     # Aggregated visit counts for the public pages. Deliberately independent of
     # registration_enabled: an invite-only instance is exactly the one that still
     # wants to see who lands on the landing page.

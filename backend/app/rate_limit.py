@@ -69,13 +69,41 @@ def check_login_lockout(ip: str, email: str) -> bool:
         return False
 
 
+_PRUNE_INTERVAL = 60
+_last_prune = 0.0
+
+
+def _prune_stale(now: float) -> None:
+    """Drop entries with no attempt and no lockout inside the window, at most once
+    a minute. Called under _lock. Without it the dict keeps every IP+email ever
+    tried until a restart."""
+    global _last_prune
+    if now - _last_prune < _PRUNE_INTERVAL:
+        return
+    _last_prune = now
+    stale = [
+        key for key, entry in _failed_attempts.items()
+        if now - entry["last_attempt"] > _LOCKOUT_SECONDS
+        and not (entry["locked_until"] and now < entry["locked_until"])
+    ]
+    for key in stale:
+        del _failed_attempts[key]
+
+
 def record_failed_login(ip: str, email: str) -> bool:
     """Record a failed login attempt. Returns True if lockout was just triggered."""
     key = (ip, email.lower())
     with _lock:
+        now = time.monotonic()
+        _prune_stale(now)
         entry = _failed_attempts[key]
+        # A lockout that has run out starts the count again. Left at the threshold,
+        # every single miss afterwards would lock the account for another 15 minutes.
+        if entry["locked_until"] and now >= entry["locked_until"]:
+            entry["count"] = 0
+            entry["locked_until"] = None
         entry["count"] += 1
-        entry["last_attempt"] = time.monotonic()
+        entry["last_attempt"] = now
         if entry["count"] >= _LOCKOUT_THRESHOLD:
             entry["locked_until"] = time.monotonic() + _LOCKOUT_SECONDS
             return True

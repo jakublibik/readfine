@@ -12,6 +12,52 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- Briefings now go to the account's own address only, unless you turn on **Briefings to other addresses** in **Admin → Settings** (off after the upgrade). Recipients already saved are kept and get mail again once it is on. Admins can always add them.
+- If you installed with `setup.sh`, check your `.env`. Set `TRUSTED_PROXY_COUNT=1` (or `TRUST_CLOUDFLARE=true` behind Cloudflare): without it every visitor looked like one address, so anyone could keep the admin locked out of login. Rename `BASE_URL` to `PUBLIC_URL`, or emails from background jobs go out without a link. Keep your `ENCRYPTION_KEY` as it is, even though new installs get a stronger one: changing it makes stored passwords and API keys unreadable.
+- To get HSTS on an existing `setup.sh` install with a domain, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of `nginx.conf`. New installs have it.
+- Behind Cloudflare, UFW does not protect you, because it does not filter ports published by Docker. Use your hosting provider's firewall or Docker's `DOCKER-USER` chain instead (see the README).
+
+### Changed
+
+- Mail can now go out over port 465 (implicit TLS). Before, every send to that port hung until it timed out. The TLS box in **Admin → Settings → SMTP** is for STARTTLS on other ports such as 587.
+- A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on (admins have no limit).
+- New rate limits: refreshing a feed by hand and adding a scrape feed (10 a minute), testing and applying filters, the term suggestions in **Settings → Relevance**, and OPML imports (10 an hour). A message in the article chat is limited to 2,000 characters, like the general chat.
+
+### Fixed
+
+- A slow feed server could stop all feed fetching until a restart and make logins hang, and a slow custom AI endpoint could hold up scores and summaries for every account. Fetches and model calls now have an overall time limit (for AI: 2 minutes for a score, 5 for a summary or chat, 10 for a digest) and are retried later. Sending mail no longer holds up the app either.
+- An install reached by IP address over plain HTTP could not log in. Set the new `SESSION_COOKIE_SECURE=false` (`setup.sh` does it for IP installs), on a home network only.
+- A deactivated account kept sending its briefings, spending its AI key and serving its shared article links. All of it now stops until the account is reactivated.
+- Labels stayed on articles you had lost access to (after unsubscribing, or unstarring or unsaving an article with no feed). The article sat in the label's list but could not be opened or marked read. Deleting a label also left its "add label" action in your filters, and saving such a filter failed. Both now go with the access or the label, a filter left with no action is turned off, and the upgrade removes the leftovers.
+- One failed feed in an OPML import made every feed after it fail too. Each feed now fails on its own, with the reason in plain words, and a rejected import shows a message instead of replacing the page.
+- Input the app does not accept (a name that is too long, only spaces, or already taken) ended in a server error page. The app and the API now say what was wrong, the API with 400 or 409. Adding a feed through the API whose address cannot be fetched now answers 400 with the reason too.
+- A wrong API key or model name now says so everywhere the AI is used, instead of "try again" or the provider's raw response.
+- Some sidebar and title bar counts didn't match their list, because they counted articles retention had removed or a grouped story as several rows.
+- Feeds in an encoding such as windows-1250, named only inside the feed, showed garbled accented letters.
+- A scrape feed with an invalid CSS selector failed on every fetch with "Internal error". Such a selector is now refused when you add or edit the feed. **Regenerate** in the AI selector now uses your note about the previous attempt.
+- Deleting an account now also deletes the articles only that account kept. The per-feed article cap (`purge_keep_count`) no longer keeps fewer articles than set.
+- `PATCH /api/v1/articles/{id}` now returns the same fields as a `GET`, and a search with a very long query no longer ends in a server error.
+- Smaller fixes: articles scrolled past just before closing the tab could stay unread, a labelled article could miss its AI score, a feed with an item dated far ahead showed its last article in the future, and renaming or deleting a saved **Catch me up** configuration could replace the list with an error. Clicking a label in the sidebar no longer makes its count jump left. In dark mode, the "dormant" date and "unverified" badges in **Admin → Users** are readable again. Removing a feed or folder now also warns about inactive filters scoped only to it.
+
+### Removed
+
+- The API's feed response no longer has `favicon_url`. It was always `null`.
+
+### Security
+
+- A feed could hide page code in an article's address, and it ran in the reader's session when they opened the article or its shared link. Addresses are now encoded, and the upgrade cleans articles stored before.
+- A feed server that answered with a bare address made Readfine fetch it, past every check that keeps fetches off private networks. Anyone with an account could reach services inside your network. A feed's response is now only read as content, and every address outside the public internet is refused (including 100.64.0.0/10, used by Tailscale).
+- A private feed's username and password were sent to every site its articles linked to when full-text extraction fetched them. They now go only to the feed's own host. Saving a link in **Saved** could also give you an article another account had fetched from a private feed.
+- API tokens also worked on every web page, **Admin** included. They now work on `/api/v1` only, so scripts that called web pages with a token have to move to the API.
+- A filter with a badly written regex could freeze the instance for minutes. Such a filter is now switched off at once and marked "regex too slow" in **Settings → Filters**. Fix the pattern and turn it back on.
+- AI output no longer shows images. An article could make the AI add one, and loading it told the article's author your IP address and text from your other articles.
+- A custom AI endpoint could send a response large enough to run the instance out of memory. Responses are now capped at `MAX_FETCH_BYTES`.
+- On a shared computer, saved settings pages, the chat and the last open view stayed in the browser after logout, and the next account got them back. Settings pages are no longer stored, and the rest is restored only for its own account.
+- A file full of dead addresses could keep one OPML import running for hours. An import now tries about twice as many feeds as the account has room for (2,000 for admins) and skips feeds you already follow without fetching them.
+- Smaller fixes: the Content Security Policy no longer allows `unsafe-eval`. **Show AI prompt** in the scrape setup could run a script from the scraped site's error page. The article list showed the last error, address included, of a feed you don't follow. Any subscriber of a shared private feed could change its fetch interval or scrape selector. One wrong password right after a lockout ended locked the account again.
+
 ## [0.20.0] - 2026-10-04
 
 ### Upgrade notes

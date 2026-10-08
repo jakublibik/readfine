@@ -10,7 +10,8 @@ Two cases would silently *widen* a scope and so are handled specially, with a
 user-facing report:
 
 * a ``Filter`` whose ``scope_include`` is emptied by the strip would fall back to
-  "all feeds" (empty = all) → the filter is **deactivated** instead;
+  "all feeds" (empty = all) → the filter is **deactivated** instead; one that was
+  already off is reported too, since switching it back on would apply it to all;
 * a briefing-enabled ``UserCatchupConfig`` whose ``scope_include`` is emptied
   would widen the emailed digest to every feed (a real cost/volume blow-up) →
   the **briefing is disabled**.
@@ -40,12 +41,17 @@ class ScopeCleanupResult:
     """Names of items whose behaviour changed and should be surfaced to the user."""
 
     deactivated_filters: list[str] = field(default_factory=list)
+    # Already off, scope now empty: harmless today, all feeds once switched back on.
+    unscoped_inactive_filters: list[str] = field(default_factory=list)
     disabled_briefings: list[str] = field(default_factory=list)
     emptied_searches: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
-        return bool(self.deactivated_filters or self.disabled_briefings or self.emptied_searches)
+        return bool(
+            self.deactivated_filters or self.unscoped_inactive_filters
+            or self.disabled_briefings or self.emptied_searches
+        )
 
 
 def _strip(value: str | None, token: str) -> tuple[str | None, bool, bool]:
@@ -101,6 +107,8 @@ async def strip_scope_references(
         if inc_emptied and f.is_active:
             f.is_active = False
             result.deactivated_filters.append(f.name)
+        elif inc_emptied:
+            result.unscoped_inactive_filters.append(f.name)
 
     cq = select(UserCatchupConfig).where(UserCatchupConfig.scope_include.like(like))
     if user_id is not None:

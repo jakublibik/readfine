@@ -141,3 +141,79 @@ class TestErrorPages401Regression:
         r = error_client.get("/app", follow_redirects=False)
         assert r.status_code == 302
         assert "/login" in r.headers.get("location", "")
+
+
+class TestClientErrorSafetyNets:
+    """Validation and unique-index errors that slip past a route are the user's input,
+    so they answer 400/409 with a message, not the 500 page."""
+
+    def _request(self, path, htmx=False):
+        from unittest.mock import MagicMock
+        from starlette.datastructures import State
+        request = MagicMock()
+        request.url.path = path
+        request.method = "POST"
+        request.headers = {"HX-Request": "true"} if htmx else {}
+        request.state = State()
+        request.state.csp_nonce = "test-nonce"
+        return request
+
+    def _validation_error(self):
+        from pydantic import BaseModel, Field, ValidationError
+        class Form(BaseModel):
+            name: str = Field(max_length=3)
+        try:
+            Form(name="too long")
+        except ValidationError as exc:
+            return exc
+
+    def _integrity_error(self, code):
+        from types import SimpleNamespace
+        from sqlalchemy.exc import IntegrityError
+        return IntegrityError("INSERT ...", {}, SimpleNamespace(sqlstate=code))
+
+    def _handler(self, exc_class):
+        from app.main import app
+        return app.exception_handlers[exc_class]
+
+    def test_validation_error_is_400_json_for_api(self):
+        import asyncio, json
+        from pydantic import ValidationError
+        response = asyncio.run(self._handler(ValidationError)(
+            self._request("/api/v1/labels"), self._validation_error()))
+        assert response.status_code == 400
+        assert "name" in json.loads(response.body)["detail"]
+
+    def test_validation_error_is_toast_for_htmx(self):
+        import asyncio, json
+        from pydantic import ValidationError
+        response = asyncio.run(self._handler(ValidationError)(
+            self._request("/app/labels", htmx=True), self._validation_error()))
+        assert response.status_code == 400
+        toast = json.loads(response.headers["HX-Trigger"])["showToast"]
+        assert toast["type"] == "error"
+        assert "name" in toast["msg"]
+
+    def test_validation_error_is_page_for_plain_web(self):
+        import asyncio
+        from pydantic import ValidationError
+        response = asyncio.run(self._handler(ValidationError)(
+            self._request("/settings/labels"), self._validation_error()))
+        assert response.status_code == 400
+        assert b"Invalid name" in response.body
+
+    def test_unique_violation_is_409(self):
+        import asyncio, json
+        from sqlalchemy.exc import IntegrityError
+        response = asyncio.run(self._handler(IntegrityError)(
+            self._request("/api/v1/folders"), self._integrity_error("23505")))
+        assert response.status_code == 409
+        assert "already exists" in json.loads(response.body)["detail"]
+
+    def test_other_integrity_error_stays_500(self):
+        import asyncio
+        from sqlalchemy.exc import IntegrityError
+        response = asyncio.run(self._handler(IntegrityError)(
+            self._request("/api/v1/folders"), self._integrity_error("23503")))
+        assert response.status_code == 500
+        assert b"INSERT" not in response.body

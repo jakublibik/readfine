@@ -1,5 +1,7 @@
 """Web routes for the scrape-feed setup flow (preview, AI selector, subscribe)."""
 
+from html import escape
+
 from bs4 import BeautifulSoup
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,12 +14,20 @@ from app.fetcher.scrape import extract_article_links, fetch_page_html
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
 from app.rate_limit import limiter
-from app.services.ai_service import ai_client, generate_css_selector_from_sample
+from app.services.ai_service import (
+    ai_client, describe_ai_error, generate_css_selector_from_sample,
+)
 from app.services.feed import subscribe_scrape
 from app.templating import templates
 from app.utils.crypto import auth_pair
 from app.utils.parsing import safe_int
-from app.utils.scrape_ai import build_selector_prompt, extract_article_sample, generate_selector_prompt
+from app.utils.scrape_ai import (
+    SAMPLE_MAX_CHARS,
+    build_selector_prompt,
+    extract_article_sample,
+    generate_selector_prompt,
+    parse_selector_history,
+)
 from app.utils.url_validator import split_url_credentials
 
 from .common import (
@@ -126,18 +136,14 @@ async def settings_scrape_ai_selector(
 
     form = await request.form()
     url, auth = await _scrape_target(form, user, db)
-    html_sample = (form.get("html_sample") or "").strip()
-    history_raw = (form.get("conversation_history") or "[]").strip()
+    # Both come back from the page; capped at what the page itself would send.
+    html_sample = (form.get("html_sample") or "").strip()[:SAMPLE_MAX_CHARS]
+    history = parse_selector_history(
+        form.get("conversation_history") or "[]", form.get("refinement") or "",
+    )
 
     if not url:
         return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>URL is required.</div>")
-
-    try:
-        history: list[dict] = _json.loads(history_raw)
-        if not isinstance(history, list):
-            history = []
-    except Exception:
-        history = []
 
     if not html_sample:
         try:
@@ -154,21 +160,16 @@ async def settings_scrape_ai_selector(
         if client is None:
             return HTMLResponse("<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Main model not configured. Set it in <a href='/settings/ai' class='underline'>Settings → AI</a>.</div>")
 
-        in_tok = out_tok = 0
         try:
             selector, in_tok, out_tok = await generate_css_selector_from_sample(
                 url, html_sample, history, client, provider, model
             )
         except Exception as e:
-            db.add(AiUsageLog(
-                user_id=user.id, operation="css_selector_generation",
-                model_slot="quality", model=model, provider=provider,
-                input_tokens=in_tok, output_tokens=out_tok,
-            ))
-            await db.commit()
+            # No usage row: a failed call reports no tokens, and a row of zeros would
+            # only count as a run in the statistics.
             prompt_text = build_selector_prompt(url, html_sample, history)
             return templates.TemplateResponse(request, "settings/partials/scrape_ai_error.html", {
-                "error": f"AI error: {e}",
+                "error": f"AI error: {describe_ai_error(e)}",
                 "prompt_text": prompt_text,
             })
 
@@ -229,7 +230,9 @@ async def settings_scrape_show_prompt(
         html = await fetch_page_html(url, auth=auth)
         prompt = generate_selector_prompt(url, html)
     except Exception as e:
-        return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {e}</div>")
+        # Escaped: the error text can carry what the fetched server sent (the reason
+        # phrase of an HTTP error), and HTMX swaps this fragment into the page.
+        return HTMLResponse(f"<div class='px-4 py-3 bg-red-50 border border-red-200 rounded text-sm text-red-700'>Could not fetch page: {escape(str(e))}</div>")
 
     return templates.TemplateResponse(request, "settings/partials/scrape_prompt.html", {
         "prompt": prompt,
@@ -237,6 +240,7 @@ async def settings_scrape_show_prompt(
 
 
 @router.post("/feeds/scrape", response_class=HTMLResponse)
+@limiter.limit("10/minute")  # fetches the page to check the selector, like preview
 async def settings_scrape_subscribe(
     request: Request,
     user: User = Depends(get_current_user),

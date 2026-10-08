@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import ArticleAiJob
 from app.models.settings import AppSettings
 from app.models.user import AI_MIN_CHARS_MIN, UserSettings
-from app.utils.url_validator import find_blocked_address
+from app.utils.url_validator import find_endpoint_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,22 @@ async def ai_enabled_globally(db: AsyncSession) -> bool:
     return bool(await db.scalar(select(AppSettings.ai_enabled).where(AppSettings.id == 1)))
 
 
+async def ai_work_held_back(user_id: int, db: AsyncSession) -> bool:
+    """Should no tokens be spent for this account right now?
+
+    A deactivated account, or a dormant one (dormancy_service): both still get
+    articles from a feed someone else keeps fetched, and nobody reads them.
+    Deactivation is asked separately because dormancy only ever applies to
+    active accounts.
+    """
+    from app.models.user import User
+    from app.services.dormancy_service import is_user_dormant
+
+    if not await db.scalar(select(User.is_active).where(User.id == user_id)):
+        return True
+    return await is_user_dormant(user_id, db)
+
+
 def extract_http_status(exc: Exception) -> int | None:
     """Best-effort extraction of an HTTP status code from a provider exception."""
     for attr in ("status_code", "http_status", "code"):
@@ -97,9 +113,12 @@ def apply_job_failure(
     waiting turns an endpoint the instance is not allowed to reach into one it
     is. Retrying it would leave the reader watching a spinner for the length of
     the whole backoff before being told something a human has to fix. Its message
-    replaces the provider's, which at that point is only "Connection error."
+    replaces the provider's, which at that point is only "Connection error." A
+    response over the size cap is treated the same way (``find_endpoint_refusal``):
+    the endpoint is not one that answers like an AI API, and each retry would cost
+    the instance the cap's worth of memory again.
     """
-    blocked = find_blocked_address(exc)
+    blocked = find_endpoint_refusal(exc)
     msg = str(blocked or exc)[:300]
     http_status = extract_http_status(exc)
     retries = job.retry_count + 1

@@ -1,4 +1,5 @@
 """AI prompt generation for CSS selector discovery."""
+import json
 from bs4 import BeautifulSoup
 
 _ARTICLE_TAGS = {"article", "li", "div", "section"}
@@ -39,6 +40,37 @@ def _looks_like_article_block(tag) -> bool:
     return has_link and (has_heading or len(tag.get_text(strip=True)) > 50)
 
 
+SAMPLE_MAX_CHARS = 3000
+_HISTORY_MAX_ITEMS = 5
+_HISTORY_FIELD_MAX_CHARS = 500
+
+
+def parse_selector_history(raw: str, refinement: str = "") -> list[dict]:
+    """The refinement history the page sends back, reduced to what the page itself
+    writes: the last few ``{"selector", "feedback"}`` pairs of short strings.
+
+    *refinement* is what the user just typed about the last attempt; it becomes that
+    attempt's feedback, which is what "Regenerate" sends the model.
+    """
+    try:
+        items = json.loads(raw or "[]")
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    history = [
+        {
+            "selector": str(h.get("selector", ""))[:_HISTORY_FIELD_MAX_CHARS],
+            "feedback": str(h.get("feedback", ""))[:_HISTORY_FIELD_MAX_CHARS],
+        }
+        for h in items if isinstance(h, dict)
+    ][-_HISTORY_MAX_ITEMS:]
+    refinement = refinement.strip()[:_HISTORY_FIELD_MAX_CHARS]
+    if refinement and history:
+        history[-1]["feedback"] = refinement
+    return history
+
+
 def extract_article_sample(html: str) -> str:
     """Extract representative article HTML blocks for AI analysis (~3000 chars)."""
     soup = BeautifulSoup(html, "lxml")
@@ -53,7 +85,7 @@ def extract_article_sample(html: str) -> str:
         blocks.append(str(tag)[:500])
         if len(blocks) >= 5:
             break
-    return "\n\n".join(blocks)[:3000] if blocks else html[:3000]
+    return "\n\n".join(blocks)[:SAMPLE_MAX_CHARS] if blocks else html[:SAMPLE_MAX_CHARS]
 
 
 def build_selector_prompt(url: str, sample: str, history: list[dict] | None = None) -> str:

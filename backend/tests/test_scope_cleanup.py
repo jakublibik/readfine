@@ -138,6 +138,23 @@ async def test_filter_emptied_is_deactivated_and_reported(pg):
 
 
 @pytest.mark.asyncio
+async def test_inactive_filter_emptied_is_reported(pg):
+    """Already off, so nothing to deactivate, but switching it back on would now
+    apply it to every feed: the user is told."""
+    user = await _user(pg)
+    f = await _filter(pg, user, include=["feed:5"], name="off-feed-5")
+    f.is_active = False
+    await pg.flush()
+    res = await strip_scope_references(pg, kind="feed", ref_id=5, user_id=user.id)
+    await pg.flush()
+    await pg.refresh(f)
+    assert f.is_active is False
+    assert res.deactivated_filters == []
+    assert res.unscoped_inactive_filters == ["off-feed-5"]
+    assert res.has_changes is True
+
+
+@pytest.mark.asyncio
 async def test_except_only_ref_cleared_without_deactivation(pg):
     user = await _user(pg)
     f = await _filter(pg, user, include=["feed:9"], exceptt=["feed:5"])

@@ -15,7 +15,7 @@
 {%- if msg.role == "user" -%}
 <div class="flex justify-end"><div class="max-w-[85%] bg-blue-50 dark:bg-blue-900/30 border border-blue-100 dark:border-blue-800 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200">{{ msg.content }}</div></div>
 {%- else -%}
-<div class="flex justify-start"><div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | markdown }}</div></div>
+<div class="flex justify-start"><div class="max-w-[85%] bg-gray-50 dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-lg px-3 py-2 prose prose-sm dark:prose-invert max-w-none ai-text">{{ msg.content | ai_markdown }}</div></div>
 {%- endif -%}
 {%- endfor -%}
 {#- -#}</div>
@@ -33,7 +33,7 @@
 <div class="flex-shrink-0 pt-2 border-t border-gray-100 dark:border-gray-700">
 {#- The textarea carries a data-* hook the chat JS binds to (Enter to send,
     autosize); it differs per panel, so the caller names it. -#}
-<textarea id="{{ input_id }}" name="message" rows="3" placeholder="{{ placeholder }}" class="w-full text-sm border border-gray-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
+<textarea id="{{ input_id }}" name="message" rows="3" maxlength="2000" placeholder="{{ placeholder }}" class="w-full text-sm border border-gray-200 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 rounded p-2 resize-none mb-1 sm:mb-2"
 {%- if input_data_attr %} {{ input_data_attr }}{% if input_data_value is not none %}="{{ input_data_value }}"{% endif %}{% endif -%}
 ></textarea>
 {#- -#}<div class="flex items-center pl-0.5">

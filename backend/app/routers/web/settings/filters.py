@@ -1,14 +1,17 @@
 """Web routes for filter CRUD, testing, and retroactive apply in settings."""
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_settings_config
 from app.database import get_db
 from app.models.feed import Folder
 from app.models.settings import AppSettings
 from app.models.user import User, UserSettings
+from app.rate_limit import limiter
 from app.schemas.filter import FilterActionCreate, FilterConditionCreate, FilterCreate, FilterUpdate
 from app.services.feed import list_user_feeds
 from app.services.filter_service import (
@@ -24,6 +27,7 @@ from app.services.filter_service import (
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
 from app.services.label_service import list_labels
 from app.templating import templates
+from app.utils.htmx import validation_message
 from app.utils.parsing import safe_int
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -123,12 +127,13 @@ async def settings_filter_create(
 ):
     form = await request.form()
     save_and_test = form.get("save_and_test") == "1"
-    payload = _parse_filter_form(form)
+    payload = None
     try:
+        payload = _parse_filter_form(form)
         f = await create_filter(user.id, payload, db)
     except ValueError as e:
         ctx = await _filter_form_context(user, db)
-        ctx.update({"filter": None, "form_values": payload, "error": str(e)})
+        ctx.update({"filter": None, "form_values": _form_values(e, payload), "error": str(e)})
         return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     if save_and_test:
         test_result = await test_filter(user.id, f.id, db)
@@ -147,13 +152,14 @@ async def settings_filter_update(
 ):
     form = await request.form()
     save_and_test = form.get("save_and_test") == "1"
-    payload = _parse_filter_form(form)
+    payload = None
     try:
+        payload = _parse_filter_form(form)
         await update_filter(user.id, filter_id, FilterUpdate(**payload.model_dump()), db)
     except ValueError as e:
         existing = await get_filter(user.id, filter_id, db)
         ctx = await _filter_form_context(user, db)
-        ctx.update({"filter": existing, "form_values": payload, "error": str(e)})
+        ctx.update({"filter": existing, "form_values": _form_values(e, payload), "error": str(e)})
         return templates.TemplateResponse(request, "settings/filter_edit.html", ctx)
     if save_and_test:
         updated = await get_filter(user.id, filter_id, db)
@@ -182,6 +188,7 @@ async def settings_filter_delete(
 
 
 @router.post("/filters/{filter_id}/test", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_test(
     filter_id: int,
     request: Request,
@@ -197,6 +204,7 @@ async def settings_filter_test(
 
 
 @router.post("/filters/{filter_id}/apply/preview", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_apply_preview(
     filter_id: int,
     request: Request,
@@ -213,6 +221,7 @@ async def settings_filter_apply_preview(
 
 
 @router.post("/filters/{filter_id}/apply", response_class=HTMLResponse)
+@limiter.limit(app_settings_config.rate_limit_filter_run)
 async def settings_filter_apply(
     filter_id: int,
     request: Request,
@@ -232,8 +241,26 @@ async def settings_filter_apply(
     })
 
 
+class _FilterFormError(ValueError):
+    """The form does not make a valid filter. Carries what was submitted, so the
+    editor can show it again instead of an empty form."""
+
+    def __init__(self, message: str, form_values: FilterCreate):
+        super().__init__(message)
+        self.form_values = form_values
+
+
+def _form_values(error: ValueError, payload: FilterCreate | None) -> FilterCreate | None:
+    """What the editor shows after *error*: the parsed form, or the raw one."""
+    return error.form_values if isinstance(error, _FilterFormError) else payload
+
+
 def _parse_filter_form(form) -> FilterCreate:
-    """Parse multi-value filter form into FilterCreate."""
+    """Parse the multi-value filter form into FilterCreate.
+
+    Raises _FilterFormError when a value does not pass the schema (an empty or
+    too long name, an unknown operator from a hand-built request).
+    """
     conditions = []
     fields = form.getlist("cond_field")
     operators = form.getlist("cond_operator")
@@ -246,32 +273,35 @@ def _parse_filter_form(form) -> FilterCreate:
             source = sources[i] if i < len(sources) else ""
             field = SCORE_SOURCE_FIELDS.get(source, "")
         if field and op and val:
-            conditions.append(FilterConditionCreate(
-                field=field, operator=op, value=val,
-                position=int(positions[i]) if i < len(positions) else i,
-            ))
+            conditions.append({
+                "field": field, "operator": op, "value": val,
+                "position": safe_int(positions[i], i) if i < len(positions) else i,
+            })
 
     actions = []
     action_types = form.getlist("action_type")
     action_values = form.getlist("action_value")
     for a_type, a_val in zip(action_types, action_values):
         if a_type:
-            actions.append(FilterActionCreate(
-                action_type=a_type,
-                action_value=a_val or None,
-            ))
+            actions.append({"action_type": a_type, "action_value": a_val or None})
 
-    scope_include = [v for v in form.getlist("scope_include") if v]
-    scope_except = [v for v in form.getlist("scope_except") if v]
-
-    return FilterCreate(
-        name=form.get("name", ""),
-        is_active=form.get("is_active") == "true",
-        match_operator=form.get("match_operator", "AND"),
-        position=safe_int(form.get("position"), 0),
-        stop_on_match=form.get("stop_on_match") == "true",
-        scope_include=scope_include,
-        scope_except=scope_except,
-        conditions=conditions,
-        actions=actions,
-    )
+    data = {
+        "name": form.get("name", ""),
+        "is_active": form.get("is_active") == "true",
+        "match_operator": form.get("match_operator", "AND"),
+        "position": safe_int(form.get("position"), 0),
+        "stop_on_match": form.get("stop_on_match") == "true",
+        "scope_include": [v for v in form.getlist("scope_include") if v],
+        "scope_except": [v for v in form.getlist("scope_except") if v],
+        "conditions": conditions,
+        "actions": actions,
+    }
+    try:
+        return FilterCreate.model_validate(data)
+    except ValidationError as exc:
+        submitted = FilterCreate.model_construct(**{
+            **data,
+            "conditions": [FilterConditionCreate.model_construct(**c) for c in conditions],
+            "actions": [FilterActionCreate.model_construct(**a) for a in actions],
+        })
+        raise _FilterFormError(validation_message(exc), submitted) from exc

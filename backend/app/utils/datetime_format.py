@@ -95,12 +95,6 @@ def _available_set() -> frozenset[str]:
     return frozenset(zoneinfo.available_timezones())
 
 
-@cache
-def available_timezone_list() -> list[str]:
-    """Sorted list of IANA timezone names (cached, computed once)."""
-    return sorted(_available_set())
-
-
 def is_valid_timezone(tz_str: str | None) -> bool:
     return bool(tz_str) and tz_str in _available_set()
 

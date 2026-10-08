@@ -5,8 +5,13 @@ from urllib.parse import urljoin, urlparse
 
 from lxml import html
 
-from app.utils.http_client import READFINE_UA
-from app.utils.url_validator import async_validate_feed_url, fetch_url_with_ssrf_check
+from app.utils.http_client import READFINE_UA, run_outbound
+from app.utils.parsing import parse_feed_body
+from app.utils.url_validator import (
+    async_validate_feed_url,
+    fetch_url_bytes,
+    fetch_url_with_ssrf_check,
+)
 
 _FEED_MIME_TYPES = {
     "application/rss+xml",
@@ -17,6 +22,10 @@ _FEED_MIME_TYPES = {
 }
 _COMMON_PATHS = ["/feed", "/rss", "/rss.xml", "/atom.xml", "/feed.xml", "/feeds/posts/default"]
 _FETCH_HEADERS = {"User-Agent": READFINE_UA, "Accept": "text/html,*/*"}
+# Each <link rel="alternate"> is fetched to check it, so a page listing a thousand of
+# them would turn one subscribe into a thousand requests. Real pages list a handful
+# (posts, comments, a few categories), and the first ones are the main feeds.
+_MAX_CANDIDATES = 10
 
 _YT_CHANNEL_RE = re.compile(r"youtube\.com/channel/(UC[\w-]+)")
 _YT_USER_RE = re.compile(r"youtube\.com/user/([\w-]+)")
@@ -36,15 +45,12 @@ async def _validate_feed_url(url: str) -> tuple[bool, str | None]:
     Returns (is_feed, feed title) — the title comes for free from the parse the
     validation does anyway, and it's what the subscribe UI shows.
     """
-    import feedparser
     try:
         await async_validate_feed_url(url)
-        loop = asyncio.get_running_loop()
-        body = await loop.run_in_executor(
-            None,
-            lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=10),
+        body = await run_outbound(fetch_url_bytes, url, headers=_FETCH_HEADERS, timeout=10)
+        parsed = await asyncio.get_running_loop().run_in_executor(
+            None, parse_feed_body, body.content, body.content_type
         )
-        parsed = feedparser.parse(body)
         if not parsed.entries:
             return False, None
         return True, (parsed.feed.get("title") or "").strip() or None
@@ -64,10 +70,8 @@ async def detect_feeds(url: str) -> list[dict]:
     # Fetch HTML
     try:
         await async_validate_feed_url(url)
-        loop = asyncio.get_running_loop()
-        content = await loop.run_in_executor(
-            None,
-            lambda: fetch_url_with_ssrf_check(url, headers=_FETCH_HEADERS, timeout=15),
+        content = await run_outbound(
+            fetch_url_with_ssrf_check, url, headers=_FETCH_HEADERS, timeout=15
         )
     except Exception:
         return []
@@ -89,6 +93,7 @@ async def detect_feeds(url: str) -> list[dict]:
     except Exception:
         pass
 
+    results = _dedup(results)[:_MAX_CANDIDATES]
     if results:
         # Validate candidates in parallel — only keep reachable feeds
         validations = await asyncio.gather(*[_validate_feed_url(r["url"]) for r in results])
@@ -99,7 +104,7 @@ async def detect_feeds(url: str) -> list[dict]:
             for r, (ok, title) in zip(results, validations) if ok
         ]
         if validated:
-            return _dedup(validated)
+            return validated
         results = []  # all candidates failed — don't carry them into the fallback
 
     # Fallback: try common paths in parallel

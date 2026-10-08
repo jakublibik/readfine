@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ status }} – Readfine{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-start sm:items-center justify-center pt-12 pb-8 sm:py-8">
+    <div class="w-full max-w-sm text-center">
+        <h1 class="text-2xl font-semibold mb-2">Readfine</h1>
+        <p class="text-5xl font-bold text-gray-300 mb-4">{{ status }}</p>
+        <p class="text-gray-700 mb-2">That did not go through.</p>
+        <p class="text-sm text-gray-500 mb-6">{{ message }} Go back and correct it, then try again.</p>
+        <a href="/app" class="text-blue-600 hover:underline text-sm">Go to app</a>
+    </div>
+</div>
+{% endblock %}

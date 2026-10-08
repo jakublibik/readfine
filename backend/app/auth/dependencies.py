@@ -45,8 +45,8 @@ async def _auth_by_bearer(
     """Resolve a user from a Bearer credential: JWT first, then a hashed API token.
 
     Returns None when there is no credential or it doesn't resolve to an active
-    user. Shared by both the web (session-or-bearer) and API (bearer-only) deps so
-    the token-verification path exists in exactly one place.
+    user. Used by the API dependency only; the web takes a session and nothing
+    else (see get_current_user).
     """
     if not credentials:
         return None
@@ -87,21 +87,20 @@ async def _auth_by_bearer(
 
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Resolves current user from session (web) or Bearer token (API)."""
-    # 1. Try session cookie (web)
+    """Session-only auth for the web app. Bearer credentials are not accepted.
+
+    The web used to fall back to the Bearer branch, which made an API token (meant
+    for a feed client or a script) a full web session: the admin panel, minting more
+    tokens. CSRF was no obstacle, since any GET hands out the cookie. Nothing in the
+    frontend sends a Bearer header, so the API keeps its own dependency below.
+    """
     user_id = request.session.get("user_id")
     if user_id:
         user = await _get_user_by_id(user_id, db)
         if user and request.session.get("tv", 0) == user.session_token_version:
             return user
-
-    # 2. Try Bearer token (API)
-    user = await _auth_by_bearer(credentials, db)
-    if user is not None:
-        return user
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

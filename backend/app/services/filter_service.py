@@ -22,7 +22,7 @@ from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
 from app.services.relevance_service import effective_score, score_cut
-from app.services.scope_tokens import token_matches_article
+from app.services.scope_tokens import token_id, token_matches_article
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +63,28 @@ _REDOS_PATTERNS = re.compile(r"(\(.*\*.*\*|\(.*\+.*\+|\(\w\+\)\+|\(\w\*\)\*|\(\w
 # cap is far larger than any real article body, so legitimate matches are unaffected.
 #
 # The budget is generous on purpose. It is wall-clock time measured on a shared box,
-# and an aborted match is silently reported as "no match" — a filter the user wrote
-# simply does not fire. A cap tight enough to occasionally catch an innocent pattern
-# buys nothing: `\bAI\b` over the full input cap costs ~25 ms, and 0.1 s left so
-# little headroom that a busy fetch cycle tripped it in production. One second still
-# stops a catastrophically backtracking pattern from freezing the event loop, which
-# is the only thing this guard exists for.
+# and a cap tight enough to occasionally catch an innocent pattern buys nothing:
+# `\bAI\b` over the full input cap costs ~25 ms, and 0.1 s left so little headroom
+# that a busy fetch cycle tripped it in production.
+#
+# The timeout bounds one match, not a run: a pattern that hits it on one article
+# will hit it on the next, and a test over a few hundred articles would hold the
+# event loop for minutes. So the first timeout switches the filter off
+# (REGEX_TIMEOUT) and every pass skips it from then on, which caps the cost at
+# one second per filter until the user fixes the pattern and saves it.
 _REGEX_MATCH_TIMEOUT_S = 1.0
 _REGEX_INPUT_CAP = 1_000_000
+
+REGEX_TIMEOUT = "regex_timeout"
+REGEX_TIMEOUT_MESSAGE = (
+    "Its regex took too long on an article, so the filter was switched off. "
+    "Simplify the pattern (nested repeats like (a+)+ are the usual cause), "
+    "then turn the filter back on."
+)
+
+
+class RegexTimedOut(Exception):
+    """A filter regex ran into the match timeout."""
 
 
 @lru_cache(maxsize=512)
@@ -159,9 +173,12 @@ def _validate_regex_conditions(conditions) -> None:
             raise ValueError(f"Regex pattern too long (max {_REGEX_MAX_LEN} characters).")
         if _REDOS_PATTERNS.search(c.value):
             raise ValueError("Regex pattern contains potentially unsafe constructs (nested quantifiers).")
+        # The same engine and flags the condition runs with (_compile_user_regex):
+        # validating with `re` turned down valid `regex` syntax such as \p{L}, and
+        # accepted patterns that mean something else under `regex`.
         try:
-            re.compile(c.value)
-        except re.error as e:
+            _regex.compile(c.value, _regex.IGNORECASE)
+        except _regex.error as e:
             raise ValueError(f"Invalid regex pattern: {e}") from e
 
 
@@ -178,11 +195,13 @@ async def _validate_scope_list(user_id: int, scope_list: list[str], db: AsyncSes
     feed_ids: list[int] = []
     folder_ids: list[int] = []
     for item in scope_list:
+        if not isinstance(item, str):
+            raise ValueError(f"Invalid scope item: {item!r}")
         try:
             if item.startswith("feed:"):
-                feed_ids.append(int(item[5:]))
+                feed_ids.append(token_id(item[5:]))
             elif item.startswith("folder:"):
-                folder_id = int(item[7:])
+                folder_id = token_id(item[7:])
                 if folder_id != 0:  # 0 = sentinel for "no folder", no DB check needed
                     folder_ids.append(folder_id)
             else:
@@ -315,10 +334,13 @@ async def update_filter(
         await _validate_label_actions(user_id, payload.actions, db)
 
     scalar_fields = payload.model_dump(
-        exclude_unset=True, exclude={"conditions", "actions", "scope_include", "scope_except"}
+        exclude_unset=True, exclude_none=True, exclude={"conditions", "actions", "scope_include", "scope_except"}
     )
     for field, value in scalar_fields.items():
         setattr(f, field, value)
+    # Saving is how the user says the filter is fixed; a slow regex that is still
+    # there switches it off again on its first timeout.
+    f.disabled_reason = None
     if "scope_include" in (payload.model_fields_set or set()):
         f.scope_include = json.dumps(payload.scope_include) if payload.scope_include else None
     if "scope_except" in (payload.model_fields_set or set()):
@@ -423,10 +445,10 @@ def _eval_op(op: str, val: str, field_value) -> bool:
             return bool(compiled.search(text, timeout=_REGEX_MATCH_TIMEOUT_S))
         except TimeoutError:
             logger.warning(
-                "filter regex timed out after %.2fs (pattern=%r) — treated as no match",
+                "filter regex timed out after %.2fs (pattern=%r)",
                 _REGEX_MATCH_TIMEOUT_S, val[:100],
             )
-            return False
+            raise RegexTimedOut(val) from None
     if op in ("gt", "lt"):
         if isinstance(field_value, datetime):
             try:
@@ -524,6 +546,30 @@ def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = No
     return all(results) if f.match_operator == "AND" else any(results)
 
 
+def _switch_off_slow_filter(f: Filter) -> None:
+    """Turn off a filter whose regex hit the timeout. The caller owns the commit."""
+    f.is_active = False
+    f.disabled_reason = REGEX_TIMEOUT
+    logger.warning("filter %s (user %s) switched off: regex hit the match timeout",
+                   f.id, f.user_id)
+
+
+def _evaluate(f: Filter, article: Article, user_feed: UserFeed | None = None,
+              state=None) -> bool:
+    """``evaluate_filter`` for the passes that run filters as articles arrive.
+
+    A filter switched off for a slow regex earlier in the same pass is skipped,
+    so the timeout is paid once, not once per article.
+    """
+    if f.disabled_reason == REGEX_TIMEOUT:
+        return False
+    try:
+        return evaluate_filter(f, article, user_feed, state)
+    except RegexTimedOut:
+        _switch_off_slow_filter(f)
+        return False
+
+
 # ── Action execution ──────────────────────────────────────────────────────────
 
 async def _execute_actions(
@@ -535,11 +581,14 @@ async def _execute_actions(
         try:
             if action.action_type == "label" and action.action_value:
                 label_id = int(action.action_value)
-                # Verify label belongs to this user
-                label_check = await db.execute(
-                    select(Label.id).where(Label.id == label_id, Label.user_id == user_id)
-                )
-                if not label_check.scalar_one_or_none():
+                # Verify label belongs to this user. Once per session, not per article:
+                # a fetch or a retroactive apply runs the same action over many.
+                owned = db.info.setdefault("filter_label_owned", {})
+                if (user_id, label_id) not in owned:
+                    owned[(user_id, label_id)] = await db.scalar(
+                        select(Label.id).where(Label.id == label_id, Label.user_id == user_id)
+                    ) is not None
+                if not owned[(user_id, label_id)]:
                     continue
                 existing = await db.execute(
                     select(ArticleLabel).where(
@@ -679,7 +728,7 @@ async def _apply_user_filters_to_article(
     for f in filters:
         if filter_phase(f) != "fetch":
             continue
-        if evaluate_filter(f, article, uf, state):
+        if _evaluate(f, article, uf, state):
             fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, uf.user_id, uf, db)
             if f.stop_on_match:
@@ -765,7 +814,7 @@ async def _run_filters_once(
     """
     fired: set[str] = set()
     for f in filters:
-        if evaluate_filter(f, article, uf, state):
+        if _evaluate(f, article, uf, state):
             fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, user_id, uf, db)
             if f.stop_on_match:
@@ -804,7 +853,7 @@ async def apply_filters_to_saved_article(
     for f in filters_result.scalars().all():
         if is_score_filter(f):
             continue
-        if evaluate_filter(f, article, None):
+        if _evaluate(f, article, None):
             await _execute_actions(f, article, user_id, None, db)
             if f.stop_on_match:
                 break
@@ -869,11 +918,26 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
             continue
 
         uf = feed_user_map.get((state.user_id, article.feed_id))
+        if not _reachable(state, article, uf):
+            state.ai_filters_applied = True
+            state.relevance_filters_pending = False
+            continue
         await _apply_ai_filters_for_state(state, article, uf, filters_by_user.get(state.user_id, []), db)
 
     await db.commit()
     logger.info("ai_filters: processed %d states", len(states))
     return len(states)
+
+
+def _reachable(state: "UserArticleState", article: Article, uf: "UserFeed | None") -> bool:
+    """Whether the reader can still open the article (``article_access_predicate``).
+
+    A score can land after the reader unsubscribed: a job already running when
+    they did writes its result anyway. Their filters must not label or star an
+    article they let go of; a star would even give it back to them.
+    """
+    return (uf is not None or bool(state.is_starred) or bool(state.is_archived)
+            or state.saved_at is not None)
 
 
 async def _apply_ai_filters_for_state(
@@ -957,6 +1021,9 @@ async def process_relevance_fallback(db: AsyncSession) -> int:
 
     for state, article in rows:
         uf = feed_user_map.get((state.user_id, article.feed_id))
+        if not _reachable(state, article, uf):
+            state.relevance_filters_pending = False
+            continue
         await _run_filters_once(filters_by_user.get(state.user_id, []), article,
                                 state.user_id, uf, state, db)
         state.relevance_filters_pending = False
@@ -978,6 +1045,8 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     f = result.scalar_one_or_none()
     if not f:
         return None
+    if f.disabled_reason == REGEX_TIMEOUT:
+        return FilterTestResult(matched_count=0, samples=[], error=REGEX_TIMEOUT_MESSAGE)
 
     from app.models.feed import Feed
 
@@ -1015,11 +1084,16 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
             )
             states_map = {s.article_id: s for s in states_result.scalars()}
 
-    matched = [
-        (a, ft)
-        for a, ft in rows
-        if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
-    ]
+    try:
+        matched = [
+            (a, ft)
+            for a, ft in rows
+            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+        ]
+    except RegexTimedOut:
+        _switch_off_slow_filter(f)
+        await db.commit()
+        return FilterTestResult(matched_count=0, samples=[], error=REGEX_TIMEOUT_MESSAGE)
     return FilterTestResult(
         matched_count=len(matched),
         samples=[
@@ -1047,6 +1121,7 @@ class RetroApplyPlan:
     has_label_action: bool
     items: "list[_RetroItem]"
     scoring_count: int       # matched articles that will be queued for AI scoring
+    error: str | None = None  # the scan stopped (REGEX_TIMEOUT_MESSAGE); apply nothing
 
 
 def _scope_feed_ids(f: Filter, user_feeds_map: "dict[int, UserFeed]") -> "set[int] | None":
@@ -1104,6 +1179,9 @@ async def _plan_retroactive_apply(
     has_label = "label" in action_types
     has_star_or_label = bool(action_types & {"star", "label"})
     is_ai = is_ai_filter(f)
+    if f.disabled_reason == REGEX_TIMEOUT:
+        return RetroApplyPlan(f=f, is_ai=is_ai, has_label_action=has_label,
+                              items=[], scoring_count=0, error=REGEX_TIMEOUT_MESSAGE)
 
     user_feeds_result = await db.execute(
         select(UserFeed).where(UserFeed.user_id == user_id)
@@ -1136,10 +1214,16 @@ async def _plan_retroactive_apply(
         )
         states_map = {s.article_id: s for s in states_result.scalars()}
 
-    matched = [
-        a for a in articles
-        if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
-    ]
+    try:
+        matched = [
+            a for a in articles
+            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+        ]
+    except RegexTimedOut:
+        _switch_off_slow_filter(f)
+        await db.commit()
+        return RetroApplyPlan(f=f, is_ai=is_ai, has_label_action=has_label,
+                              items=[], scoring_count=0, error=REGEX_TIMEOUT_MESSAGE)
 
     # Scoring prerequisites loaded once. Settings-level eligibility (uf=None) gates
     # the whole batch; a per-feed override can only turn scoring *off* per article.
@@ -1198,6 +1282,7 @@ async def preview_filter_retroactive(
         "scoring_count": plan.scoring_count,
         "is_ai_filter": plan.is_ai,
         "has_label_action": plan.has_label_action,
+        "error": plan.error,
     }
 
 

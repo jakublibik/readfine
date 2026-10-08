@@ -1,5 +1,4 @@
 """Web scrape fetcher: CSS selector → article URLs → readable extraction pipeline."""
-import asyncio
 import hashlib
 import html
 import logging
@@ -8,17 +7,16 @@ import time
 from datetime import datetime, timezone
 from urllib.parse import urljoin
 
-import httpx
+import soupsieve
 from bs4 import BeautifulSoup
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article
 from app.models.feed import Feed
-from app.models.fetch_log import FetchLog
 from app.utils.crypto import feed_auth
-from app.utils.http_client import READFINE_UA
-from app.utils.parsing import normalize_url, soften_nbsp_runs
+from app.utils.http_client import READFINE_UA, run_outbound
+from app.utils.parsing import encode_unsafe_url_chars, normalize_url, soften_nbsp_runs
 from app.fetcher import host_throttle
 from app.utils.url_validator import (
     async_validate_feed_url,
@@ -27,12 +25,12 @@ from app.utils.url_validator import (
     redact_url,
 )
 from app.fetcher.redirects import adopt_permanent_url
+from app.fetcher.rss import _dedup_cross_feed
 # FETCH_ERROR_DISABLE_THRESHOLD is re-exported for symmetry with rss.py.
 from app.fetcher.failure import (  # noqa: F401
     FETCH_ERROR_DISABLE_THRESHOLD,
-    arm_host_cooldown,
-    failure_values,
-    log_failure_message,
+    mark_fetch_success,
+    record_fetch_failure,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,10 +50,7 @@ async def fetch_page_html(url: str, timeout: int = 30, auth=None) -> str:
     That includes *auth*: a page behind HTTP credentials has to be reachable while the
     selector is being written, not only once the feed exists.
     """
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None, fetch_url_with_ssrf_check, url, auth, timeout, _HEADERS
-    )
+    return await run_outbound(fetch_url_with_ssrf_check, url, auth, timeout, _HEADERS)
 
 
 def _extract_title(elem, a_tag, fallback_url: str) -> str:
@@ -162,10 +157,25 @@ def _metadata_context(elem):
     return elem
 
 
+def check_selector(selector: str) -> None:
+    """Raise ValueError when *selector* is not valid CSS.
+
+    soupsieve's SelectorSyntaxError is a plain Exception, so left alone it would get
+    past every ``except ValueError`` on the subscribe and edit paths, and the fetcher
+    would file it as a fault of ours ("Internal error") on every run, never counting
+    it against the feed.
+    """
+    try:
+        soupsieve.compile(selector)
+    except soupsieve.SelectorSyntaxError as exc:
+        raise ValueError(f"Invalid CSS selector: {str(exc).splitlines()[0]}") from exc
+
+
 def extract_article_links(
     html: str, selector: str, feed_url: str
 ) -> list[tuple[str, str, datetime | None, str | None]]:
     """Apply CSS selector, return (url, title, published_at, excerpt) tuples."""
+    check_selector(selector)
     soup = BeautifulSoup(html, "lxml")
     results: list[tuple[str, str, datetime | None, str | None]] = []
     seen_urls: set[str] = set()
@@ -176,7 +186,7 @@ def extract_article_links(
         href = str(a.get("href", "")).strip()
         if not href or href.startswith(("javascript:", "mailto:", "#")):
             continue
-        url = urljoin(feed_url, href)
+        url = encode_unsafe_url_chars(urljoin(feed_url, href))
         if not url.startswith(("http://", "https://")):
             continue
         if url in seen_urls:
@@ -219,10 +229,7 @@ async def fetch_scrape_feed(
         # a hostname that resolved publicly at feed creation could later point
         # at an internal/metadata address.
         await async_validate_feed_url(feed_url)
-        loop = asyncio.get_running_loop()
-        page = await loop.run_in_executor(
-            None, fetch_url_page, feed_url, auth, _TIMEOUT, _HEADERS
-        )
+        page = await run_outbound(fetch_url_page, feed_url, auth, _TIMEOUT, _HEADERS)
         links = extract_article_links(page.text, selector, feed_url)
         if not links:
             raise ValueError(f"CSS selector '{selector}' matched no article links")
@@ -232,13 +239,7 @@ async def fetch_scrape_feed(
         )
         duration_ms = int(time.monotonic() * 1000) - start_ms
 
-        feed.last_fetched_at = fetched_at
-        feed.last_fetch_duration_ms = duration_ms
-        feed.status = "active"
-        feed.last_error = None
-        feed.fetch_error_count = 0
-        feed.block_count = 0
-        feed.retry_after_until = None
+        await mark_fetch_success(db, feed, fetched_at, duration_ms)
         # Mirror rss.py: track the newest article date this listing carried. Only
         # advance when at least one link is dated, so a fetch of purely undated
         # links doesn't wipe a previously-known publication date. Stays None for
@@ -263,21 +264,9 @@ async def fetch_scrape_feed(
     except Exception as exc:
         await db.rollback()
         logger.error("Error scraping feed %d (%s): %s", feed_id, redact_url(feed_url), exc)
-        now = datetime.now(timezone.utc)
-        http_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
-        db.add(FetchLog(
-            feed_id=feed_id,
-            failed_at=now,
-            http_status=http_status,
-            error_message=log_failure_message(exc, feed_url),
-        ))
-        arm_host_cooldown(feed_url, exc, http_status, now)
-        await db.execute(
-            update(Feed).where(Feed.id == feed_id).values(
-                **failure_values(exc, feed_url=feed_url, feed_block_count=block_count, now=now)
-            )
+        await record_fetch_failure(
+            db, exc, feed_id=feed_id, feed_url=feed_url, feed_block_count=block_count
         )
-        await db.commit()
         return 0
 
 
@@ -365,6 +354,11 @@ async def _save_scrape_articles(
 
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        # Same per-feed URL dedup as RSS. The scheduler's global pass would catch
+        # these too, but a manual refresh and the first fetch after subscribing run
+        # outside any round.
+        await _dedup_cross_feed(feed.id, new_articles, db)
 
         # See rss._save_articles: inside a scheduler round the post-gather pass does
         # this once for every feed, and doing it here as well only pays for the trigram

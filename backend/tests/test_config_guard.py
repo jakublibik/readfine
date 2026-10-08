@@ -56,3 +56,13 @@ def test_debug_mode_bypasses_all_checks():
         first_admin_password="change-me",
     )
     assert s.debug is True
+
+
+def test_session_cookie_secure_follows_debug_when_unset():
+    assert _make(debug=False, session_cookie_secure=None).session_cookie_is_secure is True
+    assert _make(debug=True, session_cookie_secure=None).session_cookie_is_secure is False
+
+
+def test_session_cookie_secure_can_be_turned_off_in_production():
+    # An install reached over plain HTTP by IP address needs this to log in at all.
+    assert _make(debug=False, session_cookie_secure=False).session_cookie_is_secure is False

@@ -8,7 +8,6 @@ from app.utils.datetime_format import (
     format_local,
     format_until,
     is_valid_timezone,
-    available_timezone_list,
     timezone_groups,
 )
 
@@ -107,11 +106,6 @@ class TestTimezoneHelpers:
         assert not is_valid_timezone("Mars/Olympus")
         assert not is_valid_timezone("")
         assert not is_valid_timezone(None)
-
-    def test_available_list_nonempty_and_sorted(self):
-        tzs = available_timezone_list()
-        assert "Europe/Prague" in tzs
-        assert tzs == sorted(tzs)
 
     def test_groups_contain_region(self):
         groups = dict(timezone_groups())

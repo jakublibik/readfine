@@ -1,5 +1,4 @@
 """OPML import and export service."""
-import asyncio
 import json
 import logging
 import re
@@ -17,10 +16,12 @@ from sqlalchemy.orm import selectinload
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.filter import Filter
 from app.models.label import Label
+from app.models.settings import AppSettings
 from app.models.user import User, UserCatchupConfig, UserSettings
 from app.schemas.filter import FilterConditionCreate, FilterActionCreate, FilterCreate
 from app.services.ai_profile_service import PROFILE_MAX_CHARS
 from app.services.briefing_service import reschedule_briefings
+from app.services.catchup_service import CATCHUP_PERIODS, CATCHUP_STATUSES
 from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.services.folder_service import (
@@ -35,6 +36,7 @@ from app.services.saved_search_service import (
     SavedSearchError, create_saved_search, list_saved_searches,
 )
 from app.services.story_service import DEDUP_VALUES
+from app.utils.background import spawn_background
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.email_validate import is_valid_email
 from app.utils.formats import is_valid_format
@@ -91,8 +93,10 @@ _PROFILE_TEXTS = {
 # Feed outline attribute → UserFeed column, for per-feed retention.
 _FEED_PURGE_ATTRS = {"purge-after-days": "purge_after_days", "purge-keep-count": "purge_keep_count"}
 
-_CATCHUP_PERIODS = ("today", "yesterday", "7days")
-_CATCHUP_STATUSES = ("all", "not_opened")
+# Feed outlines one import may try beyond the free slots (see _feed_attempt_budget),
+# and the ceiling for admins, who have no feed limit.
+_MIN_FAILED_TRIES = 20
+_ADMIN_FEED_TRIES = 2000
 
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
@@ -487,6 +491,9 @@ class ImportResult:
     # migration cut from 180 feeds to 50 has to say so where it cannot be missed.
     feeds_over_limit: int = 0
     feed_limit: int | None = None
+    # Set when the import used up the feed attempts it may make (see
+    # _feed_attempt_budget): how many outlines were left untried.
+    feeds_not_tried: int = 0
 
 
 class _LabelBook:
@@ -604,13 +611,30 @@ async def import_opml(
         feed_outlines = _collect_feed_outlines(body)
         folder_cache: dict[str, int] = {}
         next_folder_pos = await next_folder_position(db, user.id)
+        subscribed_urls = set((await db.execute(
+            select(Feed.feed_url)
+            .join(UserFeed, UserFeed.feed_id == Feed.id)
+            .where(UserFeed.user_id == user.id)
+        )).scalars())
+        attempts_left = await _feed_attempt_budget(user, len(subscribed_urls), db)
         for index, (outline, folder_name) in enumerate(feed_outlines):
+            xml_url = outline.get("xmlUrl", "")
+            is_scrape = (outline.get("feed-type") or "").strip().lower() == "scrape"
+            # A feed the account already has costs nothing to skip here, where
+            # subscribe() would only find out after fetching it. Scrape feeds are
+            # keyed by page and selector, so the address alone does not decide.
+            if not is_scrape and xml_url.strip() in subscribed_urls:
+                result.feeds_skipped += 1
+                continue
+            if attempts_left <= 0:
+                result.feeds_not_tried = len(feed_outlines) - index
+                break
+            attempts_left -= 1
             folder_id = None
             if folder_name:
                 folder_id, next_folder_pos = await _get_or_create_folder(
                     user, folder_name, folder_cache, db, next_folder_pos
                 )
-            xml_url = outline.get("xmlUrl", "")
             try:
                 added_id = await _import_feed(user, outline, folder_id, result, db)
             except FeedLimitReached as exc:
@@ -619,10 +643,11 @@ async def import_opml(
                 result.feed_limit = exc.max_feeds
                 break
             if added_id and xml_url:
+                subscribed_urls.add(xml_url.strip())
                 feed_url_to_id[xml_url] = added_id
                 # Scrape feeds already trigger their own background fetch in
                 # subscribe_scrape; don't queue them for the RSS _initial_fetch.
-                if (outline.get("feed-type") or "").strip().lower() != "scrape":
+                if not is_scrape:
                     new_feed_ids.append(added_id)
 
     # Lookup maps for scope resolution, from the subscriptions as they are now.
@@ -694,7 +719,7 @@ async def import_opml(
             if feed_id in _initial_fetch_in_progress:
                 continue
             _initial_fetch_in_progress.add(feed_id)
-            asyncio.create_task(_initial_fetch(feed_id))
+            spawn_background(_initial_fetch(feed_id), name=f"initial-fetch-{feed_id}")
 
     return result
 
@@ -785,6 +810,25 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
     return results
 
 
+async def _feed_attempt_budget(user: User, subscribed: int, db: AsyncSession) -> int:
+    """How many feed outlines one import may try to subscribe.
+
+    Each try fetches the feed inside the request, and only the ones that succeed
+    count toward the account's feed limit. Without a cap a file of dead addresses
+    would hold the request (and its database connection) for hours while the server
+    sends a request to every host in it. So the budget follows the limit: the free
+    slots, plus as many again (at least _MIN_FAILED_TRIES) for feeds that fail.
+    Admins have no feed limit and get a fixed ceiling instead.
+    """
+    if user.role == "admin":
+        return _ADMIN_FEED_TRIES
+    max_feeds = await db.scalar(
+        select(AppSettings.max_feeds_per_user).where(AppSettings.id == 1)
+    ) or 200
+    free = max(0, max_feeds - subscribed)
+    return free + max(_MIN_FAILED_TRIES, free)
+
+
 async def _get_or_create_folder(
     user: User,
     name: str,
@@ -808,7 +852,9 @@ async def _get_or_create_folder(
         folder = Folder(user_id=user.id, name=name, position=next_position)
         next_position += 1
         db.add(folder)
-        await db.flush()
+        # Committed on its own, so a feed that fails after it (and is rolled back)
+        # cannot take the folder the cache still points at with it.
+        await db.commit()
     cache[name] = folder.id
     return folder.id, next_position
 
@@ -884,6 +930,10 @@ async def _import_feed(
     except FeedLimitReached:
         raise  # propagate to the import loop, which stops and warns
     except Exception as exc:
+        # A failure past a write leaves the session unusable for every outline after
+        # this one. The rollback expires the user, and a lazy load is not allowed here.
+        await db.rollback()
+        await db.refresh(user)
         result.feeds_failed += 1
         result.warnings.append(f"Failed to import {xml_url}: {exc}")
         return None
@@ -989,7 +1039,7 @@ async def _import_filters(
         if not isinstance(fd, dict):
             continue
         try:
-            name = str(fd.get("name") or f"Imported filter {i + 1}")[:100]
+            name = str(fd.get("name") or "").strip()[:100] or f"Imported filter {i + 1}"
 
             # Detect format: our own export (has "match_operator") vs TTRSS (has "match_any_rule" / "rules")
             is_readfine = "match_operator" in fd
@@ -997,26 +1047,30 @@ async def _import_filters(
             # A label the filter applies but the account lacks is created, so the
             # action survives the move instead of being dropped. Except for digits
             # in a Readfine file from before the format marker: those exports wrote
-            # the id of a label deleted since (deleting one leaves its filter
-            # actions in place) and creating a label called "17" helps nobody.
+            # the id of a label deleted since (deleting one used to leave its
+            # filter actions in place) and creating a label called "17" helps nobody.
             for label_name in _filter_label_names(fd, is_readfine):
-                if is_readfine and not versioned and label_name.isdigit()                         and label_name not in labels.ids:
+                if (
+                    is_readfine and not versioned and label_name.isdigit()
+                    and label_name not in labels.ids
+                ):
                     continue
                 await labels.ensure(label_name, db)
             await db.commit()
 
             if is_readfine:
-                payload = _parse_readfine_filter(fd, labels.ids, feed_url_to_id, folder_name_to_id, result)
+                payload = _parse_readfine_filter(
+                    fd, labels.ids, feed_url_to_id, folder_name_to_id, result, filter_name=name
+                )
             else:
                 payload = _parse_ttrss_filter(
-                    fd, labels.ids, feed_title_to_id, folder_name_to_id, result
+                    fd, labels.ids, feed_title_to_id, folder_name_to_id, result, filter_name=name
                 )
 
             if payload is None:
                 result.filters_skipped += 1
                 continue
 
-            payload.name = name
             # Collapse duplicate conditions. TTRSS scope is per-rule, so once we
             # factor it up to the filter (e.g. a "match-all on 9 feeds" filter),
             # the rules degenerate into identical (field, operator, value) triples;
@@ -1057,15 +1111,17 @@ def _parse_readfine_filter(
     feed_url_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    filter_name: str = "Imported filter",
 ) -> FilterCreate | None:
     """Parse our own export format."""
     conditions = []
     for c in fd.get("conditions", []):
+        cond_position = _int_or_none(c.get("position"))
         conditions.append(FilterConditionCreate(
             field=c["field"],
             operator=c["operator"],
             value=c["value"],
-            position=c.get("position", 0),
+            position=cond_position if cond_position is not None and 0 <= cond_position <= _SMALLINT_MAX else 0,
         ))
 
     actions = []
@@ -1102,7 +1158,7 @@ def _parse_readfine_filter(
 
     position = _int_or_none(fd.get("position"))
     return FilterCreate(
-        name="",
+        name=filter_name,
         is_active=is_active,
         match_operator=fd.get("match_operator", "AND"),
         position=position if position is not None and 0 <= position <= _SMALLINT_MAX else 0,
@@ -1180,6 +1236,7 @@ def _parse_ttrss_filter(
     feed_title_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    filter_name: str = "Imported filter",
 ) -> FilterCreate | None:
     """Parse TTRSS OPML filter format (best-effort)."""
     match_operator = "OR" if _truthy(fd.get("match_any_rule")) else "AND"
@@ -1247,7 +1304,7 @@ def _parse_ttrss_filter(
     scope_include = _derive_filter_scope(fd.get("name"), rule_scopes, unresolved_scope, result)
 
     return FilterCreate(
-        name="",
+        name=filter_name,
         is_active=_truthy(fd.get("enabled", True)),
         match_operator=match_operator,
         scope_include=scope_include,
@@ -1512,7 +1569,7 @@ async def _import_catchups(
         name = str(item.get("name") or "").strip()[:100]
         if not name:
             continue
-        period = item.get("period") if item.get("period") in _CATCHUP_PERIODS else "7days"
+        period = item.get("period") if item.get("period") in CATCHUP_PERIODS else "7days"
         if (name, period) in taken:
             result.catchups_skipped += 1
             continue
@@ -1534,7 +1591,7 @@ async def _import_catchups(
             user_id=user.id,
             name=name,
             period=period,
-            filter_status=status if status in _CATCHUP_STATUSES else "all",
+            filter_status=status if status in CATCHUP_STATUSES else "all",
             scope_include=json.dumps(scope) if scope else None,
             label_filter=json.dumps(label_tokens) if label_tokens else None,
             filter_score_min=score_min / 100 if score_ok else None,

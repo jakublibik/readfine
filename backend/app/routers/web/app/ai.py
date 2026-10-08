@@ -20,7 +20,7 @@ from app.services.ai_jobs import (
 )
 from app.services.article import add_article_access_joins, article_access_predicate
 from app.templating import templates
-from app.utils.url_validator import find_blocked_address
+from app.services.ai_service import describe_ai_error
 
 router = APIRouter(tags=["web-app"])
 
@@ -48,6 +48,29 @@ def _ai_context_block(article_id: int, context: str) -> str:
 
 
 _CHAT_MAX_MESSAGES = 10  # 5 user + 5 assistant turns
+_CHAT_MAX_MESSAGE_CHARS = 2000  # what the user types, in both chats
+# The general chat's history comes back from the client. A reply is longer than a
+# question, so this is a ceiling against a hand-made request, not a limit on answers.
+_CHAT_MAX_HISTORY_ITEM_CHARS = 20000
+
+
+def _parse_chat_history(raw: str) -> list[dict]:
+    """The general chat's history from the form, reduced to what a real one holds:
+    user and assistant turns with string content. Anything else (a "system" turn, a
+    non-dict, a missing field) is dropped rather than passed to the provider."""
+    try:
+        items = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    return [
+        {"role": m["role"], "content": m["content"][:_CHAT_MAX_HISTORY_ITEM_CHARS]}
+        for m in items
+        if isinstance(m, dict)
+        and m.get("role") in ("user", "assistant")
+        and isinstance(m.get("content"), str)
+    ]
 
 
 def _chat_macros():
@@ -226,9 +249,7 @@ async def htmx_ai_context_trigger(
                 focus=focus,
             )
         except Exception as exc:
-            # A refused address reaches here as the SDK's bare "Connection error.",
-            # so ask what really happened before quoting it.
-            msg = html_module.escape(str(find_blocked_address(exc) or exc)[:120])
+            msg = html_module.escape(describe_ai_error(exc)[:200])
             return HTMLResponse(
                 f'<div id="ai-context-{article_id}" class="text-xs text-red-500 py-1">Context failed: {msg}</div>'
             )
@@ -275,20 +296,8 @@ async def htmx_ai_context_trigger(
 
 
 def _ai_chat_error_message(exc: Exception) -> str:
-    """Map an AI-provider exception to a user-facing chat error line."""
-    if find_blocked_address(exc) is not None:
-        # The one failure here that "try again" cannot fix: it is a decision about
-        # the address, not a hiccup, and the same answer comes back every time.
-        return "The AI endpoint is at an address this instance is not allowed to reach."
-    exc_str = str(exc)
-    status = getattr(exc, "status_code", None)
-    if status == 529 or "529" in exc_str or "overloaded" in exc_str.lower():
-        return "AI provider is overloaded. Please try again in a moment."
-    if status == 429 or "429" in exc_str or "rate_limit" in exc_str.lower():
-        return "Rate limit reached. Please wait a moment and try again."
-    if status and status >= 500:
-        return "AI provider returned a server error. Please try again."
-    return "Chat failed. Please try again."
+    """The chat's error line for a failed AI call."""
+    return f"Chat failed: {describe_ai_error(exc)}"
 
 
 @router.post("/htmx/ai-chat", response_class=HTMLResponse)
@@ -320,16 +329,11 @@ async def htmx_general_ai_chat(
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
-    msg_text = message.strip()[:2000]
+    msg_text = message.strip()[:_CHAT_MAX_MESSAGE_CHARS]
     if not msg_text:
         return HTMLResponse("", status_code=400)
 
-    try:
-        current_messages: list[dict] = json.loads(history)
-        if not isinstance(current_messages, list):
-            current_messages = []
-    except (json.JSONDecodeError, ValueError):
-        current_messages = []
+    current_messages = _parse_chat_history(history)
 
     current_messages.append({"role": "user", "content": msg_text})
     if len(current_messages) > _CHAT_MAX_MESSAGES:
@@ -434,7 +438,7 @@ async def htmx_ai_chat(
     if not getattr(settings, 'ai_chat_enabled', False):
         return HTMLResponse("", status_code=403)
 
-    msg_text = message.strip()
+    msg_text = message.strip()[:_CHAT_MAX_MESSAGE_CHARS]
     if not msg_text:
         return HTMLResponse("", status_code=400)
 
