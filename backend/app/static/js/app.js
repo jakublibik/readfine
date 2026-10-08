@@ -3320,6 +3320,22 @@ function _markReadAutoAdvance(clickedRow) {
   return true;
 }
 
+// ── Label badges sent out-of-band with a label list ───────────────────────
+// Opening a label view re-sends its sidebar badges (_label_badge_oob). A badge put in
+// while the pointer is still on the row takes the hover position at once, since a new
+// element has no transition to delay it, so it jumped left on every click. Swap only
+// when the count actually changed.
+document.body.addEventListener('htmx:oobBeforeSwap', function (e) {
+  var target = e.detail.target;
+  if (!target || !/^label-badge-/.test(target.id)) return;
+  var current = target.querySelector('.mark-read-badge');
+  var next = e.detail.fragment && e.detail.fragment.querySelector('.mark-read-badge');
+  if (current && next && current.className === next.className
+      && current.textContent === next.textContent) {
+    e.detail.shouldSwap = false;
+  }
+});
+
 // ── Sidebar mark-all-as-read: refresh sidebar + article list after action ──
 document.body.addEventListener('htmx:afterRequest', function (e) {
   if (!e.detail.elt || e.detail.elt.dataset.action !== 'mark-read') return;
