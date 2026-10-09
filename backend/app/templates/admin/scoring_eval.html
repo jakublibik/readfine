@@ -56,16 +56,16 @@
   </span>
   {% endif %}
 
-  <form method="get" action="/admin/scoring-eval" class="flex items-center gap-2 ml-auto">
+  <form method="get" action="/admin/scoring-eval" class="flex items-center gap-2 ml-auto min-w-0 max-w-full">
     <input type="hidden" name="days" value="{{ eval.days }}">
-    <label class="text-gray-500" for="eval-user">User:</label>
-    <select name="user_id" id="eval-user" class="border border-gray-300 rounded px-2 py-1 text-sm">
+    <label class="text-gray-500 shrink-0" for="eval-user">User:</label>
+    <select name="user_id" id="eval-user" class="min-w-0 border border-gray-300 rounded px-2 py-1 text-sm">
       <option value="">All users (aggregate)</option>
       {% for u in eval.users %}
       <option value="{{ u.id }}" {{ 'selected' if eval.user_id == u.id }}>{{ u.name }} ({{ u.n|num }} scored, {{ u.engaged|num }} engaged)</option>
       {% endfor %}
     </select>
-    <button type="submit" class="px-2 py-1 rounded border border-gray-300 text-gray-600 hover:border-gray-400">Show</button>
+    <button type="submit" class="shrink-0 px-2 py-1 rounded border border-gray-300 text-gray-600 hover:border-gray-400">Show</button>
   </form>
 </div>
 
