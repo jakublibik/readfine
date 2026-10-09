@@ -3,6 +3,7 @@ import logging
 import re
 from datetime import date, datetime, timedelta, timezone
 
+import regex as _regex
 from sqlalchemy import Text, and_, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,9 +215,10 @@ def _format_date(dt: datetime | None) -> str:
 # written ('simple') and stemmed ('english'), so "votes" finds "voting" while a query
 # the English parser drops as stop words ("The Who") still finds its exact words.
 # The 'simple' half also cuts Chinese, Japanese and Korean into overlapping character
-# pairs (cjk_bigrams, migration 0117): the parser splits only on spaces and
-# punctuation, so a whole CJK sentence was one word and nothing inside it could be
-# found. The 'english' half is left alone, or every pair would be in twice.
+# pairs (cjk_bigrams, migration 0117), and Thai, Lao, Khmer and Burmese with them
+# (0125): the parser splits only on spaces and punctuation, so a whole sentence in
+# these scripts was one word and nothing inside it could be found. The 'english'
+# half is left alone, or every pair would be in twice.
 # Must match the expression of idx_articles_search_fts (migration 0117) exactly, or
 # searches stop using the index.
 _FTS_TITLE = "immutable_unaccent(coalesce(articles.title, ''))"
@@ -239,12 +241,21 @@ MAX_QUERY_LENGTH = 500
 
 # A word ending in "*" matches every word it begins ("zpráv*" finds "zprávami"). Two
 # letters at least: a one-letter prefix matches nearly everything and is slow.
-_PREFIX_WORD = re.compile(r"(\w{2,})\*")
+# `regex`, whose `\w` includes combining marks: under `re` a word ending in a vowel
+# sign ("சென்னை*") had no letter before the star and was searched as written.
+_PREFIX_WORD = _regex.compile(r"(\w{2,})\*")
+_STAR_AFTER_WORD = _regex.compile(r"(\w)\*")
 _SINGLE_LEXEME = re.compile(r"^'([^']+)'$")
 
-# A CJK run in the query, with a "-" that negates it (at the start or after a space,
-# not a hyphen inside a word) and a trailing star, which means nothing for pairs.
-_CJK_QUERY_RUN = re.compile(rf"((?<!\S)-)?([{CJK_CHARS}]+)\*?")
+# What cjk_bigrams() cuts into pairs: CJK, and the Thai and Lao, Myanmar and Khmer
+# blocks (migration 0125). Only search pairs the last four; the relevance score
+# reads them as words it cannot split, see `relevance_service.tokenize`.
+_PAIRED_CHARS = CJK_CHARS + "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff"
+
+# A run of them in the query, with a "-" that negates it (at the start or after a
+# space, not a hyphen inside a word) and a trailing star, which means nothing for
+# pairs.
+_CJK_QUERY_RUN = re.compile(rf"((?<!\S)-)?([{_PAIRED_CHARS}]+)\*?")
 
 
 def split_cjk_query(q: str) -> tuple[str, list[tuple[str, bool]]]:
@@ -313,7 +324,7 @@ async def _build_search_tsquery(db: AsyncSession, q: str):
     parser wrote them.
     """
     prefixes = _PREFIX_WORD.findall(q)
-    folded = func.immutable_unaccent(re.sub(r"(\w)\*", r"\1", q))
+    folded = func.immutable_unaccent(_STAR_AFTER_WORD.sub(r"\1", q))
     written = func.websearch_to_tsquery("simple", folded)
     try:
         # Round-trip to PostgreSQL to catch malformed inputs before the full query

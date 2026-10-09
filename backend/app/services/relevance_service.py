@@ -88,8 +88,9 @@ SUMMARY_MAX_CHARS = 300
 # ── tokenization ──────────────────────────────────────────────────────────────
 
 # Kana, CJK ideographs (extension A, unified, compatibility), Hangul syllables,
-# jamo and compatibility jamo. The cjk_bigrams() SQL function (migration 0117)
-# spells the same class out; change both together.
+# jamo and compatibility jamo. The cjk_bigrams() SQL function (migration 0125)
+# spells the same class out, with Thai, Lao, Khmer and Burmese added for search
+# only; change them together.
 CJK_CHARS = ("぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
              "가-힯ᄀ-ᇿ㄰-㆏")
 _CJK_SPLIT_RE = re.compile(rf"([{CJK_CHARS}]+)")

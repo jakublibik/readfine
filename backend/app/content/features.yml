@@ -133,8 +133,8 @@ categories:
       - title: Search
         desc: >-
           Full-text search across your articles that ignores accents and matches English
-          word forms, with `word*` for word beginnings. Finds Chinese, Japanese and
-          Korean words inside running text too. Filter by feed, folder, status,
+          word forms, with `word*` for word beginnings. Finds Chinese, Japanese,
+          Korean, Thai, Lao, Khmer and Burmese words inside running text too. Filter by feed, folder, status,
           label, score, publish date, or your starred, saved and archived articles.
           Open it from anywhere with the `/` shortcut.
       - title: Keyboard shortcuts

@@ -107,6 +107,16 @@ async def test_star_matches_word_beginnings(pg):
     assert await found(f"{tok} -zpráv*") == {other}
 
 
+async def test_star_after_a_vowel_sign(pg):
+    """Tamil attaches case endings: "in Chennai" is one word starting "Chennai"."""
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (locative, other) = await _setup(pg, [
+        (f"சென்னையில் மழை {tok}", "<p>x</p>"), (f"மதுரை {tok}", "<p>x</p>"),
+    ])
+    found = {a.id for a in await list_articles(user=user, db=pg, q=f"சென்னை* {tok}")}
+    assert found == {locative}
+
+
 async def test_one_letter_star_is_a_plain_word(pg):
     tok = "zq" + uuid.uuid4().hex[:8]
     user, (art,) = await _setup(pg, [(f"Zprávy {tok}", "<p>x</p>")])
@@ -192,6 +202,28 @@ async def test_cjk_word_inside_a_sentence(pg):
     assert await found(f"날씨 {tok}") == {ko}
     assert await found(f"{tok} -智能") == {ja, ko}
     assert await found(f'"人工智能的" {tok}') == {zh}
+
+
+async def test_thai_lao_khmer_burmese_word_inside_a_sentence(pg):
+    """No spaces between words either; vowel signs end up inside the pairs."""
+    tok = "zq" + uuid.uuid4().hex[:8]
+    user, (th, lo, km, my) = await _setup(pg, [
+        (f"ข่าว {tok}", "<p>วันนี้เราพูดถึงปัญญาประดิษฐ์และแมว</p>"),
+        (f"news {tok}", "<p>ມື້ນີ້ມີຂ່າວດີ</p>"),
+        (f"news {tok}", "<p>ថ្ងៃនេះមានព័ត៌មានល្អ</p>"),
+        (f"news {tok}", "<p>ဒီနေ့သတင်းကောင်းရှိတယ်</p>"),
+    ])
+
+    async def found(q):
+        return {a.id for a in await list_articles(user=user, db=pg, q=q)}
+
+    assert await found(f"ปัญญาประดิษฐ์ {tok}") == {th}
+    assert await found(f"ประดิษฐ์ {tok}") == {th}
+    assert await found(f"ຂ່າວ {tok}") == {lo}
+    assert await found(f"ព័ត៌មាន {tok}") == {km}
+    assert await found(f"သတင်း {tok}") == {my}
+    assert await found(f"{tok} -แมว") == {lo, km, my}
+    assert await found(f"หมา {tok}") == set()
 
 
 async def test_cjk_next_to_latin(pg):
