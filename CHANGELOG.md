@@ -38,6 +38,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A wrong API key or model name now says so everywhere the AI is used, instead of "try again" or the provider's raw response.
 - Some sidebar and title bar counts didn't match their list, because they counted articles retention had removed or a grouped story as several rows.
 - Feeds in an encoding such as windows-1250, named only inside the feed, showed garbled accented letters.
+- The basic relevance score could not read Hindi, Bengali, Tamil and other Indic text. Their vowel signs were dropped like accents, which left words in pieces. The term table is rebuilt on its own after the upgrade.
 - A scrape feed with an invalid CSS selector failed on every fetch with "Internal error". Such a selector is now refused when you add or edit the feed. **Regenerate** in the AI selector now uses your note about the previous attempt.
 - Deleting an account now also deletes the articles only that account kept. The per-feed article cap (`purge_keep_count`) no longer keeps fewer articles than set.
 - `PATCH /api/v1/articles/{id}` now returns the same fields as a `GET`, and a search with a very long query no longer ends in a server error.

@@ -31,7 +31,10 @@ What is a decision here and not detail:
   and a CJK term has to match as consecutive bigrams, since it is one word cut up
   rather than a list of words. Everything else is `\\w\\w+` words with accents
   stripped. NFKC first; accents are stripped outside CJK runs only, because NFKD
-  splits a Hangul syllable into jamo and drops the voicing mark off kana.
+  splits a Hangul syllable into jamo and drops the voicing mark off kana. They
+  are stripped only from Latin, Greek, Cyrillic, Arabic, Hebrew and Syriac
+  letters, too: in Devanagari, Bengali, Tamil or Thai the combining marks are
+  the vowels, and dropping them left `हिन्दी` as `नद`.
 - **Unknown terms score zero**, they are not smoothed. A term the corpus has not
   used often enough to be in the table is one this scorer has never seen, and
   guessing an IDF for it would hand the highest weight in the formula to the
@@ -57,12 +60,13 @@ from functools import lru_cache
 from typing import Iterable, Iterator, Mapping, NamedTuple, Sequence
 
 import nh3
+import regex as _regex
 
 # Bumped whenever tokenization changes. The stored term table records the version
 # it was counted with, and a table counted by another version is treated as no
 # table at all until it has been rebuilt: scoring against a vocabulary the
 # tokenizer can no longer produce fails silently, with every score near zero.
-TOKENIZER = 2
+TOKENIZER = 3
 
 BM25_K1 = 1.5
 
@@ -91,19 +95,41 @@ CJK_CHARS = ("぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿"
 _CJK_SPLIT_RE = re.compile(rf"([{CJK_CHARS}]+)")
 _CJK_RUN_RE = re.compile(rf"^[{CJK_CHARS}]+$")
 # Matches scikit-learn's default `(?u)\b\w\w+\b`: two or more word characters,
-# so single letters and punctuation drop out.
-_WORD_RE = re.compile(r"\b\w\w+\b", re.UNICODE)
+# so single letters and punctuation drop out. The `regex` module and not `re`,
+# because its `\w` includes combining marks: under `re` a vowel sign ends the
+# word, and `हिन्दी` falls apart into single consonants.
+_WORD_RE = _regex.compile(r"\b\w\w+\b")
+# Marks on letters where they are accents or optional vowel points: Latin,
+# Greek, Cyrillic, Arabic, Hebrew, Syriac. Common covers digits, symbols, spaces
+# and the start of the text. In the scripts left out, Indic and Southeast Asian
+# ones above all, the marks are vowels and viramas and stay.
+#
+# What `re` and `unicodedata.combining` did before, on the scripts where it
+# worked: a mark with a combining class is dropped, and one without (an emoji's
+# variation selector) splits the word, since `re`'s `\w` never matched it. The
+# lookbehind comes after the mark, so it only runs where there is one.
+_BASE = r"(?:^|[\p{Latin}\p{Greek}\p{Cyrillic}\p{Arabic}\p{Hebrew}\p{Syriac}\p{Common}])"
+_ACCENT_RE = _regex.compile(rf"[^\p{{ccc=0}}](?<={_BASE}\p{{M}}+)")
+_UNCLASSED_MARK_RE = _regex.compile(rf"\p{{M}}(?<={_BASE}\p{{M}}+)")
+# Zero-width (non-)joiners. The `regex` `\w` counts them as word characters, and
+# feeds leave them in English text (U+200C before "resulting"); inside a Persian or Indic
+# word they only steer how the letters are drawn, and a query typed without them
+# has to match.
+_JOINERS = ("\u200c", "\u200d")
 
 
 def strip_accents(text: str) -> str:
-    """NFKD-normalize and drop combining marks, as `strip_accents="unicode"` does.
+    """NFKD-normalize and drop accents, as `strip_accents="unicode"` does.
 
     Czech loses its diacritics here, which is deliberate: "bezpečnost" and
     "bezpecnost" being two different terms would only split a thin signal. Never
-    applied to CJK runs, see `tokenize`.
+    applied to CJK runs, see `tokenize`, and marks on letters of other scripts
+    stay, see `_ACCENT_RE`.
     """
-    return "".join(c for c in unicodedata.normalize("NFKD", text)
-                   if not unicodedata.combining(c))
+    for joiner in _JOINERS:
+        text = text.replace(joiner, "")
+    text = unicodedata.normalize("NFKD", text)
+    return _UNCLASSED_MARK_RE.sub(" ", _ACCENT_RE.sub("", text))
 
 
 def is_cjk(token: str) -> bool:

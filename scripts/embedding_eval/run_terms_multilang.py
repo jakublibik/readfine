@@ -4,6 +4,7 @@
 #   "scikit-learn>=1.5",
 #   "numpy>=1.26",
 #   "nh3>=0.2",
+#   "regex>=2026.2.28",
 #   "sqlalchemy[asyncio]>=2.0",
 # ]
 # ///
