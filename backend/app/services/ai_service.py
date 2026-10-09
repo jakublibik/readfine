@@ -259,19 +259,24 @@ def provider_requires_key(provider: str | None) -> bool:
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
-# Last updated: 2026-09-18
+# Last updated: 2026-10-09
 # Anthropic: https://www.anthropic.com/pricing
 # OpenAI:    https://openai.com/api/pricing
 # Gemini:    https://ai.google.dev/gemini-api/docs/pricing
 _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     # Anthropic
+    # Haiku 5.5 doubles to $0.50 / $2.50 for prompts over 100K tokens; ours stay
+    # well under that.
+    "claude-haiku-5-5": 0.10,
     "claude-haiku-4-5": 1.00,
     "claude-haiku-3-5": 0.80,
     # The $2 launch price was announced as introductory through 2026-08-31; the
     # rise to $3 was called off and $2 is now the standard price.
+    "claude-sonnet-5-5": 2.00,
     "claude-sonnet-5": 2.00,
     "claude-sonnet-4-6": 3.00,
     "claude-sonnet-3-5": 3.00,
+    "claude-opus-5-5": 4.00,
     "claude-opus-5": 5.00,
     "claude-opus-4-8": 5.00,
     "claude-opus-4-7": 5.00,
@@ -283,6 +288,9 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "gpt-4o-mini": 0.15,
     "gpt-4o": 2.50,
     "gpt-6-astra": 10.00,
+    "gpt-6.1-sol": 2.00,
+    "gpt-6-sol": 2.00,
+    "gpt-6-luna": 0.10,
     # Promotional price, held at least until 2026-11-21.
     "gpt-5.6-sol": 4.00,
     "gpt-5.6-terra": 2.00,
@@ -291,6 +299,16 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "gpt-5.4": 2.50,
     "gpt-5.4-mini": 0.75,
     "gpt-5.4-nano": 0.20,
+    "gpt-5.2": 1.75,
+    "gpt-5.1": 1.25,
+    "gpt-5": 1.25,
+    "gpt-5-mini": 0.25,
+    "gpt-5-nano": 0.05,
+    "gpt-4.1": 2.00,
+    "gpt-4.1-mini": 0.40,
+    "gpt-4.1-nano": 0.10,
+    "o3": 2.00,
+    "o4-mini": 1.10,
     # Gemini
     "gemini-2.0-flash": 0.10,
     "gemini-2.0-flash-lite": 0.075,
@@ -308,6 +326,7 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "gemini-3.5-flash-lite": 0.30,
     "gemini-3.1-flash-lite": 0.25,
     "gemini-3.1-pro-preview": 2.00,
+    "gemini-3-flash-preview": 0.50,
 }
 
 # Map versioned IDs → alias so cost lookup works for both input formats
@@ -321,11 +340,14 @@ _MODEL_ALIAS_MAP: dict[str, str] = {
 
 # Output token cost = input cost × multiplier (output is more expensive than input)
 _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
+    "claude-haiku-5-5": 5.00,
     "claude-haiku-4-5": 5.00,
     "claude-haiku-3-5": 5.00,
+    "claude-sonnet-5-5": 5.00,
     "claude-sonnet-5": 5.00,
     "claude-sonnet-4-6": 5.00,
     "claude-sonnet-3-5": 5.00,
+    "claude-opus-5-5": 5.00,
     "claude-opus-5": 5.00,
     "claude-opus-4-8": 5.00,
     "claude-opus-4-7": 5.00,
@@ -336,6 +358,9 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gpt-4o-mini": 4.00,
     "gpt-4o": 4.00,
     "gpt-6-astra": 5.00,  # $10.00 in / $50.00 out
+    "gpt-6.1-sol": 5.00,  # $2.00 in / $10.00 out
+    "gpt-6-sol": 5.00,  # $2.00 in / $10.00 out
+    "gpt-6-luna": 5.00,  # $0.10 in / $0.50 out
     "gpt-5.6-sol": 5.00,  # $4.00 in / $20.00 out
     "gpt-5.6-terra": 6.00,  # $2.00 in / $12.00 out
     "gpt-5.6-luna": 6.00,  # $0.20 in / $1.20 out
@@ -343,6 +368,16 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gpt-5.4": 6.00,  # $2.50 in / $15.00 out
     "gpt-5.4-mini": 6.00,  # $0.75 in / $4.50 out
     "gpt-5.4-nano": 6.25,  # $0.20 in / $1.25 out
+    "gpt-5.2": 8.00,  # $1.75 in / $14.00 out
+    "gpt-5.1": 8.00,  # $1.25 in / $10.00 out
+    "gpt-5": 8.00,  # $1.25 in / $10.00 out
+    "gpt-5-mini": 8.00,  # $0.25 in / $2.00 out
+    "gpt-5-nano": 8.00,  # $0.05 in / $0.40 out
+    "gpt-4.1": 4.00,  # $2.00 in / $8.00 out
+    "gpt-4.1-mini": 4.00,  # $0.40 in / $1.60 out
+    "gpt-4.1-nano": 4.00,  # $0.10 in / $0.40 out
+    "o3": 4.00,  # $2.00 in / $8.00 out
+    "o4-mini": 4.00,  # $1.10 in / $4.40 out
     "gemini-2.0-flash": 4.00,
     "gemini-2.0-flash-lite": 4.00,
     "gemini-1.5-flash": 4.00,
@@ -357,6 +392,7 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "gemini-3.5-flash-lite": 2.50 / 0.30,  # $0.30 in / $2.50 out
     "gemini-3.1-flash-lite": 6.00,  # $0.25 in / $1.50 out
     "gemini-3.1-pro-preview": 6.00,  # $2.00 in / $12.00 out
+    "gemini-3-flash-preview": 6.00,  # $0.50 in / $3.00 out
 }
 
 # When the configured model isn't in the catalog above (the model field is free
@@ -1634,6 +1670,19 @@ def _openai_token_kwargs(provider: str, model: str, max_tokens: int) -> dict[str
 # be asked directly, which keeps the budgets meaning what they say.
 _ANTHROPIC_THINKING_OFF = {"type": "disabled"}
 
+# Sonnet 5.5 answers "disabled" with a 400 but has its own off switch: thinking
+# only between tool calls, and with no tools in the request that is no thinking at
+# all. Tried second, so a model that takes "disabled" never sees it.
+_ANTHROPIC_THINKING_BETWEEN_TOOLS = {"type": "between_tools"}
+_ANTHROPIC_THINKING_OFF_FORMS = (_ANTHROPIC_THINKING_OFF, _ANTHROPIC_THINKING_BETWEEN_TOOLS)
+
+# Which off switch each model took, or None for one that refused both (Fable 5,
+# Opus 5.5). Learned from the 400s rather than kept as a list of model names, and
+# remembered for the life of the process so the refusals are paid once per model,
+# not on every call. A model's answer to the parameter does not change under it, so
+# an entry is never revisited.
+_anthropic_thinking_off_form: dict[str, dict | None] = {}
+
 
 def _rejects_thinking_param(exc: Exception) -> bool:
     """True when a 400 is about the thinking parameter rather than the request.
@@ -1658,34 +1707,51 @@ async def _anthropic_create(
 ):
     """messages.create with thinking off, retried by models that refuse that.
 
-    Fable 5 always thinks and answers an explicit "disabled" with a 400, and models
-    older than the parameter reject it too. Those two look identical here and need
+    Thinking is turned off with "disabled", or with "between_tools" on a model that
+    refuses the first (Sonnet 5.5). Fable 5 and Opus 5.5 refuse both, and so do
+    models older than the parameter. Those two look identical here and need
     opposite things: the old model does not think, so its budget was never at risk,
     while Fable 5 spends the answer's budget reasoning and returns a summary cut off
-    mid-sentence. The retry therefore carries *reasoning_headroom* on top of
-    max_tokens, which rescues the second without changing the first.
+    mid-sentence. The final request without the parameter therefore carries
+    *reasoning_headroom* on top of max_tokens, which rescues the second without
+    changing the first. What worked is remembered per model, see
+    _anthropic_thinking_off_form.
 
-    *require_thinking_off* is for the one caller the retry cannot help: scoring asks
-    for a single decimal in 10 tokens, and an always-thinking model cannot answer
-    that at any ceiling worth paying for. Rather than send a request that is known
-    to come back empty, it raises ModelCannotSkipThinking and says so in words. Note
-    that this fires for an old model that merely does not know the parameter too:
-    that model would answer fine, but it is not one anybody is scoring with, and
-    guessing which of the two we are talking to would take the wasted call the flag
-    exists to avoid.
+    *require_thinking_off* is for the one caller that last request cannot help:
+    scoring asks for a single decimal in 10 tokens, and an always-thinking model
+    cannot answer that at any ceiling worth paying for. Rather than send a request
+    that is known to come back empty, it raises ModelCannotSkipThinking and says so
+    in words. Note that this fires for an old model that merely does not know the
+    parameter too: that model would answer fine, but it is not one anybody is
+    scoring with, and guessing which of the two we are talking to would take the
+    wasted call the flag exists to avoid.
     """
-    try:
-        return await client.messages.create(thinking=_ANTHROPIC_THINKING_OFF, **kwargs)
-    except Exception as exc:
-        if not _rejects_thinking_param(exc):
-            raise
-        if require_thinking_off:
-            raise ModelCannotSkipThinking(kwargs.get("model") or "This model") from exc
-        logger.info("Model %s rejected thinking=disabled; retrying without it",
-                    kwargs.get("model"))
-        if reasoning_headroom and kwargs.get("max_tokens"):
-            kwargs = {**kwargs, "max_tokens": kwargs["max_tokens"] + reasoning_headroom}
-        return await client.messages.create(**kwargs)
+    model = kwargs.get("model")
+    forms = _ANTHROPIC_THINKING_OFF_FORMS
+    if model in _anthropic_thinking_off_form:
+        known = _anthropic_thinking_off_form[model]
+        forms = () if known is None else forms[forms.index(known):]
+    last_exc: Exception | None = None
+    for form in forms:
+        try:
+            resp = await client.messages.create(thinking=form, **kwargs)
+        except Exception as exc:
+            if not _rejects_thinking_param(exc):
+                raise
+            last_exc = exc
+            continue
+        if model:
+            _anthropic_thinking_off_form[model] = form
+        return resp
+    if model and _anthropic_thinking_off_form.get(model, {}) is not None:
+        logger.info("Model %s cannot turn thinking off; sending requests without it",
+                    model)
+        _anthropic_thinking_off_form[model] = None
+    if require_thinking_off:
+        raise ModelCannotSkipThinking(model or "This model") from last_exc
+    if reasoning_headroom and kwargs.get("max_tokens"):
+        kwargs = {**kwargs, "max_tokens": kwargs["max_tokens"] + reasoning_headroom}
+    return await client.messages.create(**kwargs)
 
 
 async def _complete(

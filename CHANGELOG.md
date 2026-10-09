@@ -27,6 +27,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - New screenshots, each in a light and a dark version, in `landing.example.html` and the README. The install dialog of the app (PWA) shows them too.
 - The regex tips in the filter editor are now folded under a **Regex tips** link instead of always taking up space below the conditions.
 - Search finds Thai, Lao, Khmer and Burmese words inside running text, as it does for Chinese, Japanese and Korean. The basic relevance score doesn't handle these four languages yet.
+- Claude Sonnet 5.5 now runs with thinking off, like the other models, and can be used for scoring. Before, it thought on every request, which cost more and was slower. The AI cost table knows the newest Claude, OpenAI and Gemini models (Claude Haiku, Sonnet and Opus 5.5, GPT-6 Sol and Luna, among others), so their costs are no longer estimates.
 
 ### Fixed
 
