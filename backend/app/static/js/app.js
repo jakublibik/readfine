@@ -966,7 +966,10 @@ function _autoLoadArticleList() {
   if (view) {
     url = '/htmx/articles?' + view[1] + '_only=true';
     try { localStorage.setItem('lastNavItem', url); } catch (e) {}
-    history.replaceState(null, '', window.location.pathname);
+    // Only view= is consumed: an open_article_id next to it (the share target's
+    // "Read it now") is still read from the URL by _initDeeplinkDetail.
+    var rest = window.location.search.replace(/([?&])view=[^&]*&?/, '$1').replace(/[?&]$/, '');
+    history.replaceState(null, '', window.location.pathname + rest);
   } else {
     var saved;
     try { saved = localStorage.getItem('lastNavItem'); } catch (e) {}
@@ -1046,7 +1049,24 @@ function _initDeeplinkDetail() {
   if (!/[?&]open_article_id=/.test(window.location.search)) return;
   if (window._getCurrentBucket() === 'large') return;
   document.documentElement.classList.add('deeplink-detail-open');
+  // Back closes the overlay instead of leaving the app for the page the link was on
+  // (the share target, Stats). The list takes over the current entry, without the id
+  // so a reload lands on it, and the article gets one of its own, like the story overlay.
+  history.replaceState(null, '', window.location.pathname);
+  history.pushState({ deeplinkDetailOpen: true }, '');
 }
+
+// Emptied as well as lowered, for the same reason as the story overlay: the hidden
+// panel would otherwise go on answering for the open article.
+function _closeDeeplinkDetail() {
+  if (!document.documentElement.classList.contains('deeplink-detail-open')) return false;
+  if (window._dwellSend) window._dwellSend();
+  document.documentElement.classList.remove('deeplink-detail-open');
+  var panel = document.getElementById('article-detail');
+  if (panel) panel.innerHTML = '';
+  return true;
+}
+window._closeDeeplinkDetail = _closeDeeplinkDetail;
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', _initDeeplinkDetail);
 } else {
@@ -1434,8 +1454,10 @@ document.addEventListener('click', function (e) {
 // handler further down this file: that one returns early off the small bucket, and this
 // overlay opens in the 2-panel layout on a desktop too.
 window.addEventListener('popstate', function (e) {
-  if ((e.state || {}).storyDetailOpen) return;
+  var state = e.state || {};
+  if (state.storyDetailOpen || state.deeplinkDetailOpen) return;
   _closeStoryOverlay();
+  _closeDeeplinkDetail();
 });
 
 // The read button and the set-read endpoint carry the same answer as the scroll batch:
@@ -2348,6 +2370,7 @@ document.addEventListener('keydown', function (e) {
     // through rather than just a class to drop.
     if (_anyModalOpen()) { closeSearchModal(); closeFeedbackModal(); closeShortcutsModal(); return; }
     if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
+    if (window._closeDeeplinkDetail && window._closeDeeplinkDetail()) { history.back(); return; }
     closeSearchModal(); closeFeedbackModal(); closeShortcutsModal(); return;
   }
   if (e.key === 'Enter' && e.target.id === 'search-input') { submitSearch(); return; }
@@ -3703,6 +3726,7 @@ document.body.addEventListener('htmx:confirm', function (e) {
     // The story overlay flushes dwell and empties the panel itself, and it pushed one
     // entry however many members were read on it, so Back returns to the list either way.
     if (window._closeStoryOverlay && window._closeStoryOverlay()) { history.back(); return; }
+    if (window._closeDeeplinkDetail && window._closeDeeplinkDetail()) { history.back(); return; }
     // Flush dwell + stop the clock, else list-browsing time gets attributed to this article.
     if (window._dwellSend) window._dwellSend();
     document.documentElement.classList.remove('mobile-detail-open', 'deeplink-detail-open');

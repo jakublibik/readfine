@@ -398,6 +398,20 @@
       </select>
     </div>
 
+    {#- Desktop only: a bookmarks bar to drag onto is a desktop thing, and on a phone
+        the share sheet does the same job. Clicking it here does nothing, the CSP
+        blocks javascript: links on our own pages, so the hint says to drag. -#}
+    <div class="hidden md:flex items-center justify-between gap-4">
+      <div>
+        <label class="text-sm font-medium text-gray-700">Save bookmarklet</label>
+        <p class="text-xs text-gray-500 mt-0.5">Drag the button to your bookmarks bar. Clicking it on any page
+          opens that page in Readfine, ready to add to Saved.</p>
+      </div>
+      <a href="{{ bookmarklet }}" draggable="true"
+         class="shrink-0 px-3 py-1.5 border border-gray-300 rounded text-sm text-gray-700
+                bg-white hover:bg-gray-50 cursor-grab whitespace-nowrap">Save to Readfine</a>
+    </div>
+
   </div>
 </section>
 
