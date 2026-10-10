@@ -347,8 +347,9 @@
               when the filter runs:</p>
             <ul class="list-disc pl-5 mt-2 space-y-1">
               <li><strong>Basic</strong>: the basic score. Every article has one as soon as it arrives, so the filter runs
-                with the others, in run order. It applies to articles the AI scored too, so <em>basic below 30 → mark
-                read</em> also catches an article the AI gave 90. A threshold of 70 lets through about one article in ten.</li>
+                with the others, in run order. It ignores AI scores, so an article the AI rated highly still matches on its
+                basic score. To go by the AI score where there is one, use <strong>AI, else basic</strong>. A threshold
+                of 70 lets through about one article in ten.</li>
               <li><strong>AI</strong>: the AI score. Only articles a label filter sent to AI scoring have one, and the
                 filter runs once the score is in.</li>
               <li><strong>AI, else basic</strong>: the relevance score, the same number the article list shows. The filter
