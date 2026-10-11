@@ -12,6 +12,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-11
+
 ### Upgrade notes
 
 - If you installed with `setup.sh`, check your `.env`. Set `TRUSTED_PROXY_COUNT=1` (or `TRUST_CLOUDFLARE=true` behind Cloudflare): without it every visitor looked like one address, so anyone could keep the admin locked out of login. Rename `BASE_URL` to `PUBLIC_URL`, or emails from background jobs go out without a link. Keep your `ENCRYPTION_KEY` as it is, even though new installs get a stronger one: changing it makes stored passwords and API keys unreadable.
