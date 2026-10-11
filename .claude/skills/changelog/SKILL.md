@@ -31,4 +31,14 @@ tests, docs, formatting and renames without user impact.
 ## Before a deploy or release
 
 Compare `git log origin/master..dev` with `[Unreleased]` and add whatever notable is
-missing. The full rules are in `RELEASING.md` under "Keep entries short".
+missing. Then read the whole section once more:
+
+- Look for entries that overlap or contradict each other, also across categories, and
+  merge or rewrite them. Check each entry sits in the right category (something that
+  used to be broken is `Fixed`, not `Changed`).
+- `/changelog` shows `### Upgrade notes` to admins only. If a change there also affects
+  what users see or can do, say so in a user-facing entry too.
+- Check the order by impact within each category again; new entries tend to land at
+  the bottom.
+
+The full rules are in `RELEASING.md` under "Keep entries short".
