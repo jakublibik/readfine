@@ -14,10 +14,11 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Upgrade notes
 
-- Briefings now go to the account's own address only, unless you turn on **Briefings to other addresses** in **Admin → Settings** (off after the upgrade). Recipients already saved are kept and get mail again once it is on. Admins can always add them.
 - If you installed with `setup.sh`, check your `.env`. Set `TRUSTED_PROXY_COUNT=1` (or `TRUST_CLOUDFLARE=true` behind Cloudflare): without it every visitor looked like one address, so anyone could keep the admin locked out of login. Rename `BASE_URL` to `PUBLIC_URL`, or emails from background jobs go out without a link. Keep your `ENCRYPTION_KEY` as it is, even though new installs get a stronger one: changing it makes stored passwords and API keys unreadable.
+- Briefings now go to the account's own address only, unless you turn on **Briefings to other addresses** in **Admin → Settings** (off after the upgrade). Recipients already saved are kept and get mail again once it is on. Admins can always add them.
 - To get HSTS on an existing `setup.sh` install with a domain, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of `nginx.conf`. New installs have it.
 - Behind Cloudflare, UFW does not protect you, because it does not filter ports published by Docker. Use your hosting provider's firewall or Docker's `DOCKER-USER` chain instead (see the README).
+- If the database has articles in Thai, Lao, Khmer or Burmese, the upgrade rebuilds the search index. On a large instance this can take a few minutes.
 
 ### Added
 
@@ -25,28 +26,28 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Changed
 
-- Mail can now go out over port 465 (implicit TLS). Before, every send to that port hung until it timed out. The TLS box in **Admin → Settings → SMTP** is for STARTTLS on other ports such as 587.
-- A test briefing goes to your own address only. An account can have at most 5 briefings with additional recipients switched on (admins have no limit).
-- New rate limits: refreshing a feed by hand and adding a scrape feed (10 a minute), testing and applying filters, the term suggestions in **Settings → Relevance**, and OPML imports (10 an hour). A message in the article chat is limited to 2,000 characters, like the general chat.
-- New screenshots, each in a light and a dark version, in `landing.example.html` and the README. The install dialog of the app (PWA) shows them too.
-- The regex tips in the filter editor are now folded under a **Regex tips** link instead of always taking up space below the conditions.
-- Search finds Thai, Lao, Khmer and Burmese words inside running text, as it does for Chinese, Japanese and Korean. The basic relevance score doesn't handle these four languages yet.
 - Claude Sonnet 5.5 now runs with thinking off, like the other models, and can be used for scoring. Before, it thought on every request, which cost more and was slower. The AI cost table knows the newest Claude, OpenAI and Gemini models (Claude Haiku, Sonnet and Opus 5.5, GPT-6 Sol and Luna, among others), so their costs are no longer estimates.
+- Briefings go only to your own address, unless the admin allows other addresses in **Admin → Settings**. A test briefing always goes to your own address, and an account can have at most 5 briefings with other recipients (admins have no limit).
+- The regex tips in the filter editor are now folded under a **Regex tips** link instead of always taking up space below the conditions.
+- New rate limits: refreshing a feed by hand and adding a scrape feed (10 a minute), testing and applying filters, the term suggestions in **Settings → Relevance**, and OPML imports (10 an hour). A message in the article chat is limited to 2,000 characters, like the general chat.
+- Search finds Thai, Lao, Khmer and Burmese words inside running text, as it does for Chinese, Japanese and Korean. The basic relevance score doesn't handle these four languages yet.
+- New screenshots, each in a light and a dark version, in `landing.example.html` and the README. The install dialog of the app (PWA) shows them too.
 
 ### Fixed
 
 - A slow feed server could stop all feed fetching until a restart and make logins hang, and a slow custom AI endpoint could hold up scores and summaries for every account. Fetches and model calls now have an overall time limit (for AI: 2 minutes for a score, 5 for a summary or chat, 10 for a digest) and are retried later. Sending mail no longer holds up the app either.
+- Mail over port 465 (implicit TLS) hung on every send until it timed out. It works now. The TLS box in **Admin → Settings → SMTP** is for STARTTLS on other ports such as 587.
 - An install reached by IP address over plain HTTP could not log in. Set the new `SESSION_COOKIE_SECURE=false` (`setup.sh` does it for IP installs), on a home network only.
-- A deactivated account kept sending its briefings, spending its AI key and serving its shared article links. All of it now stops until the account is reactivated.
-- Labels stayed on articles you had lost access to (after unsubscribing, or unstarring or unsaving an article with no feed). The article sat in the label's list but could not be opened or marked read. Deleting a label also left its "add label" action in your filters, and saving such a filter failed. Both now go with the access or the label, a filter left with no action is turned off, and the upgrade removes the leftovers.
-- One failed feed in an OPML import made every feed after it fail too. Each feed now fails on its own, with the reason in plain words, and a rejected import shows a message instead of replacing the page.
-- Input the app does not accept (a name that is too long, only spaces, or already taken) ended in a server error page. The app and the API now say what was wrong, the API with 400 or 409. Adding a feed through the API whose address cannot be fetched now answers 400 with the reason too.
-- A wrong API key or model name now says so everywhere the AI is used, instead of "try again" or the provider's raw response.
 - Some sidebar and title bar counts didn't match their list, because they counted articles retention had removed or a grouped story as several rows.
+- A wrong API key or model name now says so everywhere the AI is used, instead of "try again" or the provider's raw response.
+- Labels stayed on articles you had lost access to (after unsubscribing, or unstarring or unsaving an article with no feed). The article sat in the label's list but could not be opened or marked read. Deleting a label also left its "add label" action in your filters, and saving such a filter failed. Both now go with the access or the label, a filter left with no action is turned off, and the upgrade removes the leftovers.
 - Feeds in an encoding such as windows-1250, named only inside the feed, showed garbled accented letters.
-- The basic relevance score could not read Hindi, Bengali, Tamil and other Indic text. Their vowel signs were dropped like accents, which left words in pieces. The term table is rebuilt on its own after the upgrade. In search, `word*` now also works for words that end in a vowel sign, and reading time for these articles is no longer two or three times too long.
+- One failed feed in an OPML import made every feed after it fail too. Each feed now fails on its own, with the reason in plain words, and a rejected import shows a message instead of replacing the page.
 - A scrape feed with an invalid CSS selector failed on every fetch with "Internal error". Such a selector is now refused when you add or edit the feed. **Regenerate** in the AI selector now uses your note about the previous attempt.
+- A deactivated account kept sending its briefings, spending its AI key and serving its shared article links. All of it now stops until the account is reactivated.
 - Deleting an account now also deletes the articles only that account kept. The per-feed article cap (`purge_keep_count`) no longer keeps fewer articles than set.
+- Input the app does not accept (a name that is too long, only spaces, or already taken) ended in a server error page. The app and the API now say what was wrong, the API with 400 or 409. Adding a feed through the API whose address cannot be fetched now answers 400 with the reason too.
+- The basic relevance score could not read Hindi, Bengali, Tamil and other Indic text. Their vowel signs were dropped like accents, which left words in pieces. The term table is rebuilt on its own after the upgrade. In search, `word*` now also works for words that end in a vowel sign, and reading time for these articles is no longer two or three times too long.
 - `PATCH /api/v1/articles/{id}` now returns the same fields as a `GET`, and a search with a very long query no longer ends in a server error.
 - Smaller fixes: articles scrolled past just before closing the tab could stay unread, a labelled article could miss its AI score, a feed with an item dated far ahead showed its last article in the future, and renaming or deleting a saved **Catch me up** configuration could replace the list with an error. Clicking a label in the sidebar no longer makes its count jump left. The **Saved** count now goes up as soon as you save a link. In dark mode, the "dormant" date and "unverified" badges in **Admin → Users** are readable again. Removing a feed or folder now also warns about inactive filters scoped only to it. An article opened from a link (in **Stats**, for example) on a phone or in the 2-panel layout now closes back to the list, where Back used to leave the app.
 
