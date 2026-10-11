@@ -114,7 +114,7 @@
   </p>
   {% endif %}
   <p class="text-xs text-gray-500 mb-4">
-    Enter a model alias (e.g. <code class="font-mono">claude-haiku-4-5</code>) or a specific version ID. Aliases always resolve to the latest version.
+    Enter a model alias (e.g. <code class="font-mono">claude-haiku-5-5</code>) or a specific version ID. Aliases always resolve to the latest version.
   </p>
 
   {# Above the slots, and inside this form rather than the API Keys one: Verify
@@ -170,7 +170,7 @@
       <div class="flex items-center gap-2 sm:gap-3 sm:flex-1">
         <input type="text" name="ai_{{ slot }}_model" maxlength="100"
                value="{{ model_val or '' }}"
-               placeholder="e.g. {{ 'claude-haiku-4-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
+               placeholder="e.g. {{ 'claude-haiku-5-5' if slot == 'fast' else 'claude-sonnet-4-6' }}"
                class="flex-1 min-w-0 border border-gray-300 rounded px-2 py-1.5 text-sm font-mono">
         <button type="button"
                 hx-post="/settings/ai/verify/{{ slot }}"

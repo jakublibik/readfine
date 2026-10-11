@@ -19,6 +19,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - To get HSTS on an existing `setup.sh` install with a domain, add `add_header Strict-Transport-Security "max-age=31536000" always;` to the `listen 443` block of `nginx.conf`. New installs have it.
 - Behind Cloudflare, UFW does not protect you, because it does not filter ports published by Docker. Use your hosting provider's firewall or Docker's `DOCKER-USER` chain instead (see the README).
 
+### Added
+
+- A bookmarklet for saving the page you are on. Drag **Save to Readfine** from **Settings → Preferences** to your bookmarks bar, click it on any page and press **Save**. The article lands in **Saved**, like a link pasted there, and **Read it now** opens it with the **Saved** list next to it (from the Android share sheet too).
+
 ### Changed
 
 - Mail can now go out over port 465 (implicit TLS). Before, every send to that port hung until it timed out. The TLS box in **Admin → Settings → SMTP** is for STARTTLS on other ports such as 587.
@@ -26,6 +30,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - New rate limits: refreshing a feed by hand and adding a scrape feed (10 a minute), testing and applying filters, the term suggestions in **Settings → Relevance**, and OPML imports (10 an hour). A message in the article chat is limited to 2,000 characters, like the general chat.
 - New screenshots, each in a light and a dark version, in `landing.example.html` and the README. The install dialog of the app (PWA) shows them too.
 - The regex tips in the filter editor are now folded under a **Regex tips** link instead of always taking up space below the conditions.
+- Search finds Thai, Lao, Khmer and Burmese words inside running text, as it does for Chinese, Japanese and Korean. The basic relevance score doesn't handle these four languages yet.
+- Claude Sonnet 5.5 now runs with thinking off, like the other models, and can be used for scoring. Before, it thought on every request, which cost more and was slower. The AI cost table knows the newest Claude, OpenAI and Gemini models (Claude Haiku, Sonnet and Opus 5.5, GPT-6 Sol and Luna, among others), so their costs are no longer estimates.
 
 ### Fixed
 
@@ -38,10 +44,11 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - A wrong API key or model name now says so everywhere the AI is used, instead of "try again" or the provider's raw response.
 - Some sidebar and title bar counts didn't match their list, because they counted articles retention had removed or a grouped story as several rows.
 - Feeds in an encoding such as windows-1250, named only inside the feed, showed garbled accented letters.
+- The basic relevance score could not read Hindi, Bengali, Tamil and other Indic text. Their vowel signs were dropped like accents, which left words in pieces. The term table is rebuilt on its own after the upgrade. In search, `word*` now also works for words that end in a vowel sign, and reading time for these articles is no longer two or three times too long.
 - A scrape feed with an invalid CSS selector failed on every fetch with "Internal error". Such a selector is now refused when you add or edit the feed. **Regenerate** in the AI selector now uses your note about the previous attempt.
 - Deleting an account now also deletes the articles only that account kept. The per-feed article cap (`purge_keep_count`) no longer keeps fewer articles than set.
 - `PATCH /api/v1/articles/{id}` now returns the same fields as a `GET`, and a search with a very long query no longer ends in a server error.
-- Smaller fixes: articles scrolled past just before closing the tab could stay unread, a labelled article could miss its AI score, a feed with an item dated far ahead showed its last article in the future, and renaming or deleting a saved **Catch me up** configuration could replace the list with an error. Clicking a label in the sidebar no longer makes its count jump left. The **Saved** count now goes up as soon as you save a link. In dark mode, the "dormant" date and "unverified" badges in **Admin → Users** are readable again. Removing a feed or folder now also warns about inactive filters scoped only to it.
+- Smaller fixes: articles scrolled past just before closing the tab could stay unread, a labelled article could miss its AI score, a feed with an item dated far ahead showed its last article in the future, and renaming or deleting a saved **Catch me up** configuration could replace the list with an error. Clicking a label in the sidebar no longer makes its count jump left. The **Saved** count now goes up as soon as you save a link. In dark mode, the "dormant" date and "unverified" badges in **Admin → Users** are readable again. Removing a feed or folder now also warns about inactive filters scoped only to it. An article opened from a link (in **Stats**, for example) on a phone or in the 2-panel layout now closes back to the list, where Back used to leave the app.
 
 ### Removed
 

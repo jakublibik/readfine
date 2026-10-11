@@ -190,6 +190,18 @@ def _dormancy_off(request):
         yield
 
 
+# ── Anthropic thinking switch ─────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _forget_thinking_off_forms():
+    """Which off switch a model took is remembered per process. Tests mock a model's
+    answers one way and the next test another, so none may inherit the memory."""
+    from app.services.ai_service import _anthropic_thinking_off_form
+    _anthropic_thinking_off_form.clear()
+    yield
+    _anthropic_thinking_off_form.clear()
+
+
 # ── Client fixtures ───────────────────────────────────────────────────────────
 
 @pytest.fixture

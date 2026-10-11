@@ -133,8 +133,8 @@
               to open search without reaching for the mouse, or use the magnifier in the sidebar header. You can scope
               a search by feed, folder, label, read status, your starred, saved or archived articles, score and how recently it was published (the last day, week, month and so on), and sort the results, best score first if you like.
               A search with no words and just a score condition gives you a list of your best articles.
-              Chinese, Japanese and Korean words are found inside running text too, though a search for a single
-              character only looks at titles.
+              Chinese, Japanese and Korean words are found inside running text too, and so are Thai, Lao, Khmer and
+              Burmese ones, though a search for a single character only looks at titles.
               <strong>Save</strong> in the results header keeps a search in the sidebar; see
               <a href="#saved-searches" class="text-blue-600 hover:underline dark:text-blue-400">How do saved searches work?</a>.
               Besides Unread and Read, which follow the read mark (scrolling past sets it too), the status can be
@@ -304,7 +304,8 @@
                 languages with many word endings, such as Czech or Polish, with no language setting.</li>
               <li><strong>Other languages are just more terms.</strong> If you read in two languages, add the translation:
                 <code>cycling, ciclismo</code>. Chinese, Japanese and Korean terms work too, and must appear in the article
-                as written.</li>
+                as written. Thai, Lao, Khmer and Burmese don't work yet: they write without spaces between words, and
+                the score can't tell where a word ends.</li>
             </ul>
             <p class="mt-2">It looks at the title and the first 300 characters of each article and matches words, not
               meaning: it cannot tell that a report from the Tour de France is about cycling unless one of your terms
@@ -346,8 +347,9 @@
               when the filter runs:</p>
             <ul class="list-disc pl-5 mt-2 space-y-1">
               <li><strong>Basic</strong>: the basic score. Every article has one as soon as it arrives, so the filter runs
-                with the others, in run order. It applies to articles the AI scored too, so <em>basic below 30 → mark
-                read</em> also catches an article the AI gave 90. A threshold of 70 lets through about one article in ten.</li>
+                with the others, in run order. It ignores AI scores, so an article the AI rated highly still matches on its
+                basic score. To go by the AI score where there is one, use <strong>AI, else basic</strong>. A threshold
+                of 70 lets through about one article in ten.</li>
               <li><strong>AI</strong>: the AI score. Only articles a label filter sent to AI scoring have one, and the
                 filter runs once the score is in.</li>
               <li><strong>AI, else basic</strong>: the relevance score, the same number the article list shows. The filter
@@ -480,6 +482,10 @@
               readable extraction as a normal article. Saved articles stay until you remove them, so
               <a href="#purge" class="text-blue-600 hover:underline dark:text-blue-400">retention</a> never takes them
               away.</p>
+            <p class="mt-2">You can also save a page while you are on it. On a computer, drag the
+              <strong>Save bookmarklet</strong> from <a href="/settings/preferences" class="text-blue-600 hover:underline dark:text-blue-400">Settings &gt; Preferences</a>
+              to your bookmarks bar, then click it on any page and press <strong>Save</strong>. On Android, the
+              <a href="#install" class="text-blue-600 hover:underline dark:text-blue-400">installed app</a> does the same from the share sheet.</p>
           </div>
 
           <div id="saved-searches" class="py-5 first:pt-0 last:pb-0">

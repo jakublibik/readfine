@@ -23,9 +23,9 @@
   var SOURCE_LABELS = { ai: 'AI', basic: 'Basic', relevance: 'AI, else basic' };
   var SOURCE_HINTS = {
     ai: 'Only articles a label filter sent to AI scoring have an AI score.',
-    basic: 'Every article has a basic score, including ones the AI scored: ' +
-           'basic below 30 → mark read also catches an article the AI gave 90. ' +
-           'A threshold of 70 lets through about one article in ten.',
+    basic: 'This ignores AI scores: an article the AI rated highly still matches ' +
+           'on its basic score. To go by the AI score where there is one, pick ' +
+           'AI, else basic. At 70, about one article in ten passes.',
     relevance: 'AI, else basic uses the AI score where an article has one and ' +
                'the basic score otherwise, the same number the article list shows.',
   };

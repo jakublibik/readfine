@@ -23,7 +23,9 @@ from app.services.ai_service import (
     _rejects_thinking_param,
     _summary_token_budget,
     _ANTHROPIC_REASONING_BUDGET,
+    _ANTHROPIC_THINKING_BETWEEN_TOOLS,
     _ANTHROPIC_THINKING_OFF,
+    _anthropic_thinking_off_form,
     _OPENAI_REASONING_BUDGET,
     _SUMMARY_CHARS_PER_TOKEN,
     _SUMMARY_MAX_TOKENS,
@@ -245,6 +247,10 @@ class TestExtractTruncated:
         assert _extract_truncated("nope", SimpleNamespace()) is False
 
 
+def _refused():
+    return _ApiError(400, "thinking cannot be disabled")
+
+
 class TestRejectsThinkingParam:
     """Only a 400 about the parameter itself may trigger the retry — anything else
     has to keep surfacing as the error it is."""
@@ -286,12 +292,13 @@ class TestAnthropicCreate:
     async def test_model_that_refuses_gets_the_plain_request(self):
         create = AsyncMock(side_effect=[
             _ApiError(400, "thinking: 'disabled' is not supported by this model"),
+            _ApiError(400, "thinking: 'between_tools' is not supported by this model"),
             "ok",
         ])
         client = SimpleNamespace(messages=SimpleNamespace(create=create))
         result = await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
         assert result == "ok"
-        assert create.call_count == 2
+        assert create.call_count == 3
         assert "thinking" not in create.call_args.kwargs
         # The retry is the request we would have sent before any of this existed.
         assert create.call_args.kwargs == {"model": "claude-fable-5", "max_tokens": 10}
@@ -316,7 +323,7 @@ class TestAnthropicCreate:
     async def test_headroom_lets_the_answer_survive_alongside_reasoning(self):
         """A model that cannot switch thinking off shares max_tokens with it, so a
         summary sized for the answer alone came back cut off mid-sentence."""
-        create = AsyncMock(side_effect=[_ApiError(400, "thinking cannot be disabled"), "ok"])
+        create = AsyncMock(side_effect=[_refused(), _refused(), "ok"])
         client = SimpleNamespace(messages=SimpleNamespace(create=create))
         result = await _anthropic_create(
             client, reasoning_headroom=8000, model="claude-fable-5", max_tokens=400,
@@ -338,21 +345,91 @@ class TestAnthropicCreate:
         """Scoring wants one decimal in 10 tokens. An always-thinking model cannot
         do that at any ceiling worth paying for, so it fails rather than costing
         8000 tokens per article."""
-        create = AsyncMock(side_effect=[_ApiError(400, "thinking cannot be disabled"), "ok"])
+        create = AsyncMock(side_effect=[_refused(), _refused(), "ok"])
         client = SimpleNamespace(messages=SimpleNamespace(create=create))
         await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
         assert create.call_args.kwargs["max_tokens"] == 10
 
     @pytest.mark.asyncio
     async def test_a_refusing_model_that_fails_again_raises_the_second_error(self):
-        create = AsyncMock(side_effect=[
-            _ApiError(400, "thinking cannot be disabled"),
-            _ApiError(429, "rate limit"),
-        ])
+        create = AsyncMock(side_effect=[_refused(), _refused(), _ApiError(429, "rate limit")])
         client = SimpleNamespace(messages=SimpleNamespace(create=create))
         with pytest.raises(_ApiError) as exc:
             await _anthropic_create(client, model="claude-fable-5", max_tokens=10)
         assert exc.value.status_code == 429
+
+
+class TestThinkingOffSwitches:
+    """Sonnet 5.5 refuses "disabled" but turns thinking off with "between_tools".
+    Which switch a model takes is learned once and remembered, so the refusals are
+    not paid again on every call."""
+
+    @pytest.mark.asyncio
+    async def test_between_tools_is_the_second_try(self):
+        create = AsyncMock(side_effect=[_refused(), "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        result = await _anthropic_create(
+            client, reasoning_headroom=8000, model="claude-sonnet-5-5", max_tokens=400,
+        )
+        assert result == "ok"
+        assert create.call_args.kwargs["thinking"] == _ANTHROPIC_THINKING_BETWEEN_TOOLS
+        # Thinking is off, so there is nothing to make room for.
+        assert create.call_args.kwargs["max_tokens"] == 400
+
+    @pytest.mark.asyncio
+    async def test_scoring_works_on_a_model_with_between_tools(self):
+        create = AsyncMock(side_effect=[_refused(), "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        result = await _anthropic_create(
+            client, require_thinking_off=True, model="claude-sonnet-5-5", max_tokens=10,
+        )
+        assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_the_switch_that_worked_is_sent_first_next_time(self):
+        create = AsyncMock(side_effect=[_refused(), "ok", "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        await _anthropic_create(client, model="claude-sonnet-5-5", max_tokens=10)
+        await _anthropic_create(client, model="claude-sonnet-5-5", max_tokens=10)
+        assert create.call_count == 3
+        assert create.call_args.kwargs["thinking"] == _ANTHROPIC_THINKING_BETWEEN_TOOLS
+
+    @pytest.mark.asyncio
+    async def test_a_model_without_a_switch_is_asked_plainly_next_time(self):
+        create = AsyncMock(side_effect=[_refused(), _refused(), "ok", "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        await _anthropic_create(client, model="claude-opus-5-5", max_tokens=10)
+        await _anthropic_create(client, model="claude-opus-5-5", max_tokens=10)
+        assert create.call_count == 4
+        assert "thinking" not in create.call_args.kwargs
+        assert _anthropic_thinking_off_form["claude-opus-5-5"] is None
+
+    @pytest.mark.asyncio
+    async def test_scoring_on_a_known_always_thinking_model_sends_nothing(self):
+        _anthropic_thinking_off_form["claude-fable-5"] = None
+        create = AsyncMock(return_value="ok")
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(ModelCannotSkipThinking):
+            await _anthropic_create(
+                client, require_thinking_off=True, model="claude-fable-5", max_tokens=10,
+            )
+        assert create.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_memory_is_per_model(self):
+        create = AsyncMock(side_effect=[_refused(), "ok", "ok"])
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        await _anthropic_create(client, model="claude-sonnet-5-5", max_tokens=10)
+        await _anthropic_create(client, model="claude-haiku-5-5", max_tokens=10)
+        assert create.call_args.kwargs["thinking"] == _ANTHROPIC_THINKING_OFF
+
+    @pytest.mark.asyncio
+    async def test_an_unrelated_error_teaches_nothing(self):
+        create = AsyncMock(side_effect=_ApiError(429, "rate limit"))
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        with pytest.raises(_ApiError):
+            await _anthropic_create(client, model="claude-sonnet-5-5", max_tokens=10)
+        assert "claude-sonnet-5-5" not in _anthropic_thinking_off_form
 
 
 class TestEmptyResponseDetailNamesCrowdedOutAnswer:
@@ -553,7 +630,8 @@ class TestScoringRefusesAnAlwaysThinkingModel:
                 client, require_thinking_off=True,
                 model="claude-fable-5", max_tokens=10,
             )
-        assert create.call_count == 1
+        # Both off switches asked for, the request without one never sent.
+        assert create.call_count == 2
         assert "claude-fable-5" in str(exc.value)
 
     @pytest.mark.asyncio
@@ -582,13 +660,14 @@ class TestScoringRefusesAnAlwaysThinkingModel:
             await ai_service.score_article(
                 "An article.", "Likes tests", client, "anthropic", "claude-fable-5",
             )
-        assert create.call_count == 1
+        assert create.call_count == 2
 
     @pytest.mark.asyncio
     async def test_summaries_keep_their_retry(self):
         """The same model is fine for a summary, which can be given room to think."""
         create = AsyncMock(side_effect=[
-            _ApiError(400, "thinking cannot be disabled"),
+            _refused(),
+            _refused(),
             SimpleNamespace(
                 content=[SimpleNamespace(type="text", text="A summary.")],
                 usage=SimpleNamespace(input_tokens=100, output_tokens=20),
@@ -600,7 +679,7 @@ class TestScoringRefusesAnAlwaysThinkingModel:
             "An article.", client, "anthropic", "claude-fable-5",
         )
         assert answer.text == "A summary."
-        assert create.call_count == 2
+        assert create.call_count == 3
 
     def test_the_job_retry_policy_reads_it_as_permanent(self):
         """Three attempts at a request that cannot succeed is three times the cost

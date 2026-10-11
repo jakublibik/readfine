@@ -1,9 +1,12 @@
 """Web routes for reading/display preferences in settings."""
+import json
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.config import settings as app_config
 from app.database import get_db
 from app.models.user import User
 from app.services.briefing_service import reschedule_briefings
@@ -25,6 +28,24 @@ from .common import _get_or_create_settings
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
+def _bookmarklet(request: Request) -> str:
+    """A `javascript:` link that opens the share target with the current page filled in.
+
+    The address is this instance's own, from PUBLIC_URL when set, so the link keeps
+    working on a self-hosted install. It arrives at /share-target as cross-site, which
+    turns off saving on load: the page shows the address and waits for Save.
+
+    noopener, or the page the bookmarklet was clicked on keeps a handle on our tab and
+    can later send it somewhere else, such as a fake login.
+    """
+    base = (app_config.public_url or str(request.base_url)).rstrip("/")
+    target = json.dumps(f"{base}/share-target?url=")
+    return (
+        f"javascript:void(window.open({target}+encodeURIComponent(location.href)"
+        "+'&title='+encodeURIComponent(document.title),'_blank','noopener'))"
+    )
+
+
 @router.get("/preferences", response_class=HTMLResponse)
 async def settings_preferences(
     request: Request,
@@ -36,6 +57,7 @@ async def settings_preferences(
         "s": s,
         "suppressed_week": await count_suppressed(user.id, db),
         "suppressed_days": SUPPRESSED_DAYS,
+        "bookmarklet": _bookmarklet(request),
     })
 
 
@@ -144,4 +166,5 @@ async def settings_preferences_save(
         "saved": True,
         "suppressed_week": await count_suppressed(user.id, db),
         "suppressed_days": SUPPRESSED_DAYS,
+        "bookmarklet": _bookmarklet(request),
     })

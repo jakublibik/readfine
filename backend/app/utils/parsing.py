@@ -5,6 +5,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import feedparser
 import nh3
+import regex as _regex
 
 
 # Tracking parameters that identify the referrer rather than the article, so two
@@ -217,6 +218,12 @@ _UNSPACED_CJK_RE = re.compile(
     "[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ]"
 )
 
+# `regex` and not `re`, because its `\w` includes combining marks: under `re` every
+# vowel sign in Hindi or Tamil ended a word, and "हिन्दी समाचार" counted as six. A
+# word starts with a letter or digit, or the variation selector after an emoji and
+# a stray zero-width joiner would count as words of their own.
+_WORD_RE = _regex.compile(r"[\p{L}\p{N}_]\w*")
+
 
 def count_text_words(text: str | None) -> int:
     """Words in plain text. Chinese and Japanese characters count as half a word each,
@@ -226,7 +233,7 @@ def count_text_words(text: str | None) -> int:
         return 0
     cjk = len(_UNSPACED_CJK_RE.findall(text))
     rest = _UNSPACED_CJK_RE.sub(" ", text) if cjk else text
-    return len(re.findall(r"\w+", rest)) + (cjk + 1) // 2
+    return len(_WORD_RE.findall(rest)) + (cjk + 1) // 2
 
 
 def count_words(html: str | None) -> int:

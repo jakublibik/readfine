@@ -184,6 +184,10 @@ class TestCountWords:
     def test_korean_counts_by_spaces(self):
         assert count_text_words("서울 날씨가 좋다") == 3
 
+    def test_indic_vowel_signs_do_not_split_words(self):
+        assert count_text_words("हिन्दी समाचार") == 2
+        assert count_text_words("தமிழ் செய்திகள்") == 2
+
     def test_long_chinese_body_clears_full_content_threshold(self):
         # A 1200-character article is a full article, not a 1-word teaser
         assert count_words("<p>" + "中文内容。" * 300 + "</p>") > 500

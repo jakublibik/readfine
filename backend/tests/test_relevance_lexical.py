@@ -73,6 +73,27 @@ class TestTokenize:
     def test_full_width_latin_is_folded(self):
         assert rs.tokenize("ＡＩ") == ["ai"]
 
+    @pytest.mark.parametrize("text, tokens", [
+        ("हिन्दी समाचार", ["हिन्दी", "समाचार"]),
+        ("বাংলা সংবাদ", ["বাংলা", "সংবাদ"]),
+        ("தமிழ் செய்திகள்", ["தமிழ்", "செய்திகள்"]),
+    ])
+    def test_indic_vowel_signs_are_part_of_the_word(self, text, tokens):
+        """They are combining marks, and stripping them as accents left `नद`."""
+        assert rs.tokenize(text) == tokens
+
+    def test_arabic_and_hebrew_vowel_points_are_dropped(self):
+        assert rs.tokenize("الذَّكَاءُ الذكاء") == ["الذكاء", "الذكاء"]
+        assert rs.tokenize("שָׁלוֹם שלום") == ["שלום", "שלום"]
+
+    def test_an_emoji_variation_selector_splits_the_word(self):
+        """A mark with no combining class, on a symbol: never part of a word."""
+        assert rs.tokenize("⚠️BREAKING news") == ["breaking", "news"]
+
+    def test_zero_width_joiners_are_ignored(self):
+        assert rs.tokenize("‌resulting") == ["resulting"]
+        assert rs.tokenize("آتش‌بس") == ["اتشبس"]
+
 
 class TestParseTerms:
     def test_new_lines_separate_terms(self):
