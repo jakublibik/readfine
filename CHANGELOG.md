@@ -12,6 +12,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+### Fixed
+
+- After a change of `SECRET_KEY`, or with a second Readfine on the same host (the demo next to a real install, for example), every action failed with "403" until you cleared your cookies. The page now picks up a fresh security token by itself.
+
 ## [0.21.0] - 2026-10-11
 
 ### Upgrade notes

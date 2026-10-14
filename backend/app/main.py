@@ -13,11 +13,11 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
-from starlette_csrf import CSRFMiddleware
 from slowapi.errors import RateLimitExceeded
 
 from sqlalchemy import select, text
 
+from app.auth.csrf import ReissuingCSRFMiddleware
 from app.config import settings
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
@@ -121,7 +121,7 @@ def create_app() -> FastAPI:
         max_age=settings.session_max_age_days * 24 * 3600,
     )
     app.add_middleware(
-        CSRFMiddleware,
+        ReissuingCSRFMiddleware,
         secret=settings.secret_key,
         # API uses Bearer tokens; auth forms are exempt (no session yet, or low-risk logout)
         exempt_urls=[
