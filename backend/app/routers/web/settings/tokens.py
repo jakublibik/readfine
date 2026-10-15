@@ -51,7 +51,7 @@ async def settings_tokens_create(
         return templates.TemplateResponse(request, "settings/tokens.html", {
             "tokens": tokens,
             "error": "Token name cannot be empty.",
-        }, status_code=422)
+        })
 
     raw_token = generate_token()
     token_prefix = raw_token[:8]

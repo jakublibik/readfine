@@ -38,7 +38,6 @@
             {% endif %}
 
             <form method="post" action="/resend-verification" class="space-y-3">
-                <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
                 <div>
                     <label class="block text-sm font-medium mb-1" for="resend_email">Resend verification email</label>
                     <input id="resend_email" name="email" type="email" required

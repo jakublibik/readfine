@@ -36,7 +36,6 @@
         {% endif %}
 
         <form method="post" action="/login" class="bg-white shadow rounded-lg p-6 space-y-4">
-            <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
             {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
             <div>
                 <label class="block text-sm font-medium mb-1" for="email">Email</label>
