@@ -16,6 +16,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 - After a change of `SECRET_KEY`, or with a second Readfine on the same host (the demo next to a real install, for example), every action failed with "403" until you cleared your cookies. The page now picks up a fresh security token by itself.
 - Creating an API token in **Settings → API Tokens** failed with "403". It works again.
+- On a new instance, relevance scores show up within a minute instead of up to 20 minutes later, and they also match words that so far appear in just one article.
 
 ## [0.21.0] - 2026-10-11
 

@@ -48,11 +48,18 @@ BODY_FETCH_CHARS = 4000
 _INSERT_CHUNK = 5000
 
 # Below this, the instance is still filling up and the statistics are worth
-# recounting as often as anyone asks: a corpus of a few dozen articles at
-# min_df=3 has almost no terms in it, so the scores it produces are close to
-# useless and the rebuild that fixes them costs milliseconds. Above it, the
-# nightly job is enough.
-BOOTSTRAP_MAX_DOCS = 500
+# recounting whenever articles arrive: a young corpus misses words its next
+# fetch will bring, and the rebuild that adds them costs under 100 ms at this
+# size. Above it, the nightly job is enough.
+BOOTSTRAP_MAX_DOCS = 2000
+# Below this, every word counts (SMALL_CORPUS_MIN_DF), above it the long tail
+# is dropped (MIN_DF). Measured on the dev database, a corpus of 500 articles
+# at min_df=3 knows half the common words min_df=1 does, and min_df=3 only
+# catches up around a few thousand. A cutoff any lower would make terms a new
+# account already scores on unknown again, and the backfill after that build
+# would zero their scores. The table stays small: about 30k terms at 5000.
+SMALL_CORPUS_MAX_DOCS = 5000
+SMALL_CORPUS_MIN_DF = 1
 
 _cached: CorpusStats | None = None
 _cached_built_at: datetime | None = None
@@ -78,8 +85,11 @@ async def _iter_texts(db: AsyncSession, cutoff: datetime):
 
 
 async def rebuild(db: AsyncSession, *, window_days: int = WINDOW_DAYS,
-                  min_df: int = MIN_DF) -> dict:
+                  min_df: int | None = None) -> dict:
     """Recount the corpus and replace the stored tables. Idempotent.
+
+    Without an explicit `min_df`, the cutoff follows the size of the corpus:
+    SMALL_CORPUS_MIN_DF below SMALL_CORPUS_MAX_DOCS, MIN_DF above it.
 
     One streaming pass counts tokens and token prefixes together. The counters
     are the job's whole memory cost, around 100 MB at the peak for a month of a
@@ -99,6 +109,8 @@ async def rebuild(db: AsyncSession, *, window_days: int = WINDOW_DAYS,
             doc_freq[t] = doc_freq.get(t, 0) + 1
         for p in prefixes:
             prefix_freq[p] = prefix_freq.get(p, 0) + 1
+    if min_df is None:
+        min_df = SMALL_CORPUS_MIN_DF if n_docs < SMALL_CORPUS_MAX_DOCS else MIN_DF
     terms = [{"term": t, "doc_freq": df} for t, df in doc_freq.items()
              if df >= min_df and len(t) <= TERM_MAX_CHARS]
     del doc_freq
@@ -142,7 +154,10 @@ async def ensure_built(db: AsyncSession, **rebuild_kwargs) -> bool:
     handful of articles, and a corpus that small is worth redoing as the feeds
     fill in. A table counted by another tokenizer is rebuilt at once as well,
     which is how an upgrade that changes tokenization takes effect without
-    waiting for the night.
+    waiting for the night. While the corpus is small, it is recounted only when
+    the number of articles in the window has changed since the last count, so an
+    instance that stays below BOOTSTRAP_MAX_DOCS does not redo it, and rescore
+    every account, on each run.
 
     Costs one small query on an instance that is past that stage. The job passes
     no `rebuild_kwargs`; they exist so a test can narrow the window.
@@ -152,8 +167,17 @@ async def ensure_built(db: AsyncSession, **rebuild_kwargs) -> bool:
         .where(LexicalCorpus.id == 1)
     )).first()
     if (row is not None and row.built_at is not None
-            and row.n_docs >= BOOTSTRAP_MAX_DOCS and row.tokenizer == TOKENIZER):
-        return False
+            and row.tokenizer == TOKENIZER):
+        if row.n_docs >= BOOTSTRAP_MAX_DOCS:
+            return False
+        # Capped at the threshold, so the count stays cheap whatever the table holds.
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=rebuild_kwargs.get("window_days", WINDOW_DAYS))
+        in_window = await db.scalar(select(func.count()).select_from(
+            select(Article.id).where(Article.fetched_at >= cutoff)
+            .limit(BOOTSTRAP_MAX_DOCS).subquery()))
+        if in_window == row.n_docs:
+            return False
     if not await db.scalar(select(Article.id).limit(1)):
         return False  # nothing to count yet; a brand new instance with no fetch
     await rebuild(db, **rebuild_kwargs)
