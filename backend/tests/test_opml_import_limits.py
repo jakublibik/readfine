@@ -319,5 +319,7 @@ async def test_rate_limited_feed_is_added_unchecked_and_a_dead_one_is_not(pg, mo
     assert await pg.scalar(select(UserFeed).where(
         UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)) is not None
     assert await pg.scalar(select(Feed).where(Feed.feed_url == gone)) is None
-    assert any("rate-limiting" in w for w in result.warnings)
-    assert any(gone in w and "404" in w for w in result.warnings)
+    by_url = {p.url: p for p in result.feed_problems}
+    assert by_url[limited].title == "r/selfhosted"
+    assert "rate-limiting" in by_url[limited].message
+    assert by_url[gone].title == "Gone" and "404" in by_url[gone].message

@@ -471,6 +471,16 @@ def _scope_to_urls(
 # ── Import ────────────────────────────────────────────────────────────────────
 
 @dataclass
+class FeedProblem:
+    """A feed the import could not add, or added without checking. Kept apart from
+    the warnings so the page can show the feed's name and its address on its own,
+    ready to copy into Add feed."""
+    url: str
+    title: str | None
+    message: str  # reads after the address: "not added: HTTP 404"
+
+
+@dataclass
 class ImportResult:
     feeds_added: int = 0
     feeds_skipped: int = 0
@@ -486,6 +496,7 @@ class ImportResult:
     catchups_added: int = 0
     catchups_skipped: int = 0
     warnings: list[str] = field(default_factory=list)
+    feed_problems: list[FeedProblem] = field(default_factory=list)
     # Set when the subscription cap stopped the import part way. feeds_over_limit is
     # how many outlines were never even attempted, so it counts duplicates the import
     # would have skipped anyway — it is "left out", not "would have been added". Kept
@@ -904,9 +915,8 @@ async def _import_feed(
             selector = (outline.get("article-links-selector") or "").strip()
             if not selector:
                 result.feeds_failed += 1
-                result.warnings.append(
-                    f"Failed to import {xml_url}: scrape feed is missing its CSS selector"
-                )
+                result.feed_problems.append(FeedProblem(
+                    xml_url, title, "not added: scrape feed is missing its CSS selector"))
                 return None
             # Trust the backup: skip live selector validation (the page may be
             # temporarily down or changed). subscribe_scrape still kicks off the
@@ -952,9 +962,8 @@ async def _import_feed(
                 )
                 why = ("the site is rate-limiting this server"
                        if exc.problem.status == 429 else "the site did not answer properly")
-                result.warnings.append(
-                    f"Added {xml_url} without checking it ({why}). It will be fetched later."
-                )
+                result.feed_problems.append(FeedProblem(
+                    xml_url, title, f"added without checking it ({why}), it will be fetched later"))
     except AlreadySubscribed:
         result.feeds_skipped += 1
         return None
@@ -966,7 +975,7 @@ async def _import_feed(
         await db.rollback()
         await db.refresh(user)
         result.feeds_failed += 1
-        result.warnings.append(f"Failed to import {xml_url}: {exc}")
+        result.feed_problems.append(FeedProblem(xml_url, title, f"not added: {exc}"))
         return None
 
     result.feeds_added += 1
