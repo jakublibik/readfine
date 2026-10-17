@@ -72,7 +72,7 @@
     {% else %}
       <span class="text-amber-600">No terms yet, so nothing is being scored. Three are enough to start.</span>
     {% endif %}
-    Saving rescores the last 7 days of unread articles within a few minutes. New articles are scored as they arrive.
+    Saving rescores the last 7 days of unread articles shortly. New articles are scored as they arrive.
   </p>
   <div hx-get="/settings/relevance/suggestions" hx-trigger="load" hx-swap="outerHTML"
        class="mt-4 flex items-center gap-2 text-xs text-gray-500">
@@ -113,7 +113,10 @@
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Display</h2>
   <div class="flex items-center gap-2">
     <input type="checkbox" name="ai_score_show_in_list" id="ai_score_show_in_list"
-           {% if s.ai_score_show_in_list %}checked{% endif %}
+           {#- Checked until the first terms are saved: saved with it off, they
+               would score every article and show none of it, as /welcome knows.
+               Someone who later empties the list sees what they chose. #}
+           {% if s.ai_score_show_in_list or s.relevance_terms_updated_at is none %}checked{% endif %}
            class="w-4 h-4 text-blue-600 rounded border-gray-300">
     <label for="ai_score_show_in_list" class="text-sm text-gray-700">
       Show the score in the article list
