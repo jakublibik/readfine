@@ -411,14 +411,17 @@ class TestScope:
             {"http://a.com/rss": 1},
             {"Tech": 2},
             res,
+            what="Filter 'F'",
         )
         assert out == ["feed:1", "folder:2", "folder:0"]
 
     def test_resolve_scope_unknown_warns(self):
         res = ImportResult()
-        out = _resolve_scope(["feed:http://gone.com/rss"], {}, {}, res)
+        out = _resolve_scope(["feed:http://gone.com/rss"], {}, {}, res, what="Filter 'F'")
         assert out == []
-        assert any("not found" in w for w in res.warnings)
+        assert res.warnings == [
+            "Filter 'F': feed http://gone.com/rss was not imported, so it was left out of the scope"
+        ]
 
     def test_scope_to_urls_invalid_json_returns_empty(self):
         assert _scope_to_urls("not json", {}, {}) == []

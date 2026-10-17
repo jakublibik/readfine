@@ -1357,8 +1357,14 @@ def _parse_readfine_filter(
 
     # Resolve scope
     wanted_include = fd.get("scope_include") or []
-    scope_include = _resolve_scope(wanted_include, feed_url_to_id, folder_name_to_id, result)
-    scope_except = _resolve_scope(fd.get("scope_except") or [], feed_url_to_id, folder_name_to_id, result)
+    what = f"Filter '{filter_name}'"
+    scope_include = _resolve_scope(
+        wanted_include, feed_url_to_id, folder_name_to_id, result, what=what,
+    )
+    scope_except = _resolve_scope(
+        fd.get("scope_except") or [], feed_url_to_id, folder_name_to_id, result,
+        what=what, part="exceptions",
+    )
 
     is_active = _truthy(fd.get("enabled", True))
     if wanted_include and not scope_include and is_active:
@@ -1367,7 +1373,7 @@ def _parse_readfine_filter(
         # of them. Imported switched off, for the user to rescope.
         is_active = False
         result.warnings.append(
-            f"Filter '{fd.get('name')}': none of its feeds or folders were found, "
+            f"{what}: none of its feeds or folders were found, "
             f"imported switched off (set its scope and switch it on)"
         )
 
@@ -1576,7 +1582,12 @@ def _resolve_scope(
     feed_url_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    *,
+    what: str,
+    part: str = "scope",
 ) -> list[str]:
+    """Scope tokens from a file back to this account's ids. A feed or folder that is
+    not here is dropped, with a warning naming the item (``what``) it belonged to."""
     resolved = []
     for item in scope_list:
         if not isinstance(item, str):
@@ -1587,7 +1598,9 @@ def _resolve_scope(
             if feed_id:
                 resolved.append(f"feed:{feed_id}")
             else:
-                result.warnings.append(f"Scope feed not found: {url}")
+                result.warnings.append(
+                    f"{what}: feed {url} was not imported, so it was left out of the {part}"
+                )
         elif item.startswith("folder:"):
             name = item[7:]
             if name == "__no_folder__":
@@ -1597,7 +1610,9 @@ def _resolve_scope(
                 if folder_id:
                     resolved.append(f"folder:{folder_id}")
                 else:
-                    result.warnings.append(f"Scope folder not found: {name}")
+                    result.warnings.append(
+                        f"{what}: folder '{name}' was not imported, so it was left out of the {part}"
+                    )
     return resolved
 
 
@@ -1708,7 +1723,7 @@ def _resolve_file_scope(
     them are here: an empty scope means every feed, so the item would silently
     turn into something much wider than it was."""
     wanted = [item for item in _json_list(raw) if isinstance(item, str)]
-    resolved = _resolve_scope(wanted, feed_url_to_id, folder_name_to_id, result)
+    resolved = _resolve_scope(wanted, feed_url_to_id, folder_name_to_id, result, what=what)
     if wanted and not resolved:
         result.warnings.append(f"{what}: none of its feeds or folders were found, skipped")
         return None

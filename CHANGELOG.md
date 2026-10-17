@@ -15,7 +15,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 ### Changed
 
 - After you save new relevance terms in **Settings → Relevance**, or import them with an OPML file, the last 7 days are rescored within seconds instead of up to 5 minutes later.
-- After an OPML import, feeds that could not be added (or were added without a check) are listed under **Feeds to check** with their name, and one click selects the address for copying into **Add feed**.
+- After an OPML import, feeds that could not be added (or were added without a check) are listed under **Feeds to check** with their name, and one click selects the address for copying into **Add feed**. When such a feed was part of a filter, saved search or catch-up, the warning now names that item.
 
 ### Fixed
 
