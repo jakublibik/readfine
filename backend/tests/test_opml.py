@@ -596,6 +596,14 @@ async def _import_feeds_only(xml: bytes) -> ImportResult:
 
 
 class TestImportFeedLimit:
+    @pytest.fixture(autouse=True)
+    def _checks_pass(self, monkeypatch):
+        """subscribe() is stubbed, so the import's check of each new address only
+        has to come back without touching the network."""
+        async def fetch(url, auth=None):
+            return None, None
+        monkeypatch.setattr("app.services.feed.fetch_and_parse_url", fetch)
+
     async def test_cap_records_how_many_feeds_were_left_out(self, monkeypatch):
         """The cap stops the import part way; the result has to say by how much.
 

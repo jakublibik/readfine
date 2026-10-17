@@ -8,11 +8,13 @@ the session unusable for the rest of the file.
 The budget tests use a stub session; the rollback and race tests run against the
 real (dev) DB in a rolled-back transaction.
 """
+import asyncio
 import uuid
 from types import SimpleNamespace
 
 import feedparser
 import httpx
+import pytest
 import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.config import settings as app_settings
 from app.models.feed import Feed, Folder, UserFeed
 from app.models.user import User
+from app.services import opml as opml_module
 from app.services.feed import subscribe
 from app.services.opml import _ADMIN_FEED_TRIES, _MIN_FAILED_TRIES, import_opml
 
@@ -85,6 +88,16 @@ async def _run(db, xml, role="user"):
         import_feeds=True, import_labels=False, import_prefs=False,
         import_filters=False, db=db,
     )
+
+
+@pytest.fixture(autouse=True)
+def _checks_pass(monkeypatch):
+    """The import checks new addresses before subscribing them. These tests stub
+    subscribe() itself, so the check only has to stay off the network; the tests
+    about checking patch it again."""
+    async def fetch(url, auth=None):
+        return feedparser.parse("<rss><channel><title>T</title></channel></rss>"), None
+    monkeypatch.setattr("app.services.feed.fetch_and_parse_url", fetch)
 
 
 def _failing_subscribe(calls):
@@ -323,3 +336,147 @@ async def test_rate_limited_feed_is_added_unchecked_and_a_dead_one_is_not(pg, mo
     assert by_url[limited].title == "r/selfhosted"
     assert "rate-limiting" in by_url[limited].message
     assert by_url[gone].title == "Gone" and "404" in by_url[gone].message
+
+
+# ── Checking new feeds side by side ───────────────────────────────────────────
+
+def _rss(title: str):
+    return feedparser.parse(
+        f"<rss><channel><title>{title}</title><item><title>a</title>"
+        "<link>https://ex.invalid/a</link><description>x</description></item>"
+        "</channel></rss>"
+    )
+
+
+def _no_network_but(monkeypatch, fetch):
+    async def no_dns(_url):
+        return None
+    monkeypatch.setattr("app.services.feed.async_validate_feed_url", no_dns)
+    monkeypatch.setattr("app.services.feed.fetch_and_parse_url", fetch)
+    monkeypatch.setattr("app.services.feed.get_cached_feed_preview", lambda _u: None)
+    monkeypatch.setattr("app.services.feed.get_cached_permanent_url", lambda _u: None)
+    monkeypatch.setattr("app.services.opml.spawn_background", lambda *a, **kw: None)
+
+
+async def test_checks_run_side_by_side_and_each_feed_is_fetched_once(pg, monkeypatch):
+    """The point of checking ahead: a file of slow feeds takes a fraction of the
+    sum of their fetches, and subscribe() uses the check instead of fetching again."""
+    user = await _user(pg)
+    urls = [f"https://ex.invalid/{uuid.uuid4().hex}.rss" for _ in range(12)]
+    fetched: list[str] = []
+    running = 0
+    peak = 0
+
+    async def fetch(url, auth=None):
+        nonlocal running, peak
+        fetched.append(url)
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+        return _rss("Checked"), None
+
+    _no_network_but(monkeypatch, fetch)
+    xml = ('<opml version="2.0"><body>'
+           + "".join(f'<outline type="rss" xmlUrl="{u}"/>' for u in urls)
+           + "</body></opml>").encode()
+
+    result = await import_opml(
+        user=user, xml_bytes=xml, import_feeds=True, import_labels=False,
+        import_prefs=False, import_filters=False, db=pg,
+    )
+
+    assert result.feeds_added == 12 and result.feeds_unchecked == 0
+    assert sorted(fetched) == sorted(urls)
+    assert 1 < peak <= opml_module._CHECK_CONCURRENCY
+    titles = (await pg.execute(select(Feed.title).where(Feed.feed_url.in_(urls)))).scalars().all()
+    assert titles == ["Checked"] * 12
+
+
+async def test_feeds_past_the_check_budget_go_in_unchecked(pg, monkeypatch):
+    """A slow host must not hold the import past the proxy's timeout: once the
+    budget is spent the feed is added unchecked. A dead feed checked in time is
+    still left out, and a feed the instance already has is joined without a fetch."""
+    user = await _user(pg)
+    fast = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    gone = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    slow = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    known = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    pg.add(Feed(feed_url=known, title="Known", subscriber_count=0, is_private=False))
+    await pg.commit()
+    fetched: list[str] = []
+
+    async def fetch(url, auth=None):
+        fetched.append(url)
+        if url == slow:
+            await asyncio.sleep(5)
+        if url == gone:
+            request = httpx.Request("GET", url)
+            raise httpx.HTTPStatusError("no", request=request,
+                                        response=httpx.Response(404, request=request))
+        return _rss("Fast"), None
+
+    _no_network_but(monkeypatch, fetch)
+    monkeypatch.setattr(opml_module, "_CHECK_BUDGET_SECONDS", 0.3)
+    xml = (
+        '<opml version="2.0"><body>'
+        f'<outline type="rss" xmlUrl="{fast}"/>'
+        f'<outline type="rss" text="Gone" xmlUrl="{gone}"/>'
+        f'<outline type="rss" text="Slow" xmlUrl="{slow}"/>'
+        f'<outline type="rss" text="Known" xmlUrl="{known}"/>'
+        '</body></opml>'
+    ).encode()
+
+    started = asyncio.get_running_loop().time()
+    result = await import_opml(
+        user=user, xml_bytes=xml, import_feeds=True, import_labels=False,
+        import_prefs=False, import_filters=False, db=pg,
+    )
+
+    assert asyncio.get_running_loop().time() - started < 3
+    assert known not in fetched
+    assert result.feeds_added == 3  # fast, slow and known
+    assert result.feeds_unchecked == 1
+    assert result.feeds_failed == 1
+    slow_feed = await pg.scalar(select(Feed).where(Feed.feed_url == slow))
+    assert slow_feed is not None and slow_feed.title == "Slow"
+    assert await pg.scalar(select(Feed.title).where(Feed.feed_url == fast)) == "Fast"
+    assert await pg.scalar(select(Feed).where(Feed.feed_url == gone)) is None
+    assert [p.url for p in result.feed_problems] == [gone]
+
+
+async def test_after_the_budget_addresses_are_still_validated_but_not_fetched(pg, monkeypatch):
+    """Past the budget nothing is fetched, but the address rules still apply: a
+    feed whose host does not resolve (or resolves somewhere private) stays out,
+    and subscribe() does not look the others up a second time."""
+    user = await _user(pg)
+    ok = [f"https://ex.invalid/{uuid.uuid4().hex}.rss" for _ in range(3)]
+    refused = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    looked_up: list[str] = []
+
+    async def fetch(url, auth=None):
+        raise AssertionError("nothing is fetched once the budget is spent")
+
+    async def validate(url):
+        looked_up.append(url)
+        if url == refused:
+            raise ValueError("URL resolves to a disallowed address (127.0.0.1)")
+
+    _no_network_but(monkeypatch, fetch)
+    monkeypatch.setattr("app.services.feed.async_validate_feed_url", validate)
+    monkeypatch.setattr(opml_module, "_CHECK_BUDGET_SECONDS", 0.0)
+    xml = ('<opml version="2.0"><body>'
+           + "".join(f'<outline type="rss" xmlUrl="{u}"/>' for u in [*ok, refused])
+           + "</body></opml>").encode()
+
+    result = await import_opml(
+        user=user, xml_bytes=xml, import_feeds=True, import_labels=False,
+        import_prefs=False, import_filters=False, db=pg,
+    )
+
+    assert result.feeds_added == 3 and result.feeds_unchecked == 3
+    assert result.feeds_failed == 1
+    assert sorted(looked_up) == sorted([*ok, refused])  # once each
+    assert await pg.scalar(select(Feed).where(Feed.feed_url == refused)) is None
+    assert [p.url for p in result.feed_problems] == [refused]
+    assert "disallowed address" in result.feed_problems[0].message

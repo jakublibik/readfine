@@ -19,6 +19,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- Importing a large OPML file could end on a "504 Gateway Timeout" page, even though the import itself went through. New feeds are now checked several at a time, and the result page always comes back. Feeds that could not be checked in time are added anyway and fetched in the background; the result says how many.
 - After a change of `SECRET_KEY`, or with a second Readfine on the same host (the demo next to a real install, for example), every action failed with "403" until you cleared your cookies. The page now picks up a fresh security token by itself.
 - After a password change on another device, or with an old login from a second Readfine on the same host, the browser could get stuck bouncing between the reader and the login page ("too many redirects"). The old login is now dropped and you land on the sign-in form.
 - If you skipped the topics question at signup and set up terms later in **Settings → Relevance**, the scores were there but the article list did not show them. **Show the score in the article list** now starts checked until you save your first terms.

@@ -53,6 +53,13 @@
     carries on rather than starting over.
   </p>
   {% endif %}
+  {% if import_result.feeds_unchecked %}
+  <p class="text-sm text-gray-600">
+    {{ import_result.feeds_unchecked|num }} of the added feeds went in without a check,
+    because checking them all would have taken too long. They are being fetched now,
+    and any that do not work will show an error in your feed list.
+  </p>
+  {% endif %}
   <table class="w-full text-sm text-gray-700">
     <thead>
       <tr class="text-xs text-gray-500 border-b border-gray-200">
