@@ -37,7 +37,7 @@
     Too many feeds in this file could not be added, so the import stopped and the last
     {{ not_tried|num }} of
     {{ (import_result.feeds_added + import_result.feeds_skipped + import_result.feeds_failed + not_tried)|num }}
-    feeds were not tried. Everything below was. The warnings list the feeds that failed.
+    feeds were not tried. Everything below was. Feeds to check lists the ones that failed.
     Remove the ones that no longer work from the file and import it again: feeds you
     already have are skipped, so a second run carries on rather than starting over.
   </p>
@@ -51,6 +51,13 @@
     this instance to raise the limit, or unsubscribe from feeds you no longer read and
     import the same file again: feeds you already have are skipped, so a second run
     carries on rather than starting over.
+  </p>
+  {% endif %}
+  {% if import_result.feeds_unchecked %}
+  <p class="text-sm text-gray-600">
+    {{ import_result.feeds_unchecked|num }} of the added feeds went in without a check,
+    because checking them all would have taken too long. They are being fetched now,
+    and any that do not work will show an error in your feed list.
   </p>
   {% endif %}
   <table class="w-full text-sm text-gray-700">
@@ -107,6 +114,16 @@
       </tr>
     </tbody>
   </table>
+  {% if import_result.feed_problems %}
+  <div class="pt-2 border-t {{ 'border-amber-200' if stopped else 'border-green-200' }}">
+    <p class="text-xs font-medium text-gray-600 mb-1">Feeds to check</p>
+    <ul class="text-xs text-gray-500 space-y-0.5 list-disc list-inside">
+      {% for p in import_result.feed_problems %}
+      <li>{% if p.title %}<span class="text-gray-700">{{ p.title }}</span> {% endif %}<code class="select-all break-all text-gray-700">{{ p.url }}</code> {{ p.message }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
   {% if import_result.warnings %}
   <div class="pt-2 border-t {{ 'border-amber-200' if stopped else 'border-green-200' }}">
     <p class="text-xs font-medium text-gray-600 mb-1">Warnings</p>

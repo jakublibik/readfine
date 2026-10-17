@@ -527,6 +527,8 @@ async def subscribe(
     import_limit: int = 500,
     fetch_interval_min: int | None = None,
     verify: bool = True,
+    prefetched: tuple[feedparser.FeedParserDict, str | None] | None = None,
+    address_validated: bool = False,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
@@ -536,8 +538,17 @@ async def subscribe(
 
     ``verify=False`` creates a new feed without fetching it first, titled from
     ``custom_title`` or the address. For an OPML import whose check of the
-    address hit a rate limit or a server error: the backup says it is a feed, and
-    the first fetch finds out the rest.
+    address hit a rate limit or a server error, or ran out of time: the backup
+    says it is a feed, and the first fetch finds out the rest.
+
+    ``prefetched`` is ``(parsed, permanent_url)`` from a ``fetch_and_parse_url`` the
+    caller already ran on *url*, used instead of fetching it again. The OPML import
+    checks its feeds side by side ahead of subscribing them one by one.
+
+    ``address_validated`` skips the SSRF lookup below, for a caller that has just run
+    ``async_validate_feed_url`` on this same *url* (the import, again, which does
+    those lookups side by side too). The fetcher validates the address again on
+    every fetch.
 
     Credentials written into the address (``https://user:pass@host/feed``) are moved
     into the auth columns before anything else happens, so the password is encrypted
@@ -557,7 +568,8 @@ async def subscribe(
     is_private = is_private or bool(fetch_auth_user or fetch_auth_pass)
 
     # SSRF protection
-    await async_validate_feed_url(url)
+    if not address_validated:
+        await async_validate_feed_url(url)
     await _check_subscribe_preconditions(user, folder_id, db)
 
     feed: Feed | None = None
@@ -591,8 +603,11 @@ async def subscribe(
         # Reuse a recent Test-step parse if available so the whole add flow is a
         # single network request (avoids tripping rate limits like Reddit's). Only
         # public feeds are cached; private/auth feeds always fetch fresh.
-        parsed = None if is_private else get_cached_feed_preview(url)
-        permanent_url = None if is_private else get_cached_permanent_url(url)
+        if prefetched is not None and not is_private:
+            parsed, permanent_url = prefetched
+        else:
+            parsed = None if is_private else get_cached_feed_preview(url)
+            permanent_url = None if is_private else get_cached_permanent_url(url)
         if parsed is None and verify:
             try:
                 parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)

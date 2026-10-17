@@ -1,7 +1,9 @@
 """OPML import and export service."""
+import asyncio
 import json
 import logging
 import re
+from collections import deque
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -22,8 +24,10 @@ from app.schemas.filter import FilterConditionCreate, FilterActionCreate, Filter
 from app.services.ai_profile_service import PROFILE_MAX_CHARS
 from app.services.briefing_service import reschedule_briefings
 from app.services.catchup_service import CATCHUP_PERIODS, CATCHUP_STATUSES
+from app.services import feed as feed_service
 from app.services.feed import (
-    AlreadySubscribed, FeedFetchError, FeedLimitReached, subscribe, subscribe_scrape,
+    AlreadySubscribed, FeedFetchError, FeedLimitReached, _raise_fetch_error, subscribe,
+    subscribe_scrape,
 )
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.services.folder_service import (
@@ -42,6 +46,7 @@ from app.utils.background import spawn_background
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.email_validate import is_valid_email
 from app.utils.formats import is_valid_format
+from app.utils.url_validator import split_url_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +104,19 @@ _FEED_PURGE_ATTRS = {"purge-after-days": "purge_after_days", "purge-keep-count":
 # and the ceiling for admins, who have no feed limit.
 _MIN_FAILED_TRIES = 20
 _ADMIN_FEED_TRIES = 2000
+
+# The import checks the addresses it does not know yet side by side, ahead of the
+# loop that subscribes them one by one, so that a long file still answers inside the
+# proxy's timeout (nginx gives a request 60 s, Cloudflare 100 s). A few at a time,
+# well below the 16 outbound threads the scheduler fetches on too; a lookahead
+# long enough that one slow host (30 s to time out) does not leave the other slots
+# idle, yet bounded, since a finished check holds its parsed feed until the loop
+# gets there; and a budget, after which the rest are only validated, go in
+# unchecked, and their first fetch finds out. On a 590-feed file the import
+# answered in about 35 s.
+_CHECK_CONCURRENCY = 6
+_CHECK_LOOKAHEAD = 48
+_CHECK_BUDGET_SECONDS = 25.0
 
 
 # ── TTRSS filter_type / action_id mappings ────────────────────────────────────
@@ -471,6 +489,16 @@ def _scope_to_urls(
 # ── Import ────────────────────────────────────────────────────────────────────
 
 @dataclass
+class FeedProblem:
+    """A feed the import could not add, or added without checking. Kept apart from
+    the warnings so the page can show the feed's name and its address on its own,
+    ready to copy into Add feed."""
+    url: str
+    title: str | None
+    message: str  # reads after the address: "not added: HTTP 404"
+
+
+@dataclass
 class ImportResult:
     feeds_added: int = 0
     feeds_skipped: int = 0
@@ -486,6 +514,7 @@ class ImportResult:
     catchups_added: int = 0
     catchups_skipped: int = 0
     warnings: list[str] = field(default_factory=list)
+    feed_problems: list[FeedProblem] = field(default_factory=list)
     # Set when the subscription cap stopped the import part way. feeds_over_limit is
     # how many outlines were never even attempted, so it counts duplicates the import
     # would have skipped anyway — it is "left out", not "would have been added". Kept
@@ -496,6 +525,9 @@ class ImportResult:
     # Set when the import used up the feed attempts it may make (see
     # _feed_attempt_budget): how many outlines were left untried.
     feeds_not_tried: int = 0
+    # Feeds added without a check because the check budget ran out (see _FeedChecks).
+    # Counted in feeds_added as well.
+    feeds_unchecked: int = 0
 
 
 class _LabelBook:
@@ -619,38 +651,44 @@ async def import_opml(
             .where(UserFeed.user_id == user.id)
         )).scalars())
         attempts_left = await _feed_attempt_budget(user, len(subscribed_urls), db)
-        for index, (outline, folder_name) in enumerate(feed_outlines):
-            xml_url = outline.get("xmlUrl", "")
-            is_scrape = (outline.get("feed-type") or "").strip().lower() == "scrape"
-            # A feed the account already has costs nothing to skip here, where
-            # subscribe() would only find out after fetching it. Scrape feeds are
-            # keyed by page and selector, so the address alone does not decide.
-            if not is_scrape and xml_url.strip() in subscribed_urls:
-                result.feeds_skipped += 1
-                continue
-            if attempts_left <= 0:
-                result.feeds_not_tried = len(feed_outlines) - index
-                break
-            attempts_left -= 1
-            folder_id = None
-            if folder_name:
-                folder_id, next_folder_pos = await _get_or_create_folder(
-                    user, folder_name, folder_cache, db, next_folder_pos
-                )
-            try:
-                added_id = await _import_feed(user, outline, folder_id, result, db)
-            except FeedLimitReached as exc:
-                # The one that raised was not imported either, so it counts as left out.
-                result.feeds_over_limit = len(feed_outlines) - index
-                result.feed_limit = exc.max_feeds
-                break
-            if added_id and xml_url:
-                subscribed_urls.add(xml_url.strip())
-                feed_url_to_id[xml_url] = added_id
-                # Scrape feeds already trigger their own background fetch in
-                # subscribe_scrape; don't queue them for the RSS _initial_fetch.
-                if not is_scrape:
-                    new_feed_ids.append(added_id)
+        checks = _FeedChecks(
+            (await _addresses_to_check(feed_outlines, subscribed_urls, db))[:attempts_left]
+        )
+        try:
+            for index, (outline, folder_name) in enumerate(feed_outlines):
+                xml_url = outline.get("xmlUrl", "")
+                is_scrape = (outline.get("feed-type") or "").strip().lower() == "scrape"
+                # A feed the account already has costs nothing to skip here, where
+                # subscribe() would only find out after fetching it. Scrape feeds are
+                # keyed by page and selector, so the address alone does not decide.
+                if not is_scrape and xml_url.strip() in subscribed_urls:
+                    result.feeds_skipped += 1
+                    continue
+                if attempts_left <= 0:
+                    result.feeds_not_tried = len(feed_outlines) - index
+                    break
+                attempts_left -= 1
+                folder_id = None
+                if folder_name:
+                    folder_id, next_folder_pos = await _get_or_create_folder(
+                        user, folder_name, folder_cache, db, next_folder_pos
+                    )
+                try:
+                    added_id = await _import_feed(user, outline, folder_id, result, db, checks)
+                except FeedLimitReached as exc:
+                    # The one that raised was not imported either, so it counts as left out.
+                    result.feeds_over_limit = len(feed_outlines) - index
+                    result.feed_limit = exc.max_feeds
+                    break
+                if added_id and xml_url:
+                    subscribed_urls.add(xml_url.strip())
+                    feed_url_to_id[xml_url] = added_id
+                    # Scrape feeds already trigger their own background fetch in
+                    # subscribe_scrape; don't queue them for the RSS _initial_fetch.
+                    if not is_scrape:
+                        new_feed_ids.append(added_id)
+        finally:
+            checks.close()
 
     # Lookup maps for scope resolution, from the subscriptions as they are now.
     # The URL a feed was just added under wins over the one it is stored as, since
@@ -817,6 +855,162 @@ def _collect_feed_outlines(body: Element) -> list[tuple[Element, str | None]]:
     return results
 
 
+_NOT_QUEUED = object()
+_OUT_OF_TIME = object()
+_ADDRESS_OK = object()
+
+
+class _FeedChecks:
+    """The fetches that check the import's new feed addresses, run ahead of the loop
+    that subscribes them (see _CHECK_CONCURRENCY for the numbers).
+
+    Once the budget is spent, the addresses still to come are only validated (the
+    DNS lookup and address rules subscribe() would otherwise run one at a time,
+    which on a few hundred feeds took longer than the checks themselves).
+
+    ``outcome(url)`` hands back what the check of one address found: the
+    ``(parsed, permanent_url)`` pair, the exception the fetch or validation raised,
+    ``_ADDRESS_OK`` for an address validated but not fetched, ``_OUT_OF_TIME`` for a
+    fetch the budget cut short (not validated either), or ``_NOT_QUEUED`` for an
+    address that was never queued. Each address is asked for once, in the file's order.
+    """
+
+    def __init__(self, urls: list[str], budget: float | None = None):
+        self._loop = asyncio.get_running_loop()
+        self._deadline = self._loop.time() + (
+            _CHECK_BUDGET_SECONDS if budget is None else budget
+        )
+        self._pending: deque[str] = deque(dict.fromkeys(urls))
+        self._queued = set(self._pending)
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._address_only: set[str] = set()
+        self._slots = asyncio.Semaphore(_CHECK_CONCURRENCY)
+        self._fill()
+
+    def _expired(self) -> bool:
+        return self._loop.time() >= self._deadline
+
+    def _start(self, url: str) -> asyncio.Task:
+        if self._expired():
+            async def check():
+                async with self._slots:
+                    await feed_service.async_validate_feed_url(url)
+                return _ADDRESS_OK
+            self._address_only.add(url)
+        else:
+            async def check():
+                async with self._slots:
+                    return await feed_service.fetch_and_parse_url(url)
+        task = asyncio.create_task(check(), name=f"opml-check-{url}")
+        self._tasks[url] = task
+        return task
+
+    def _fill(self) -> None:
+        while self._pending and len(self._tasks) < _CHECK_LOOKAHEAD:
+            self._start(self._pending.popleft())
+
+    async def outcome(self, url: str):
+        if url not in self._queued:
+            return _NOT_QUEUED
+        self._queued.discard(url)
+        task = self._tasks.get(url)
+        if task is None:
+            # Not started yet: the lookahead is full of addresses the loop skipped.
+            self._pending.remove(url)
+            task = self._start(url)
+        if url in self._address_only:
+            # Quick, and what the loop would otherwise do itself: no deadline.
+            await asyncio.wait({task})
+        else:
+            remaining = self._deadline - self._loop.time()
+            if not task.done() and remaining > 0:
+                await asyncio.wait({task}, timeout=remaining)
+        del self._tasks[url]
+        self._address_only.discard(url)
+        self._fill()
+        if not task.done():
+            # The thread doing the fetch runs on to its own timeout; only the wait
+            # for it ends here.
+            task.cancel()
+            return _OUT_OF_TIME
+        if task.cancelled():
+            return _OUT_OF_TIME
+        return task.exception() or task.result()
+
+    def close(self) -> None:
+        """Drop the checks the import never asked for (it stopped early)."""
+        for task in self._tasks.values():
+            if task.done() and not task.cancelled():
+                task.exception()  # retrieved, so asyncio does not log it
+            task.cancel()
+        self._tasks.clear()
+        self._pending.clear()
+
+
+async def _addresses_to_check(
+    feed_outlines: list[tuple[Element, str | None]],
+    subscribed_urls: set[str],
+    db: AsyncSession,
+) -> list[str]:
+    """The RSS addresses in the file that subscribing would have to fetch, in order.
+
+    Left out: scrape feeds (subscribe_scrape does not fetch here), ones the account
+    has, ones the instance already has a public row for (subscribing joins it), and
+    ones with credentials in the address, which subscribe() fetches with them.
+    """
+    urls = []
+    for outline, _folder in feed_outlines:
+        url = outline.get("xmlUrl", "").strip()
+        if (not url or url in subscribed_urls
+                or (outline.get("feed-type") or "").strip().lower() == "scrape"
+                or split_url_credentials(url)[1] is not None):
+            continue
+        urls.append(url)
+    if not urls:
+        return []
+    known = set((await db.execute(
+        select(Feed.feed_url).where(Feed.feed_url.in_(set(urls)), Feed.is_private == False)
+    )).scalars())
+    return [url for url in urls if url not in known]
+
+
+async def _subscribe_outline(
+    user: User,
+    xml_url: str,
+    title: str | None,
+    folder_id: int | None,
+    checks: _FeedChecks | None,
+    result: ImportResult,
+    db: AsyncSession,
+):
+    """subscribe() one RSS outline on what its check found.
+
+    A failed check raises as subscribe() would have (FeedFetchError for a fetch
+    failure). One the budget did not reach goes in unchecked.
+    """
+    outcome = await checks.outcome(xml_url) if checks is not None else _NOT_QUEUED
+    if isinstance(outcome, BaseException):
+        _raise_fetch_error(outcome)
+        raise outcome
+    unchecked = outcome is _OUT_OF_TIME or outcome is _ADDRESS_OK
+    uf = await subscribe(
+        user=user,
+        url=xml_url,
+        folder_id=folder_id,
+        custom_title=title,
+        fetch_auth_user=None,
+        fetch_auth_pass=None,
+        db=db,
+        trigger_initial_fetch=False,
+        verify=not unchecked,
+        prefetched=None if outcome is _NOT_QUEUED or unchecked else outcome,
+        address_validated=outcome is _ADDRESS_OK,
+    )
+    if unchecked:
+        result.feeds_unchecked += 1
+    return uf
+
+
 async def _feed_attempt_budget(user: User, subscribed: int, db: AsyncSession) -> int:
     """How many feed outlines one import may try to subscribe.
 
@@ -886,6 +1080,7 @@ async def _import_feed(
     folder_id: int | None,
     result: ImportResult,
     db: AsyncSession,
+    checks: "_FeedChecks | None" = None,
 ) -> int | None:
     """Subscribe user to a single feed outline. Returns new feed_id or None.
 
@@ -904,9 +1099,8 @@ async def _import_feed(
             selector = (outline.get("article-links-selector") or "").strip()
             if not selector:
                 result.feeds_failed += 1
-                result.warnings.append(
-                    f"Failed to import {xml_url}: scrape feed is missing its CSS selector"
-                )
+                result.feed_problems.append(FeedProblem(
+                    xml_url, title, "not added: scrape feed is missing its CSS selector"))
                 return None
             # Trust the backup: skip live selector validation (the page may be
             # temporarily down or changed). subscribe_scrape still kicks off the
@@ -922,16 +1116,7 @@ async def _import_feed(
             )
         else:
             try:
-                uf = await subscribe(
-                    user=user,
-                    url=xml_url,
-                    folder_id=folder_id,
-                    custom_title=title,
-                    fetch_auth_user=None,
-                    fetch_auth_pass=None,
-                    db=db,
-                    trigger_initial_fetch=False,
-                )
+                uf = await _subscribe_outline(user, xml_url, title, folder_id, checks, result, db)
             except FeedFetchError as exc:
                 if not exc.problem.transient:
                     raise
@@ -952,9 +1137,8 @@ async def _import_feed(
                 )
                 why = ("the site is rate-limiting this server"
                        if exc.problem.status == 429 else "the site did not answer properly")
-                result.warnings.append(
-                    f"Added {xml_url} without checking it ({why}). It will be fetched later."
-                )
+                result.feed_problems.append(FeedProblem(
+                    xml_url, title, f"added without checking it ({why}), it will be fetched later"))
     except AlreadySubscribed:
         result.feeds_skipped += 1
         return None
@@ -966,7 +1150,7 @@ async def _import_feed(
         await db.rollback()
         await db.refresh(user)
         result.feeds_failed += 1
-        result.warnings.append(f"Failed to import {xml_url}: {exc}")
+        result.feed_problems.append(FeedProblem(xml_url, title, f"not added: {exc}"))
         return None
 
     result.feeds_added += 1
@@ -1173,8 +1357,14 @@ def _parse_readfine_filter(
 
     # Resolve scope
     wanted_include = fd.get("scope_include") or []
-    scope_include = _resolve_scope(wanted_include, feed_url_to_id, folder_name_to_id, result)
-    scope_except = _resolve_scope(fd.get("scope_except") or [], feed_url_to_id, folder_name_to_id, result)
+    what = f"Filter '{filter_name}'"
+    scope_include = _resolve_scope(
+        wanted_include, feed_url_to_id, folder_name_to_id, result, what=what,
+    )
+    scope_except = _resolve_scope(
+        fd.get("scope_except") or [], feed_url_to_id, folder_name_to_id, result,
+        what=what, part="exceptions",
+    )
 
     is_active = _truthy(fd.get("enabled", True))
     if wanted_include and not scope_include and is_active:
@@ -1183,7 +1373,7 @@ def _parse_readfine_filter(
         # of them. Imported switched off, for the user to rescope.
         is_active = False
         result.warnings.append(
-            f"Filter '{fd.get('name')}': none of its feeds or folders were found, "
+            f"{what}: none of its feeds or folders were found, "
             f"imported switched off (set its scope and switch it on)"
         )
 
@@ -1392,7 +1582,12 @@ def _resolve_scope(
     feed_url_to_id: dict[str, int],
     folder_name_to_id: dict[str, int],
     result: ImportResult,
+    *,
+    what: str,
+    part: str = "scope",
 ) -> list[str]:
+    """Scope tokens from a file back to this account's ids. A feed or folder that is
+    not here is dropped, with a warning naming the item (``what``) it belonged to."""
     resolved = []
     for item in scope_list:
         if not isinstance(item, str):
@@ -1403,7 +1598,9 @@ def _resolve_scope(
             if feed_id:
                 resolved.append(f"feed:{feed_id}")
             else:
-                result.warnings.append(f"Scope feed not found: {url}")
+                result.warnings.append(
+                    f"{what}: feed {url} was not imported, so it was left out of the {part}"
+                )
         elif item.startswith("folder:"):
             name = item[7:]
             if name == "__no_folder__":
@@ -1413,7 +1610,9 @@ def _resolve_scope(
                 if folder_id:
                     resolved.append(f"folder:{folder_id}")
                 else:
-                    result.warnings.append(f"Scope folder not found: {name}")
+                    result.warnings.append(
+                        f"{what}: folder '{name}' was not imported, so it was left out of the {part}"
+                    )
     return resolved
 
 
@@ -1524,7 +1723,7 @@ def _resolve_file_scope(
     them are here: an empty scope means every feed, so the item would silently
     turn into something much wider than it was."""
     wanted = [item for item in _json_list(raw) if isinstance(item, str)]
-    resolved = _resolve_scope(wanted, feed_url_to_id, folder_name_to_id, result)
+    resolved = _resolve_scope(wanted, feed_url_to_id, folder_name_to_id, result, what=what)
     if wanted and not resolved:
         result.warnings.append(f"{what}: none of its feeds or folders were found, skipped")
         return None

@@ -361,6 +361,34 @@
               stays as it is and is marked in the list.</p>
           </div>
 
+          <div id="terms-or-filters" class="py-5 first:pt-0 last:pb-0">
+            <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">Do I still need keyword filters if I have terms?</h4>
+            <p>Fewer than you might think. Your <a href="/settings/relevance" class="text-blue-600 hover:underline dark:text-blue-400">terms</a>
+              already rate every article as it arrives, so one filter on the basic score can do the work of a pile of
+              keyword filters. It helps to ask what each of your filters is for:</p>
+            <ul class="list-disc pl-5 mt-2 space-y-1">
+              <li><strong>Picking out what interests you.</strong> Terms can take this over. A single filter
+                <em>Basic at least 50 → add a label</em> labels whatever matches your terms, and the label sends it
+                to AI scoring. You keep one list of terms instead of a keyword list in every filter.</li>
+              <li><strong>Sorting into topics</strong> you browse by label, such as <em>Cycling</em> or <em>Baking</em>.
+                Keep these filters. The score is a single number and can't tell one topic from another.</li>
+              <li><strong>Fixed rules</strong>, such as labeling everything from one feed or marking sports results or
+                shopping deals as read. Keep these too. Terms have no regex, can't exclude anything and only look at the
+                title and the opening of an article.</li>
+            </ul>
+            <p class="mt-2">Exact names are also safer in a filter. A term matches loose words, while a filter matches the
+              text exactly or by regex. And the basic score is the weaker scorer, so a low threshold lets some misses
+              through. With AI scoring on, that is fine: the AI score sorts them out afterwards.</p>
+            <p class="mt-2">With both scorers, the labeling filter and a cleanup filter work well together. Label at a
+              lower basic score than the cleanup protects, for example label at 50 and clean up with
+              <em>AI below 30 AND Basic below 60 → mark as read</em>. Articles from 50 to 59 go to the AI and it decides.
+              From 60 up, your terms vouch for the article and it stays even if the AI disagrees.</p>
+            <p class="mt-2">That safety net matters most where your terms and your interest profile differ. A topic that is
+              in your terms but missing from the profile (or listed there among things to avoid) gets a low AI score, and
+              only the basic score keeps it in the list. If the topic matters to you, add it to the profile as well.
+              <a href="#score-filters" class="text-blue-600 hover:underline dark:text-blue-400">Which score a filter reads</a>.</p>
+          </div>
+
           <div id="regex" class="py-5 first:pt-0 last:pb-0">
             <h4 class="font-semibold text-gray-900 text-[15px] mb-1.5 dark:text-gray-100">How do I use regex in a filter?</h4>
             <p>When a condition's operator is <strong>regex</strong>, the value is treated as a regular

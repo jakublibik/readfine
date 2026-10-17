@@ -411,14 +411,17 @@ class TestScope:
             {"http://a.com/rss": 1},
             {"Tech": 2},
             res,
+            what="Filter 'F'",
         )
         assert out == ["feed:1", "folder:2", "folder:0"]
 
     def test_resolve_scope_unknown_warns(self):
         res = ImportResult()
-        out = _resolve_scope(["feed:http://gone.com/rss"], {}, {}, res)
+        out = _resolve_scope(["feed:http://gone.com/rss"], {}, {}, res, what="Filter 'F'")
         assert out == []
-        assert any("not found" in w for w in res.warnings)
+        assert res.warnings == [
+            "Filter 'F': feed http://gone.com/rss was not imported, so it was left out of the scope"
+        ]
 
     def test_scope_to_urls_invalid_json_returns_empty(self):
         assert _scope_to_urls("not json", {}, {}) == []
@@ -596,6 +599,14 @@ async def _import_feeds_only(xml: bytes) -> ImportResult:
 
 
 class TestImportFeedLimit:
+    @pytest.fixture(autouse=True)
+    def _checks_pass(self, monkeypatch):
+        """subscribe() is stubbed, so the import's check of each new address only
+        has to come back without touching the network."""
+        async def fetch(url, auth=None):
+            return None, None
+        monkeypatch.setattr("app.services.feed.fetch_and_parse_url", fetch)
+
     async def test_cap_records_how_many_feeds_were_left_out(self, monkeypatch):
         """The cap stops the import part way; the result has to say by how much.
 

@@ -7,7 +7,7 @@
 
 {% if saved %}
 <div class="mb-4 px-4 py-2 bg-green-50 border border-green-200 rounded text-sm text-green-700">
-  Relevance settings saved.{% if rescoring %} Scores for the last 7 days appear shortly.{% endif %}
+  Relevance settings saved.{% if rescoring %} Scores for the last 7 days will appear shortly.{% endif %}
   {% if skipped %}
   <span class="block mt-1 text-gray-700">
     Skipped {{ skipped | length }} term{{ 's' if skipped | length != 1 else '' }}, as a repeat of another term or with no word of two letters or more:
