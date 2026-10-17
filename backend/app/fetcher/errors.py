@@ -43,6 +43,17 @@ class FetchProblem:
     message: str
 
     @property
+    def transient(self) -> bool:
+        """Is this likely to pass on its own: a rate limit, a server error, a timeout?
+
+        Not a 403: a host that blocks this server's address keeps doing so.
+        """
+        if self.kind in ("timeout", "transport"):
+            return True
+        return self.kind == "http" and self.status is not None and (
+            self.status == 429 or self.status >= 500)
+
+    @property
     def wrong_kind_of_page(self) -> bool:
         """Could the address be a web page rather than a feed?
 
