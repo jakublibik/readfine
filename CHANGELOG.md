@@ -12,6 +12,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+### Changed
+
+- After you save new relevance terms in **Settings → Relevance**, or import them with an OPML file, the last 7 days are rescored within seconds instead of up to 5 minutes later.
+
 ### Fixed
 
 - After a change of `SECRET_KEY`, or with a second Readfine on the same host (the demo next to a real install, for example), every action failed with "403" until you cleared your cookies. The page now picks up a fresh security token by itself.

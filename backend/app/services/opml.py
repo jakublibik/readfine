@@ -31,7 +31,7 @@ from app.services.preference_values import (
     DENSITY_VALUES, FONT_FAMILY_VALUES, FONT_SIZE_VALUES, LABEL_DISPLAY_VALUES,
     SORT_VALUES, UNREAD_FILTER_VALUES, clamp_articles_per_page, clamp_buckets,
 )
-from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
+from app.services.relevance_terms_service import TERMS_MAX_CHARS, backfill_due, save_terms
 from app.services.saved_search_service import (
     SavedSearchError, create_saved_search, list_saved_searches,
 )
@@ -686,6 +686,11 @@ async def import_opml(
             if data:
                 _apply_profile(us, data, result)
         await db.commit()
+        # Imported feeds are not scored as they are added, so terms that came
+        # with the file would otherwise wait for the next backfill tick.
+        if backfill_due(us):
+            from app.fetcher.scheduler import run_lexical_backfill_now
+            run_lexical_backfill_now()
 
     # Pass 4: filters
     if import_filters:

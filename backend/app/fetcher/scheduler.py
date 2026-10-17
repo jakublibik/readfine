@@ -755,17 +755,26 @@ async def _ensure_lexical_corpus() -> None:
     """Job: get a young instance its term statistics without waiting for the night.
 
     A build makes every account with terms due for a backfill, so the backfill
-    job is pulled forward to now: a new account gets its first scores within a
-    minute instead of at the next backfill tick. Pulled forward rather than
-    called here, so its max_instances=1 keeps two backfills from inserting the
-    same score rows at once.
+    job is pulled forward: a new account gets its first scores within a minute
+    instead of at the next backfill tick.
     """
     if db.async_session_factory is None:
         return
     from app.services import relevance_corpus_service
     async with db.async_session_factory() as session:
         built = await relevance_corpus_service.ensure_built(session)
-    if built and scheduler.get_job("backfill_lexical_scores"):
+    if built:
+        run_lexical_backfill_now()
+
+
+def run_lexical_backfill_now() -> None:
+    """Pull the backfill job forward to now, for an account that just became due.
+
+    Pulled forward rather than called directly, so its max_instances=1 keeps two
+    backfills from inserting the same score rows at once. A no-op where the
+    scheduler has no such job (tests, a process without the scheduler).
+    """
+    if scheduler.get_job("backfill_lexical_scores"):
         scheduler.modify_job("backfill_lexical_scores",
                              next_run_time=datetime.now(timezone.utc))
 
