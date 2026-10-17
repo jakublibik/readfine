@@ -23,7 +23,8 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - If you skipped the topics question at signup and set up terms later in **Settings → Relevance**, the scores were there but the article list did not show them. **Show the score in the article list** now starts checked until you save your first terms.
 - An OPML import with several Reddit feeds dropped some of them with "Too many requests (429)". A feed whose site is rate-limiting the server or briefly down is now added anyway and fetched later.
 - Creating an API token in **Settings → API Tokens** failed with "403". It works again.
-- On a new instance, relevance scores show up seconds after the first articles arrive instead of up to 20 minutes later, and they also match words that so far appear in just one article. Until then, a note in the reader says they are on the way.- In the dark theme, an unstarred star and empty values (such as zeros in the admin tables) were brighter than the text around them. They are now dimmed as in the light theme, and the **dormant** and **inactive** badges in **Admin → Users** stand out better.
+- On a new instance, relevance scores show up seconds after the first articles arrive instead of up to 20 minutes later, and they also match words that so far appear in just one article. Until then, a note in the reader says they are on the way.
+- In the dark theme, an unstarred star and empty values (such as zeros in the admin tables) were brighter than the text around them. They are now dimmed as in the light theme, and the **dormant** and **inactive** badges in **Admin → Users** stand out better.
 
 ## [0.21.0] - 2026-10-11
 
