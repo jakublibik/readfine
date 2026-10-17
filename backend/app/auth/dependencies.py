@@ -101,6 +101,10 @@ async def get_current_user(
         user = await _get_user_by_id(user_id, db)
         if user and request.session.get("tv", 0) == user.session_token_version:
             return user
+        # A dead session (stale "tv" after a password change, a deleted account,
+        # another instance's cookie on the same host) must not survive the 401:
+        # /login only checks that user_id is set and would send it back to /app.
+        request.session.clear()
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

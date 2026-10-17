@@ -1,4 +1,6 @@
 """Tests for session_token_version invalidation across session cookies and JWTs."""
+import json
+from base64 import b64encode
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -6,9 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
+from itsdangerous import TimestampSigner
 
 from app.auth.dependencies import get_api_user, get_current_user
 from app.auth.security import create_access_token
+from app.config import settings
 
 
 def _user(tv=0):
@@ -66,6 +70,27 @@ class TestSessionTokenVersion:
             with pytest.raises(HTTPException) as exc:
                 await get_current_user(request=request, db=_empty_db())
         assert exc.value.status_code == 401
+        assert request.session == {}
+
+    async def test_unknown_user_clears_session(self):
+        request = SimpleNamespace(session={"user_id": 99, "tv": 0})
+        with patch("app.auth.dependencies._get_user_by_id", new=AsyncMock(return_value=None)):
+            with pytest.raises(HTTPException):
+                await get_current_user(request=request, db=_empty_db())
+        assert request.session == {}
+
+    def test_stale_session_does_not_loop_between_app_and_login(self, unauth_client):
+        """/app used to send a dead session to /login, which saw user_id and sent it
+        back to /app (ERR_TOO_MANY_REDIRECTS)."""
+        signer = TimestampSigner(settings.secret_key)
+        payload = b64encode(json.dumps({"user_id": 1, "tv": 1}).encode())
+        # The domain httpx files response cookies under, so the server's delete lands.
+        unauth_client.cookies.set("session", signer.sign(payload).decode(), domain="testserver.local")
+        with patch("app.auth.dependencies._get_user_by_id", new=AsyncMock(return_value=_user(tv=2))):
+            resp = unauth_client.get("/app", follow_redirects=False)
+            assert resp.status_code == 302 and resp.headers["location"] == "/login"
+            resp = unauth_client.get("/login", follow_redirects=False)
+        assert resp.status_code == 200
 
     async def test_missing_tv_defaults_to_zero(self):
         """Pre-deploy sessions without 'tv' survive while version is still 0."""
