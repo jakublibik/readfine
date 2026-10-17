@@ -22,8 +22,7 @@
 {% endif %}
 
 <!-- Create new token -->
-<form method="POST" action="/settings/tokens" class="mb-8 flex gap-2 items-end">
-  <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
+<form method="POST" action="/settings/tokens" hx-boost="true" class="mb-8 flex gap-2 items-end">
   <div class="flex-1">
     <label class="block text-sm font-medium text-gray-700 mb-1">New token name</label>
     <input type="text" name="name" required maxlength="100" placeholder="e.g. My script"

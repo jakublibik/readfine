@@ -13,12 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.config import settings as app_settings_config
 from app.database import get_db
+from app.fetcher.scheduler import run_lexical_backfill_now
 from app.models.user import User
 from app.rate_limit import limiter
 from app.services.relevance_corpus_service import get_stats
 from app.services import relevance_suggest_service as suggest
 from app.services.relevance_service import parse_terms, skipped_terms
-from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
+from app.services.relevance_terms_service import TERMS_MAX_CHARS, backfill_due, save_terms
 from app.templating import templates
 
 from .common import _get_or_create_settings
@@ -82,13 +83,12 @@ async def settings_relevance_save(
     ctx = await _page_context(user, db)
     ctx["saved"] = True
     ctx["skipped"] = skipped_terms(raw)
-    # The rescoring is a scheduler job (every 5 minutes), so a reader going straight
-    # back to the list would find no scores yet; said only when a save made it due.
-    ctx["rescoring"] = bool(
-        s.basic_scoring_enabled and parse_terms(s.relevance_terms)
-        and (s.lexical_backfill_at is None
-             or s.lexical_backfill_at < s.relevance_terms_updated_at)
-    )
+    # The rescoring is a scheduler job, pulled forward to now, so it usually lands
+    # within seconds; a reader going straight back to the list may still find no
+    # scores yet, so it is said when a save made it due.
+    ctx["rescoring"] = backfill_due(s)
+    if ctx["rescoring"]:
+        run_lexical_backfill_now()
     return templates.TemplateResponse(request, "settings/relevance.html", ctx)
 
 

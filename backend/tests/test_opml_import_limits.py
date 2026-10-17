@@ -12,6 +12,7 @@ import uuid
 from types import SimpleNamespace
 
 import feedparser
+import httpx
 import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
@@ -275,3 +276,48 @@ async def test_subscribe_joins_a_feed_created_while_it_was_fetching(pg, monkeypa
     rows = (await pg.execute(select(Feed).where(Feed.feed_url == url))).scalars().all()
     assert len(rows) == 1
     assert uf.feed_id == rows[0].id
+
+
+async def test_rate_limited_feed_is_added_unchecked_and_a_dead_one_is_not(pg, monkeypatch):
+    """A few Reddit feeds in a row are enough for a 429 on the check. That says
+    nothing about the address, so the feed goes in; a 404 still does not."""
+    user = await _user(pg)
+    limited = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+    gone = f"https://ex.invalid/{uuid.uuid4().hex}.rss"
+
+    async def no_dns(_url):
+        return None
+
+    async def fetch(url, auth=None):
+        status = 429 if url == limited else 404
+        request = httpx.Request("GET", url)
+        raise httpx.HTTPStatusError("no", request=request,
+                                    response=httpx.Response(status, request=request))
+
+    monkeypatch.setattr("app.services.feed.async_validate_feed_url", no_dns)
+    monkeypatch.setattr("app.services.feed.fetch_and_parse_url", fetch)
+    monkeypatch.setattr("app.services.feed.get_cached_feed_preview", lambda _u: None)
+    monkeypatch.setattr("app.services.feed.get_cached_permanent_url", lambda _u: None)
+    monkeypatch.setattr("app.services.opml.spawn_background", lambda *a, **kw: None)
+    xml = (
+        '<opml version="2.0"><body>'
+        f'<outline type="rss" text="r/selfhosted" xmlUrl="{limited}"/>'
+        f'<outline type="rss" text="Gone" xmlUrl="{gone}"/>'
+        '</body></opml>'
+    ).encode()
+
+    result = await import_opml(
+        user=user, xml_bytes=xml, import_feeds=True, import_labels=False,
+        import_prefs=False, import_filters=False, db=pg,
+    )
+
+    assert result.feeds_added == 1
+    assert result.feeds_failed == 1
+    feed = await pg.scalar(select(Feed).where(Feed.feed_url == limited))
+    assert feed is not None and feed.title == "r/selfhosted"
+    assert feed.last_fetched_at is None
+    assert await pg.scalar(select(UserFeed).where(
+        UserFeed.user_id == user.id, UserFeed.feed_id == feed.id)) is not None
+    assert await pg.scalar(select(Feed).where(Feed.feed_url == gone)) is None
+    assert any("rate-limiting" in w for w in result.warnings)
+    assert any(gone in w and "404" in w for w in result.warnings)

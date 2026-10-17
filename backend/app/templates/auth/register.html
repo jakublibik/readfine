@@ -20,7 +20,6 @@
         {% endif %}
 
         <form method="post" action="/register" class="bg-white shadow rounded-lg p-6 space-y-4">
-            <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
             <input type="hidden" name="timezone" id="tz-field">
             <input type="hidden" name="format_profile" id="fmt-field">
             {# Re-render after an error reuses the stamp the submit came with, so the

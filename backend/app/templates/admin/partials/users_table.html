@@ -29,7 +29,7 @@
           {% set dormant_note = "Feeds that no active user follows are not fetched." if item.dormant_stops_feeds
                                 else "All its feeds are followed by active users too, so nothing is paused." %}
           {% if item.dormant %}
-            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-100 text-gray-500 align-middle"
+            <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-200 text-gray-600 align-middle"
                   title="No activity for {{ item.inactive_days|num if item.inactive_days is not none else 'many' }} days. {{ dormant_note }}">dormant</span>
           {% elif item.dormant_on %}
             <span class="ml-1 px-1.5 py-0.5 text-[10px] font-medium rounded bg-amber-100 text-amber-700 align-middle whitespace-nowrap"
@@ -44,15 +44,15 @@
         {% elif u.is_active %}
           <span class="px-2 py-0.5 text-xs rounded bg-green-100 text-green-700">active</span>
         {% else %}
-          <span class="px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-500">inactive</span>
+          <span class="px-2 py-0.5 text-xs rounded bg-gray-200 text-gray-600">inactive</span>
         {% endif %}
       </td>
       <td class="px-2 py-2 text-right text-gray-600">{{ item.feed_count|num }}</td>
       <td class="px-2 py-2 text-right text-gray-600">{{ item.article_count|num }}</td>
-      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count|num }}</td>
+      <td class="px-2 py-2 text-right {{ 'text-gray-600' if item.read_count else 'text-gray-300' }}">{{ item.read_count|num if item.read_count else '—' }}</td>
       <td class="px-2 py-2 text-right whitespace-nowrap {{ 'text-gray-600' if item.filter_count else 'text-gray-300' }}"
           {% if item.score_filter_count %}title="{{ item.score_filter_count|num }} of {{ item.filter_count|num }} filters use a score"{% endif %}>
-        {{ item.filter_count|num }}{% if item.score_filter_count %} ({{ item.score_filter_count|num }}){% endif %}
+        {% if item.filter_count %}{{ item.filter_count|num }}{% if item.score_filter_count %} ({{ item.score_filter_count|num }}){% endif %}{% else %}—{% endif %}
       </td>
       {% set t = item.terms %}
       {% if t and t.count %}

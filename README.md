@@ -43,8 +43,8 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 
 - **Feeds:** RSS/Atom plus **web-scraping feeds** (CSS selectors) for sites without a feed; folders and scheduled fetching
 - **Reading:** readable extraction (trafilatura → readability-lxml fallback), article states, labels, saved searches, keyboard shortcuts (Inoreader/Miniflux style), dark mode (HTMX + Tailwind); YouTube and Vimeo videos play in the reader
-- **Saved:** paste any link, from a feed or not, and keep it as a readable article that retention never removes (also via the API, so a share sheet or bookmarklet can do it)
-- **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop
+- **Saved:** paste any link, from a feed or not, or send it from the Android share sheet or the bookmarklet, and keep it as a readable article that retention never removes
+- **Adaptive layout:** pick **2- or 3-panel** views per screen size with user-configurable breakpoints; a dedicated mobile layout (collapsible sidebar, inline or full-screen article view) that's more than mobile-friendly, not a squeezed-down desktop; installable as an app (PWA) on phones and desktops
 - **Filters:** conditions → actions (label, mark read, star…), regex, AND/OR, feed/folder scoping, retroactive apply
 - **Stories:** an event several of your feeds cover is one row saying how many sources filed it; unfold the rest in place, read the row to finish the story, and optionally keep repeats of what you've already read out of the list
 - **Relevance scoring:** every new article is scored against a list of terms you keep, with no AI key; suggestions from what you read offer terms to add and drop, and filters and search can act on the score
@@ -54,18 +54,16 @@ readable extraction, and optional AI summaries, scoring, and briefings.
 
 See [FEATURES.md](FEATURES.md) for the full list, grouped by area (also at `/features` in the app).
 
-<p>
+<p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_summary_dark.webp">
-    <img src="backend/app/static/images/landing/mobile_summary.webp" alt="AI summary" width="30%">
-  </picture>
-  <picture>
+    <img src="backend/app/static/images/landing/mobile_summary.webp" alt="AI summary" width="29%">
+  </picture>&emsp;<picture>
     <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_catchmeup_dark.webp">
-    <img src="backend/app/static/images/landing/mobile_catchmeup.webp" alt="Catch me up" width="30%">
-  </picture>
-  <picture>
+    <img src="backend/app/static/images/landing/mobile_catchmeup.webp" alt="Catch me up" width="29%">
+  </picture>&emsp;<picture>
     <source media="(prefers-color-scheme: dark)" srcset="backend/app/static/images/landing/mobile_filters_dark.webp">
-    <img src="backend/app/static/images/landing/mobile_filters.webp" alt="Filters" width="30%">
+    <img src="backend/app/static/images/landing/mobile_filters.webp" alt="Filters" width="29%">
   </picture>
 </p>
 

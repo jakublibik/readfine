@@ -17,7 +17,6 @@
     <form hx-post="/settings/tokens/{{ token.id }}/revoke"
           hx-target="#tokens-list"
           class="inline">
-      <input type="hidden" name="csrftoken" value="{{ request.state.csrftoken }}">
       <button type="submit"
               class="swap-confirm text-xs text-red-600 hover:text-red-800 hover:underline"
               data-confirm-text="Confirm"

@@ -22,7 +22,9 @@ from app.schemas.filter import FilterConditionCreate, FilterActionCreate, Filter
 from app.services.ai_profile_service import PROFILE_MAX_CHARS
 from app.services.briefing_service import reschedule_briefings
 from app.services.catchup_service import CATCHUP_PERIODS, CATCHUP_STATUSES
-from app.services.feed import AlreadySubscribed, FeedLimitReached, subscribe, subscribe_scrape
+from app.services.feed import (
+    AlreadySubscribed, FeedFetchError, FeedLimitReached, subscribe, subscribe_scrape,
+)
 from app.services.filter_service import FILTER_ORDER, create_filter
 from app.services.folder_service import (
     FOLDER_ORDER_DEFAULT, FOLDER_ORDER_MODES, folder_order_clause, next_folder_position,
@@ -31,7 +33,7 @@ from app.services.preference_values import (
     DENSITY_VALUES, FONT_FAMILY_VALUES, FONT_SIZE_VALUES, LABEL_DISPLAY_VALUES,
     SORT_VALUES, UNREAD_FILTER_VALUES, clamp_articles_per_page, clamp_buckets,
 )
-from app.services.relevance_terms_service import TERMS_MAX_CHARS, save_terms
+from app.services.relevance_terms_service import TERMS_MAX_CHARS, backfill_due, save_terms
 from app.services.saved_search_service import (
     SavedSearchError, create_saved_search, list_saved_searches,
 )
@@ -686,6 +688,11 @@ async def import_opml(
             if data:
                 _apply_profile(us, data, result)
         await db.commit()
+        # Imported feeds are not scored as they are added, so terms that came
+        # with the file would otherwise wait for the next backfill tick.
+        if backfill_due(us):
+            from app.fetcher.scheduler import run_lexical_backfill_now
+            run_lexical_backfill_now()
 
     # Pass 4: filters
     if import_filters:
@@ -914,16 +921,40 @@ async def _import_feed(
                 validate_selector=False,
             )
         else:
-            uf = await subscribe(
-                user=user,
-                url=xml_url,
-                folder_id=folder_id,
-                custom_title=title,
-                fetch_auth_user=None,
-                fetch_auth_pass=None,
-                db=db,
-                trigger_initial_fetch=False,
-            )
+            try:
+                uf = await subscribe(
+                    user=user,
+                    url=xml_url,
+                    folder_id=folder_id,
+                    custom_title=title,
+                    fetch_auth_user=None,
+                    fetch_auth_pass=None,
+                    db=db,
+                    trigger_initial_fetch=False,
+                )
+            except FeedFetchError as exc:
+                if not exc.problem.transient:
+                    raise
+                # A rate limit or a server that is down says nothing about the
+                # address: a few Reddit feeds in a row are enough for a 429. Added
+                # unchecked, like a scrape feed above; the first fetch tries again,
+                # and a rate-limited one waits as long as the host asks.
+                uf = await subscribe(
+                    user=user,
+                    url=xml_url,
+                    folder_id=folder_id,
+                    custom_title=title,
+                    fetch_auth_user=None,
+                    fetch_auth_pass=None,
+                    db=db,
+                    trigger_initial_fetch=False,
+                    verify=False,
+                )
+                why = ("the site is rate-limiting this server"
+                       if exc.problem.status == 429 else "the site did not answer properly")
+                result.warnings.append(
+                    f"Added {xml_url} without checking it ({why}). It will be fetched later."
+                )
     except AlreadySubscribed:
         result.feeds_skipped += 1
         return None

@@ -526,12 +526,18 @@ async def subscribe(
     import_mode: str = "recent",
     import_limit: int = 500,
     fetch_interval_min: int | None = None,
+    verify: bool = True,
 ) -> UserFeed:
     """
     Subscribe a user to a feed URL.
 
     Public feeds (no auth) are shared: if the feed already exists in DB, the
     existing row is reused. Private feeds always get a dedicated row.
+
+    ``verify=False`` creates a new feed without fetching it first, titled from
+    ``custom_title`` or the address. For an OPML import whose check of the
+    address hit a rate limit or a server error: the backup says it is a feed, and
+    the first fetch finds out the rest.
 
     Credentials written into the address (``https://user:pass@host/feed``) are moved
     into the auth columns before anything else happens, so the password is encrypted
@@ -587,7 +593,7 @@ async def subscribe(
         # public feeds are cached; private/auth feeds always fetch fresh.
         parsed = None if is_private else get_cached_feed_preview(url)
         permanent_url = None if is_private else get_cached_permanent_url(url)
-        if parsed is None:
+        if parsed is None and verify:
             try:
                 parsed, permanent_url = await fetch_and_parse_url(url, auth=auth)
             except Exception as exc:
@@ -607,10 +613,11 @@ async def subscribe(
     if feed is None:
         title = (
             custom_title
-            or feed_title_text(parsed.feed.get("title"), parsed.feed.get("title_detail"))
+            or (parsed is not None
+                and feed_title_text(parsed.feed.get("title"), parsed.feed.get("title_detail")))
             or url
         )
-        site_url = parsed.feed.get("link")
+        site_url = parsed.feed.get("link") if parsed is not None else None
 
         feed = Feed(
             feed_url=url,
@@ -645,6 +652,10 @@ async def subscribe(
     if parsed is not None:
         # New feed: check entries we just fetched
         extract_readable = not is_full_content_feed(parsed)
+    elif is_new_feed:
+        # Unverified, nothing to look at yet: on, as for a scrape feed. The fetcher's
+        # auto-disable turns it off once the articles turn out to be full text.
+        extract_readable = True
     else:
         # Existing feed: ask the same measurement the fetcher's auto-disable uses, so
         # the two cannot disagree about the same feed. A smaller sample, because this

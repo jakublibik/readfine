@@ -26,6 +26,8 @@ from app.services.counts_service import (
 from app.services.feed import list_user_feeds
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, get_folder_order
 from app.services.label_service import list_labels
+from app.services.relevance_corpus_service import get_stats
+from app.services.relevance_service import parse_terms
 from app.services.saved_search_service import (
     get_saved_search, has_missing_references, list_saved_searches,
 )
@@ -68,6 +70,12 @@ async def main_app(
     # Mobile quicklink: offer Labels only to users who actually label articles,
     # everyone else gets All articles (checked per page load, so it follows along).
     has_labeled = bool(await db.scalar(select(exists().where(ArticleLabel.user_id == user.id))))
+    # Only a brand new instance has no word statistics yet; until the first build
+    # its articles carry no score, and an empty score column looks broken.
+    scores_pending = bool(
+        settings and settings.basic_scoring_enabled and parse_terms(settings.relevance_terms)
+        and await get_stats(db) is None
+    )
     return templates.TemplateResponse(request, "app/main.html", {
         "user": user,
         "bucket_small_max": bucket_small_max,
@@ -81,6 +89,7 @@ async def main_app(
         "open_article_id": open_article_id,
         "has_labeled": has_labeled,
         "feeds_resumed": feeds_resumed,
+        "scores_pending": scores_pending,
     })
 
 

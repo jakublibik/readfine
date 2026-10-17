@@ -1,8 +1,9 @@
 """Saving the term list and the article list's relevance intro bar."""
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from app.services.relevance_terms_service import save_terms, show_relevance_intro
+from app.services.relevance_terms_service import backfill_due, save_terms, show_relevance_intro
 
 NOW = datetime(2026, 9, 24, tzinfo=timezone.utc)
 
@@ -42,6 +43,45 @@ class TestSaveTerms:
         save_terms(s, "")
         assert s.relevance_terms is None
         assert s.lexical_backfill_at is None
+
+
+class TestBackfillDue:
+    def test_first_terms_are_due(self):
+        s = _settings(lexical_backfill_at=None)
+        save_terms(s, "cycling")
+        assert backfill_due(s)
+
+    def test_changed_terms_are_due(self):
+        s = _settings(relevance_terms="cycling", relevance_terms_updated_at=NOW)
+        save_terms(s, "cycling, sourdough")
+        assert backfill_due(s)
+
+    def test_unchanged_terms_are_not(self):
+        s = _settings(relevance_terms="cycling", relevance_terms_updated_at=NOW)
+        save_terms(s, "cycling")
+        assert not backfill_due(s)
+
+    def test_not_due_without_terms_or_with_scoring_off(self):
+        assert not backfill_due(_settings(lexical_backfill_at=None))
+        assert not backfill_due(_settings(relevance_terms="cycling", lexical_backfill_at=None,
+                                          basic_scoring_enabled=False))
+
+
+class TestRunLexicalBackfillNow:
+    def test_pulls_the_job_forward(self):
+        from app.fetcher import scheduler as sched
+        with patch.object(sched, "scheduler") as fake:
+            sched.run_lexical_backfill_now()
+        fake.modify_job.assert_called_once()
+        assert fake.modify_job.call_args.args == ("backfill_lexical_scores",)
+        assert fake.modify_job.call_args.kwargs["next_run_time"] <= datetime.now(timezone.utc)
+
+    def test_no_op_without_the_job(self):
+        from app.fetcher import scheduler as sched
+        with patch.object(sched, "scheduler") as fake:
+            fake.get_job.return_value = None
+            sched.run_lexical_backfill_now()
+        fake.modify_job.assert_not_called()
 
 
 class TestShowRelevanceIntro:

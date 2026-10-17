@@ -563,10 +563,11 @@ function _revertNavSnapshot() {
   if (snap.url) htmx.ajax('GET', snap.url, { target: '#article-list', swap: 'innerHTML' });
 }
 
-// The one-off "welcome back, feeds were paused" bar (app/main.html).
+// The one-off notice bars at the bottom of the reader (app/main.html).
 document.addEventListener('click', function (e) {
-  if (!e.target.closest('[data-feeds-resumed-close]')) return;
-  var bar = document.querySelector('[data-feeds-resumed]');
+  var btn = e.target.closest('[data-notice-bar-close]');
+  if (!btn) return;
+  var bar = btn.closest('[data-notice-bar]');
   if (bar) bar.remove();
 });
 

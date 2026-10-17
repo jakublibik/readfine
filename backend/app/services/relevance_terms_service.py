@@ -25,6 +25,15 @@ def save_terms(s: UserSettings, text: str | None, source: str = "manual") -> Non
         s.lexical_backfill_at = None
 
 
+def backfill_due(s: UserSettings) -> bool:
+    """Whether the 7-day rescore is waiting for this account."""
+    return bool(
+        s.basic_scoring_enabled and parse_terms(s.relevance_terms)
+        and (s.lexical_backfill_at is None
+             or s.lexical_backfill_at < s.relevance_terms_updated_at)
+    )
+
+
 def show_relevance_intro(s: UserSettings | None) -> bool:
     """Whether the article list offers to set up basic relevance.
 

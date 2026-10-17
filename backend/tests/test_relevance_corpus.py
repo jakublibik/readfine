@@ -154,6 +154,45 @@ class TestRebuild:
 
 
 @pytest.mark.asyncio
+class TestSmallCorpusMinDf:
+    """A young instance counts every word, a grown one drops the long tail.
+
+    The window also holds whatever the dev database fetched today, so the
+    threshold is moved around the build instead of trusting its size.
+    """
+
+    async def test_small_corpus_keeps_a_word_from_one_article(self, pg, monkeypatch):
+        monkeypatch.setattr(rcs, "SMALL_CORPUS_MAX_DOCS", 10**9)
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1)
+
+        assert (await pg.get(LexicalCorpus, 1)).min_df == rcs.SMALL_CORPUS_MIN_DF
+        assert await pg.scalar(
+            select(LexicalTerm.doc_freq).where(LexicalTerm.term == RARE)) == 1
+
+        stats = await rcs.get_stats(pg)
+        terms = rs.parse_terms(f"{RARE} topics")
+        text = rs.article_text(f"{RARE} delta", "<p>body four</p>")
+        assert rs.lexical_score(text, terms, stats) > 0.0
+
+    async def test_grown_corpus_goes_back_to_min_df(self, pg, monkeypatch):
+        monkeypatch.setattr(rcs, "SMALL_CORPUS_MAX_DOCS", 1)
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1)
+
+        assert (await pg.get(LexicalCorpus, 1)).min_df == rcs.MIN_DF
+        assert await pg.scalar(
+            select(LexicalTerm.doc_freq).where(LexicalTerm.term == RARE)) is None
+
+    async def test_explicit_min_df_wins(self, pg, monkeypatch):
+        monkeypatch.setattr(rcs, "SMALL_CORPUS_MAX_DOCS", 10**9)
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+
+        assert (await pg.get(LexicalCorpus, 1)).min_df == 3
+
+
+@pytest.mark.asyncio
 class TestGetStats:
     async def test_none_before_the_first_build(self, pg):
         """A fresh install: no build, so no score, which is not a score of zero."""
@@ -232,6 +271,19 @@ class TestEnsureBuilt:
 
         assert await rcs.ensure_built(pg, window_days=1) is True
         assert (await pg.get(LexicalCorpus, 1)).built_at > first
+
+    async def test_skips_a_tiny_corpus_nothing_has_been_added_to(self, pg, monkeypatch):
+        """Below the threshold the job runs every minute; most runs find nothing new."""
+        monkeypatch.setattr(rcs, "BOOTSTRAP_MAX_DOCS", 10**9)
+        await _seed(pg)
+        await rcs.rebuild(pg, window_days=1)
+        first = (await pg.get(LexicalCorpus, 1)).built_at
+
+        assert await rcs.ensure_built(pg, window_days=1) is False
+        assert (await pg.get(LexicalCorpus, 1)).built_at == first
+
+        await _article(pg, f"{COMMON} epsilon")
+        assert await rcs.ensure_built(pg, window_days=1) is True
 
     async def test_rebuilds_a_table_from_another_tokenizer_at_once(self, pg):
         """An upgrade that changes tokenization must not wait for the night."""
