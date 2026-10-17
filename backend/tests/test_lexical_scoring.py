@@ -7,6 +7,8 @@ are this test's own articles.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -14,6 +16,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
+from app.fetcher import scheduler as sched
 from app.models.article import Article, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.user import User, UserSettings
@@ -465,3 +468,48 @@ async def test_a_failure_scoring_on_subscribe_keeps_the_subscription(pg_savepoin
     )
     # What callers read next, after the rollback in the failure path.
     assert uf.feed.title == "o" and uf.feed_id == other.id and user.email
+
+
+class TestCorpusPulledForward:
+    """A fresh install: the first fetch has nothing to score with and asks for a build."""
+
+    async def test_fetch_without_statistics_pulls_the_build_forward(self):
+        db = AsyncMock()
+        db.scalars.return_value = [1]
+        with patch.object(lss, "load_terms", AsyncMock(return_value={1: object()})), \
+                patch.object(lss, "stats_for", AsyncMock(return_value=None)), \
+                patch("app.fetcher.scheduler.run_lexical_corpus_soon") as soon:
+            assert await lss.score_new_articles(db, 1, [object()]) == 0
+        soon.assert_called_once()
+
+    async def test_without_terms_nothing_is_asked_for(self):
+        db = AsyncMock()
+        db.scalars.return_value = [1]
+        with patch.object(lss, "load_terms", AsyncMock(return_value={})), \
+                patch("app.fetcher.scheduler.run_lexical_corpus_soon") as soon:
+            await lss.score_new_articles(db, 1, [object()])
+        soon.assert_not_called()
+
+
+class TestRunLexicalCorpusSoon:
+    def _job(self, next_run_time):
+        return SimpleNamespace(next_run_time=next_run_time)
+
+    def test_brings_a_later_run_forward(self):
+        with patch.object(sched, "scheduler") as fake:
+            fake.get_job.return_value = self._job(datetime.now(timezone.utc) + timedelta(seconds=50))
+            sched.run_lexical_corpus_soon()
+        when = fake.modify_job.call_args.kwargs["next_run_time"]
+        assert when <= datetime.now(timezone.utc) + sched.LEXICAL_CORPUS_SOON
+
+    def test_never_pushes_a_sooner_run_back(self):
+        with patch.object(sched, "scheduler") as fake:
+            fake.get_job.return_value = self._job(datetime.now(timezone.utc) + timedelta(seconds=1))
+            sched.run_lexical_corpus_soon()
+        fake.modify_job.assert_not_called()
+
+    def test_leaves_a_paused_job_alone(self):
+        with patch.object(sched, "scheduler") as fake:
+            fake.get_job.return_value = self._job(None)
+            sched.run_lexical_corpus_soon()
+        fake.modify_job.assert_not_called()

@@ -147,8 +147,10 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
                              articles: list[Article]) -> int:
     """Fetch-time entry point: score a feed's new articles for its subscribers.
 
-    Silent no-op before the corpus statistics exist (a fresh install, up to the
-    first build) and for a feed whose subscribers have no terms.
+    No-op for a feed whose subscribers have no terms, and before the corpus
+    statistics exist (a fresh install, up to the first build). In that case the
+    build is pulled forward: the build and the backfill after it score these
+    articles within seconds instead of at the next tick of the minute job.
     """
     if not articles:
         return 0
@@ -159,6 +161,8 @@ async def score_new_articles(db: AsyncSession, feed_id: int,
         return 0
     stats = await stats_for(db, terms_by_user)
     if stats is None:
+        from app.fetcher.scheduler import run_lexical_corpus_soon
+        run_lexical_corpus_soon()
         return 0
     return await score_articles_for_users(
         db, [Scorable.of(a) for a in articles], terms_by_user, stats)
