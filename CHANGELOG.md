@@ -12,22 +12,24 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-18
+
 ### Changed
 
-- After you save new relevance terms in **Settings → Relevance**, or import them with an OPML file, the last 7 days are rescored within seconds instead of up to 5 minutes later.
 - After an OPML import, feeds that could not be added (or were added without a check) are listed under **Feeds to check** with their name, and one click selects the address for copying into **Add feed**. When such a feed was part of a filter, saved search or catch-up, the warning now names that item.
+- After you save new relevance terms in **Settings → Relevance**, or import them with an OPML file, the last 7 days are rescored within seconds instead of up to 5 minutes later.
 - **Labels** and single-label views open faster on a large instance, most of all when nothing in them is unread. Their speed now depends on how many articles you have labeled, not on how many articles the whole instance holds.
 
 ### Fixed
 
 - Importing a large OPML file could end on a "504 Gateway Timeout" page, even though the import itself went through. New feeds are now checked several at a time, and the result page always comes back. Feeds that could not be checked in time are added anyway and fetched in the background; the result says how many.
+- An OPML import with several Reddit feeds dropped some of them with "Too many requests (429)". A feed whose site is rate-limiting the server or briefly down is now added anyway and fetched later.
+- On a new instance, relevance scores show up seconds after the first articles arrive instead of up to 20 minutes later, and they also match words that so far appear in just one article. Until then, a note in the reader says they are on the way.
+- If you skipped the topics question at signup and set up terms later in **Settings → Relevance**, the scores were there but the article list did not show them. **Show the score in the article list** now starts checked until you save your first terms.
 - **Catch me up** over a long period could end on a "504 Gateway Timeout" page, while the AI finished in the background and the tokens were spent anyway. The briefing is now generated in the background and shows up on the page when it is ready.
 - After a change of `SECRET_KEY`, or with a second Readfine on the same host (the demo next to a real install, for example), every action failed with "403" until you cleared your cookies. The page now picks up a fresh security token by itself.
 - After a password change on another device, or with an old login from a second Readfine on the same host, the browser could get stuck bouncing between the reader and the login page ("too many redirects"). The old login is now dropped and you land on the sign-in form.
-- If you skipped the topics question at signup and set up terms later in **Settings → Relevance**, the scores were there but the article list did not show them. **Show the score in the article list** now starts checked until you save your first terms.
-- An OPML import with several Reddit feeds dropped some of them with "Too many requests (429)". A feed whose site is rate-limiting the server or briefly down is now added anyway and fetched later.
 - Creating an API token in **Settings → API Tokens** failed with "403". It works again.
-- On a new instance, relevance scores show up seconds after the first articles arrive instead of up to 20 minutes later, and they also match words that so far appear in just one article. Until then, a note in the reader says they are on the way.
 - In the dark theme, an unstarred star and empty values (such as zeros in the admin tables) were brighter than the text around them. They are now dimmed as in the light theme, and the **dormant** and **inactive** badges in **Admin → Users** stand out better.
 
 ## [0.21.0] - 2026-10-11
