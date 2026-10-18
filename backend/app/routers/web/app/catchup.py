@@ -3,7 +3,12 @@ scheduled-briefing settings attached to them."""
 import html as html_module
 import json
 import logging
+import secrets
+import time
+from collections.abc import Coroutine
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse
@@ -19,6 +24,7 @@ from app.services.ai_jobs import ai_enabled_globally
 from app.services.catchup_service import CUSTOM_PROMPT_MAX, CatchupPeriod, CatchupStatus
 from app.services.label_service import list_labels
 from app.templating import templates
+from app.utils.background import spawn_background
 from app.utils.markdown import md_render_ai
 
 from .common import _catchup_available
@@ -204,15 +210,13 @@ async def htmx_catchup_generate(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    include_snippet_bool = include_snippet == 'true'
-    article_limit = max(1, min(article_limit, 500))
-    from app.models.user import CatchupLog
-    from app.services.ai_service import ai_client, catch_me_up
-    from app.services.catchup_service import (
-        annotate_sources, apply_catchup_limit, build_articles_meta,
-        fetch_catchup_articles, fold_stories, populate_snippet_sources,
-        resolve_story_mode, scoring_available, validate_scope,
-    )
+    """Start a digest and answer with a block that polls for it.
+
+    The AI call can take minutes, longer than the proxies in front wait for one
+    request (nginx 60 s, Cloudflare 100 s), so it runs as a background job. A reader
+    with a digest still running gets that one's poll instead of a second paid call.
+    """
+    from app.services.catchup_service import validate_scope
 
     ai_on = bool(await ai_enabled_globally(db))
     settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user.id))).scalar_one_or_none()
@@ -226,30 +230,173 @@ async def htmx_catchup_generate(
     except ValueError as exc:
         return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Invalid scope: {html_module.escape(str(exc)[:200])}</div>')
 
+    running = _running_digest(user.id)
+    if running is not None:
+        return _digest_progress(running)
+
+    job_id = _start_digest(user.id, _digest_job(
+        user.id,
+        period=period,
+        filter_status=filter_status,
+        label_filter=label_filter,
+        filter_score_min=filter_score_min,
+        scope_include=scope_include,
+        article_limit=article_limit,
+        custom_prompt=custom_prompt,
+        include_snippet=include_snippet,
+        config_id=config_id,
+    ))
+    return _digest_progress(job_id)
+
+
+_DIGEST_INTERRUPTED = (
+    '<div class="text-red-600 text-sm p-4">This briefing was interrupted, '
+    'most likely by a server restart. Generate it again.</div>'
+)
+
+
+@router.get("/htmx/catch-me-up/jobs/{job_id}", response_class=HTMLResponse)
+async def htmx_catchup_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
+    """Poll for a digest started above: the progress block again, or the result."""
+    _forget_old_digests()
+    job = _digest_jobs.get(job_id)
+    if job is None or job.user_id != user.id:
+        return HTMLResponse(_DIGEST_INTERRUPTED)
+    if job.html is None:
+        return _digest_progress(job_id)
+    return HTMLResponse(job.html)
+
+
+# Digests being generated, and finished ones kept a while for the poll to collect.
+# In memory, like the other in-process state: Readfine runs as one process. A restart
+# loses them, and the poll then asks the reader to generate the digest again.
+_DIGEST_KEEP_SECONDS = 600
+
+
+@dataclass
+class _DigestJob:
+    user_id: int
+    html: str | None = None
+    finished_at: float | None = None
+
+
+_digest_jobs: dict[str, _DigestJob] = {}
+
+
+def _forget_old_digests() -> None:
+    cutoff = time.monotonic() - _DIGEST_KEEP_SECONDS
+    for job_id in [k for k, j in _digest_jobs.items()
+                   if j.finished_at is not None and j.finished_at < cutoff]:
+        del _digest_jobs[job_id]
+
+
+def _running_digest(user_id: int) -> str | None:
+    for job_id, job in _digest_jobs.items():
+        if job.user_id == user_id and job.html is None:
+            return job_id
+    return None
+
+
+def _start_digest(user_id: int, digest: Coroutine[Any, Any, str]) -> str:
+    _forget_old_digests()
+    job_id = secrets.token_urlsafe(16)
+    job = _DigestJob(user_id=user_id)
+    _digest_jobs[job_id] = job
+
+    async def run() -> None:
+        try:
+            job.html = await digest
+        except Exception:
+            logger.exception("catchup: digest job failed for user %d", user_id)
+            job.html = '<div class="text-red-600 text-sm p-4">Could not generate digest. Try again.</div>'
+        finally:
+            if job.html is None:  # cancelled, at shutdown
+                job.html = _DIGEST_INTERRUPTED
+            job.finished_at = time.monotonic()
+
+    spawn_background(run(), name=f"catchup-digest-{user_id}")
+    return job_id
+
+
+def _digest_progress(job_id: str) -> HTMLResponse:
+    """The block shown while a digest runs. It asks again every few seconds and is
+    swapped into the result panel, so the finished digest replaces it there."""
+    return HTMLResponse(
+        f'<div hx-get="/htmx/catch-me-up/jobs/{job_id}" hx-trigger="load delay:3s" '
+        f'hx-target="#catchup-result" hx-swap="innerHTML" '
+        f'class="flex items-center gap-2 text-sm text-gray-500 p-4">'
+        f'<svg class="w-5 h-5 animate-spin text-blue-500 flex-shrink-0" fill="none" viewBox="0 0 24 24">'
+        f'<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>'
+        f'<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path></svg>'
+        f'Generating briefing… A long period can take a few minutes.</div>'
+    )
+
+
+async def _digest_job(user_id: int, **form: Any) -> str:
+    """Generate the digest on a session of its own: the request's is gone by then."""
+    import app.database as db_module
+    async with db_module.async_session_factory() as db:
+        return await generate_digest(user_id, db, **form)
+
+
+async def generate_digest(
+    user_id: int,
+    db: AsyncSession,
+    *,
+    period: str = "7days",
+    filter_status: str = "all",
+    label_filter: str | None = None,
+    filter_score_min: float | None = None,
+    scope_include: str | None = None,
+    article_limit: int = 500,
+    custom_prompt: str | None = None,
+    include_snippet: str | None = None,
+    config_id: int | None = None,
+) -> str:
+    """The digest for the generate form, as the HTML for the result panel.
+
+    Availability and the scope were checked when the job started.
+    """
+    include_snippet_bool = include_snippet == 'true'
+    article_limit = max(1, min(article_limit, 500))
+    from app.models.user import CatchupLog
+    from app.services.ai_service import ai_client, catch_me_up
+    from app.services.catchup_service import (
+        annotate_sources, apply_catchup_limit, build_articles_meta,
+        fetch_catchup_articles, fold_stories, populate_snippet_sources,
+        resolve_story_mode, scoring_available,
+    )
+
+    ai_on = bool(await ai_enabled_globally(db))
+    settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))).scalar_one_or_none()
+
     tz_str = settings.timezone if settings else "UTC"
     has_score = scoring_available(ai_on, settings)
     collapsing, exclude_hidden = resolve_story_mode(settings)
 
     try:
         articles = await fetch_catchup_articles(
-            user_id=user.id, tz_str=tz_str, db=db,
+            user_id=user_id, tz_str=tz_str, db=db,
             period=period, scope_include=scope_include,
             filter_status=filter_status, label_filter=label_filter,
             filter_score_min=filter_score_min / 100 if filter_score_min is not None else None,
             exclude_hidden=exclude_hidden,
         )
     except Exception as exc:
-        logger.exception("catchup: fetch failed for user %d", user.id)
-        return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not fetch articles: {html_module.escape(str(exc)[:200])}</div>')
+        logger.exception("catchup: fetch failed for user %d", user_id)
+        return f'<div class="text-red-600 text-sm p-4">Could not fetch articles: {html_module.escape(str(exc)[:200])}</div>'
 
     if not articles:
-        return HTMLResponse('<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>')
+        return '<div class="text-gray-500 text-sm p-4">No articles match the selected filters.</div>'
 
     # The digest always runs on the main model; the scoring slot is reserved for
     # article scoring, where the model is picked to be small.
-    async with ai_client(user.id, "quality", db) as (client, provider, model):
+    async with ai_client(user_id, "quality", db) as (client, provider, model):
         if client is None:
-            return HTMLResponse(
+            return (
                 '<div class="text-red-600 text-sm p-4">No main model configured. '
                 'Pick one in <a href="/settings/ai" class="underline">Settings → AI</a>.</div>'
             )
@@ -260,15 +407,15 @@ async def htmx_catchup_generate(
             articles = fold_stories(articles)
         sampled = apply_catchup_limit(articles, article_limit, has_score)
         if collapsing:
-            await annotate_sources(sampled, user.id, db)
+            await annotate_sources(sampled, user_id, db)
             logger.info(
                 "catchup: user=%d rows=%d folded=%d with_sources=%d",
-                user.id, len(sampled),
+                user_id, len(sampled),
                 sum(a.folded_count for a in sampled),
                 sum(1 for a in sampled if a.source_count),
             )
         if include_snippet_bool:
-            await populate_snippet_sources(sampled, user.id, db)
+            await populate_snippet_sources(sampled, user_id, db)
         articles_meta = build_articles_meta(sampled, include_snippet_bool)
 
         try:
@@ -283,9 +430,9 @@ async def htmx_catchup_generate(
             )
         except Exception as exc:
             from app.services.ai_service import describe_ai_error
-            logger.exception("catchup: AI generation failed for user %d", user.id)
+            logger.exception("catchup: AI generation failed for user %d", user_id)
             reason = describe_ai_error(exc)
-            return HTMLResponse(f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>')
+            return f'<div class="text-red-600 text-sm p-4">Could not generate digest: {html_module.escape(reason[:200])}</div>'
 
     # Log the run. The config id comes from the form: one the reader does not own, or
     # one deleted meanwhile in another tab, is logged as no config rather than failing
@@ -294,11 +441,11 @@ async def htmx_catchup_generate(
         from app.models.user import UserCatchupConfig
         config_id = await db.scalar(
             select(UserCatchupConfig.id).where(
-                UserCatchupConfig.id == config_id, UserCatchupConfig.user_id == user.id,
+                UserCatchupConfig.id == config_id, UserCatchupConfig.user_id == user_id,
             )
         )
     log = CatchupLog(
-        user_id=user.id,
+        user_id=user_id,
         config_id=config_id,
         article_count=len(sampled),
         input_tokens=input_tokens,
@@ -311,9 +458,7 @@ async def htmx_catchup_generate(
     await db.commit()
 
     rendered = md_render_ai(text)
-    return HTMLResponse(
-        f'<div class="prose prose-sm dark:prose-invert max-w-none">{rendered}</div>'
-    )
+    return f'<div class="prose prose-sm dark:prose-invert max-w-none">{rendered}</div>'
 
 
 # ── Catchup config CRUD ───────────────────────────────────────────────────────

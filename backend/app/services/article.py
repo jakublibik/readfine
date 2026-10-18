@@ -4,8 +4,8 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 import regex as _regex
-from sqlalchemy import Text, and_, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
-from sqlalchemy.dialects.postgresql import TSQUERY, insert as pg_insert
+from sqlalchemy import BigInteger, Text, and_, any_, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy.dialects.postgresql import ARRAY, TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import SUPPRESSED_BY_BULK, Article, UserArticleState
@@ -359,6 +359,26 @@ async def _build_search_tsquery(db: AsyncSession, q: str):
     return cast(re.sub(r"'([^']+)'", expand, text_form), TSQUERY)
 
 
+def labeled_clause(user_id: int, label_id: int | None = None):
+    """Articles the reader has labeled (with one label if given), for a label view.
+
+    Asked as ``id = ANY(array of the reader's labeled ids)``, so the view costs what
+    the reader's labels cost, not what the instance's articles cost. The array is
+    computed once and each id is a primary key lookup. Asked as EXISTS or as a join,
+    the planner walks a whole index of articles instead: ix_articles_sort_ts under the
+    list's ordering (518 ms on production for an account with 7.6k labeled articles
+    and none of them unread; 145 ms against 10 ms on 169k articles), and even starting
+    from a materialized CTE it may merge-join along the full articles_pkey. An article
+    with two labels is still one row, since ANY doesn't multiply rows.
+    """
+    ids = select(func.array_agg(ArticleLabel.article_id)).where(ArticleLabel.user_id == user_id)
+    if label_id is not None:
+        ids = ids.where(ArticleLabel.label_id == label_id)
+    # The cast makes it ANY(array), not ANY(subquery), which Postgres would plan as
+    # the same semi-join this is here to avoid.
+    return Article.id == any_(cast(ids.scalar_subquery(), ARRAY(BigInteger)))
+
+
 async def list_articles(
     user: User,
     db: AsyncSession,
@@ -506,22 +526,8 @@ async def list_articles(
                     clauses.append(UserFeed.folder_id == fid)
             stmt = stmt.where(UserFeed.id.is_not(None), or_(*clauses))
 
-    if label_id is not None:
-        stmt = stmt.join(
-            ArticleLabel,
-            (ArticleLabel.article_id == Article.id)
-            & (ArticleLabel.user_id == user.id)
-            & (ArticleLabel.label_id == label_id),
-        )
-    elif labeled_only:
-        stmt = stmt.where(
-            select(ArticleLabel.article_id)
-            .where(
-                (ArticleLabel.article_id == Article.id)
-                & (ArticleLabel.user_id == user.id)
-            )
-            .exists()
-        )
+    if label_id is not None or labeled_only:
+        stmt = stmt.where(labeled_clause(user.id, label_id))
 
     # Search label filter (multi-select): "any" = has at least one label,
     # otherwise articles carrying at least one of the selected labels.

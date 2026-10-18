@@ -22,7 +22,9 @@ from app.models.article import Article, UserArticleState
 from app.models.feed import UserFeed
 from app.models.label import ArticleLabel
 from app.models.user import User, UserSettings
-from app.services.article import count_articles, unread_clause, visible_article_clause
+from app.services.article import (
+    count_articles, labeled_clause, unread_clause, visible_article_clause,
+)
 from app.services.story_service import (
     DEDUP_COLLAPSE, DEDUP_OFF, collapses_stories, row_count,
 )
@@ -116,14 +118,9 @@ async def sidebar_counts(
     (c.nav_starred, c.nav_unread_starred, c.nav_archived, c.nav_unread_archived,
      c.nav_saved, c.nav_unread_saved) = (n or 0 for n in states)
 
-    # Labeled: an article with two labels is one row in the list, so the label is
-    # asked for as EXISTS, not joined in (which would count it once per label when
-    # nothing folds).
-    has_label = (
-        select(ArticleLabel.article_id)
-        .where(ArticleLabel.article_id == Article.id, ArticleLabel.user_id == user_id)
-        .exists()
-    )
+    # Labeled: the list's own clause, which also counts an article with two labels
+    # once even when nothing folds.
+    has_label = labeled_clause(user_id)
     labeled = select(rows_drawn).select_from(Article).outerjoin(UserArticleState, uas_join)
     c.nav_labeled = await db.scalar(labeled.where(visible, has_label)) or 0
     c.nav_unread_labeled = await db.scalar(labeled.where(visible, has_label, unread)) or 0
