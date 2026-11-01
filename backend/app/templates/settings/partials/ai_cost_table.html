@@ -102,19 +102,17 @@
   </table>
   </div>
   {% if cost_stats.operations | selectattr("is_estimated") | list %}
-  <p class="mt-2 text-xs text-gray-400">~ Estimated - a configured model isn't in the price list; its cost is approximated using a typical model for the provider.</p>
+  <p class="mt-2 text-xs text-gray-400">~ Estimated - a model isn't in the price list; its cost is approximated using a typical model for the provider.</p>
   {% endif %}
   {% if cost_stats.has_unpriced_provider %}
   <p class="mt-2 text-xs text-gray-400">
     A custom endpoint has no price list here, so its rows show tokens only and the total covers the paid models alone.
   </p>
   {% endif %}
-  {# Not tied to the custom provider being configured: the moment a slot is
-     switched away from one, the past runs it did get re-priced at the new
-     model's rate and this is the only thing on the page that says so. #}
+  {# Costs follow the model that ran each job. This covers what never recorded one. #}
   {% if cost_stats.prices_follow_current_model %}
   <p class="mt-2 text-xs text-gray-400">
-    Costs follow the model each slot is set to right now, not the one that actually ran - changing a slot re-prices what came before it, and work done on a custom endpoint is priced as if it had run on the new model.
+    Chat, and any older runs that didn't record their model, are priced at the model the slot is set to now, so changing the slot changes what they show. Everything else is priced at the model that actually ran it.
   </p>
   {% endif %}
 </div>

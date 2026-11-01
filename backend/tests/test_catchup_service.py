@@ -372,17 +372,17 @@ class TestBuildArticlesMeta:
 class TestEstimateCatchupTokens:
     def test_without_snippet(self):
         inp, out = estimate_catchup_tokens(100, include_snippet=False)
-        assert inp == 100 * 20 + 300
-        assert out == 800
+        assert inp == 100 * 50 + 300
+        assert out == 2000
 
     def test_with_snippet(self):
         inp, out = estimate_catchup_tokens(100, include_snippet=True)
-        assert inp == 100 * 55 + 300
-        assert out == 800
+        assert inp == 100 * 140 + 300
+        assert out == 2000
 
     def test_default_limit(self):
         inp_s, _ = estimate_catchup_tokens(200, include_snippet=True)
-        assert inp_s == 200 * 55 + 300
+        assert inp_s == 200 * 140 + 300
 
     def test_snippet_increases_tokens(self):
         inp_no, _ = estimate_catchup_tokens(50, include_snippet=False)

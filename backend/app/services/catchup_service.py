@@ -579,8 +579,14 @@ def build_articles_meta(
 # ── Cost estimation ───────────────────────────────────────────────────────────
 
 def estimate_catchup_tokens(article_limit: int, include_snippet: bool) -> tuple[int, int]:
-    """Return (input_tokens, output_tokens) estimate for cost calculation."""
-    tokens_per_article = 55 if include_snippet else 20
+    """Return (input_tokens, output_tokens) estimate for cost calculation.
+
+    Taken from logged runs on Sonnet 5.5 (2026-11): 139 input tokens per article and
+    about 2,000 output tokens a run, nearly all of them with snippets. The figure
+    without a snippet is worked out from line length, since the log doesn't say
+    which runs had one: a snippet is around 200 of the roughly 300 characters.
+    """
+    tokens_per_article = 140 if include_snippet else 50
     input_tokens = article_limit * tokens_per_article + 300
-    output_tokens = 800
+    output_tokens = 2000
     return input_tokens, output_tokens
