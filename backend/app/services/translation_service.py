@@ -155,6 +155,98 @@ async def bulk_create_translation_jobs(pairs: list[tuple[int, int]], db: AsyncSe
     return result.rowcount or 0
 
 
+# ── backfill ──────────────────────────────────────────────────────────────────
+
+# Unread articles per feed translated when a reader turns translation on or picks
+# another language. New articles only get jobs as they arrive, so without this a
+# freshly ticked feed would look as if nothing happened.
+BACKFILL_LIMIT = 100
+
+
+async def backfill_translations(
+    user_id: int, db: AsyncSession, feed_ids: list[int] | None = None,
+) -> int:
+    """Queue the latest unread articles of the reader's translated feeds that have
+    no translation in the current language yet: *feed_ids* after ticking feeds,
+    every translated feed (``None``) after a language change.
+
+    The job key is (article, user, operation), so an article translated before in
+    another language, or one whose job failed, already has a job: that one is
+    reset to pending rather than a second one added. A job a run holds right now
+    is left to it.
+
+    Does not commit. Sets ``db.info[ENQUEUED_FLAG]`` like the fetch path, so the
+    caller kicks a run after its commit. Returns the number of jobs queued.
+    """
+    from sqlalchemy import exists, update
+
+    from app.models.article import UserArticleState
+    from app.services.article import unread_clause, visible_article_clause
+
+    language = await db.scalar(
+        select(UserSettings.ai_translation_language).where(UserSettings.user_id == user_id))
+    if language not in LANGUAGES:
+        return 0
+    if not await ai_enabled_globally(db) or await ai_work_held_back(user_id, db):
+        return 0
+
+    q = select(UserFeed.feed_id).where(
+        UserFeed.user_id == user_id, UserFeed.translate.is_(True))
+    if feed_ids is not None:
+        if not feed_ids:
+            return 0
+        q = q.where(UserFeed.feed_id.in_(feed_ids))
+    translated_feeds = (await db.scalars(q)).all()
+
+    article_ids: list[int] = []
+    for feed_id in translated_feeds:
+        article_ids += (await db.scalars(
+            select(Article.id)
+            .outerjoin(UserArticleState,
+                       (UserArticleState.article_id == Article.id)
+                       & (UserArticleState.user_id == user_id))
+            .where(
+                Article.feed_id == feed_id,
+                unread_clause(),
+                visible_article_clause(),
+                UserArticleState.hidden_at.is_(None),
+                ~exists().where(
+                    ArticleTranslation.user_id == user_id,
+                    ArticleTranslation.article_id == Article.id,
+                    ArticleTranslation.language == language,
+                ),
+            )
+            .order_by(Article.id.desc())
+            .limit(BACKFILL_LIMIT)
+        )).all()
+    if not article_ids:
+        return 0
+
+    created = await bulk_create_translation_jobs([(aid, user_id) for aid in article_ids], db)
+    reusable = (
+        select(ArticleAiJob.id)
+        .where(
+            ArticleAiJob.user_id == user_id,
+            ArticleAiJob.operation == "translation",
+            ArticleAiJob.article_id.in_(article_ids),
+            ArticleAiJob.status != "pending",
+        )
+        .with_for_update(skip_locked=True)
+    )
+    reset = (await db.execute(
+        update(ArticleAiJob)
+        .where(ArticleAiJob.id.in_(reusable))
+        .values(status="pending", retry_count=0, next_retry_at=None,
+                error_message=None, processed_at=None)
+        .execution_options(synchronize_session=False)
+    )).rowcount or 0
+
+    queued = created + reset
+    if queued:
+        db.info[ENQUEUED_FLAG] = True
+    return queued
+
+
 # ── parsing ───────────────────────────────────────────────────────────────────
 
 def parse_translations(raw: str, originals: dict[int, str]) -> dict[int, str]:
@@ -211,12 +303,15 @@ class _BatchRun:
         self.db = db
         self.now = now
         self.timed_out = False
+        # The reader picked another language while a call ran: the rest of this
+        # batch waits for the next one, which reads the new language.
+        self.language_changed = False
 
     async def translate(self, jobs: list[ArticleAiJob], titles: dict[int, str]) -> None:
         """Translate *jobs*, halving on an answer that does not cover them all."""
         from app.services.ai_service import AiCallTimeout, ProviderEmptyResponse, translate_titles
 
-        if self.timed_out:
+        if self.timed_out or self.language_changed:
             return
         for job in jobs:
             job.provider = self.provider
@@ -249,17 +344,20 @@ class _BatchRun:
         got = {} if answer.truncated else parse_translations(
             answer.text, {j.article_id: titles[j.article_id] for j in jobs})
 
+        current = await self.db.scalar(
+            select(UserSettings.ai_translation_language)
+            .where(UserSettings.user_id == self.s.user_id))
+        if current != self.language:
+            # Changed in the seconds this call took. A backfill cannot reset these
+            # jobs (still pending, and locked by this run), so they stay pending
+            # here instead of passing as done in a language nobody shows. What came
+            # back is kept under its own language, for a reader who switches back.
+            await self._store(got)
+            self.language_changed = True
+            return
+
         if got:
-            stmt = pg_insert(ArticleTranslation).values([
-                {"user_id": self.s.user_id, "article_id": aid, "language": self.language,
-                 "title": title, "model": self.model}
-                for aid, title in got.items()
-            ])
-            await self.db.execute(stmt.on_conflict_do_update(
-                index_elements=["user_id", "article_id", "language"],
-                set_={"title": stmt.excluded.title, "model": stmt.excluded.model,
-                      "created_at": self.now},
-            ))
+            await self._store(got)
             for job in jobs:
                 if job.article_id in got:
                     job.status = "success"
@@ -277,6 +375,20 @@ class _BatchRun:
         else:
             # Strictly smaller than this batch either way, so the recursion ends.
             await self._split(missing, titles)
+
+    async def _store(self, got: dict[int, str]) -> None:
+        if not got:
+            return
+        stmt = pg_insert(ArticleTranslation).values([
+            {"user_id": self.s.user_id, "article_id": aid, "language": self.language,
+             "title": title, "model": self.model}
+            for aid, title in got.items()
+        ])
+        await self.db.execute(stmt.on_conflict_do_update(
+            index_elements=["user_id", "article_id", "language"],
+            set_={"title": stmt.excluded.title, "model": stmt.excluded.model,
+                  "created_at": self.now},
+        ))
 
     async def _split(self, jobs: list[ArticleAiJob], titles: dict[int, str]) -> None:
         if len(jobs) == 1:
@@ -348,7 +460,11 @@ async def process_pending_translations(db: AsyncSession) -> int:
             jobs = [r[0] for r in rows]
             titles = {r[0].article_id: r[2] for r in rows}
 
-            s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
+            # Fresh from the database: the session keeps objects across commits,
+            # and a language changed since the last batch must show.
+            s = await db.scalar(
+                select(UserSettings).where(UserSettings.user_id == user_id)
+                .execution_options(populate_existing=True))
             translating = feed_id is not None and await db.scalar(
                 select(UserFeed.translate).where(
                     UserFeed.user_id == user_id, UserFeed.feed_id == feed_id)

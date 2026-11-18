@@ -412,3 +412,118 @@ def test_kick_starts_a_run_only_after_jobs_were_queued():
         spawn.assert_called_once()
         spawn.call_args.args[0].close()  # the coroutine, never awaited here
     assert ts.ENQUEUED_FLAG not in db.info
+
+
+# ── backfill ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_backfill_queues_the_latest_unread_visible_untranslated_articles(pg):
+    from app.models.article import UserArticleState
+
+    feed, articles = await _feed(pg, ["read", "hidden", "trimmed", "done", "old", "new1", "new2"])
+    other, other_articles = await _feed(pg, ["other feed"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    await _subscribe(pg, user, other, translate=False)
+    read, hidden, trimmed, done, old, new1, new2 = articles
+    now = datetime.now(timezone.utc)
+    pg.add(UserArticleState(user_id=user.id, article_id=read.id, is_read=True))
+    pg.add(UserArticleState(user_id=user.id, article_id=hidden.id, hidden_at=now))
+    trimmed.trimmed_at = now
+    pg.add(ArticleTranslation(user_id=user.id, article_id=done.id, language="cs",
+                              title="hotovo", model="m"))
+    await pg.flush()
+
+    with patch.object(ts, "BACKFILL_LIMIT", 2):
+        assert await ts.backfill_translations(user.id, pg) == 2
+    assert pg.info.pop(ts.ENQUEUED_FLAG) is True
+    # The newest two of what is left; "old" waits for being under the limit, and a
+    # feed the reader does not translate gets nothing.
+    assert set(await _jobs(pg, articles + other_articles)) == {new1.id, new2.id}
+
+
+@pytest.mark.asyncio
+async def test_backfill_only_touches_the_feeds_it_is_given(pg):
+    feed_a, a = await _feed(pg, ["А"])
+    feed_b, b = await _feed(pg, ["Б"])
+    user = await _reader(pg)
+    await _subscribe(pg, user, feed_a)
+    await _subscribe(pg, user, feed_b)
+
+    assert await ts.backfill_translations(user.id, pg, feed_ids=[feed_b.id]) == 1
+    assert set(await _jobs(pg, a + b)) == {b[0].id}
+    assert await ts.backfill_translations(user.id, pg, feed_ids=[]) == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_needs_a_language_and_ai_on(pg):
+    feed, articles = await _feed(pg, ["А"])
+    user = await _reader(pg, None)
+    await _subscribe(pg, user, feed)
+    assert await ts.backfill_translations(user.id, pg) == 0
+
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    s.ai_translation_language = "cs"
+    (await pg.get(AppSettings, 1)).ai_enabled = False
+    await pg.flush()
+    assert await ts.backfill_translations(user.id, pg) == 0
+    assert ts.ENQUEUED_FLAG not in pg.info
+
+
+@pytest.mark.asyncio
+async def test_a_language_change_retranslates_through_the_existing_jobs(pg):
+    feed, articles = await _feed(pg, ["Один", "Два"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    await ts.enqueue_translation_jobs(feed.id, articles, pg)
+    await _process(pg, FakeModel(refuse={"Два"}))
+    jobs = await _jobs(pg, articles)
+    jobs[articles[1].id].status = "failed"  # as if out of retries
+    jobs[articles[1].id].retry_count = 3
+    await pg.flush()
+
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    s.ai_translation_language = "de"
+    await pg.flush()
+    assert await ts.backfill_translations(user.id, pg) == 2
+
+    for job in (await _jobs(pg, articles)).values():
+        await pg.refresh(job)
+        assert (job.status, job.retry_count, job.next_retry_at) == ("pending", 0, None)
+    await _process(pg, FakeModel())
+    rows = (await pg.scalars(select(ArticleTranslation).where(
+        ArticleTranslation.user_id == user.id))).all()
+    assert {(r.article_id, r.language) for r in rows} == {
+        (articles[0].id, "cs"), (articles[0].id, "de"), (articles[1].id, "de")}
+
+    # Back to Czech: only the one never done in Czech is queued again.
+    s.ai_translation_language = "cs"
+    await pg.flush()
+    assert await ts.backfill_translations(user.id, pg) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_language_change_during_a_call_leaves_the_jobs_for_the_new_language(pg):
+    from sqlalchemy import update
+
+    feed, articles = await _feed(pg, ["Один", "Два"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    await ts.enqueue_translation_jobs(feed.id, articles, pg)
+
+    class SwitchesMidCall(FakeModel):
+        async def __call__(self, items, language, *rest):
+            if not self.calls:  # the reader saves German while Czech is on its way
+                await pg.execute(update(UserSettings).where(UserSettings.user_id == user.id)
+                                 .values(ai_translation_language="de"))
+            return await super().__call__(items, language, *rest)
+
+    model = SwitchesMidCall()
+    await _process(pg, model)
+
+    assert len(model.calls) == 2  # the Czech batch, then the same jobs in German
+    rows = (await pg.scalars(select(ArticleTranslation).where(
+        ArticleTranslation.user_id == user.id))).all()
+    assert {(r.article_id, r.language) for r in rows} == {
+        (a.id, lang) for a in articles for lang in ("cs", "de")}
+    assert {j.status for j in (await _jobs(pg, articles)).values()} == {"success"}
