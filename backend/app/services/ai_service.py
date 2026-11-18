@@ -1354,6 +1354,46 @@ async def generate_css_selector_from_sample(
     return selector, answer.input_tokens, answer.output_tokens
 
 
+# Output cap per headline. Measured on 120 Russian news headlines with Haiku 5.5:
+# about 45 tokens each into English and 50 into Czech, JSON wrapping included.
+# The rest is headroom for long headlines; unused tokens are not billed.
+_TRANSLATION_TOKENS_PER_TITLE = 100
+_TRANSLATION_BASE_TOKENS = 100
+
+
+async def translate_titles(
+    items: list[dict], language: str, client, provider: str, model: str,
+) -> Completion:
+    """Translate headlines in one call. *items* are ``{"id": int, "title": str}``.
+
+    Ids rather than position carry each answer back to its article, so a model that
+    drops or reorders one cannot shift the rest onto the wrong headlines. Parsing
+    and checking the reply is the caller's job (``translation_service``), which
+    knows what to do with a partial answer.
+
+    *language* is the English name from the fixed list, never free text: it goes
+    into the prompt as is.
+    """
+    import json
+
+    prompt = (
+        f"Translate these news headlines into {language}. Keep names, places and "
+        f"abbreviations accurate (use the established {language} spelling where one "
+        f"exists), keep the headline style, and do not add or drop information. Use "
+        f"sentence case (capitalize only the first word and proper nouns).\n\n"
+        f"Input is a JSON array of objects with \"id\" and \"title\". Reply with only a "
+        f"JSON array of objects with the same \"id\" and the translated \"title\", in "
+        f"the same order, no other text.\n\n"
+        f"{json.dumps(items, ensure_ascii=False)}"
+    )
+    return await _complete(
+        prompt, client, provider, model,
+        max_tokens=_TRANSLATION_BASE_TOKENS + _TRANSLATION_TOKENS_PER_TITLE * len(items),
+        reasoning_headroom=_ANTHROPIC_REASONING_BUDGET,
+        budget=_SCORING_BUDGET_SECONDS,
+    )
+
+
 # Longest behavioural lookback window used by the interest profile (G1). The retention
 # trim/delete (purge_service T2) keeps engaged article stubs at least this long so the
 # profile still sees their signal. Keep > the admin retention horizon max (120).

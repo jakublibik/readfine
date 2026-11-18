@@ -589,6 +589,13 @@ async def _process_ai_scoring() -> None:
         await process_pending_scoring(session)
 
 
+async def _process_translations() -> None:
+    """Job: pick up translation jobs a kick after a fetch did not finish (retries,
+    a backlog over one run, a restart in between)."""
+    from app.services.translation_service import run_translations
+    await run_translations()
+
+
 async def _process_ai_summaries() -> None:
     """Job: process pending AI summary jobs."""
     if db.async_session_factory is None:
@@ -990,6 +997,15 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        _process_translations,
+        trigger="interval",
+        minutes=1,
+        id="process_translations",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=30,
     )
     scheduler.add_job(
         _process_ai_filters,

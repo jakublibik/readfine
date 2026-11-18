@@ -248,6 +248,8 @@ async def fetch_scrape_feed(
         if latest_pub:
             feed.last_published_at = latest_pub
         await db.commit()
+        from app.services.translation_service import kick_translations
+        kick_translations(db)
         # Scrape success carries no RateLimit-* headers (fetch returns HTML only), so
         # this just clears any pending 429 streak for the host.
         host_throttle.record_success(host_throttle.host_key(feed_url), datetime.now(timezone.utc))
@@ -354,6 +356,11 @@ async def _save_scrape_articles(
 
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        # Only queues jobs: the model runs after the fetch has committed, see
+        # translation_service.
+        from app.services.translation_service import enqueue_translation_jobs
+        await enqueue_translation_jobs(feed.id, new_articles, db)
 
         # Same per-feed URL dedup as RSS. The scheduler's global pass would catch
         # these too, but a manual refresh and the first fetch after subscribing run

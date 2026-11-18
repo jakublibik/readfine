@@ -921,7 +921,8 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
 
     s = (await db.execute(
         text("""
-            SELECT ai_fast_model, ai_quality_model, ai_fast_provider, ai_quality_provider
+            SELECT ai_fast_model, ai_quality_model, ai_fast_provider, ai_quality_provider,
+                   ai_translation_slot
             FROM user_settings WHERE user_id = :uid
         """),
         {"uid": user_id},
@@ -930,6 +931,7 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
     quality_model = s[1] if s else None
     fast_provider = s[2] if s else None
     quality_provider = s[3] if s else None
+    translation_slot = s[4] if s and s[4] in ("fast", "quality") else "fast"
 
     def _prov(slot: str) -> str | None:
         return fast_provider if slot == "fast" else quality_provider
@@ -1095,6 +1097,31 @@ async def get_ai_cost_stats(user_id: int, db: AsyncSession, days: int = 30) -> A
         is_estimated=pref.is_estimated,
         trend_pct=_trend(pref.cost, prev_pref_cost),
     ))
+
+    # Translation runs in batches, so it is logged per model call rather than on
+    # the jobs; the count is calls, not titles. Grouped with whichever slot the
+    # reader translates on today, and priced by the model each call recorded.
+    tr = await _usage_log_stats("translation", cutoff)
+    prev_tr_cost = (await _usage_log_stats("translation", prev_cutoff)).cost
+    if tr.count or prev_tr_cost:
+        current_usage.append(tr)
+        prev_cost_by_slot[translation_slot].append(prev_tr_cost)
+        tr_row = OperationCostRow(
+            operation="translation",
+            label="Translation",
+            slot=translation_slot,
+            count=tr.count,
+            input_tokens=tr.input_tokens,
+            output_tokens=tr.output_tokens,
+            est_cost=tr.cost,
+            is_estimated=tr.is_estimated,
+            trend_pct=_trend(tr.cost, prev_tr_cost),
+        )
+        if translation_slot == "fast":
+            # Next to scoring, the other fast-slot row.
+            operation_rows.insert(1, tr_row)
+        else:
+            operation_rows.append(tr_row)
 
     css = await _usage_log_stats("css_selector_generation", cutoff)
     prev_css_cost = (await _usage_log_stats("css_selector_generation", prev_cutoff)).cost
