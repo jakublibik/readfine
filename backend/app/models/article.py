@@ -167,7 +167,10 @@ class UserArticleState(Base):
 class ArticleAiJob(Base):
     __tablename__ = "article_ai_jobs"
     __table_args__ = (
-        CheckConstraint("operation IN ('scoring', 'summary', 'context')", name="ck_article_ai_jobs_operation"),
+        CheckConstraint(
+            "operation IN ('scoring', 'summary', 'context', 'translation')",
+            name="ck_article_ai_jobs_operation",
+        ),
         CheckConstraint("status IN ('pending', 'success', 'failed', 'skipped')", name="ck_article_ai_jobs_status"),
         UniqueConstraint("article_id", "user_id", "operation", name="uq_article_ai_jobs_article_user_op"),
     )
@@ -194,6 +197,21 @@ class ArticleAiJob(Base):
 
     article: Mapped["Article"] = relationship()
     user: Mapped["User"] = relationship()
+
+
+class ArticleTranslation(Base):
+    """A reader's AI translation of an article title. Never shared between readers:
+    each translates with their own key and model. The original stays in articles."""
+    __tablename__ = "article_translations"
+
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    article_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True, index=True)
+    language: Mapped[str] = mapped_column(String(10), primary_key=True)
+    title: Mapped[str] = mapped_column(String(1000), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class AiUsageLog(Base):
