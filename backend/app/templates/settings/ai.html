@@ -381,6 +381,32 @@
   </div>
 </section>
 
+{# ── Title translation ─────────────────────────────────────────────────────── #}
+<section class="mb-8">
+  <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Title translation</h2>
+  <div class="space-y-3">
+    <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
+      <label for="ai_translation_language" class="text-sm font-medium text-gray-700 sm:w-28">Translate into</label>
+      <select name="ai_translation_language" id="ai_translation_language"
+              class="border border-gray-300 rounded px-2 py-1.5 text-sm w-52">
+        <option value="">Off</option>
+        {% for code, name in translation_languages %}
+        <option value="{{ code }}" {% if s.ai_translation_language == code %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
+      <label for="ai_translation_slot" class="text-sm font-medium text-gray-700 sm:w-28">Model</label>
+      <select name="ai_translation_slot" id="ai_translation_slot"
+              class="border border-gray-300 rounded px-2 py-1.5 text-sm w-52">
+        <option value="fast" {% if s.ai_translation_slot != 'quality' %}selected{% endif %}>Scoring (cheaper)</option>
+        <option value="quality" {% if s.ai_translation_slot == 'quality' %}selected{% endif %}>Main</option>
+      </select>
+    </div>
+  </div>
+  <p class="text-xs text-gray-500 mt-2">Translates the titles of the feeds you choose, as new articles arrive. Turn it on for a feed in its settings. Only the title is translated, the article itself stays in its original language. Choosing a language also translates the latest {{ backfill_limit }} unread articles of each translated feed.</p>
+</section>
+
 {# ── Chat ──────────────────────────────────────────────────────────────────── #}
 <section class="mb-8">
   <h2 class="text-sm font-medium text-gray-700 mb-3 pb-1 border-b border-gray-200">Chat</h2>

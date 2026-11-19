@@ -4818,6 +4818,41 @@ document.body.addEventListener('htmx:confirm', function (e) {
   }
 })();
 
+// ── Translated titles ─────────────────────────────────────────────────────
+// "Show original" in the reading pane swaps an AI-translated title back to the
+// original, in the pane and in the article's list row, until either is drawn
+// again. The summary snippet is in the original language, so it shows only next
+// to the original title. Both titles travel as data attributes on the pane's
+// <article> and on the row; nothing goes to the server.
+(function () {
+  function apply(root, showOriginal) {
+    if (!root || !root.hasAttribute('data-title-translated')) return;
+    if (showOriginal) root.setAttribute('data-showing-original', '');
+    else root.removeAttribute('data-showing-original');
+    var text = root.getAttribute(showOriginal ? 'data-title-original' : 'data-title-translated');
+    root.querySelectorAll('[data-article-title], [data-detail-title]').forEach(function (t) {
+      t.textContent = text;
+    });
+    root.querySelectorAll('[data-translation-mark]').forEach(function (m) {
+      m.classList.toggle('opacity-40', showOriginal);
+    });
+    var snippet = root.querySelector('[data-article-snippet]');
+    if (snippet) snippet.classList.toggle('hidden', !showOriginal);
+  }
+
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('[data-toggle-translation]');
+    if (!btn) return;
+    e.preventDefault();
+    var id = btn.getAttribute('data-toggle-translation');
+    var pane = btn.closest('article[data-article-id]');
+    var showOriginal = !(pane && pane.hasAttribute('data-showing-original'));
+    apply(pane, showOriginal);
+    apply(document.getElementById('article-row-' + id), showOriginal);
+    btn.textContent = showOriginal ? 'Show translation' : 'Show original';
+  });
+})();
+
 // ── Service worker registration ───────────────────────────────────────────
 // Always "/sw.js", never static_url(): the registration URL is the worker's identity,
 // so a cache-busting query would leave a second worker behind on every deploy. The

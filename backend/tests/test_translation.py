@@ -527,3 +527,74 @@ async def test_a_language_change_during_a_call_leaves_the_jobs_for_the_new_langu
     assert {(r.article_id, r.language) for r in rows} == {
         (a.id, lang) for a in articles for lang in ("cs", "de")}
     assert {j.status for j in (await _jobs(pg, articles)).values()} == {"success"}
+
+
+# ── display ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_list_and_detail_show_the_translation_while_the_feed_is_translated(pg):
+    from app.services.article import get_article, get_article_list_item, list_articles
+
+    feed, (article,) = await _feed(pg, ["Один"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    pg.add(ArticleTranslation(user_id=user.id, article_id=article.id, language="cs",
+                              title="Jedna", model="m"))
+    pg.add(ArticleTranslation(user_id=user.id, article_id=article.id, language="de",
+                              title="Eins", model="m"))
+    other = await _reader(pg, "cs")  # same feed, no translation of their own
+    await _subscribe(pg, other, feed)
+    await pg.flush()
+
+    async def shown(reader):
+        rows = await list_articles(reader, pg, feed_id=feed.id)
+        item = await get_article_list_item(reader, article.id, pg)
+        detail = await get_article(reader, article.id, pg)
+        assert rows[0].translated_title == item.translated_title == detail.translated_title
+        return rows[0].translated_title
+
+    assert await shown(user) == "Jedna"
+    assert await shown(other) is None
+    # The API keeps the original.
+    detail = await get_article(user, article.id, pg)
+    assert "translated_title" not in detail.model_dump()
+
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    s.ai_translation_language = "de"
+    await pg.flush()
+    assert await shown(user) == "Eins"
+
+    uf = await pg.scalar(select(UserFeed).where(UserFeed.user_id == user.id))
+    uf.translate = False
+    await pg.flush()
+    assert await shown(user) is None
+
+
+@pytest.mark.asyncio
+async def test_blocker_names_what_is_missing(pg):
+    user = await _reader(pg, None)
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    assert await ts.translation_blocker(s, pg) == "no_language"
+    s.ai_translation_language = "cs"
+    assert await ts.translation_blocker(s, pg) == "no_api_key"
+    s.ai_fast_model = None
+    assert await ts.translation_blocker(s, pg) == "no_model"
+    s.ai_translation_slot = "quality"
+    assert await ts.translation_blocker(s, pg) == "no_api_key"
+
+
+@pytest.mark.asyncio
+async def test_a_backlog_does_not_hold_back_other_readers(pg):
+    # A language change queues up to BACKFILL_LIMIT a feed; a reader whose one new
+    # headline was queued after that gets the second batch of the run, not the last.
+    big_feed, big = await _feed(pg, [f"A{i}" for i in range(2 * ts.BATCH_SIZE + 5)])
+    small_feed, small = await _feed(pg, ["B0"])
+    a, b = await _reader(pg, "en"), await _reader(pg, "en")
+    await _subscribe(pg, a, big_feed)
+    await _subscribe(pg, b, small_feed)
+    await ts.enqueue_translation_jobs(big_feed.id, big, pg)
+    await ts.enqueue_translation_jobs(small_feed.id, small, pg)
+
+    model = FakeModel()
+    assert await _process(pg, model) == len(big) + 1
+    assert [c[0][0] for c in model.calls] == ["A", "B", "A", "A"]

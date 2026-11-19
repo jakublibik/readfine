@@ -30,6 +30,10 @@ from app.services.feed import (
     unsubscribe,
 )
 from app.services.folder_service import FOLDER_ORDER_DEFAULT, folder_order_clause
+from app.services.translation_service import (
+    BACKFILL_LIMIT, backfill_translations, kick_translations, language_name,
+    monthly_estimate, translation_blocker, translation_slot,
+)
 from app.templating import templates
 from app.utils.crypto import auth_pair, encrypt
 from app.utils.feed_detect import detect_feeds
@@ -285,6 +289,26 @@ async def _feed_edit_page(
     default_interval = (app_s.default_fetch_interval_min if app_s else None) or 60
     min_interval = (app_s.min_fetch_interval_min if app_s else None) or 15
     max_interval = (app_s.max_fetch_interval_min if app_s else None) or 360
+    # Offered whenever AI is on for the instance. A reader who cannot translate yet
+    # (no language, no model, no key) sees why instead of a box that does nothing.
+    translation = None
+    if app_s and app_s.ai_enabled:
+        blocker = await translation_blocker(user_s, db)
+        count, cost = (
+            await monthly_estimate(uf.feed_id, user_s, db) if blocker is None else (0, None)
+        )
+        translation = {
+            "blocker": blocker,
+            "language": language_name(user_s.ai_translation_language) if user_s else None,
+            "slot": translation_slot(user_s) if user_s else "fast",
+            "provider": (
+                (user_s.ai_fast_provider if translation_slot(user_s) == "fast"
+                 else user_s.ai_quality_provider) if user_s else None
+            ),
+            "monthly_articles": count,
+            "monthly_cost": cost,
+            "backfill_limit": BACKFILL_LIMIT,
+        }
     return templates.TemplateResponse(request, "settings/feed_edit.html", {
         "uf": uf,
         "folders": folders,
@@ -309,6 +333,7 @@ async def _feed_edit_page(
         ),
         "ai_summary_global_enabled": bool(user_s and user_s.ai_summary_enabled_default),
         "ai_selector_available": ai_selector_available,
+        "translation": translation,
         **extra,
     })
 
@@ -404,6 +429,11 @@ async def settings_feed_update(
     uf.readable_auto_disabled_reason = None
     if form.get("ai_summary_enabled_present") == "1":
         uf.ai_summary_enabled = form.get("ai_summary_enabled") == "on"
+    translation_turned_on = False
+    if form.get("translate_present") == "1":
+        translate = form.get("translate") == "on"
+        translation_turned_on = translate and not uf.translate
+        uf.translate = translate
 
     # Interval is feed-wide: the sole subscriber's or an admin's to change, read-only
     # on a shared feed (see services.feed.may_edit_feed_settings and feed_edit.html).
@@ -454,7 +484,13 @@ async def settings_feed_update(
         from app.services.readable_service import stamp_readable_streak_start
         await stamp_readable_streak_start(uf.feed_id, db)
 
+    if translation_turned_on:
+        # Without this a freshly ticked feed shows nothing new until its next
+        # articles arrive.
+        await backfill_translations(user.id, db, feed_ids=[uf.feed_id])
+
     await db.commit()
+    kick_translations(db)
     return RedirectResponse("/settings/feeds", status_code=303)
 
 

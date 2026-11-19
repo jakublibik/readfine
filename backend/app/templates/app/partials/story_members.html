@@ -37,7 +37,7 @@
       <a href="#" data-open-story-member="{{ member.id }}"
          class="min-w-0 hover:underline
                 {% if member.is_read %}text-gray-500 dark:text-gray-400
-                {% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}">{{ member.title }}</a>
+                {% else %}text-gray-900 dark:text-gray-100 font-medium{% endif %}">{{ member.translated_title or member.title }}</a>
     </div>
     {#- Only the source name gives way when the line runs out of room. It carries
         min-w-0 so truncate can actually cut it (a flex item will not shrink below its

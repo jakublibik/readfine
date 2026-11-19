@@ -155,6 +155,63 @@ async def bulk_create_translation_jobs(pairs: list[tuple[int, int]], db: AsyncSe
     return result.rowcount or 0
 
 
+# ── settings page helpers ─────────────────────────────────────────────────────
+
+# Tokens per title, prompt share included, from a real batch of ten (Haiku 5.5,
+# Russian into English: 646 in, 437 out). Only for the estimate on the feed page.
+_EST_INPUT_TOKENS_PER_TITLE = 65
+_EST_OUTPUT_TOKENS_PER_TITLE = 45
+
+
+async def translation_blocker(s: UserSettings | None, db: AsyncSession) -> str | None:
+    """Why the reader's titles cannot be translated, or None when they can:
+    ``no_language``, ``no_model``, ``no_api_key`` or ``no_endpoint``. The same
+    question the runner asks through ``ai_client``, without opening a client."""
+    from app.models.ai import UserAiKey
+    from app.services.ai_service import provider_requires_key
+
+    if s is None or s.ai_translation_language not in LANGUAGES:
+        return "no_language"
+    slot = translation_slot(s)
+    provider = s.ai_fast_provider if slot == "fast" else s.ai_quality_provider
+    model = s.ai_fast_model if slot == "fast" else s.ai_quality_model
+    if not provider or not model:
+        return "no_model"
+    if provider_requires_key(provider):
+        has_key = await db.scalar(select(UserAiKey.provider).where(
+            UserAiKey.user_id == s.user_id, UserAiKey.provider == provider))
+        if has_key is None:
+            return "no_api_key"
+    elif not s.ai_custom_base_url:
+        return "no_endpoint"
+    return None
+
+
+async def monthly_estimate(
+    feed_id: int, s: UserSettings, db: AsyncSession,
+) -> tuple[int, float | None]:
+    """Articles the feed brought in the last 30 days, and what translating that
+    many titles costs on the reader's translation model (None when the model has
+    no known price, a custom endpoint for one)."""
+    from datetime import timedelta
+
+    from sqlalchemy import func
+
+    from app.services.stats_service import _calc_cost
+
+    since = datetime.now(timezone.utc) - timedelta(days=30)
+    count = await db.scalar(
+        select(func.count()).select_from(Article)
+        .where(Article.feed_id == feed_id, Article.fetched_at >= since)
+    ) or 0
+    slot = translation_slot(s)
+    model = s.ai_fast_model if slot == "fast" else s.ai_quality_model
+    provider = s.ai_fast_provider if slot == "fast" else s.ai_quality_provider
+    cost, _ = _calc_cost(model, provider, count * _EST_INPUT_TOKENS_PER_TITLE,
+                         count * _EST_OUTPUT_TOKENS_PER_TITLE)
+    return count, cost
+
+
 # ── backfill ──────────────────────────────────────────────────────────────────
 
 # Unread articles per feed translated when a reader turns translation on or picks
@@ -441,16 +498,29 @@ async def process_pending_translations(db: AsyncSession) -> int:
     # Readers whose model ran out of time in this run: their other jobs wait for
     # the next one rather than costing the full budget again, batch after batch.
     timed_out: set[int] = set()
+    # Readers who got a batch in the current round. Each round serves every reader
+    # with work once before anyone gets a second batch, so one reader's backlog (a
+    # language change queues up to BACKFILL_LIMIT per feed) does not hold back the
+    # new titles of everyone else.
+    served: set[int] = set()
     async with AiClientPool() as pool:
         for _ in range(_MAX_BATCHES_PER_RUN):
             now = datetime.now(timezone.utc)
             q = _due_jobs(now)
             if timed_out:
                 q = q.where(ArticleAiJob.user_id.not_in(timed_out))
-            first = (await db.execute(q.limit(1))).first()
+            first = None
+            if served:
+                first = (await db.execute(
+                    q.where(ArticleAiJob.user_id.not_in(served)).limit(1))).first()
+                if first is None:
+                    served.clear()  # everyone had a turn: next round
+            if first is None:
+                first = (await db.execute(q.limit(1))).first()
             if first is None:
                 break
             user_id, feed_id = first[0].user_id, first[1]
+            served.add(user_id)
             rows = (await db.execute(
                 q.where(
                     ArticleAiJob.user_id == user_id,
