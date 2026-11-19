@@ -211,6 +211,11 @@ categories:
           filled in.
       - title: Chat over articles
         desc: Ask questions about an article and get answers grounded in its text.
+      - title: Translated headlines
+        desc: >-
+          Follow a feed in a language you don't read. Turn translation on per
+          feed and its headlines show up in your language, with the original
+          one click away.
       - title: Interest profile
         desc: >-
           Describe what you care about, or have the AI draft it from what you

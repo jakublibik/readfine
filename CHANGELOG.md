@@ -12,6 +12,10 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ## [Unreleased]
 
+### Added
+
+- Headlines of feeds in other languages can be translated by your AI model. Pick a language in **Settings → AI**, then tick **Translate titles** in a feed's settings, which also shows what a month of its headlines would cost. New headlines are translated as they arrive and the latest 100 unread ones right away. A small mark in the list shows the original on hover, and **Show original** in the article switches back. Only the headline is translated; filters, scoring and search still use the original.
+
 ### Fixed
 
 - The cost table in **Settings → AI** priced all past usage at the model set today, so after a model change the costs were wrong and the trend could point the wrong way. Scoring, summaries, context and interest profiles are now priced at the model that actually ran them, and changing a model no longer changes past costs. Chat keeps using the current model because it does not record one.
