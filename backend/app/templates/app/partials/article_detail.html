@@ -305,7 +305,7 @@
         </button>
     </div>
     <!-- Chat area (swapped by HTMX) -->
-    {{ chat_area(article.id, chat_messages, true, "", article.title or "") }}
+    {{ chat_area(article.id, chat_messages, true, "", article.translated_title or article.title or "") }}
   </div>
 </div>
 {% endif %}

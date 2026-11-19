@@ -20,7 +20,8 @@ from app.models.article import (
 from app.models.feed import Feed, UserFeed
 from app.schemas.article import ArticleListItem, StoryMember, SuppressedArticle
 from app.services.article import (
-    add_article_access_joins, article_access_predicate, unread_clause,
+    add_article_access_joins, article_access_predicate, join_translation,
+    translated_title_expr, unread_clause,
 )
 
 # A group is small by construction (measured median 2, largest 13), so this is a guard
@@ -101,10 +102,11 @@ async def list_members(
         Article.id == article_id
     ).scalar_subquery()
     rows = (await db.execute(
-        _members_query(
+        join_translation(_members_query(
             [
                 Article.id,
                 Article.title,
+                translated_title_expr().label("translated_title"),
                 Article.url,
                 Article.published_at,
                 Article.fetched_at,
@@ -120,7 +122,7 @@ async def list_members(
                    Article.title_norm] if diag else []),
             ],
             user_id, story_id, article_id,
-        )
+        ), user_id)
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .order_by(
             func.coalesce(Article.published_at, Article.fetched_at).desc(),
@@ -137,6 +139,7 @@ async def list_members(
         StoryMember(
             id=r.id,
             title=r.title,
+            translated_title=r.translated_title,
             url=r.url,
             feed_title=r.custom_title or r.feed_title,
             published_at=r.published_at or r.fetched_at,
@@ -196,11 +199,12 @@ async def list_suppressed(
     purpose: it is a week of a handful a day, and a reader for whom it runs long is
     being told something worth knowing by the length itself.
     """
+    # Headlines as the reader sees them in the list: translated where they translate.
     rows = (await db.execute(
-        _suppressed_query(
+        join_translation(_suppressed_query(
             [
                 Article.id,
-                Article.title,
+                func.coalesce(translated_title_expr(), Article.title).label("title"),
                 Article.story_id,
                 Feed.title.label("feed_title"),
                 UserFeed.custom_title,
@@ -208,7 +212,7 @@ async def list_suppressed(
                 UserArticleState.suppressed_by,
             ],
             user_id, days,
-        )
+        ), user_id)
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .order_by(UserArticleState.hidden_at.desc(), Article.id.desc())
     )).all()
@@ -259,16 +263,17 @@ async def _suppressed_against(
     hidden = aliased(Article)
     match = func.similarity(hidden.title_norm, Article.title_norm).label("match")
     rows = (await db.execute(
-        add_article_access_joins(
+        join_translation(add_article_access_joins(
             select(
                 hidden.id.label("hidden_id"),
                 hidden.title_norm.label("hidden_norm"),
-                Article.title,
+                # Shown to the reader; the matching below stays on the originals.
+                func.coalesce(translated_title_expr(), Article.title).label("title"),
                 Article.title_norm,
                 match,
             ).select_from(Article),
             user_id,
-        )
+        ), user_id)
         .join(hidden, hidden.story_id == Article.story_id)
         .where(
             hidden.id.in_(article_ids),

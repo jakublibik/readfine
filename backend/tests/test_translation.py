@@ -598,3 +598,26 @@ async def test_a_backlog_does_not_hold_back_other_readers(pg):
     model = FakeModel()
     assert await _process(pg, model) == len(big) + 1
     assert [c[0][0] for c in model.calls] == ["A", "B", "A", "A"]
+
+
+@pytest.mark.asyncio
+async def test_story_members_and_stats_show_the_translation(pg):
+    from app.models.article import UserArticleState
+    from app.services.stats_service import get_ai_stats
+    from app.services.story_service import list_members
+
+    feed, (first, second) = await _feed(pg, ["Один", "Два"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    first.story_id = second.story_id = first.id
+    pg.add(ArticleTranslation(user_id=user.id, article_id=second.id, language="cs",
+                              title="Dva", model="m"))
+    pg.add(UserArticleState(user_id=user.id, article_id=second.id, ai_score=0.1,
+                            ever_starred=True))
+    await pg.flush()
+
+    (member,) = await list_members(user.id, first.id, first.id, pg)
+    assert (member.title, member.translated_title) == ("Два", "Dva")
+
+    stats = await get_ai_stats(user.id, pg)
+    assert [g.title for g in stats.wrong] == ["Dva"]

@@ -4408,7 +4408,9 @@ document.body.addEventListener('htmx:confirm', function (e) {
     var short = '';
     if (artId) {
       var artElem = document.querySelector('article[data-article-id="' + artId + '"]');
-      var title = artElem ? (artElem.getAttribute('data-title') || '') : '';
+      // The title the reader sees: a translation where there is one.
+      var title = artElem ? (artElem.getAttribute('data-title-translated') ||
+                             artElem.getAttribute('data-title') || '') : '';
       short = title.length > 25 ? title.slice(0, 25) + '…' : title;
     }
     if (attachBtn) attachBtn.classList.toggle('hidden', !artId);

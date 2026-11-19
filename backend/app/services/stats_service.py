@@ -675,13 +675,18 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
     gems_result = await db.execute(
         text("""
             WITH candidates AS (
-                SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title,
+                SELECT a.id, COALESCE(tr.title, a.title) AS title,
+                       COALESCE(uf.custom_title, f.title) AS feed_title,
                        uas.ai_score, uas.is_starred,
                        COALESCE(a.story_id, -a.id) AS story_key
                 FROM user_article_states uas
                 JOIN articles a ON a.id = uas.article_id
                 JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
                 JOIN feeds f ON f.id = uf.feed_id
+                LEFT JOIN user_settings us_tr ON us_tr.user_id = :uid
+                LEFT JOIN article_translations tr
+                  ON tr.user_id = :uid AND tr.article_id = a.id
+                 AND tr.language = us_tr.ai_translation_language AND uf.translate
                 WHERE uas.user_id = :uid
                   AND uas.ai_score >= 0.7
                   AND uas.dwell_seconds = 0
@@ -717,11 +722,16 @@ async def get_ai_stats(user_id: int, db: AsyncSession, days: int = 30) -> AiStat
     # AI got it wrong — low score, ever_starred
     wrong_result = await db.execute(
         text("""
-            SELECT a.id, a.title, COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score
+            SELECT a.id, COALESCE(tr.title, a.title) AS title,
+                   COALESCE(uf.custom_title, f.title) AS feed_title, uas.ai_score
             FROM user_article_states uas
             JOIN articles a ON a.id = uas.article_id
             JOIN user_feeds uf ON uf.feed_id = a.feed_id AND uf.user_id = :uid
             JOIN feeds f ON f.id = uf.feed_id
+            LEFT JOIN user_settings us_tr ON us_tr.user_id = :uid
+            LEFT JOIN article_translations tr
+              ON tr.user_id = :uid AND tr.article_id = a.id
+             AND tr.language = us_tr.ai_translation_language AND uf.translate
             WHERE uas.user_id = :uid
               AND uas.ai_score < 0.3
               AND uas.ever_starred = true

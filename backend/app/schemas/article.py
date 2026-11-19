@@ -185,6 +185,8 @@ class StoryMember(_EffectiveScore, BaseModel):
     """
     id: int
     title: str
+    # The reader's AI translation of the title, as in ArticleListItem.
+    translated_title: str | None = Field(default=None, exclude=True)
     url: str | None
     feed_title: str | None
     published_at: datetime | None

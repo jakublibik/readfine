@@ -53,6 +53,13 @@ def with_translated_title(stmt, user_id: int):
     UserFeed joined on this reader (inner or outer). One row per article, since
     the join goes through the translation's primary key.
     """
+    return join_translation(stmt, user_id).add_columns(
+        translated_title_expr().label("translated_title"))
+
+
+def join_translation(stmt, user_id: int):
+    """The LEFT JOIN behind ``translated_title_expr``, for queries that want the
+    expression somewhere else than as an extra column (a COALESCE, say)."""
     language = (
         select(UserSettings.ai_translation_language)
         .where(UserSettings.user_id == user_id)
@@ -63,10 +70,13 @@ def with_translated_title(stmt, user_id: int):
         (ArticleTranslation.user_id == user_id)
         & (ArticleTranslation.article_id == Article.id)
         & (ArticleTranslation.language == language),
-    ).add_columns(
-        case((UserFeed.translate.is_(True), ArticleTranslation.title), else_=null())
-        .label("translated_title")
     )
+
+
+def translated_title_expr():
+    """The reader's translated title, NULL when there is none to show. Needs
+    ``join_translation`` and UserFeed joined on this reader."""
+    return case((UserFeed.translate.is_(True), ArticleTranslation.title), else_=null())
 
 
 def unread_clause():
