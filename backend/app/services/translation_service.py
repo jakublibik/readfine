@@ -155,6 +155,21 @@ async def bulk_create_translation_jobs(pairs: list[tuple[int, int]], db: AsyncSe
     return result.rowcount or 0
 
 
+# ── summaries and context ─────────────────────────────────────────────────────
+
+async def output_language(s: UserSettings | None, feed_id: int | None,
+                          db: AsyncSession) -> str | None:
+    """The language a summary or context is written in, by name, when the reader
+    translates the article's feed; None otherwise, which leaves it to the prompt
+    (the default ones answer in the article's language). Someone who translates a
+    feed does not read its language, so translated titles alone are not enough."""
+    if s is None or feed_id is None or s.ai_translation_language not in LANGUAGES:
+        return None
+    translate = await db.scalar(select(UserFeed.translate).where(
+        UserFeed.user_id == s.user_id, UserFeed.feed_id == feed_id))
+    return LANGUAGES[s.ai_translation_language] if translate else None
+
+
 # ── settings page helpers ─────────────────────────────────────────────────────
 
 # Tokens per title, prompt share included, from a real batch of ten (Haiku 5.5,

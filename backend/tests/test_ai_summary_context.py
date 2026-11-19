@@ -20,6 +20,7 @@ def make_article(**kwargs):
         "title": "Test Article",
         "content": "word " * 500,
         "readable_content": None,
+        "feed_id": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
@@ -34,6 +35,7 @@ def make_settings(**kwargs):
         "ai_min_content_chars": 1_700,
         "ai_summary_prompt": None,
         "ai_context_prompt": None,
+        "ai_translation_language": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)

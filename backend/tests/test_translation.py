@@ -621,3 +621,41 @@ async def test_story_members_and_stats_show_the_translation(pg):
 
     stats = await get_ai_stats(user.id, pg)
     assert [g.title for g in stats.wrong] == ["Dva"]
+
+
+# ── summaries and context in the reader's language ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_summary_and_context_follow_the_translation_language(pg):
+    from app.services import ai_service
+
+    feed, (article,) = await _feed(pg, ["Один"])
+    other_feed, (other,) = await _feed(pg, ["Two"])
+    user = await _reader(pg, "cs")
+    await _subscribe(pg, user, feed)
+    await _subscribe(pg, user, other_feed, translate=False)
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    assert await ts.output_language(s, feed.id, pg) == "Czech"
+    assert await ts.output_language(s, other_feed.id, pg) is None
+    assert await ts.output_language(s, None, pg) is None  # saved by URL
+    s.ai_translation_language = None
+    assert await ts.output_language(s, feed.id, pg) is None
+
+    prompts = []
+
+    async def fake_complete(prompt, *a, **kw):
+        prompts.append(prompt)
+        return Completion("ok", 1, 1)
+
+    with patch.object(ai_service, "_complete", new=fake_complete):
+        await ai_service.summarize_article("Текст статьи", None, "p", "m",
+                                           custom_prompt="Summarize in Russian.",
+                                           language="Czech")
+        await ai_service.get_article_context("Текст статьи", None, "p", "m",
+                                             focus="war", language="Czech")
+        await ai_service.summarize_article("Text", None, "p", "m")
+    rule = "Write the response in Czech, regardless of any language instruction above."
+    # Last, after the article and after a custom prompt's own language rule.
+    assert prompts[0].endswith(rule) and prompts[0].index("Текст") < prompts[0].index(rule)
+    assert prompts[1].endswith(rule)
+    assert "Write the response in" not in prompts[2]

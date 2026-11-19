@@ -1158,21 +1158,39 @@ def _summary_token_budget(content: str) -> int:
     )
 
 
+def _language_rule(language: str | None) -> str:
+    """The closing instruction for a reader who translates the article's feed:
+    answer in their language, whatever the prompt said about language (the default
+    prompts say "the same language as the article"). After the article rather than
+    before it, so it is the last thing the model reads and the article's own text
+    does not pull the answer back into its language.
+
+    *language* is the English name from translation_service.LANGUAGES, never free
+    text: it goes into the prompt as is.
+    """
+    if not language:
+        return ""
+    return (f"\n\nWrite the response in {language}, regardless of any language "
+            f"instruction above.")
+
+
 async def summarize_article(
     content: str,
     client,
     provider: str,
     model: str,
     custom_prompt: str | None = None,
+    language: str | None = None,
 ) -> Completion:
-    """Generate a concise article summary.
+    """Generate a concise article summary, in *language* when given (see
+    ``_language_rule``).
 
     The only caller that acts on ``truncated``: a summary cut off by the token cap
     is still stored, but labelled as such rather than passed off as the model's own
     choice of ending.
     """
     instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
-    prompt = f"{instruction}\n\nArticle:\n{content}"
+    prompt = f"{instruction}\n\nArticle:\n{content}{_language_rule(language)}"
     return await _complete(
         prompt, client, provider, model,
         max_tokens=_summary_token_budget(content),
@@ -1187,12 +1205,14 @@ async def get_article_context(
     model: str,
     base_prompt: str | None = None,
     focus: str | None = None,
+    language: str | None = None,
 ) -> tuple[str, int, int]:
-    """Generate background context and significance. Returns (text, input_tokens, output_tokens)."""
+    """Generate background context and significance, in *language* when given (see
+    ``_language_rule``). Returns (text, input_tokens, output_tokens)."""
     instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
     if focus:
         instruction += f"\n\nFocus on: {focus}"
-    prompt = f"{instruction}\n\nArticle:\n{content}"
+    prompt = f"{instruction}\n\nArticle:\n{content}{_language_rule(language)}"
     answer = await _complete(prompt, client, provider, model, max_tokens=500)
     return answer.text, answer.input_tokens, answer.output_tokens
 
