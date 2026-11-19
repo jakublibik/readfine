@@ -18,6 +18,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Fixed
 
+- AI summaries and context of articles not written in English often came back in English on smaller models such as Claude Haiku 5.5. The model now reads the article first and the instructions after it, and keeps to the article's language.
 - The cost table in **Settings → AI** priced all past usage at the model set today, so after a model change the costs were wrong and the trend could point the wrong way. Scoring, summaries, context and interest profiles are now priced at the model that actually ran them, and changing a model no longer changes past costs. Chat keeps using the current model because it does not record one.
 - The estimated cost shown before a **Catch me up** run was about 2.5 times too low. It now matches what recent runs actually cost.
 

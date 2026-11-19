@@ -1166,8 +1166,8 @@ async def score_article(
     return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, a short list) where it genuinely aids clarity."
-_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Write in the language the article is written in, even though these instructions are in English. You may use markdown (bold, a short list) where it genuinely aids clarity."
+_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Write in the language the article is written in, even though these instructions are in English. You may use markdown (bold, lists) where it genuinely aids clarity."
 # The summary prompt tells the model to scale length with the article, so the
 # output cap scales with it too — a cap sized for a news brief cuts a long feature
 # off mid-sentence. Roughly one output token per 16 input characters, bounded at
@@ -1196,9 +1196,7 @@ def _summary_token_budget(content: str) -> int:
 def _language_rule(language: str | None) -> str:
     """The closing instruction for a reader who translates the article's feed:
     answer in their language, whatever the prompt said about language (the default
-    prompts say "the same language as the article"). After the article rather than
-    before it, so it is the last thing the model reads and the article's own text
-    does not pull the answer back into its language.
+    prompts say the article's language).
 
     *language* is the English name from translation_service.LANGUAGES, never free
     text: it goes into the prompt as is.
@@ -1207,6 +1205,17 @@ def _language_rule(language: str | None) -> str:
         return ""
     return (f"\n\nWrite the response in {language}, regardless of any language "
             f"instruction above.")
+
+
+def _article_prompt(content: str, instruction: str, language: str | None) -> str:
+    """The article first, then what to do with it, so the instructions (the
+    default prompt's or the reader's own) are the last thing the model reads.
+    Anthropic recommends long documents above the query, and small models need
+    it: with the instructions first, Haiku 5.5 forgot "the article's language"
+    by the end of a long Czech article and answered 5 of 6 summaries in English;
+    article first, with the default prompt's sentence about language worded as
+    it is now, all 6 came back in Czech (2026-11-19)."""
+    return f"Article:\n{content}\n\n{instruction}{_language_rule(language)}"
 
 
 async def summarize_article(
@@ -1224,8 +1233,7 @@ async def summarize_article(
     is still stored, but labelled as such rather than passed off as the model's own
     choice of ending.
     """
-    instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
-    prompt = f"{instruction}\n\nArticle:\n{content}{_language_rule(language)}"
+    prompt = _article_prompt(content, custom_prompt or _DEFAULT_SUMMARY_PROMPT, language)
     return await _complete(
         prompt, client, provider, model,
         max_tokens=_summary_token_budget(content),
@@ -1247,7 +1255,7 @@ async def get_article_context(
     instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
     if focus:
         instruction += f"\n\nFocus on: {focus}"
-    prompt = f"{instruction}\n\nArticle:\n{content}{_language_rule(language)}"
+    prompt = _article_prompt(content, instruction, language)
     answer = await _complete(prompt, client, provider, model, max_tokens=500)
     return answer.text, answer.input_tokens, answer.output_tokens
 

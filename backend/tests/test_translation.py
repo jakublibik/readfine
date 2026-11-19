@@ -659,6 +659,10 @@ async def test_summary_and_context_follow_the_translation_language(pg):
     assert prompts[0].endswith(rule) and prompts[0].index("Текст") < prompts[0].index(rule)
     assert prompts[1].endswith(rule)
     assert "Write the response in" not in prompts[2]
+    # The article first, the instructions after it (custom ones as well).
+    assert prompts[0].index("Текст") < prompts[0].index("Summarize in Russian.")
+    assert prompts[2].startswith("Article:\nText\n\n")
+    assert prompts[2].endswith(ai_service._DEFAULT_SUMMARY_PROMPT)
 
 
 @pytest.mark.asyncio
