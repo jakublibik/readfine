@@ -174,8 +174,19 @@
             Enter the custom endpoint in <a href="/settings/ai" class="text-blue-500 hover:underline">AI settings</a> first.
           {% else %}
             AI translates the titles of new articles, and of the latest {{ translation.backfill_limit }} unread ones when you turn this on. The articles themselves stay in their original language.
-            {% if translation.monthly_cost is not none %}
-              At this feed's pace ({{ translation.monthly_articles | thousands }} articles in the last 30 days) that costs about {% if translation.monthly_cost < 0.01 %}less than $0.01{% else %}${{ "%.2f" | format(translation.monthly_cost) }}{% endif %} a month.
+            {% set est = translation.estimate %}
+            {% if est and est.cost is not none %}
+              {% if est.basis_days %}
+              At this feed's pace (about {{ est.articles | thousands }} articles a month, judging by the last {{ est.basis_days }} day{{ "s" if est.basis_days != 1 }}) that costs
+              {%- else %}
+              At this feed's pace ({{ est.articles | thousands }} articles in the last 30 days) that costs
+              {%- endif %} {% if est.cost < 0.01 %}less than $0.01{% else %}about ${{ "%.2f" | format(est.cost) }}{% endif %} a month.
+            {% elif est %}
+              {#- A model with no known price (one on your own endpoint): the pace still
+                  says how much work it takes on. -#}
+              At this feed's pace that is about {{ est.articles | thousands }} titles a month{% if est.basis_days %}, judging by the last {{ est.basis_days }} day{{ "s" if est.basis_days != 1 }}{% endif %}.
+            {% else %}
+              This feed is too new to estimate the cost yet.
             {% endif %}
           {% endif %}
         </span>

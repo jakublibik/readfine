@@ -294,9 +294,7 @@ async def _feed_edit_page(
     translation = None
     if app_s and app_s.ai_enabled:
         blocker = await translation_blocker(user_s, db)
-        count, cost = (
-            await monthly_estimate(uf.feed_id, user_s, db) if blocker is None else (0, None)
-        )
+        estimate = await monthly_estimate(uf.feed_id, user_s, db) if blocker is None else None
         translation = {
             "blocker": blocker,
             "language": language_name(user_s.ai_translation_language) if user_s else None,
@@ -305,8 +303,7 @@ async def _feed_edit_page(
                 (user_s.ai_fast_provider if translation_slot(user_s) == "fast"
                  else user_s.ai_quality_provider) if user_s else None
             ),
-            "monthly_articles": count,
-            "monthly_cost": cost,
+            "estimate": estimate,
             "backfill_limit": BACKFILL_LIMIT,
         }
     return templates.TemplateResponse(request, "settings/feed_edit.html", {

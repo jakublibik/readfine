@@ -202,29 +202,64 @@ async def translation_blocker(s: UserSettings | None, db: AsyncSession) -> str |
     return None
 
 
-async def monthly_estimate(
-    feed_id: int, s: UserSettings, db: AsyncSession,
-) -> tuple[int, float | None]:
-    """Articles the feed brought in the last 30 days, and what translating that
-    many titles costs on the reader's translation model (None when the model has
-    no known price, a custom endpoint for one)."""
+_ESTIMATE_WINDOW_DAYS = 30
+
+
+async def monthly_estimate(feed_id: int, s: UserSettings, db: AsyncSession) -> dict | None:
+    """How many articles a month the feed brings and what translating their
+    titles costs on the reader's translation model. None when there is nothing
+    to go on yet.
+
+    Keys: ``articles`` a month, ``cost`` (None when the model has no known price,
+    a custom endpoint for one) and ``basis_days``, the days of history the
+    number stands on when that is under the full window, else None.
+
+    A feed fetched here for 30 days or more is counted by what arrived in that
+    time. A newer one has only its first fetch or two, which would make the
+    estimate a fraction of the real pace, so its articles are counted by
+    publication date instead and scaled up from the days they cover. A new feed
+    without publication dates has no pace to read yet.
+    """
     from datetime import timedelta
 
     from sqlalchemy import func
 
     from app.services.stats_service import _calc_cost
 
-    since = datetime.now(timezone.utc) - timedelta(days=30)
-    count = await db.scalar(
-        select(func.count()).select_from(Article)
-        .where(Article.feed_id == feed_id, Article.fetched_at >= since)
-    ) or 0
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=_ESTIMATE_WINDOW_DAYS)
+    first_fetch = await db.scalar(
+        select(func.min(Article.fetched_at)).where(Article.feed_id == feed_id))
+    if first_fetch is None:
+        return None
+
+    basis_days = None
+    if first_fetch <= since:
+        articles = await db.scalar(
+            select(func.count()).select_from(Article)
+            .where(Article.feed_id == feed_id, Article.fetched_at >= since)
+        ) or 0
+    else:
+        seen, oldest = (await db.execute(
+            select(func.count(), func.min(Article.published_at))
+            .where(Article.feed_id == feed_id, Article.published_at >= since,
+                   Article.published_at <= now)
+        )).one()
+        if not seen:
+            return None
+        # At least a day, so a burst published within the hour does not read as
+        # hundreds of articles a day.
+        span = max((now - oldest).total_seconds() / 86400, 1.0)
+        articles = round(seen * _ESTIMATE_WINDOW_DAYS / span)
+        if span < _ESTIMATE_WINDOW_DAYS - 1:
+            basis_days = max(1, round(span))
+
     slot = translation_slot(s)
     model = s.ai_fast_model if slot == "fast" else s.ai_quality_model
     provider = s.ai_fast_provider if slot == "fast" else s.ai_quality_provider
-    cost, _ = _calc_cost(model, provider, count * _EST_INPUT_TOKENS_PER_TITLE,
-                         count * _EST_OUTPUT_TOKENS_PER_TITLE)
-    return count, cost
+    cost, _ = _calc_cost(model, provider, articles * _EST_INPUT_TOKENS_PER_TITLE,
+                         articles * _EST_OUTPUT_TOKENS_PER_TITLE)
+    return {"articles": articles, "cost": cost, "basis_days": basis_days}
 
 
 # ── backfill ──────────────────────────────────────────────────────────────────

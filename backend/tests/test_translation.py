@@ -659,3 +659,36 @@ async def test_summary_and_context_follow_the_translation_language(pg):
     assert prompts[0].endswith(rule) and prompts[0].index("Текст") < prompts[0].index(rule)
     assert prompts[1].endswith(rule)
     assert "Write the response in" not in prompts[2]
+
+
+@pytest.mark.asyncio
+async def test_monthly_estimate_scales_a_new_feed_by_publication_dates(pg):
+    from datetime import timedelta
+
+    user = await _reader(pg, "cs")
+    s = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+    now = datetime.now(timezone.utc)
+
+    # First fetch today, twenty articles published over the last two days.
+    feed, articles = await _feed(pg, [f"T{i}" for i in range(20)])
+    for i, a in enumerate(articles):
+        a.published_at = now - timedelta(hours=48 * (i + 1) / 20)
+    await pg.flush()
+    est = await ts.monthly_estimate(feed.id, s, pg)
+    assert est["articles"] == 300 and est["basis_days"] == 2
+    assert est["cost"] is not None
+
+    # Same feed without publication dates: nothing to go on.
+    for a in articles:
+        a.published_at = None
+    await pg.flush()
+    assert await ts.monthly_estimate(feed.id, s, pg) is None
+
+    # Fetched here for longer than the window: counted by arrival, as before.
+    articles[0].fetched_at = now - timedelta(days=40)
+    await pg.flush()
+    est = await ts.monthly_estimate(feed.id, s, pg)
+    assert est["articles"] == 19 and est["basis_days"] is None
+
+    empty, _ = await _feed(pg, [])
+    assert await ts.monthly_estimate(empty.id, s, pg) is None
