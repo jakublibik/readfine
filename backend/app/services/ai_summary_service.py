@@ -111,8 +111,10 @@ async def _execute_summary_job(
         job.model = model
 
         try:
+            from app.services.translation_service import output_language
             answer = await summarize_article(
-                content_text, client, provider, model, custom_prompt=s.ai_summary_prompt
+                content_text, client, provider, model, custom_prompt=s.ai_summary_prompt,
+                language=await output_language(s, article.feed_id, db),
             )
 
             state = await db.scalar(

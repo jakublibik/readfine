@@ -42,6 +42,10 @@ from app.services.saved_search_service import (
     SavedSearchError, create_saved_search, list_saved_searches,
 )
 from app.services.story_service import DEDUP_VALUES
+from app.services.translation_service import (
+    LANGUAGES as TRANSLATION_LANGUAGES, SLOTS as TRANSLATION_SLOTS,
+    backfill_translations, kick_translations,
+)
 from app.utils.background import spawn_background
 from app.utils.datetime_format import is_valid_timezone
 from app.utils.email_validate import is_valid_email
@@ -339,6 +343,9 @@ def _feed_outline(parent: Element, uf: UserFeed, feed: Feed) -> None:
     ai_summary = getattr(uf, "ai_summary_enabled", None)
     if ai_summary is not None:
         attrs["ai-summary"] = "1" if ai_summary else "0"
+    # Only when on, like a default everywhere else: off is what an import sets anyway.
+    if getattr(uf, "translate", False):
+        attrs["translate"] = "1"
     for attr, column in _FEED_PURGE_ATTRS.items():
         value = getattr(uf, column, None)
         if value is not None:
@@ -392,6 +399,11 @@ def _export_profile(s: UserSettings) -> dict:
         value = getattr(s, column)
         if value:
             profile[key] = value
+    # Which slot translates is a choice between the reader's two models, not a
+    # model, so it travels; the models themselves stay out like above.
+    if s.ai_translation_language:
+        profile["translation_language"] = s.ai_translation_language
+        profile["translation_model"] = s.ai_translation_slot
     return profile
 
 
@@ -721,11 +733,19 @@ async def import_opml(
             db.add(us)
         if import_prefs:
             await _import_prefs(user, root, us, result, db)
+        language_before = us.ai_translation_language
         if import_profile:
             data = _readfine_section(root, "profile", dict, result)
             if data:
                 _apply_profile(us, data, result)
+        # As on the AI settings page: a new language retranslates what the account
+        # already translates. Feeds this import adds are not fetched yet and get
+        # theirs as their first articles arrive.
+        if us.ai_translation_language != language_before and us.ai_translation_language:
+            await db.flush()
+            await backfill_translations(user.id, db)
         await db.commit()
+        kick_translations(db)
         # Imported feeds are not scored as they are added, so terms that came
         # with the file would otherwise wait for the next backfill tick.
         if backfill_due(us):
@@ -1063,7 +1083,11 @@ async def _get_or_create_folder(
 def _feed_options(outline: Element) -> dict[str, Any]:
     """The subscription settings a Readfine export writes on a feed outline."""
     options: dict[str, Any] = {}
-    for attr, column in (("extract-readable", "extract_readable"), ("ai-summary", "ai_summary_enabled")):
+    for attr, column in (
+        ("extract-readable", "extract_readable"),
+        ("ai-summary", "ai_summary_enabled"),
+        ("translate", "translate"),
+    ):
         value = outline.get(attr)
         if value is not None:
             options[column] = _truthy(value)
@@ -1710,6 +1734,20 @@ def _apply_profile(us: UserSettings, data: dict, result: ImportResult) -> None:
         if isinstance(text, str) and text.strip() and text.strip() != getattr(us, key):
             setattr(us, key, text.strip())
             result.profile_updated += 1
+
+    # Only from the fixed lists: the language name goes into the prompt.
+    language = data.get("translation_language")
+    if language is not None:
+        if isinstance(language, str) and language in TRANSLATION_LANGUAGES:
+            if language != us.ai_translation_language:
+                us.ai_translation_language = language
+                result.profile_updated += 1
+        else:
+            result.warnings.append(f"Ignored translation language {language!r}")
+    slot = data.get("translation_model")
+    if isinstance(slot, str) and slot in TRANSLATION_SLOTS and slot != us.ai_translation_slot:
+        us.ai_translation_slot = slot
+        result.profile_updated += 1
 
 
 def _resolve_file_scope(

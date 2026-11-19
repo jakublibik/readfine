@@ -60,6 +60,9 @@ class ArticleListItem(_EffectiveScore, BaseModel):
     feed_title: str | None  # resolved from Feed or UserFeed.custom_title
     url: str | None
     title: str
+    # The reader's AI translation of the title, while they translate the feed. Web
+    # only for now: left out of the API, which keeps the original.
+    translated_title: str | None = Field(default=None, exclude=True)
     author: str | None
     summary: str | None
     snippet: str | None  # pre-computed: summary or stripped content prefix
@@ -129,6 +132,9 @@ class ArticleResponse(BaseModel):
     feed_title: str | None
     url: str | None
     title: str
+    # The reader's AI translation of the title, while they translate the feed. Web
+    # only for now: left out of the API, which keeps the original.
+    translated_title: str | None = Field(default=None, exclude=True)
     author: str | None
     content: str | None
     content_source: str | None
@@ -179,6 +185,8 @@ class StoryMember(_EffectiveScore, BaseModel):
     """
     id: int
     title: str
+    # The reader's AI translation of the title, as in ArticleListItem.
+    translated_title: str | None = Field(default=None, exclude=True)
     url: str | None
     feed_title: str | None
     published_at: datetime | None

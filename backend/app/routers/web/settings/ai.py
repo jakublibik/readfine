@@ -44,6 +44,9 @@ from app.services.ai_profile_service import (
     signal_counts,
 )
 from app.services.stats_service import get_ai_cost_stats
+from app.services.translation_service import (
+    BACKFILL_LIMIT, LANGUAGES, SLOTS as TRANSLATION_SLOTS, backfill_translations, kick_translations,
+)
 from app.utils.formats import format_thousands
 from app.templating import templates
 from app.utils.url_validator import async_validate_ai_endpoint_url
@@ -107,6 +110,8 @@ async def _ai_page_context(user: User, db: AsyncSession) -> dict:
         # against instead of carrying their own copies.
         "ai_content_limit_default": AI_CONTENT_LIMIT_DEFAULT,
         "ai_min_chars_default": AI_MIN_CHARS_DEFAULT,
+        "translation_languages": sorted(LANGUAGES.items(), key=lambda kv: kv[1]),
+        "backfill_limit": BACKFILL_LIMIT,
     }
 
 
@@ -383,7 +388,22 @@ async def settings_ai_preferences_save(
     s.ai_summary_prompt = (form.get("ai_summary_prompt") or "").strip() or None
     s.ai_context_prompt = (form.get("ai_context_prompt") or "").strip() or None
 
+    # Only from the fixed list: the language name goes into the prompt. Anything
+    # else (a stale form, a hand-made request) leaves the stored value alone.
+    language_changed = False
+    if "ai_translation_language" in form:
+        language = (form.get("ai_translation_language") or "").strip() or None
+        if language is None or language in LANGUAGES:
+            language_changed = language != s.ai_translation_language
+            s.ai_translation_language = language
+    if form.get("ai_translation_slot") in TRANSLATION_SLOTS:
+        s.ai_translation_slot = form.get("ai_translation_slot")
+    if language_changed and s.ai_translation_language:
+        await backfill_translations(user.id, db)
+
     await db.commit()
+    if language_changed:
+        kick_translations(db)
 
     ctx = await _ai_page_context(user, db)
     ctx["prefs_saved"] = True

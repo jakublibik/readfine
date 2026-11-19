@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, CheckConstraint, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, SmallInteger, String, Text, ForeignKey, func, false, CheckConstraint, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -105,6 +105,8 @@ class UserFeed(Base):
     readable_auto_disabled_reason: Mapped[str | None] = mapped_column(String(20))
     ai_scoring_enabled: Mapped[bool | None] = mapped_column(Boolean)
     ai_summary_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # Translate this feed's titles into the reader's ai_translation_language.
+    translate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=false())
     purge_after_days: Mapped[int | None] = mapped_column(SmallInteger)
     purge_keep_count: Mapped[int | None] = mapped_column(SmallInteger)
     position: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)

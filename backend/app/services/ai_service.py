@@ -259,7 +259,7 @@ def provider_requires_key(provider: str | None) -> bool:
 
 # Input token cost in USD per 1M tokens.
 # !! Update manually when providers change pricing !!
-# Last updated: 2026-10-09
+# Last updated: 2026-11-19
 # Anthropic: https://www.anthropic.com/pricing
 # OpenAI:    https://openai.com/api/pricing
 # Gemini:    https://ai.google.dev/gemini-api/docs/pricing
@@ -282,43 +282,63 @@ _MODEL_INPUT_COST_PER_M: dict[str, float] = {
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
     "claude-opus-4-5": 5.00,
+    "claude-fable-5-2": 8.00,
     "claude-fable-5-1": 10.00,
     "claude-fable-5": 10.00,
+    # Mythos: verified organizations only, priced as the Fable of the same version.
+    "claude-mythos-5-2": 8.00,
+    "claude-mythos-5-1": 10.00,
     # OpenAI
     "gpt-4o-mini": 0.15,
     "gpt-4o": 2.50,
+    "gpt-6.2-astra": 8.00,
+    "gpt-6.2-sol": 2.00,
     "gpt-6-astra": 10.00,
     "gpt-6.1-sol": 2.00,
+    "gpt-6.1-terra": 1.00,
     "gpt-6-sol": 2.00,
     "gpt-6-luna": 0.10,
-    # Promotional price, held at least until 2026-11-21.
+    # Promotional price, ends 2026-11-30; OpenAI has not said what follows.
     "gpt-5.6-sol": 4.00,
     "gpt-5.6-terra": 2.00,
     "gpt-5.6-luna": 0.20,
     "gpt-5.5": 5.00,
+    "gpt-5.5-pro": 30.00,
     "gpt-5.4": 2.50,
+    "gpt-5.4-pro": 30.00,
     "gpt-5.4-mini": 0.75,
     "gpt-5.4-nano": 0.20,
     "gpt-5.2": 1.75,
+    "gpt-5.2-pro": 21.00,
     "gpt-5.1": 1.25,
     "gpt-5": 1.25,
+    "gpt-5-pro": 15.00,
     "gpt-5-mini": 0.25,
     "gpt-5-nano": 0.05,
     "gpt-4.1": 2.00,
     "gpt-4.1-mini": 0.40,
     "gpt-4.1-nano": 0.10,
     "o3": 2.00,
+    "o3-pro": 20.00,
     "o4-mini": 1.10,
     # Gemini
+    # Carbon and Argon are introductory through 2026-11-30 and double to $4 / $20
+    # on 2026-12-01.
+    "gemini-4-carbon": 2.00,
+    "gemini-4-argon": 2.00,
+    "gemini-4-neon": 3.00,
+    "gemini-4-hydrogen": 1.50,
     "gemini-2.0-flash": 0.10,
     "gemini-2.0-flash-lite": 0.075,
     "gemini-1.5-flash": 0.075,
     "gemini-1.5-pro": 1.25,
+    # 2.5 Pro and 2.5 Flash are deprecated: from 2026-12-01 Google answers them
+    # with 3.8 Flash and 3.5 Flash-Lite, at those models' prices.
     "gemini-2.5-pro": 1.25,
     "gemini-2.5-flash": 0.30,
     "gemini-2.5-flash-lite": 0.10,
-    # The three current Flash models run at half price through 2026-12-31 and go
-    # to $1.50 / $7.50 on 2027-01-01.
+    # The current Flash models run at half price through 2026-12-31 and go to
+    # $1.50 / $7.50 on 2027-01-01.
     "gemini-3.8-flash": 0.75,
     "gemini-3.7-flash": 0.75,
     "gemini-3.6-flash": 0.75,
@@ -353,31 +373,46 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
     "claude-opus-4-7": 5.00,
     "claude-opus-4-6": 5.00,
     "claude-opus-4-5": 5.00,
+    "claude-fable-5-2": 5.00,
     "claude-fable-5-1": 5.00,
     "claude-fable-5": 5.00,
+    "claude-mythos-5-2": 5.00,
+    "claude-mythos-5-1": 5.00,
     "gpt-4o-mini": 4.00,
     "gpt-4o": 4.00,
+    "gpt-6.2-astra": 5.00,  # $8.00 in / $40.00 out
+    "gpt-6.2-sol": 5.00,  # $2.00 in / $10.00 out
     "gpt-6-astra": 5.00,  # $10.00 in / $50.00 out
     "gpt-6.1-sol": 5.00,  # $2.00 in / $10.00 out
+    "gpt-6.1-terra": 5.00,  # $1.00 in / $5.00 out
     "gpt-6-sol": 5.00,  # $2.00 in / $10.00 out
     "gpt-6-luna": 5.00,  # $0.10 in / $0.50 out
     "gpt-5.6-sol": 5.00,  # $4.00 in / $20.00 out
     "gpt-5.6-terra": 6.00,  # $2.00 in / $12.00 out
     "gpt-5.6-luna": 6.00,  # $0.20 in / $1.20 out
     "gpt-5.5": 6.00,  # $5.00 in / $30.00 out
+    "gpt-5.5-pro": 6.00,  # $30.00 in / $180.00 out
     "gpt-5.4": 6.00,  # $2.50 in / $15.00 out
+    "gpt-5.4-pro": 6.00,  # $30.00 in / $180.00 out
     "gpt-5.4-mini": 6.00,  # $0.75 in / $4.50 out
     "gpt-5.4-nano": 6.25,  # $0.20 in / $1.25 out
     "gpt-5.2": 8.00,  # $1.75 in / $14.00 out
+    "gpt-5.2-pro": 8.00,  # $21.00 in / $168.00 out
     "gpt-5.1": 8.00,  # $1.25 in / $10.00 out
     "gpt-5": 8.00,  # $1.25 in / $10.00 out
+    "gpt-5-pro": 8.00,  # $15.00 in / $120.00 out
     "gpt-5-mini": 8.00,  # $0.25 in / $2.00 out
     "gpt-5-nano": 8.00,  # $0.05 in / $0.40 out
     "gpt-4.1": 4.00,  # $2.00 in / $8.00 out
     "gpt-4.1-mini": 4.00,  # $0.40 in / $1.60 out
     "gpt-4.1-nano": 4.00,  # $0.10 in / $0.40 out
     "o3": 4.00,  # $2.00 in / $8.00 out
+    "o3-pro": 4.00,  # $20.00 in / $80.00 out
     "o4-mini": 4.00,  # $1.10 in / $4.40 out
+    "gemini-4-carbon": 5.00,  # $2.00 in / $10.00 out
+    "gemini-4-argon": 5.00,  # $2.00 in / $10.00 out
+    "gemini-4-neon": 5.00,  # $3.00 in / $15.00 out
+    "gemini-4-hydrogen": 5.00,  # $1.50 in / $7.50 out
     "gemini-2.0-flash": 4.00,
     "gemini-2.0-flash-lite": 4.00,
     "gemini-1.5-flash": 4.00,
@@ -400,9 +435,9 @@ _OUTPUT_COST_MULTIPLIER: dict[str, float] = {
 # Cost rows priced this way are flagged is_estimated → rendered with a "~" prefix
 # and a table note.
 _PROVIDER_FALLBACK_MODEL: dict[str, str] = {
-    "anthropic": "claude-sonnet-5",
-    "openai": "gpt-5.4",
-    "gemini": "gemini-2.5-flash",
+    "anthropic": "claude-sonnet-5-5",
+    "openai": "gpt-6.2-sol",
+    "gemini": "gemini-3.8-flash",
 }
 
 # ── key management ────────────────────────────────────────────────────────────
@@ -1131,8 +1166,8 @@ async def score_article(
     return max(0.0, min(1.0, score)), answer.input_tokens, answer.output_tokens
 
 
-_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Respond in the same language as the article. You may use markdown (bold, a short list) where it genuinely aids clarity."
-_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Respond in the same language as the article. You may use markdown (bold, lists) where it genuinely aids clarity."
+_DEFAULT_SUMMARY_PROMPT = "Summarize the article, scaling the length with it: a sentence or two for a brief item, about 150 words for an ordinary article, and up to 300 for a long feature. Treat those as ceilings rather than targets, and stay well under them when the article is thin. Lead with prose covering the main point, and where the article is complex follow it with one short list of the key facts rather than splitting the summary across several labelled sections. A summary is always a small fraction of the original, so never let it approach the length of the article itself. Capture the conclusions and the context that changes how the article reads, and leave out detail that does not. Preserve meaningful nuance and uncertainty when relevant.\n\nAvoid filler, repetition, marketing language, and openings like \"This article explains…\". Focus on what matters most. Do not invent information. Write in the language the article is written in, even though these instructions are in English. You may use markdown (bold, a short list) where it genuinely aids clarity."
+_DEFAULT_CONTEXT_PROMPT = "Explain the broader context and significance of this article. Adjust the length to what is genuinely needed — a sentence or two for straightforward topics, a short paragraph for complex ones. Cover what the reader should know to understand why this matters: relevant background, ongoing developments, or wider implications.\n\nAvoid filler, repetition, and openings like \"This article is about…\". Stick to what is relevant and well-founded — do not speculate or present uncertain claims as facts. Write in the language the article is written in, even though these instructions are in English. You may use markdown (bold, lists) where it genuinely aids clarity."
 # The summary prompt tells the model to scale length with the article, so the
 # output cap scales with it too — a cap sized for a news brief cuts a long feature
 # off mid-sentence. Roughly one output token per 16 input characters, bounded at
@@ -1158,21 +1193,47 @@ def _summary_token_budget(content: str) -> int:
     )
 
 
+def _language_rule(language: str | None) -> str:
+    """The closing instruction for a reader who translates the article's feed:
+    answer in their language, whatever the prompt said about language (the default
+    prompts say the article's language).
+
+    *language* is the English name from translation_service.LANGUAGES, never free
+    text: it goes into the prompt as is.
+    """
+    if not language:
+        return ""
+    return (f"\n\nWrite the response in {language}, regardless of any language "
+            f"instruction above.")
+
+
+def _article_prompt(content: str, instruction: str, language: str | None) -> str:
+    """The article first, then what to do with it, so the instructions (the
+    default prompt's or the reader's own) are the last thing the model reads.
+    Anthropic recommends long documents above the query, and small models need
+    it: with the instructions first, Haiku 5.5 forgot "the article's language"
+    by the end of a long Czech article and answered 5 of 6 summaries in English;
+    article first, with the default prompt's sentence about language worded as
+    it is now, all 6 came back in Czech (2026-11-19)."""
+    return f"Article:\n{content}\n\n{instruction}{_language_rule(language)}"
+
+
 async def summarize_article(
     content: str,
     client,
     provider: str,
     model: str,
     custom_prompt: str | None = None,
+    language: str | None = None,
 ) -> Completion:
-    """Generate a concise article summary.
+    """Generate a concise article summary, in *language* when given (see
+    ``_language_rule``).
 
     The only caller that acts on ``truncated``: a summary cut off by the token cap
     is still stored, but labelled as such rather than passed off as the model's own
     choice of ending.
     """
-    instruction = custom_prompt or _DEFAULT_SUMMARY_PROMPT
-    prompt = f"{instruction}\n\nArticle:\n{content}"
+    prompt = _article_prompt(content, custom_prompt or _DEFAULT_SUMMARY_PROMPT, language)
     return await _complete(
         prompt, client, provider, model,
         max_tokens=_summary_token_budget(content),
@@ -1187,12 +1248,14 @@ async def get_article_context(
     model: str,
     base_prompt: str | None = None,
     focus: str | None = None,
+    language: str | None = None,
 ) -> tuple[str, int, int]:
-    """Generate background context and significance. Returns (text, input_tokens, output_tokens)."""
+    """Generate background context and significance, in *language* when given (see
+    ``_language_rule``). Returns (text, input_tokens, output_tokens)."""
     instruction = base_prompt or _DEFAULT_CONTEXT_PROMPT
     if focus:
         instruction += f"\n\nFocus on: {focus}"
-    prompt = f"{instruction}\n\nArticle:\n{content}"
+    prompt = _article_prompt(content, instruction, language)
     answer = await _complete(prompt, client, provider, model, max_tokens=500)
     return answer.text, answer.input_tokens, answer.output_tokens
 
@@ -1352,6 +1415,46 @@ async def generate_css_selector_from_sample(
     answer = await _complete(prompt, client, provider, model, max_tokens=200)
     selector = answer.text.strip().strip('`"\'').split('\n')[0].strip()
     return selector, answer.input_tokens, answer.output_tokens
+
+
+# Output cap per headline. Measured on 120 Russian news headlines with Haiku 5.5:
+# about 45 tokens each into English and 50 into Czech, JSON wrapping included.
+# The rest is headroom for long headlines; unused tokens are not billed.
+_TRANSLATION_TOKENS_PER_TITLE = 100
+_TRANSLATION_BASE_TOKENS = 100
+
+
+async def translate_titles(
+    items: list[dict], language: str, client, provider: str, model: str,
+) -> Completion:
+    """Translate headlines in one call. *items* are ``{"id": int, "title": str}``.
+
+    Ids rather than position carry each answer back to its article, so a model that
+    drops or reorders one cannot shift the rest onto the wrong headlines. Parsing
+    and checking the reply is the caller's job (``translation_service``), which
+    knows what to do with a partial answer.
+
+    *language* is the English name from the fixed list, never free text: it goes
+    into the prompt as is.
+    """
+    import json
+
+    prompt = (
+        f"Translate these news headlines into {language}. Keep names, places and "
+        f"abbreviations accurate (use the established {language} spelling where one "
+        f"exists), keep the headline style, and do not add or drop information. Use "
+        f"sentence case (capitalize only the first word and proper nouns).\n\n"
+        f"Input is a JSON array of objects with \"id\" and \"title\". Reply with only a "
+        f"JSON array of objects with the same \"id\" and the translated \"title\", in "
+        f"the same order, no other text.\n\n"
+        f"{json.dumps(items, ensure_ascii=False)}"
+    )
+    return await _complete(
+        prompt, client, provider, model,
+        max_tokens=_TRANSLATION_BASE_TOKENS + _TRANSLATION_TOKENS_PER_TITLE * len(items),
+        reasoning_headroom=_ANTHROPIC_REASONING_BUDGET,
+        budget=_SCORING_BUDGET_SECONDS,
+    )
 
 
 # Longest behavioural lookback window used by the interest profile (G1). The retention

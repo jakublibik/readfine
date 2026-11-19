@@ -115,7 +115,12 @@ async def list_users(db: AsyncSession) -> list[dict]:
         ArticleAiJob, ArticleAiJob.created_at, ArticleAiJob.operation,
         ArticleAiJob.status == "success",
     ))
-    await _ai_counts(_by_operation(AiUsageLog, AiUsageLog.created_at, AiUsageLog.operation))
+    # Translation writes both: a job per title and a usage log per model call.
+    # Counted once, by titles like the other per-article operations.
+    await _ai_counts(_by_operation(
+        AiUsageLog, AiUsageLog.created_at, AiUsageLog.operation,
+        AiUsageLog.operation != "translation",
+    ))
     await _ai_counts(_single(ArticleAiChat, "chat"))
     await _ai_counts(_single(GeneralChatLog, "chat"))
     # A run that found no articles logs no model and never called one.

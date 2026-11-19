@@ -4,14 +4,14 @@ import re
 from datetime import date, datetime, timedelta, timezone
 
 import regex as _regex
-from sqlalchemy import BigInteger, Text, and_, any_, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
+from sqlalchemy import BigInteger, Text, and_, any_, case, cast, delete, func, literal, literal_column, null, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import ARRAY, TSQUERY, insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import SUPPRESSED_BY_BULK, Article, UserArticleState
+from app.models.article import SUPPRESSED_BY_BULK, Article, ArticleTranslation, UserArticleState
 from app.models.feed import Feed, UserFeed
 from app.models.label import ArticleLabel, Label
-from app.models.user import User
+from app.models.user import User, UserSettings
 from app.schemas.article import ArticleListItem, ArticleResponse, ArticleStateUpdate
 from app.services.relevance_service import CJK_CHARS, effective_score_sql, score_cut
 from app.services.scope_tokens import parse_label_tokens, parse_scope_tokens
@@ -42,6 +42,41 @@ def add_article_access_joins(stmt, user_id: int):
             (UserArticleState.article_id == Article.id) & (UserArticleState.user_id == user_id),
         )
     )
+
+
+def with_translated_title(stmt, user_id: int):
+    """Add the reader's translation of the title as the ``translated_title`` column.
+
+    NULL unless there is one in the reader's current language and they still
+    translate the feed: turning a feed off shows its originals again, and a
+    language change shows originals until the new translations land. Needs
+    UserFeed joined on this reader (inner or outer). One row per article, since
+    the join goes through the translation's primary key.
+    """
+    return join_translation(stmt, user_id).add_columns(
+        translated_title_expr().label("translated_title"))
+
+
+def join_translation(stmt, user_id: int):
+    """The LEFT JOIN behind ``translated_title_expr``, for queries that want the
+    expression somewhere else than as an extra column (a COALESCE, say)."""
+    language = (
+        select(UserSettings.ai_translation_language)
+        .where(UserSettings.user_id == user_id)
+        .scalar_subquery()
+    )
+    return stmt.outerjoin(
+        ArticleTranslation,
+        (ArticleTranslation.user_id == user_id)
+        & (ArticleTranslation.article_id == Article.id)
+        & (ArticleTranslation.language == language),
+    )
+
+
+def translated_title_expr():
+    """The reader's translated title, NULL when there is none to show. Needs
+    ``join_translation`` and UserFeed joined on this reader."""
+    return case((UserFeed.translate.is_(True), ArticleTranslation.title), else_=null())
 
 
 def unread_clause():
@@ -618,6 +653,7 @@ async def list_articles(
         return (await db.execute(stmt.with_only_columns(_count))).scalar() or 0
     if _ids:
         return stmt.with_only_columns(Article.id)
+    stmt = with_translated_title(stmt, user.id)
 
     coalesced = func.coalesce(Article.published_at, Article.fetched_at)
     # Two sorts lead with something other than the date: the score, and for a text
@@ -688,7 +724,7 @@ async def list_articles(
         article, state, feed_title, custom_title, extract_readable = row[:5]
         item = _to_list_item(
             article, state, feed_title, custom_title, extract_readable,
-            labels_by_article.get(article.id, []),
+            labels_by_article.get(article.id, []), row.translated_title,
         )
         if sort_key is not None:
             item.sort_key = row.sort_key
@@ -721,7 +757,8 @@ async def has_articles(user: User, db: AsyncSession, **filters) -> bool:
 
 
 def _to_list_item(
-    article, state, feed_title, custom_title, extract_readable, labels: list[dict]
+    article, state, feed_title, custom_title, extract_readable, labels: list[dict],
+    translated_title: str | None = None,
 ) -> ArticleListItem:
     """Build one list row from the columns every list query selects.
 
@@ -735,6 +772,7 @@ def _to_list_item(
         feed_title=custom_title or feed_title,
         url=article.url,
         title=article.title,
+        translated_title=translated_title,
         author=article.author,
         summary=article.summary,
         snippet=_make_snippet(article.summary, article.content),
@@ -782,15 +820,16 @@ async def get_article_list_item(
         .outerjoin(Feed, Feed.id == Article.feed_id)
         .where(Article.id == article_id, Article.trimmed_at.is_(None))
     )
-    stmt = add_article_access_joins(stmt, user.id).where(article_access_predicate())
+    stmt = with_translated_title(add_article_access_joins(stmt, user.id), user.id)
+    stmt = stmt.where(article_access_predicate())
     row = (await db.execute(stmt)).first()
     if row is None:
         return None
 
-    article, state, feed_title, custom_title, extract_readable = row
+    article, state, feed_title, custom_title, extract_readable, translated_title = row
     return _to_list_item(
         article, state, feed_title, custom_title, extract_readable,
-        await _fetch_labels(article.id, user.id, db),
+        await _fetch_labels(article.id, user.id, db), translated_title,
     )
 
 
@@ -812,7 +851,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     is not an article any more (see visible_article_clause): a stale list or a link
     by id gets None, as it would for a deleted one.
     """
-    stmt = add_article_access_joins(
+    stmt = with_translated_title(add_article_access_joins(
         select(
             Article,
             UserArticleState,
@@ -820,7 +859,7 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
             UserFeed.custom_title.label("custom_title"),
         ).outerjoin(Feed, Feed.id == Article.feed_id),
         user.id,
-    ).where(
+    ), user.id).where(
         Article.id == article_id,
         article_access_predicate(),
         visible_article_clause(),
@@ -829,11 +868,13 @@ async def get_article(user: User, article_id: int, db: AsyncSession) -> ArticleR
     if not row:
         return None
 
-    article, state, feed_title, custom_title = row
-    return _article_response(
+    article, state, feed_title, custom_title, translated_title = row
+    response = _article_response(
         article, state, feed_title, custom_title,
         await _fetch_labels(article_id, user.id, db),
     )
+    response.translated_title = translated_title
+    return response
 
 
 async def mark_scope_read(

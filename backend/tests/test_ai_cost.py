@@ -21,10 +21,10 @@ def test_versioned_alias_is_priced_not_estimated():
 
 
 def test_unpriced_model_known_provider_falls_back_and_flags():
-    # gpt-9-turbo isn't in the catalog; openai fallback is gpt-5.4 ($2.50/M in,
-    # 6x -> $15/M out). 1M in + 1M out = $17.50, flagged estimated.
+    # gpt-9-turbo isn't in the catalog; openai fallback is gpt-6.2-sol ($2/M in,
+    # 5x -> $10/M out). 1M in + 1M out = $12, flagged estimated.
     cost, estimated = _calc_cost("gpt-9-turbo", "openai", 1_000_000, 1_000_000)
-    assert cost == 17.5
+    assert cost == 12.0
     assert estimated is True
 
 

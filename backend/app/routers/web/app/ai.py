@@ -236,6 +236,8 @@ async def htmx_ai_context_trigger(
     focus = (form.get("focus") or "").strip() or None
 
     from app.services.ai_service import ai_client, get_article_context
+    from app.services.translation_service import output_language
+    language = await output_language(settings, article.feed_id, db)
     async with ai_client(user.id, "quality", db) as (client, provider, model):
         if client is None:
             return HTMLResponse(
@@ -247,6 +249,7 @@ async def htmx_ai_context_trigger(
                 content_text, client, provider, model,
                 base_prompt=settings.ai_context_prompt,
                 focus=focus,
+                language=language,
             )
         except Exception as exc:
             msg = html_module.escape(describe_ai_error(exc)[:200])

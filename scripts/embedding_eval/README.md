@@ -121,6 +121,24 @@ uv run --script run_terms_fidelity.py --sample sample_clean.jsonl \
 as topics, bigram option, length normalization). That API is gone; to rerun
 them, check out `6a62e7a`.
 
+## 6. Other models and inputs
+
+`run_terms_embedding.py` holds the input fixed at the term list and the fetch-time
+text and swaps BM25 for an embedding model. `run_llm_rescore.py` sends the
+September window through the app's `score_article` with another model, a local
+one over Ollama (`--provider custom`) or Haiku itself (`--provider anthropic`,
+key from `--key-from-db USER_ID`). It fails unless the production Haiku scores
+on those rows give the recorded AUC. `--profile terms` and `--text fetch` give
+the LLM what BM25 reads, so the two can be compared on the same input. It needs
+the app's dependencies and `.env`, so it runs from `backend/` rather than as a
+`uv run --script`:
+
+```bash
+uv run --with numpy python ../scripts/embedding_eval/run_llm_rescore.py \
+    --sample sample_clean.jsonl --august-sample sample.jsonl --model qwen3:8b \
+    --cache rescore_qwen3_8b.jsonl
+```
+
 ## Notes
 
 Notes on what the runs do, because they are decisions and not details:

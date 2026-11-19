@@ -46,6 +46,7 @@ def make_settings(**kwargs):
         "ai_content_limit": 20_000,
         "ai_min_content_chars": 1_700,
         "ai_summary_prompt": None,
+        "ai_translation_language": None,
         "last_ai_error": None,
         "last_ai_error_at": None,
         "last_ai_error_article_id": None,

@@ -243,6 +243,8 @@ async def fetch_feed(
             feed.last_published_at = latest_pub
 
         await db.commit()
+        from app.services.translation_service import kick_translations
+        kick_translations(db)
         if resp is not None:
             host = host_throttle.host_key(feed_url)
             if resp.rate_limited_until:
@@ -409,6 +411,11 @@ async def _save_articles(
 
         from app.services.filter_service import apply_filters_to_new_articles
         await apply_filters_to_new_articles(feed.id, new_articles, db)
+
+        # Only queues jobs: the model runs after the fetch has committed, see
+        # translation_service.
+        from app.services.translation_service import enqueue_translation_jobs
+        await enqueue_translation_jobs(feed.id, new_articles, db)
 
         await _dedup_cross_feed(feed.id, new_articles, db)
 

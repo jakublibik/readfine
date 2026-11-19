@@ -145,6 +145,11 @@ class UserSettings(Base):
     ai_summary_enabled_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_summary_prompt: Mapped[str | None] = mapped_column(Text)
     ai_context_prompt: Mapped[str | None] = mapped_column(Text)
+    # Target language code for title translation (feeds with translate on). NULL = off.
+    ai_translation_language: Mapped[str | None] = mapped_column(String(10))
+    # Which slot translates: 'fast' (scoring model) or 'quality' (main model).
+    ai_translation_slot: Mapped[str] = mapped_column(
+        String(10), nullable=False, default="fast", server_default="fast")
     ai_score_show_in_list: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_chat_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ai_content_limit: Mapped[int] = mapped_column(

@@ -152,6 +152,49 @@
   </div>
   {% endif %}
 
+  {% if translation %}
+  {% set blocked = translation.blocker and not uf.translate %}
+  <div>
+    <label class="flex items-start gap-2 text-sm text-gray-700 select-none {% if blocked %}opacity-60{% else %}cursor-pointer{% endif %}">
+      <input type="hidden" name="translate_present" value="1">
+      <input type="checkbox" name="translate"
+             {% if uf.translate %}checked{% endif %}
+             {% if blocked %}disabled{% endif %}
+             class="mt-0.5 rounded">
+      <span>
+        Translate titles{% if translation.language %} into {{ translation.language }}{% endif %}
+        <span class="block text-xs text-gray-400 font-normal">
+          {% if translation.blocker == 'no_language' %}
+            Choose a language in <a href="/settings/ai" class="text-blue-500 hover:underline">AI settings</a> first.
+          {% elif translation.blocker == 'no_model' %}
+            Translation runs on your {{ "Scoring" if translation.slot == "fast" else "Main" }} model, which is not set up yet. Set it in <a href="/settings/ai" class="text-blue-500 hover:underline">AI settings</a>.
+          {% elif translation.blocker == 'no_api_key' %}
+            Add an API key for {{ translation.provider }} in <a href="/settings/ai" class="text-blue-500 hover:underline">AI settings</a> first.
+          {% elif translation.blocker == 'no_endpoint' %}
+            Enter the custom endpoint in <a href="/settings/ai" class="text-blue-500 hover:underline">AI settings</a> first.
+          {% else %}
+            AI translates the titles of new articles, and of the latest {{ translation.backfill_limit }} unread ones when you turn this on. The articles themselves stay in their original language.
+            {% set est = translation.estimate %}
+            {% if est and est.cost is not none %}
+              {% if est.basis_days %}
+              At this feed's pace (about {{ est.articles | thousands }} articles a month, judging by the last {{ est.basis_days }} day{{ "s" if est.basis_days != 1 }}) that costs
+              {%- else %}
+              At this feed's pace ({{ est.articles | thousands }} articles in the last 30 days) that costs
+              {%- endif %} {% if est.cost < 0.01 %}less than $0.01{% else %}about ${{ "%.2f" | format(est.cost) }}{% endif %} a month.
+            {% elif est %}
+              {#- A model with no known price (one on your own endpoint): the pace still
+                  says how much work it takes on. -#}
+              At this feed's pace that is about {{ est.articles | thousands }} titles a month{% if est.basis_days %}, judging by the last {{ est.basis_days }} day{{ "s" if est.basis_days != 1 }}{% endif %}.
+            {% else %}
+              This feed is too new to estimate the cost yet.
+            {% endif %}
+          {% endif %}
+        </span>
+      </span>
+    </label>
+  </div>
+  {% endif %}
+
   {% if uf.feed.feed_type == 'scrape' and is_sole_subscriber %}
   <div>
     <label class="block text-sm font-medium text-gray-700 mb-1">CSS selector for article links</label>
