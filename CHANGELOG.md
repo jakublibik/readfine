@@ -22,6 +22,7 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 - AI summaries and context of articles not written in English often came back in English on smaller models such as Claude Haiku 5.5. The model now reads the article first and the instructions after it, and keeps to the article's language.
 - The cost table in **Settings → AI** priced all past usage at the model set today, so after a model change the costs were wrong and the trend could point the wrong way. Scoring, summaries, context and interest profiles are now priced at the model that actually ran them, and changing a model no longer changes past costs. Chat keeps using the current model because it does not record one.
 - The estimated cost shown before a **Catch me up** run was about 2.5 times too low. It now matches what recent runs actually cost.
+- In the dark theme, some gray links and buttons (in feed settings, filters and the welcome steps, among others) turned dark on hover and almost disappeared. They now get lighter, like the rest.
 - The privacy policy said the service sets a single cookie. It sets two (the session and a security token against cross-site request forgery), and the policy now says so, along with display preferences kept in the browser's local storage. To move its "Last updated" date, save the legal details in **Admin → Settings** again.
 
 ## [0.22.0] - 2026-10-18
