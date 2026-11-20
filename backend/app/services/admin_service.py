@@ -193,6 +193,29 @@ async def list_users(db: AsyncSession) -> list[dict]:
     return result
 
 
+USERS_FILTERS = ("all", "active")
+# How recently an account without feeds must have been active to count as active.
+ACTIVE_NO_FEEDS_DAYS = 7
+
+
+def is_active_account(item: dict, now: datetime) -> bool:
+    """The users page's "Active" filter, over a row of ``list_users``.
+
+    A verified, enabled account that is not dormant and either has a feed or was
+    active in the last ``ACTIVE_NO_FEEDS_DAYS`` days. An account without feeds never
+    falls dormant, so the second half is what hides signups that went nowhere.
+    """
+    user = item["user"]
+    if not (user.is_active and user.email_verified) or item["dormant"]:
+        return False
+    if item["feed_count"]:
+        return True
+    seen = user.last_active_at or user.created_at
+    if seen.tzinfo is None:
+        seen = seen.replace(tzinfo=timezone.utc)
+    return seen >= now - timedelta(days=ACTIVE_NO_FEEDS_DAYS)
+
+
 async def toggle_user_active(db: AsyncSession, user_id: int, admin_id: int) -> User | None:
     """Toggle is_active on a user. Cannot deactivate yourself."""
     result = await db.execute(select(User).where(User.id == user_id))

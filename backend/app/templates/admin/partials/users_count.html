@@ -1,5 +1,17 @@
-{# Heading counts on the users page. "Active" is the dashboard's: read something
-   themselves in the last 7 days (admin_service.count_active_readers). #}
-{% set dormant_n = users | selectattr("dormant") | list | length %}
-<span id="users-count"{% if oob %} hx-swap-oob="true"{% endif %} class="text-sm font-normal text-gray-400"
-      title="Active: accounts that read at least one article themselves in the last 7 days.{% if dormant_n %} Dormant: inactive accounts whose feeds no longer keep fetching going (deactivated accounts not included).{% endif %}">({{ (users | length)|num }} · {{ active_7d|num }} active 7d{% if dormant_n %} · {{ dormant_n|num }} dormant{% endif %})</span>
+{# Heading counts and the All / Active switch on the users page, refreshed out of band
+   after a toggle or a delete. "active 7d" is the dashboard's: read something
+   themselves in the last 7 days (admin_service.count_active_readers). The Active
+   filter is broader (admin_service.is_active_account). #}
+<span id="users-count"{% if oob %} hx-swap-oob="true"{% endif %} class="flex items-center gap-3">
+  <span class="text-sm font-normal text-gray-400"
+        title="Active 7d: accounts that read at least one article themselves in the last 7 days.{% if dormant_count %} Dormant: inactive accounts whose feeds no longer keep fetching going (deactivated accounts not included).{% endif %}">({{ total_count|num }} · {{ active_7d|num }} active 7d{% if dormant_count %} · {{ dormant_count|num }} dormant{% endif %})</span>
+  <span class="flex items-center gap-1 text-sm font-normal">
+    {% for key, label, n, tip in [
+      ("all", "All", total_count, "Every account"),
+      ("active", "Active", active_count, "Verified and enabled, not dormant, and with a feed or active in the last 7 days. With dormancy off, every account with a feed counts."),
+    ] %}
+    <a href="/admin/users?filter={{ key }}" title="{{ tip }}"
+       class="px-2 py-1 rounded border {{ 'bg-blue-50 border-blue-300 text-blue-700' if users_filter == key else 'border-gray-200 text-gray-600 hover:border-gray-300' }}">{{ label }} <span class="opacity-70">{{ n|num }}</span></a>
+    {% endfor %}
+  </span>
+</span>

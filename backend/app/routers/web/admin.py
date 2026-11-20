@@ -32,6 +32,7 @@ from app.services.admin_service import (
     get_dashboard_stats,
     get_feed,
     group_feeds_by_host,
+    is_active_account,
     list_audit_logs,
     list_feeds_with_stats,
     list_fetch_logs,
@@ -43,6 +44,7 @@ from app.services.admin_service import (
     toggle_user_active,
     update_app_settings,
     update_feed_admin,
+    USERS_FILTERS,
 )
 from app.services import traffic_service
 from app.services.feed import change_feed_url
@@ -152,21 +154,44 @@ async def admin_scoring_eval(
 
 # ── Users ─────────────────────────────────────────────────────────────────────
 
-async def _users_ctx(db: AsyncSession, user: User) -> dict:
+# The users filter lives in the session, not a cookie of its own: the page renders
+# with it straight away, and the toggle and delete buttons keep it without carrying it.
+USERS_FILTER_SESSION_KEY = "admin_users_filter"
+
+
+async def _users_ctx(db: AsyncSession, request: Request, user: User) -> dict:
     """The users table and the counts in its heading, which a toggle or a delete
     refreshes along with it."""
-    users = await list_users(db)
-    active = await count_active_readers(db, datetime.now(timezone.utc))
-    return {"users": users, "current_user": user, "active_7d": active[7]}
+    now = datetime.now(timezone.utc)
+    all_users = await list_users(db)
+    active_rows = [item for item in all_users if is_active_account(item, now)]
+    users_filter = request.session.get(USERS_FILTER_SESSION_KEY)
+    if users_filter not in USERS_FILTERS:
+        users_filter = "all"
+    active = await count_active_readers(db, now)
+    return {
+        "users": active_rows if users_filter == "active" else all_users,
+        "users_filter": users_filter,
+        "total_count": len(all_users),
+        "active_count": len(active_rows),
+        "dormant_count": sum(1 for item in all_users if item["dormant"]),
+        "current_user": user,
+        "active_7d": active[7],
+    }
 
 
 @router.get("/users", response_class=HTMLResponse)
 async def admin_users(
     request: Request,
+    filter: str | None = Query(None),
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    return templates.TemplateResponse(request, "admin/users.html", await _users_ctx(db, user))
+    if filter in USERS_FILTERS:
+        request.session[USERS_FILTER_SESSION_KEY] = filter
+    return templates.TemplateResponse(
+        request, "admin/users.html", await _users_ctx(db, request, user),
+    )
 
 
 @router.post("/users/{user_id}/activate", response_class=HTMLResponse)
@@ -181,7 +206,7 @@ async def admin_toggle_active(
         action = "user_activate" if target.is_active else "user_deactivate"
         await log_audit(db, user.id, action, target_type="user", target_id=target.id)
     return templates.TemplateResponse(
-        request, "admin/partials/users_table.html", await _users_ctx(db, user),
+        request, "admin/partials/users_table.html", await _users_ctx(db, request, user),
     )
 
 
@@ -196,7 +221,7 @@ async def admin_delete_user(
     if deleted:
         await log_audit(db, user.id, "user_delete", target_type="user", target_id=user_id)
     return templates.TemplateResponse(
-        request, "admin/partials/users_table.html", await _users_ctx(db, user),
+        request, "admin/partials/users_table.html", await _users_ctx(db, request, user),
     )
 
 
