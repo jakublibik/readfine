@@ -10,14 +10,15 @@ from functools import lru_cache
 
 import regex as _regex
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.article import (
-    SUPPRESSED_BY_FILTER, Article, ArticleAiJob, UserArticleState,
+    SUPPRESSED_BY_FILTER, Article, ArticleAiJob, ArticleTranslation, UserArticleState,
 )
 from app.models.feed import Folder, UserFeed
+from app.models.user import UserSettings
 from app.models.filter import Filter, FilterAction, FilterCondition
 from app.models.label import ArticleLabel, Label
 from app.schemas.filter import FilterCreate, FilterResponse, FilterTestResult, FilterTestSample, FilterUpdate
@@ -465,14 +466,35 @@ def _eval_op(op: str, val: str, field_value) -> bool:
     return False
 
 
-def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None, state=None) -> bool:
+def _title_matches(op: str, val: str, article: Article, translation: str | None) -> bool:
+    """The title against a condition, the reader's translation of it included.
+
+    Either version matching is a match, except for ``not_contains``, where neither
+    may contain the value: a negative filter over "original OR translation" would
+    hold for almost every article, since the word is rarely in both languages.
+    The same rule as ``title_or_content`` below.
+    """
+    original = _eval_op(op, val, article.title or "")
+    if translation is None:
+        return original
+    translated = _eval_op(op, val, translation)
+    if op == "not_contains":
+        return original and translated
+    return original or translated
+
+
+def _matches_condition(condition: FilterCondition, article: Article, user_feed: UserFeed | None,
+                       state=None, translation: str | None = None) -> bool:
     op = condition.operator
     val = condition.value.strip()
     if not val:
         return False
 
+    if condition.field == "title":
+        return _title_matches(op, val, article, translation)
+
     if condition.field == "title_or_content":
-        title_match = _eval_op(op, val, _get_field_value(article, user_feed, "title"))
+        title_match = _title_matches(op, val, article, translation)
         content_match = _eval_op(op, val, _get_field_value(article, user_feed, "content"))
         # not_contains: neither field may contain the value (AND)
         # all other operators: either field suffices (OR)
@@ -536,13 +558,17 @@ def _scope_matches(f: Filter, article: Article, user_feed: UserFeed | None) -> b
     return True
 
 
-def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None, state=None) -> bool:
-    """Return True if the article is in scope and all/any conditions match."""
+def evaluate_filter(f: Filter, article: Article, user_feed: UserFeed | None = None, state=None,
+                    translation: str | None = None) -> bool:
+    """Return True if the article is in scope and all/any conditions match.
+
+    *translation* is the reader's translated title, which title conditions match
+    besides the original (``translation_service.reader_titles``)."""
     if not _scope_matches(f, article, user_feed):
         return False
     if not f.conditions:
         return False
-    results = [_matches_condition(c, article, user_feed, state) for c in f.conditions]
+    results = [_matches_condition(c, article, user_feed, state, translation) for c in f.conditions]
     return all(results) if f.match_operator == "AND" else any(results)
 
 
@@ -555,7 +581,7 @@ def _switch_off_slow_filter(f: Filter) -> None:
 
 
 def _evaluate(f: Filter, article: Article, user_feed: UserFeed | None = None,
-              state=None) -> bool:
+              state=None, translation: str | None = None) -> bool:
     """``evaluate_filter`` for the passes that run filters as articles arrive.
 
     A filter switched off for a slow regex earlier in the same pass is skipped,
@@ -564,7 +590,7 @@ def _evaluate(f: Filter, article: Article, user_feed: UserFeed | None = None,
     if f.disabled_reason == REGEX_TIMEOUT:
         return False
     try:
-        return evaluate_filter(f, article, user_feed, state)
+        return evaluate_filter(f, article, user_feed, state, translation)
     except RegexTimedOut:
         _switch_off_slow_filter(f)
         return False
@@ -653,12 +679,18 @@ async def _execute_actions(
 
 
 async def apply_filters_to_new_articles(
-    feed_id: int, articles: "list[Article]", db: AsyncSession
+    feed_id: int, articles: "list[Article]", db: AsyncSession,
+    defer: "set[int] | None" = None,
 ) -> None:
     """Apply all subscribers' active filters to a batch of newly saved articles.
 
     Subscribers and their filters are loaded once for the whole fetch (all
     articles belong to the same feed), not per article.
+
+    *defer* are the readers this fetch queues translations for
+    (``translation_service.translating_readers``). Their filters do not run here:
+    the article is marked ``translation_filters_pending`` and
+    ``process_translation_filters`` runs them over the translated title.
     """
     if not articles:
         return
@@ -688,9 +720,12 @@ async def apply_filters_to_new_articles(
     # The basic score was written just before this (score_new_articles), so a score
     # condition can read it from the state row. Loaded only for the readers who have
     # such a filter; everyone else keeps the one query above.
+    # A reader who translates the feed gets their filters once the translated
+    # title is there: they write them in their own language, not the feed's.
+    defer = {uid for uid in (defer or ()) if filters_by_user.get(uid)}
     score_users = [
         uid for uid, fs in filters_by_user.items()
-        if any(is_score_filter(f) and filter_phase(f) != "ai" for f in fs)
+        if uid in defer or any(is_score_filter(f) and filter_phase(f) != "ai" for f in fs)
     ]
     states: dict[tuple[int, int], UserArticleState] = {}
     if score_users:
@@ -709,13 +744,19 @@ async def apply_filters_to_new_articles(
         if not filters:
             continue
         for article in articles:
-            await _apply_user_filters_to_article(
-                article, uf, filters, db, states.get((uf.user_id, article.id)))
+            state = states.get((uf.user_id, article.id))
+            if uf.user_id in defer:
+                if state is None:
+                    state = UserArticleState(user_id=uf.user_id, article_id=article.id)
+                    db.add(state)
+                state.translation_filters_pending = True
+                continue
+            await _apply_user_filters_to_article(article, uf, filters, db, state)
 
 
 async def _apply_user_filters_to_article(
     article: Article, uf: UserFeed, filters: "list[Filter]", db: AsyncSession,
-    state: "UserArticleState | None" = None,
+    state: "UserArticleState | None" = None, translation: str | None = None,
 ) -> None:
     """Run one subscriber's fetch-time filters against a single article.
 
@@ -723,12 +764,15 @@ async def _apply_user_filters_to_article(
     already have, basic-score conditions included. The second is the relevance
     filters, run now over the basic score, or parked for the AI score when the
     first pass sent the article to AI scoring (see ``filter_phase``).
+
+    Also what runs once a translation the fetch waited for is there
+    (``process_translation_filters``), with *translation* the translated title.
     """
     fired: set[str] = set()
     for f in filters:
         if filter_phase(f) != "fetch":
             continue
-        if _evaluate(f, article, uf, state):
+        if _evaluate(f, article, uf, state, translation):
             fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, uf.user_id, uf, db)
             if f.stop_on_match:
@@ -746,7 +790,7 @@ async def _apply_user_filters_to_article(
     # Ran over the basic score, so a label from here goes to AI scoring like one
     # from the first pass. These filters are done: the AI score arriving later
     # runs only the AI filters (relevance_filters_pending stays False).
-    fired = await _run_filters_once(relevance, article, uf.user_id, uf, state, db)
+    fired = await _run_filters_once(relevance, article, uf.user_id, uf, state, db, translation)
     await _follow_up_star_or_label(article, uf, fired, db)
 
 
@@ -806,7 +850,7 @@ async def _get_or_create_state(article_id: int, user_id: int, db: AsyncSession) 
 
 async def _run_filters_once(
     filters: "list[Filter]", article: Article, user_id: int, uf: "UserFeed | None",
-    state: "UserArticleState | None", db: AsyncSession,
+    state: "UserArticleState | None", db: AsyncSession, translation: str | None = None,
 ) -> set[str]:
     """Evaluate filters in order and execute actions, honouring stop-on-match.
 
@@ -814,7 +858,7 @@ async def _run_filters_once(
     """
     fired: set[str] = set()
     for f in filters:
-        if _evaluate(f, article, uf, state):
+        if _evaluate(f, article, uf, state, translation):
             fired |= {a.action_type for a in f.actions}
             await _execute_actions(f, article, user_id, uf, db)
             if f.stop_on_match:
@@ -910,6 +954,8 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
     feed_user_map: dict[tuple[int, int], UserFeed] = {
         (uf.user_id, uf.feed_id): uf for uf in user_feeds_result.scalars()
     }
+    from app.services.translation_service import reader_titles
+    translations = await reader_titles(db, [(s.user_id, s.article_id) for s in states])
 
     for state in states:
         article = articles_map.get(state.article_id)
@@ -922,7 +968,9 @@ async def process_ai_filters_batch(db: AsyncSession) -> int:
             state.ai_filters_applied = True
             state.relevance_filters_pending = False
             continue
-        await _apply_ai_filters_for_state(state, article, uf, filters_by_user.get(state.user_id, []), db)
+        await _apply_ai_filters_for_state(
+            state, article, uf, filters_by_user.get(state.user_id, []), db,
+            translations.get((state.user_id, state.article_id)))
 
     await db.commit()
     logger.info("ai_filters: processed %d states", len(states))
@@ -946,6 +994,7 @@ async def _apply_ai_filters_for_state(
     uf: "UserFeed | None",
     filters: "list[Filter]",
     db: AsyncSession,
+    translation: str | None = None,
 ) -> None:
     """Run the filters that waited for this article's AI score. Does not commit.
 
@@ -956,7 +1005,7 @@ async def _apply_ai_filters_for_state(
     """
     if not state.relevance_filters_pending:
         filters = [f for f in filters if filter_phase(f) != "relevance"]
-    await _run_filters_once(filters, article, state.user_id, uf, state, db)
+    await _run_filters_once(filters, article, state.user_id, uf, state, db, translation)
     state.ai_filters_applied = True
     state.relevance_filters_pending = False
 
@@ -1018,6 +1067,8 @@ async def process_relevance_fallback(db: AsyncSession) -> int:
         for uf in (await db.execute(
             select(UserFeed).where(UserFeed.user_id.in_(user_ids)))).scalars()
     }
+    from app.services.translation_service import reader_titles
+    translations = await reader_titles(db, [(st.user_id, st.article_id) for st, _ in rows])
 
     for state, article in rows:
         uf = feed_user_map.get((state.user_id, article.feed_id))
@@ -1025,11 +1076,100 @@ async def process_relevance_fallback(db: AsyncSession) -> int:
             state.relevance_filters_pending = False
             continue
         await _run_filters_once(filters_by_user.get(state.user_id, []), article,
-                                state.user_id, uf, state, db)
+                                state.user_id, uf, state, db,
+                                translations.get((state.user_id, state.article_id)))
         state.relevance_filters_pending = False
 
     await db.commit()
     logger.info("relevance_filters: fell back to basic for %d states", len(rows))
+    return len(rows)
+
+
+# Longest the filters of a translated article wait for the translation. A batch
+# normally lands within seconds of the fetch; past this the provider is down or
+# backing off, and the reader gets their filters over the original instead.
+TRANSLATION_FILTERS_WAIT = timedelta(minutes=15)
+
+
+async def process_translation_filters(db: AsyncSession) -> int:
+    """Run the filters the fetch left for a translation, once it is there or once
+    none is coming.
+
+    The fetch marks the article ``translation_filters_pending`` for each reader who
+    translates the feed and has filters. A row is ready when the translation in the
+    reader's language exists, when no pending translation job is left for it
+    (failed for good, skipped, or never queued), when AI is off instance-wide, or
+    after ``TRANSLATION_FILTERS_WAIT``. Then the whole fetch-time pass runs, with
+    the translated title when there is one: a label from it sends the article to
+    AI scoring and parks the relevance filters exactly as at fetch. Exactly once,
+    the flag is what guarantees it.
+
+    The basic score is already over the translated title by then: the batch that
+    stored the translation rescored it (``lexical_score_service.rescore_articles``).
+    """
+    from app.services.ai_jobs import ai_enabled_globally
+    from app.services.translation_service import reader_titles
+
+    s = UserArticleState
+    ready = [s.created_at < datetime.now(timezone.utc) - TRANSLATION_FILTERS_WAIT]
+    if await ai_enabled_globally(db):
+        ready += [
+            select(ArticleTranslation.article_id)
+            .join(UserSettings,
+                  (UserSettings.user_id == ArticleTranslation.user_id)
+                  & (UserSettings.ai_translation_language == ArticleTranslation.language))
+            .where(ArticleTranslation.user_id == s.user_id,
+                   ArticleTranslation.article_id == s.article_id)
+            .correlate(s).exists(),
+            ~select(ArticleAiJob.id).where(
+                ArticleAiJob.article_id == s.article_id,
+                ArticleAiJob.user_id == s.user_id,
+                ArticleAiJob.operation == "translation",
+                ArticleAiJob.status == "pending",
+            ).exists(),
+        ]
+    else:
+        ready = [true()]
+    rows = (await db.execute(
+        select(s, Article)
+        .join(Article, Article.id == s.article_id)
+        .where(s.translation_filters_pending == True, or_(*ready))  # noqa: E712
+        .order_by(s.article_id)
+        .limit(_AI_FILTER_BATCH_SIZE)
+    )).all()
+    if not rows:
+        return 0
+
+    user_ids = list({st.user_id for st, _ in rows})
+    filters_by_user: dict[int, list[Filter]] = {}
+    for f in (await db.execute(
+        select(Filter)
+        .where(Filter.user_id.in_(user_ids), Filter.is_active == True)  # noqa: E712
+        .options(selectinload(Filter.conditions), selectinload(Filter.actions))
+        .order_by(*FILTER_ORDER)
+    )).scalars():
+        filters_by_user.setdefault(f.user_id, []).append(f)
+    feed_user_map: dict[tuple[int, int], UserFeed] = {
+        (uf.user_id, uf.feed_id): uf
+        for uf in (await db.execute(
+            select(UserFeed).where(UserFeed.user_id.in_(user_ids)))).scalars()
+    }
+    translations = await reader_titles(db, [(st.user_id, st.article_id) for st, _ in rows])
+
+    for state, article in rows:
+        state.translation_filters_pending = False
+        uf = feed_user_map.get((state.user_id, article.feed_id))
+        filters = filters_by_user.get(state.user_id)
+        # No subscription: the reader let the feed go while the article waited,
+        # and fetch-time filters are about a feed they read.
+        if not filters or uf is None:
+            continue
+        await _apply_user_filters_to_article(
+            article, uf, filters, db, state,
+            translations.get((state.user_id, state.article_id)))
+
+    await db.commit()
+    logger.info("translation_filters: ran for %d states", len(rows))
     return len(rows)
 
 
@@ -1083,12 +1223,14 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
                 )
             )
             states_map = {s.article_id: s for s in states_result.scalars()}
+    translations = await _translations_for(f, user_id, db)
 
     try:
         matched = [
             (a, ft)
             for a, ft in rows
-            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id),
+                               translations.get(a.id))
         ]
     except RegexTimedOut:
         _switch_off_slow_filter(f)
@@ -1097,10 +1239,20 @@ async def test_filter(user_id: int, filter_id: int, db: AsyncSession) -> FilterT
     return FilterTestResult(
         matched_count=len(matched),
         samples=[
-            FilterTestSample(title=a.title or "(no title)", feed_title=ft or "")
+            FilterTestSample(title=translations.get(a.id) or a.title or "(no title)",
+                             feed_title=ft or "")
             for a, ft in matched[:5]
         ],
     )
+
+
+async def _translations_for(f: Filter, user_id: int, db: AsyncSession) -> dict[int, str]:
+    """The reader's translated titles, for a preview or retroactive apply to match
+    the way the fetch does. Empty when the filter never reads the title."""
+    if not any(c.field in ("title", "title_or_content") for c in f.conditions):
+        return {}
+    from app.services.translation_service import reader_titles_for_user
+    return await reader_titles_for_user(db, user_id)
 
 
 @dataclass
@@ -1213,11 +1365,13 @@ async def _plan_retroactive_apply(
             )
         )
         states_map = {s.article_id: s for s in states_result.scalars()}
+    translations = await _translations_for(f, user_id, db)
 
     try:
         matched = [
             a for a in articles
-            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id))
+            if evaluate_filter(f, a, user_feeds_map.get(a.feed_id), states_map.get(a.id),
+                               translations.get(a.id))
         ]
     except RegexTimedOut:
         _switch_off_slow_filter(f)

@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,16 +109,15 @@ def translation_slot(s: UserSettings) -> str:
 ENQUEUED_FLAG = "translation_jobs_enqueued"
 
 
-async def enqueue_translation_jobs(feed_id: int, articles: list[Article], db: AsyncSession) -> int:
-    """Pending translation jobs for *articles* of *feed_id*, one per reader who
-    translates the feed. Called from both fetch paths after the flush, inside the
-    fetch transaction: it only writes rows. Returns the number of jobs created.
+async def translating_readers(feed_id: int, db: AsyncSession) -> set[int]:
+    """The readers a fetch of *feed_id* queues translations for: they translate the
+    feed, have a language, and AI is not held back for them.
 
-    Sets ``db.info[ENQUEUED_FLAG]`` when it created any, which tells the fetch to
-    kick a run after its commit.
+    One answer for two questions, which must not drift apart: who gets a job
+    (``enqueue_translation_jobs``) and whose filters wait for it
+    (``filter_service.apply_filters_to_new_articles``). A reader whose filters
+    waited for a job that was never queued would only get them from the fallback.
     """
-    if not articles:
-        return 0
     user_ids = (await db.scalars(
         select(UserFeed.user_id)
         .join(UserSettings, UserSettings.user_id == UserFeed.user_id)
@@ -129,10 +128,29 @@ async def enqueue_translation_jobs(feed_id: int, articles: list[Article], db: As
         )
     )).all()
     if not user_ids or not await ai_enabled_globally(db):
+        return set()
+    return {uid for uid in user_ids if not await ai_work_held_back(uid, db)}
+
+
+async def enqueue_translation_jobs(feed_id: int, articles: list[Article], db: AsyncSession,
+                                   readers: set[int] | None = None) -> int:
+    """Pending translation jobs for *articles* of *feed_id*, one per reader who
+    translates the feed. Called from both fetch paths after the flush, inside the
+    fetch transaction: it only writes rows. Returns the number of jobs created.
+
+    *readers* is ``translating_readers`` when the caller already asked it.
+
+    Sets ``db.info[ENQUEUED_FLAG]`` when it created any, which tells the fetch to
+    kick a run after its commit.
+    """
+    if not articles:
         return 0
-    eligible = [uid for uid in user_ids if not await ai_work_held_back(uid, db)]
+    if readers is None:
+        readers = await translating_readers(feed_id, db)
+    if not readers:
+        return 0
     created = await bulk_create_translation_jobs(
-        [(a.id, uid) for uid in eligible for a in articles], db
+        [(a.id, uid) for uid in sorted(readers) for a in articles], db
     )
     if created:
         db.info[ENQUEUED_FLAG] = True
@@ -153,6 +171,43 @@ async def bulk_create_translation_jobs(pairs: list[tuple[int, int]], db: AsyncSe
         .on_conflict_do_nothing(index_elements=["article_id", "user_id", "operation"])
     )
     return result.rowcount or 0
+
+
+# ── reading translations back ─────────────────────────────────────────────────
+
+def _shown_translations():
+    """Translations as the reader sees them: in their current language, of a feed
+    they still translate. The rule of ``article.with_translated_title``, so filters
+    and the basic score read the title the list shows."""
+    return (
+        select(ArticleTranslation.user_id, ArticleTranslation.article_id,
+               ArticleTranslation.title)
+        .join(UserSettings, (UserSettings.user_id == ArticleTranslation.user_id)
+              & (UserSettings.ai_translation_language == ArticleTranslation.language))
+        .join(Article, Article.id == ArticleTranslation.article_id)
+        .join(UserFeed, (UserFeed.user_id == ArticleTranslation.user_id)
+              & (UserFeed.feed_id == Article.feed_id)
+              & UserFeed.translate.is_(True))
+    )
+
+
+async def reader_titles(db: AsyncSession,
+                        pairs: list[tuple[int, int]]) -> dict[tuple[int, int], str]:
+    """Translated titles for (user_id, article_id) pairs, keyed the same way.
+    A pair without one is missing from the result."""
+    if not pairs:
+        return {}
+    rows = await db.execute(_shown_translations().where(
+        tuple_(ArticleTranslation.user_id, ArticleTranslation.article_id).in_(set(pairs))))
+    return {(uid, aid): title for uid, aid, title in rows.all()}
+
+
+async def reader_titles_for_user(db: AsyncSession, user_id: int) -> dict[int, str]:
+    """Every translated title the reader sees, by article id. Bounded by the
+    articles of their translated feeds that are still on the instance."""
+    rows = await db.execute(_shown_translations().where(
+        ArticleTranslation.user_id == user_id))
+    return {aid: title for _, aid, title in rows.all()}
 
 
 # ── summaries and context ─────────────────────────────────────────────────────
@@ -465,6 +520,17 @@ class _BatchRun:
 
         if got:
             await self._store(got)
+            # The basic score follows the title the reader sees, and the filters
+            # waiting for this translation read that score. In a savepoint and
+            # never fatal: an error here would otherwise abort the run with the
+            # jobs still pending, and every retry would pay the model again for
+            # titles already translated. The next backfill catches the score up.
+            from app.services.lexical_score_service import rescore_articles
+            try:
+                async with self.db.begin_nested():
+                    await rescore_articles(self.db, self.s.user_id, list(got))
+            except Exception:
+                logger.exception("translation: rescoring user=%s failed", self.s.user_id)
             for job in jobs:
                 if job.article_id in got:
                     job.status = "success"
@@ -636,11 +702,18 @@ async def run_translations() -> None:
     if _run_lock.locked():
         _rerun = True
         return
+    from app.services.filter_service import process_translation_filters
+
     async with _run_lock:
         while True:
             _rerun = False
             async with database.async_session_factory() as session:
                 await process_pending_translations(session)
+                # Right after the titles land, and from the minute job for the
+                # ones whose translation is not coming. Not gated on AI being on:
+                # that is one of the cases it exists for.
+                while await process_translation_filters(session):
+                    pass
             if not _rerun:
                 break
 

@@ -642,10 +642,16 @@
                 switches back.</li>
               <li>AI summaries and context for a translated feed are written in your language, even with a custom
                 prompt that says otherwise. Ones made before you turned translation on stay in the language they
-                were written in.</li>
+                were written in. Starred articles from these feeds are summarized automatically however short they
+                are, since the summary is how you read them.</li>
               <li>The translation runs on your scoring model by default, which is usually the cheaper one. You can
                 switch it to the main model. The feed's settings show what a month of its headlines would cost.</li>
-              <li>Filters, scoring and search still work on the original headline.</li>
+              <li>Filters match the translated headline as well as the original, so you can write them in your
+                language. For new articles they wait for the translation, which usually takes a few seconds. If it
+                doesn't arrive within 15 minutes, they run on the original.</li>
+              <li>The basic relevance score reads the translated headline. AI scoring reads the article itself,
+                in its own language.</li>
+              <li>Search still works on the original headline only.</li>
             </ul>
           </div>
 

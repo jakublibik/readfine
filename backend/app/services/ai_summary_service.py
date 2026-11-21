@@ -53,6 +53,11 @@ async def enqueue_summary_job(
     # the answer does not change with a limit that has nothing to do with it.
     # Nothing is sent to a model here, so there is nothing to truncate either.
     threshold = s.ai_min_content_chars if min_chars is None else min_chars
+    # A feed the reader translates: the summary, written in their language, is the
+    # only way they read the article at all, so a short one is no reason to skip it.
+    # Only the floor of the Summarize button is left.
+    if uf is not None and uf.translate and s.ai_translation_language:
+        threshold = min(threshold, ON_DEMAND_MIN_CHARS)
     full_text = normalize_text(article.title, article.readable_content or article.content)
     if len(full_text) < threshold:
         return False

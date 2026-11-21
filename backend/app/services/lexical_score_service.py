@@ -26,7 +26,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple, Sequence
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, null, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.article import Article, UserArticleState
@@ -201,16 +201,11 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
     last_id = 0
     while True:
         stmt = (
-            select(Article.id, Article.title,
-                   func.coalesce(
-                       func.nullif(func.left(Article.readable_content, _BODY_CHARS), ""),
-                       func.left(Article.content, _BODY_CHARS)))
-            .join(UserFeed, UserFeed.feed_id == Article.feed_id)
+            _reader_rows(user_id)
             .outerjoin(UserArticleState,
                        and_(UserArticleState.article_id == Article.id,
                             UserArticleState.user_id == user_id))
-            .where(UserFeed.user_id == user_id,
-                   Article.id > last_id,
+            .where(Article.id > last_id,
                    func.coalesce(Article.published_at, Article.fetched_at) >= cutoff,
                    or_(UserArticleState.user_id.is_(None),
                        UserArticleState.is_read == False))  # noqa: E712
@@ -227,6 +222,53 @@ async def backfill_user(db: AsyncSession, user_id: int, terms: Terms,
             db, [Scorable(*r) for r in rows], {user_id: terms}, stats)
         await db.commit()
     return written
+
+
+def _reader_rows(user_id: int):
+    """(id, title, body) of the reader's articles as their score reads them.
+
+    For an article whose title the reader has translated, that is the translated
+    title alone. The body stays in the feed's language, which the reader does not
+    write terms in, and the suggestions read the same text, so they would offer
+    its words. The fetch
+    scores the original (there is no translation yet) and the batch that stores
+    the translation rescores it (`rescore_articles`), so this is what every later
+    pass, a rebuild of the corpus included, has to read too, or it would put the
+    original's score back.
+    """
+    from app.services.article import join_translation, translated_title_expr
+
+    translated = translated_title_expr()
+    body = func.coalesce(
+        func.nullif(func.left(Article.readable_content, _BODY_CHARS), ""),
+        func.left(Article.content, _BODY_CHARS))
+    stmt = (
+        select(Article.id, func.coalesce(translated, Article.title),
+               case((translated.is_not(None), null()), else_=body))
+        .join(UserFeed, and_(UserFeed.feed_id == Article.feed_id,
+                             UserFeed.user_id == user_id))
+    )
+    return join_translation(stmt, user_id)
+
+
+async def rescore_articles(db: AsyncSession, user_id: int, article_ids: list[int]) -> int:
+    """Score these articles for the reader again, over what `_reader_rows` reads.
+
+    The translation batch calls this for the titles it just stored. Does not
+    commit: it is part of the batch's transaction.
+    """
+    if not article_ids:
+        return 0
+    terms_by_user = await load_terms(db, [user_id])
+    if not terms_by_user:
+        return 0
+    stats = await stats_for(db, terms_by_user)
+    if stats is None:
+        return 0
+    rows = (await db.execute(
+        _reader_rows(user_id).where(Article.id.in_(article_ids)))).all()
+    return await score_articles_for_users(
+        db, [Scorable(*r) for r in rows], terms_by_user, stats)
 
 
 async def score_subscribed_feed(db: AsyncSession, user_id: int, feed_id: int) -> int:

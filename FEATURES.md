@@ -61,7 +61,7 @@ _Optional AI on your own provider key._
 - **Summaries:** A one-tap summary of any article, plus an option to have starred articles summarized automatically.
 - **Context:** The summary tells you what an article says; context tells you what you need to know around it. Background, what led up to it, why it matters. You can add a focus for a single article when there is something specific you want filled in.
 - **Chat over articles:** Ask questions about an article and get answers grounded in its text.
-- **Translated headlines:** Follow a feed in a language you don't read. Turn translation on per feed and its headlines show up in your language, with the original one click away. Summaries and context for it come in your language too.
+- **Translated headlines:** Follow a feed in a language you don't read. Turn translation on per feed and its headlines show up in your language, with the original one click away. Summaries and context for it come in your language too, and your filters and relevance terms match the translation.
 - **Interest profile:** Describe what you care about, or have the AI draft it from what you read; the model rates articles against it.
 - **Profile on a schedule:** Have the profile regenerate itself every 2 or 4 weeks as your reading shifts, with the replaced version one click away.
 - **Catch me up:** An on-demand digest of what happened in your feeds over a period and scope you choose.

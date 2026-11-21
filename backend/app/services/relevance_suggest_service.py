@@ -54,7 +54,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import and_, false, func, or_, select
+from sqlalchemy import and_, case, false, func, null, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -426,17 +426,26 @@ async def _rows(user_id: int, db: AsyncSession,
     # LEAST skips a NULL and would cut that reader down to the floor.
     cutoff = func.least(now - timedelta(days=MIN_WINDOW_DAYS),
                         func.coalesce(nth_newest, window_start))
-    stmt = (
-        select(Article.title, func.left(Article.content, BODY_FETCH_CHARS),
+    # A translated article reads as its score does (lexical_score_service.
+    # _reader_rows): the translated title and no body, or the suggestions would
+    # offer words of a language the reader translates away from. Imported here:
+    # the offline eval scripts load this module without the web app's dependencies.
+    from app.services.article import join_translation, translated_title_expr
+
+    translated = translated_title_expr()
+    stmt = join_translation(
+        select(func.coalesce(translated, Article.title),
+               case((translated.is_not(None), null()),
+                    else_=func.left(Article.content, BODY_FETCH_CHARS)),
                func.coalesce(_engaged(), false()),
                func.coalesce(Article.story_id, Article.id),
                func.date(Article.fetched_at))
         .join(UserFeed, mine)
-        .outerjoin(s, and_(s.article_id == Article.id, s.user_id == user_id))
-        .where(Article.fetched_at >= window_start, Article.fetched_at >= cutoff)
-        .order_by(Article.fetched_at.desc(), Article.id.desc())
-        .limit(HARD_MAX_INFLOW)
-    )
+        .outerjoin(s, and_(s.article_id == Article.id, s.user_id == user_id)),
+        user_id,
+    ).where(Article.fetched_at >= window_start, Article.fetched_at >= cutoff
+    ).order_by(Article.fetched_at.desc(), Article.id.desc()
+    ).limit(HARD_MAX_INFLOW)
     return [tuple(r) for r in (await db.execute(stmt)).all()]
 
 

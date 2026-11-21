@@ -194,13 +194,15 @@ def _dormancy_off(request):
 def _translation_queue_off(request):
     """Both fetch paths queue translation jobs after saving articles, which asks the
     database who translates the feed. The fetch tests run on a mock DB that cannot
-    answer, and are about something else. test_translation.py covers the queue
-    against Postgres."""
-    if request.module.__name__.endswith("test_translation"):
+    answer, and are about something else. test_translation.py and
+    test_translation_filters.py cover the queue against Postgres."""
+    if request.module.__name__.endswith(("test_translation", "test_translation_filters")):
         yield
         return
     with patch("app.services.translation_service.enqueue_translation_jobs",
-               new=AsyncMock(return_value=0)):
+               new=AsyncMock(return_value=0)), \
+            patch("app.services.translation_service.translating_readers",
+                  new=AsyncMock(return_value=set())):
         yield
 
 

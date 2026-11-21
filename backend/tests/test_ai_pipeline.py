@@ -61,6 +61,7 @@ def make_user_feed(**kwargs):
         "feed_id": 5,
         "ai_scoring_enabled": None,
         "ai_summary_enabled": None,
+        "translate": False,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
