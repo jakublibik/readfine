@@ -1051,12 +1051,14 @@ async def htmx_article_detail(
     ai_avail = ai.quality
     summary_pending = False
     if ai_avail and not article.ai_summary:
+        from app.services.ai_summary_service import summary_runnable_clause
         summary_pending = bool(await db.scalar(
             select(ArticleAiJob.id).where(
                 ArticleAiJob.article_id == article_id,
                 ArticleAiJob.user_id == user.id,
                 ArticleAiJob.operation == "summary",
                 ArticleAiJob.status == "pending",
+                summary_runnable_clause(),
             )
         ))
     chat_available = ai.chat
@@ -1338,12 +1340,14 @@ async def _summary_refresh_oob(article, user: User, db: AsyncSession) -> str:
         return str(macros.ai_summary(
             article.id, article.ai_summary, article.ai_summary_truncated, oob=True
         ))
+    from app.services.ai_summary_service import summary_runnable_clause
     pending = await db.scalar(
         select(ArticleAiJob.id).where(
             ArticleAiJob.article_id == article.id,
             ArticleAiJob.user_id == user.id,
             ArticleAiJob.operation == "summary",
             ArticleAiJob.status == "pending",
+            summary_runnable_clause(),
         )
     )
     if not pending:
@@ -1564,10 +1568,15 @@ async def htmx_toggle_star(
         if settings and settings.ai_summary_enabled_default:
             article_obj = await db.scalar(select(Article).where(Article.id == article_id))
             if article_obj is not None:
-                from app.services.ai_summary_service import enqueue_summary_job
-                enqueued = await enqueue_summary_job(article_obj, user.id, db)
+                from app.services.ai_summary_service import awaits_readable, enqueue_summary_job
+                # The star may just have queued the extraction. The summary then waits
+                # for it, and nothing says "generating" until it is over.
+                waiting = awaits_readable(article_obj)
+                enqueued = await enqueue_summary_job(
+                    article_obj, user.id, db, wait_for_readable=waiting
+                )
                 await db.commit()
-                if enqueued:
+                if enqueued and not waiting:
                     summary_started = True
                     spawn_background(
                         _summary_after_star_bg(article_id, user.id),
@@ -1784,7 +1793,18 @@ async def htmx_extract_readable(
     article_resp = await get_article(user, article_id, db)
     if article_resp is None:
         return HTMLResponse("")
-    return await _content_with_readtime_oob(request, article_resp, user, db)
+    summary_oob = ""
+    if article_resp.is_starred and article_resp.readable_status != "pending":
+        # A summary may have waited for this extraction. In the background, so the
+        # text does not wait for the model.
+        summary_oob = await _summary_refresh_oob(article_resp, user, db)
+        spawn_background(
+            _summary_after_star_bg(article_id, user.id),
+            name=f"star-summary-{article_id}",
+        )
+    return await _content_with_readtime_oob(
+        request, article_resp, user, db, extra_oob=summary_oob
+    )
 
 
 @router.post("/htmx/articles/save-url", response_class=HTMLResponse)

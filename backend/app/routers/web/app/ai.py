@@ -183,6 +183,12 @@ async def htmx_ai_summary_poll(
         return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
 
     if job.status == "pending":
+        from app.services.ai_summary_service import AWAITS_READABLE, awaits_readable
+        if job.job_params == AWAITS_READABLE:
+            article = await db.get(Article, article_id)
+            if article is not None and awaits_readable(article):
+                # Not being generated yet. The readable poll brings the spinner back.
+                return HTMLResponse(f'<div id="ai-summary-{article_id}"></div>')
         return HTMLResponse(_ai_spinner(f"ai-summary-{article_id}", f"/htmx/articles/{article_id}/ai-summary/poll"))
 
     if job.status == "failed":

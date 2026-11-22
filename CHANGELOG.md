@@ -14,13 +14,17 @@ The app shows this file at `/changelog`, with the `### Upgrade notes` sections f
 
 ### Added
 
-- Headlines of feeds in other languages can be translated by your AI model. Pick a language in **Settings → AI**, then tick **Translate titles** in a feed's settings, which also shows what a month of its headlines would cost. New headlines are translated as they arrive and the latest 100 unread ones right away. A small mark in the list shows the original on hover, and **Show original** in the article switches back. AI summaries and context for these feeds are written in your language too. The article text stays in the original, and so do filters, scoring and search.
+- Headlines of feeds in other languages can be translated by your AI model. Pick a language in **Settings → AI**, then tick **Translate titles** in a feed's settings, which also shows what a month of its headlines would cost. New headlines are translated as they arrive and the latest 100 unread ones right away. A small mark in the list shows the original on hover, and **Show original** in the article switches back. AI summaries and context for these feeds are written in your language too, and automatic summaries of starred articles need only 500 characters. Filters match the translated headline as well as the original, and the basic relevance score uses the translation, so a filter or term in your language works on these feeds. The article text stays in the original, and so does search.
+- **Admin → Users** can show only active accounts: verified, enabled, not dormant, and with a feed or active in the last 7 days. Signups that never added a feed drop out of the list. The page remembers the choice until you sign out.
 
 ### Fixed
 
+- Starring an article before its full text was fetched summarized the feed's excerpt, or skipped the summary when the excerpt was too short. The automatic summary now waits for the full text and measures the length on that. If the text can't be fetched, it uses what the feed sent.
 - AI summaries and context of articles not written in English often came back in English on smaller models such as Claude Haiku 5.5. The model now reads the article first and the instructions after it, and keeps to the article's language.
 - The cost table in **Settings → AI** priced all past usage at the model set today, so after a model change the costs were wrong and the trend could point the wrong way. Scoring, summaries, context and interest profiles are now priced at the model that actually ran them, and changing a model no longer changes past costs. Chat keeps using the current model because it does not record one.
 - The estimated cost shown before a **Catch me up** run was about 2.5 times too low. It now matches what recent runs actually cost.
+- In the dark theme, some gray links and buttons (in feed settings, filters and the welcome steps, among others) turned dark on hover and almost disappeared. They now get lighter, like the rest.
+- The privacy policy said the service sets a single cookie. It sets two (the session and a security token against cross-site request forgery), and the policy now says so, along with display preferences kept in the browser's local storage. To move its "Last updated" date, save the legal details in **Admin → Settings** again.
 
 ## [0.22.0] - 2026-10-18
 

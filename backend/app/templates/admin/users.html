@@ -3,7 +3,7 @@
 {% set active = "users" %}
 
 {% block admin_content %}
-<h1 class="text-xl font-semibold text-gray-900 mb-6">
+<h1 class="flex flex-wrap items-center gap-3 text-xl font-semibold text-gray-900 mb-6">
   Users
   {% with oob = false %}{% include "admin/partials/users_count.html" %}{% endwith %}
 </h1>

@@ -52,8 +52,9 @@
     than chance. Fewer than {{ min_lift_matches }} matches are too few to tell. A term with no match at all may be
     too narrow for your feeds.
     {% if sugg.terms | rejectattr("known") | list %}
-    "Not counted yet" means the term's words are too rare in the last month's articles to score. It may be
-    misspelled, or new to your feeds: words from a feed you added today are counted overnight.
+    "Not counted yet" means the term's words are too rare in the last month's articles and translated headlines to
+    score. It may be misspelled, or new to your feeds: words from a feed you added or translated today are counted
+    overnight.
     {% endif %}
   </p>
 {% endif %}

@@ -82,6 +82,7 @@ class _Patched:
                   side_effect=self._extract_with_title),
             patch("app.services.ai_pipeline_service.run_pipeline_for_article_all_users",
                   new=AsyncMock(side_effect=lambda a, db: self.pipeline_calls.append(a.id))),
+            patch("app.services.ai_pipeline_service.run_waiting_summaries", new=AsyncMock()),
             patch("app.services.saved_article_service.finalize_for_all_savers",
                   new=AsyncMock(side_effect=lambda a, db: self.finalize_calls.append(a.id))),
         ]

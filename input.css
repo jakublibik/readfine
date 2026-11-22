@@ -273,6 +273,14 @@ html.dark { color-scheme: dark; }
   .dark .article-row:hover { background-color: #2a2a2a; }
 }
 
+/* "Show original" / "Show translation" in the reading pane's meta line. Hover only
+   on a real pointer: a tap on a phone leaves :hover on the button, which then kept
+   looking like a link that had been visited. */
+@media (hover: hover) and (pointer: fine) {
+  .translation-toggle:hover { color: #374151; text-decoration: underline; }
+  .dark .translation-toggle:hover { color: #e8e8e8; }
+}
+
 /* The row whose article is open in the detail pane. Only in the 3-panel layout: the
    2-panel one expands the article under its row, which says which one it is far
    better than any marking could, and .inline-expanded already dresses that row.

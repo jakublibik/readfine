@@ -157,6 +157,11 @@ class UserArticleState(Base):
     # basic score when the scoring never lands. See filter_service.
     relevance_filters_pending: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=false())
+    # The reader translates this article's feed, so the fetch left their filters for
+    # the translated title. Cleared once they ran, over the translation or, when none
+    # is coming, over the original. See filter_service.process_translation_filters.
+    translation_filters_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     # Relationships

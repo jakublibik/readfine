@@ -18,8 +18,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.config import settings as app_settings
-from app.models.article import Article
+from app.models.article import Article, ArticleTranslation
 from app.models.relevance import LexicalCorpus, LexicalPrefix, LexicalTerm
+from app.models.user import User
 from app.services import relevance_corpus_service as rcs
 from app.services import relevance_service as rs
 
@@ -66,6 +67,16 @@ async def _article(session, title, content=None, *, age_days=0) -> Article:
     session.add(a)
     await session.flush()
     return a
+
+
+async def _translation(session, article, title, language="en") -> None:
+    user = User(email=f"corpus_{uuid.uuid4().hex}@test.invalid", password_hash="x", display_name="t")
+    session.add(user)
+    await session.flush()
+    # Stamped here: the column's now() is the start of the test's one transaction.
+    session.add(ArticleTranslation(user_id=user.id, article_id=article.id, language=language,
+                                   title=title, created_at=datetime.now(timezone.utc)))
+    await session.flush()
 
 
 async def _seed(session) -> None:
@@ -248,6 +259,76 @@ class TestGetStats:
         text = rs.article_text(f"{COMMON} alpha", "<p>body one</p>")
         assert rs.lexical_score(text, terms, stats) > 0.0
         assert rs.lexical_score("nothing in common here", terms, stats) == 0.0
+
+
+@pytest.mark.asyncio
+class TestTranslatedTitles:
+    """The score reads translated titles, so the statistics have to know their words."""
+
+    async def test_a_word_only_in_translations_scores(self, pg):
+        for i in range(3):
+            a = await _article(pg, f"Заголовок {i}")
+            await _translation(pg, a, f"{COMMON} headline {i}")
+        await rcs.rebuild(pg, window_days=1, min_df=3)
+        stats = await rcs.get_stats(pg)
+
+        assert stats.doc_freq[COMMON] == 3
+        assert rs.lexical_score(f"{COMMON} strikes", [COMMON], stats) > 0.0
+        assert await pg.scalar(
+            select(LexicalPrefix.doc_freq).where(LexicalPrefix.prefix == COMMON[:4])) == 3
+
+    async def test_an_article_counts_once_however_often_translated(self, pg):
+        a = await _article(pg, f"{COMMON} original")
+        for language in ("en", "en", "de"):
+            await _translation(pg, a, f"{COMMON} {RARE}", language)
+        await rcs.rebuild(pg, window_days=1, min_df=1)
+        stats = await rcs.get_stats(pg)
+
+        assert (stats.doc_freq[COMMON], stats.doc_freq[RARE]) == (1, 1)
+
+    async def test_translations_do_not_add_documents(self, pg):
+        a = await _article(pg, "Заголовок")
+        before = (await rcs.rebuild(pg, window_days=1))["n_docs"]
+        await _translation(pg, a, COMMON)
+        await _translation(pg, a, COMMON, "de")
+
+        assert (await rcs.rebuild(pg, window_days=1))["n_docs"] == before
+
+    async def test_a_translation_takes_nothing_from_the_body(self, pg):
+        a = await _article(pg, "Заголовок", "x " * 140 + COMMON + " y" * 200)
+        await _translation(pg, a, RARE)
+        await rcs.rebuild(pg, window_days=1, min_df=1)
+        stats = await rcs.get_stats(pg)
+
+        assert (stats.doc_freq[COMMON], stats.doc_freq[RARE]) == (1, 1)
+
+    async def test_an_article_outside_the_window_stays_out(self, pg):
+        a = await _article(pg, "Заголовок", age_days=3)
+        await _translation(pg, a, RARE)
+        await rcs.rebuild(pg, window_days=1, min_df=1)
+
+        # The table, not get_stats: with nothing else in the window that is None.
+        assert await pg.get(LexicalTerm, RARE) is None
+
+    async def test_a_young_corpus_recounts_when_a_translation_lands(self, pg, monkeypatch):
+        monkeypatch.setattr(rcs, "BOOTSTRAP_MAX_DOCS", 10**9)
+        a = await _article(pg, "Заголовок")
+        await rcs.rebuild(pg, window_days=1, min_df=1)
+        await _translation(pg, a, RARE)
+
+        assert await rcs.ensure_built(pg, window_days=1) is True
+        assert (await rcs.get_stats(pg)).doc_freq[RARE] == 1
+        # Counted now, so the minute job does not redo it on every run.
+        assert await rcs.ensure_built(pg, window_days=1) is False
+
+    async def test_a_grown_corpus_leaves_translations_to_the_night(self, pg):
+        a = await _article(pg, "Заголовок")
+        await rcs.rebuild(pg, window_days=1)
+        (await pg.get(LexicalCorpus, 1)).n_docs = rcs.BOOTSTRAP_MAX_DOCS
+        await pg.flush()
+        await _translation(pg, a, RARE)
+
+        assert await rcs.ensure_built(pg, window_days=1) is False
 
 
 @pytest.mark.asyncio

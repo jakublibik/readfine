@@ -350,6 +350,9 @@ async def _import_saved_bg(
             await db.commit()
             await finalize_saved_article(article, user_id, db)
             await db.commit()
+            if article.readable_status != "pending":
+                from app.services.ai_pipeline_service import run_waiting_summaries
+                await run_waiting_summaries(article, db)
     except Exception:
         logger.exception(
             "saved import: post-processing failed for article %d user %d",

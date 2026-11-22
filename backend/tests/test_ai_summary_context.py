@@ -43,6 +43,7 @@ def make_settings(**kwargs):
 
 def make_job(**kwargs):
     defaults = {
+        "job_params": None,
         "id": 1,
         "article_id": 10,
         "user_id": 1,
