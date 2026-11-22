@@ -116,7 +116,7 @@ class TestStarRouteSummaryGating:
         scheduled: list = []
         mock_db.scalar = AsyncMock(side_effect=[
             SimpleNamespace(ai_summary_enabled_default=True),  # settings
-            SimpleNamespace(id=5),                              # article_obj
+            SimpleNamespace(id=5, readable_status="success"),
         ])
         enqueue = AsyncMock(return_value=True)
         with (
@@ -138,7 +138,7 @@ class TestStarRouteSummaryGating:
         scheduled: list = []
         mock_db.scalar = AsyncMock(side_effect=[
             SimpleNamespace(ai_summary_enabled_default=True),
-            SimpleNamespace(id=5),
+            SimpleNamespace(id=5, readable_status="success"),
         ])
         enqueue = AsyncMock(return_value=False)
         with (
@@ -160,7 +160,7 @@ class TestStarRouteSummaryGating:
         scheduled: list = []
         mock_db.scalar = AsyncMock(side_effect=[
             SimpleNamespace(ai_summary_enabled_default=True),
-            SimpleNamespace(id=5),
+            SimpleNamespace(id=5, readable_status="success"),
         ])
         with (
             patch("app.routers.web.app.articles.toggle_article_state",
@@ -177,7 +177,7 @@ class TestStarRouteSummaryGating:
     def test_no_summary_signal_when_nothing_enqueued(self, client, mock_db):
         mock_db.scalar = AsyncMock(side_effect=[
             SimpleNamespace(ai_summary_enabled_default=True),
-            SimpleNamespace(id=5),
+            SimpleNamespace(id=5, readable_status="success"),
         ])
         with (
             patch("app.routers.web.app.articles.toggle_article_state",

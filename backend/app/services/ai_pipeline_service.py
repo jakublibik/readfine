@@ -85,7 +85,7 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession, poo
     *pool* is passed on when this is reached from inside a batch, so the summary
     that follows a score shares the batch's clients rather than opening its own.
     """
-    from app.services.ai_summary_service import _execute_summary_job
+    from app.services.ai_summary_service import _execute_summary_job, release_summary_job
 
     job = await db.scalar(
         select(ArticleAiJob)
@@ -101,6 +101,8 @@ async def _run_summary_now(article: Article, user_id: int, db: AsyncSession, poo
         return
     s = await db.scalar(select(UserSettings).where(UserSettings.user_id == user_id))
     if s is None:
+        return
+    if not await release_summary_job(job, article, s, db):
         return
     await _execute_summary_job(job, article, s, db, datetime.now(timezone.utc), pool)
 
@@ -190,3 +192,29 @@ async def run_pipeline_for_article_all_users(article: Article, db: AsyncSession)
     )).all()
     for uid in user_ids:
         await run_article_pipeline(article, uid, db)
+    await run_waiting_summaries(article, db)
+
+
+async def run_waiting_summaries(article: Article, db: AsyncSession) -> None:
+    """Run the starred summaries that waited for this article's extraction.
+
+    Only so that they come at once: one missed here is taken by the summary batch.
+    Commits before the model calls, so the reader gets the full text without
+    waiting for the summary of it.
+    """
+    from app.services.ai_summary_service import AWAITS_READABLE
+
+    user_ids = (await db.scalars(
+        select(ArticleAiJob.user_id).where(
+            ArticleAiJob.article_id == article.id,
+            ArticleAiJob.operation == "summary",
+            ArticleAiJob.status == "pending",
+            ArticleAiJob.job_params.contains(AWAITS_READABLE),
+        )
+    )).all()
+    if not user_ids:
+        return
+    await db.commit()
+    for uid in user_ids:
+        await _run_summary_now(article, uid, db)
+    await db.commit()
