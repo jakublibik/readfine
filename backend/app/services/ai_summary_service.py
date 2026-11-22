@@ -117,8 +117,9 @@ async def release_summary_job(
     """May this job run now? Settles one that waited for the full text.
 
     What the star could not decide is decided here, once: the length, and whether the
-    star and the feed's switch still stand, as the wait can take hours. A job that
-    does not qualify is deleted, as if never queued, so the Summarize button works.
+    star and both switches (the reader's and the feed's) still stand, as the wait can
+    take hours. A job that does not qualify is deleted, as if never queued, so the
+    Summarize button works.
     """
     if job.job_params != AWAITS_READABLE:
         return True
@@ -138,7 +139,8 @@ async def release_summary_job(
             UserFeed.user_id == job.user_id, UserFeed.feed_id == article.feed_id,
         )
     )
-    if (not starred or (uf is not None and uf.ai_summary_enabled is False)
+    if (not starred or not s.ai_summary_enabled_default
+            or (uf is not None and uf.ai_summary_enabled is False)
             or not _long_enough(article, s, uf)):
         await db.delete(job)
         return False

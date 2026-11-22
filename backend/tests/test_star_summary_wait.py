@@ -190,7 +190,8 @@ async def test_unstar_cancels_the_wait(pg, model, spawned):
     assert await _job(pg, user, article) is None
 
 
-@pytest.mark.parametrize("change", ["unstarred_over_api", "feed_switched_off"])
+@pytest.mark.parametrize(
+    "change", ["unstarred_over_api", "feed_switched_off", "auto_summary_switched_off"])
 async def test_what_changed_during_the_wait_counts(pg, model, spawned, change):
     user, article = await _setup(pg)
     await _star(pg, user, article)
@@ -198,6 +199,9 @@ async def test_what_changed_during_the_wait_counts(pg, model, spawned, change):
         state = await pg.scalar(select(UserArticleState).where(
             UserArticleState.user_id == user.id))
         state.is_starred = False
+    elif change == "auto_summary_switched_off":
+        settings = await pg.scalar(select(UserSettings).where(UserSettings.user_id == user.id))
+        settings.ai_summary_enabled_default = False
     else:
         uf = await pg.scalar(select(UserFeed).where(UserFeed.user_id == user.id))
         uf.ai_summary_enabled = False
@@ -205,6 +209,8 @@ async def test_what_changed_during_the_wait_counts(pg, model, spawned, change):
     await _extracted(pg, article)
 
     model.assert_not_awaited()
+    # Gone rather than skipped, so the Summarize button starts clean.
+    assert await _job(pg, user, article) is None
 
 
 async def test_the_button_does_not_wait(pg, model, spawned):
