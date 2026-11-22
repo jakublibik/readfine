@@ -7,6 +7,11 @@ writes the counts to `lexical_terms` and `lexical_prefixes`, and every process
 reads the tokens back into a dictionary it keeps until the next build. Prefixes
 are looked up only as the term lists being scored need them.
 
+An article's translated titles count as part of that article. The score reads
+them (`lexical_score_service._reader_rows`), and a word found only there would
+otherwise be unknown, which scores zero. However many readers or languages an
+article was translated for, it stays one document.
+
 Rebuilt whole rather than kept up to date as articles arrive. An incremental
 count has to hear about purges, re-fetches and deleted feeds as well, and once
 it has drifted the only repair is the rebuild this does anyway. The job is
@@ -23,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.article import Article
+from app.models.article import Article, ArticleTranslation
 from app.models.relevance import LexicalCorpus, LexicalPrefix, LexicalTerm
 from app.services.relevance_service import (
     TOKENIZER,
@@ -69,19 +74,32 @@ _prefix_cache: dict[str, int] = {}
 
 
 async def _iter_texts(db: AsyncSession, cutoff: datetime):
-    """Stream the scorer's input text for every article in the window."""
+    """Stream the scorer's input text for every article in the window, with the
+    titles it was translated to appended."""
+    translated = (
+        select(ArticleTranslation.article_id,
+               func.string_agg(ArticleTranslation.title, "\n").label("titles"))
+        .join(Article, Article.id == ArticleTranslation.article_id)
+        .where(Article.fetched_at >= cutoff)
+        .group_by(ArticleTranslation.article_id)
+        .subquery()
+    )
     stmt = (
         select(
             Article.title,
+            translated.c.titles,
             func.left(Article.readable_content, BODY_FETCH_CHARS),
             func.left(Article.content, BODY_FETCH_CHARS),
         )
+        .outerjoin(translated, translated.c.article_id == Article.id)
         .where(Article.fetched_at >= cutoff)
         .execution_options(yield_per=1000)
     )
     result = await db.stream(stmt)
-    async for title, readable, content in result:
-        yield article_text(title, readable or content)
+    async for title, titles, readable, content in result:
+        # Appended after article_text, so they take nothing from the body's 300 characters.
+        text = article_text(title, readable or content)
+        yield f"{text}\n{titles}" if titles else text
 
 
 async def rebuild(db: AsyncSession, *, window_days: int = WINDOW_DAYS,
@@ -155,8 +173,9 @@ async def ensure_built(db: AsyncSession, **rebuild_kwargs) -> bool:
     fill in. A table counted by another tokenizer is rebuilt at once as well,
     which is how an upgrade that changes tokenization takes effect without
     waiting for the night. While the corpus is small, it is recounted only when
-    the number of articles in the window has changed since the last count, so an
-    instance that stays below BOOTSTRAP_MAX_DOCS does not redo it, and rescore
+    the number of articles in the window has changed since the last count or a
+    title was translated after it (the translation lands after its article), so
+    an instance that stays below BOOTSTRAP_MAX_DOCS does not redo it, and rescore
     every account, on each run.
 
     Costs one small query on an instance that is past that stage. The job passes
@@ -176,7 +195,13 @@ async def ensure_built(db: AsyncSession, **rebuild_kwargs) -> bool:
         in_window = await db.scalar(select(func.count()).select_from(
             select(Article.id).where(Article.fetched_at >= cutoff)
             .limit(BOOTSTRAP_MAX_DOCS).subquery()))
-        if in_window == row.n_docs:
+        if in_window == row.n_docs and not await db.scalar(
+            select(ArticleTranslation.article_id)
+            .join(Article, Article.id == ArticleTranslation.article_id)
+            .where(Article.fetched_at >= cutoff,
+                   ArticleTranslation.created_at > row.built_at)
+            .limit(1)
+        ):
             return False
     if not await db.scalar(select(Article.id).limit(1)):
         return False  # nothing to count yet; a brand new instance with no fetch
